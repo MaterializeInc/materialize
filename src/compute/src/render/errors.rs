@@ -63,9 +63,9 @@ pub(crate) fn soft_assert_no_error_datums<'a>(
     boundary: &str,
 ) {
     mz_ore::soft_assert_no_log!(
-        !rows
-            .into_iter()
-            .any(|row| row.iter().any(|datum| matches!(datum, Datum::Error(_)))),
+        !rows.into_iter().any(|row| {
+            row.row_error().is_some() || row.iter().any(|datum| matches!(datum, Datum::Error(_)))
+        }),
         "error datum left the replica through {boundary}"
     );
 }

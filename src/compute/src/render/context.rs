@@ -838,6 +838,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
                         let remaining = max_demand.saturating_sub(datums_borrow.len());
                         v.extend_datums(&temp_storage, &mut datums_borrow, Some(remaining));
+                        // Keys never carry a row-level error. See `SafeMfpPlan::evaluate_inner_scoped`
+                        // for where the evaluation expects it.
+                        if let Some(error) = v.row_error() {
+                            datums_borrow.push(mz_repr::Datum::Error(error));
+                        }
                         logic(&mut datums_borrow, t, d, ok_session, err_session)
                     };
 
@@ -1297,8 +1302,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                             let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
                             match key_buf.packer().try_extend(key_iter) {
                                 Ok(()) => {
-                                    let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                    val_buf.packer().extend(val_datum_iter);
+                                    // The value carries the row-level error, the key never does.
+                                    let mut packer = val_buf.packer();
+                                    if let Some(error) = row.row_error() {
+                                        packer.push_row_error(error);
+                                    }
+                                    packer.extend(thinning.iter().map(|c| datums[*c]));
                                     ok_session.give(((&*key_buf, &*val_buf), t, d));
                                 }
                                 Err(e) => {

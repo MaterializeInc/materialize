@@ -2224,9 +2224,13 @@ impl From<InvalidRangeError> for EvalError {
 impl EvalError {
     /// Packs `self` into a cell-scoped [`Datum::Error`] allocated in `arena`.
     pub fn to_datum<'a>(&self, arena: &'a RowArena) -> Datum<'a> {
+        Datum::Error(self.to_datum_error(arena))
+    }
+
+    /// Encodes `self` as the payload of an error datum or row-level error, allocated in `arena`.
+    pub fn to_datum_error<'a>(&self, arena: &'a RowArena) -> DatumError<'a> {
         use prost::Message;
-        let bytes = arena.push_bytes(self.into_proto().encode_to_vec());
-        Datum::Error(DatumError::new(bytes))
+        DatumError::new(arena.push_bytes(self.into_proto().encode_to_vec()))
     }
 
     /// Decodes the error a [`Datum::Error`] carries.
@@ -2239,6 +2243,25 @@ impl EvalError {
                 mz_ore::soft_panic_or_log!("corrupt error datum: {e}");
                 EvalError::Internal(format!("corrupt error datum: {e}").into())
             })
+    }
+
+    /// Combines two row-level errors, keeping the greater one like scalar `AND` does.
+    ///
+    /// Row-level errors are rare, so decoding both to compare them is acceptable.
+    pub fn max_row_error<'a>(
+        a: Option<DatumError<'a>>,
+        b: Option<DatumError<'a>>,
+    ) -> Option<DatumError<'a>> {
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                if EvalError::from_datum_error(a) >= EvalError::from_datum_error(b) {
+                    Some(a)
+                } else {
+                    Some(b)
+                }
+            }
+            (a, b) => a.or(b),
+        }
     }
 
     /// Returns the first cell-scoped error among `datums`, elevated to an `Err`.

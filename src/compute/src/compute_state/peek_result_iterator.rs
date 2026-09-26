@@ -469,6 +469,10 @@ where
                 .expect("literal position must be at a matching literal during row extraction");
             maybe_literal.extend_datums(&arena, &mut borrow, None);
         }
+        // See `SafeMfpPlan::evaluate_inner_scoped` for where evaluation expects it.
+        if let Some(error) = row_item.row_error() {
+            borrow.push(mz_repr::Datum::Error(error));
+        }
         let result = self
             .map_filter_project
             .evaluate_into_scoped(&mut borrow, &arena, &mut self.row_builder, self.error_scope)

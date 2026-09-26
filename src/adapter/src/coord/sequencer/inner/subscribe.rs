@@ -300,7 +300,8 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-        );
+        )
+        .with_inline_errors(plan.inline_errors);
         let catalog = self.owned_catalog();
 
         let span = Span::current();
@@ -567,6 +568,7 @@ impl Coordinator {
             backlog_accounting: Arc::clone(&backlog_accounting),
             max_buffered_bytes,
             emit_progress: plan.emit_progress,
+            inline_errors: plan.inline_errors,
             as_of: df_desc
                 .as_of
                 .as_ref()

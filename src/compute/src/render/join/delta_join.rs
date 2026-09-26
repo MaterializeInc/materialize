@@ -27,9 +27,9 @@ use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_dyncfg::ConfigSet;
-use mz_expr::{ErrorScope, Eval};
+use mz_expr::{ErrorScope, Eval, EvalError};
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -220,6 +220,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     let mut row_builder = SharedRow::get();
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
+                                    if let Some(error) = row.row_error() {
+                                        datums_local.push(Datum::Error(error));
+                                    }
                                     // TODO(mcsherry): re-use `row` allocation.
                                     final_closure
                                         .apply(
@@ -474,9 +477,12 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
             )?;
             let key = row_builder.clone();
-            row_builder
-                .packer()
-                .extend(prev_thinning.iter().map(|&c| datums_local[c]));
+            // The value carries the row-level error, the key never does.
+            let mut packer = row_builder.packer();
+            if let Some(error) = row.row_error() {
+                packer.push_row_error(error);
+            }
+            packer.extend(prev_thinning.iter().map(|&c| datums_local[c]));
             let row_value = row_builder.clone();
 
             Ok((key, row_value, time))
@@ -539,6 +545,12 @@ where
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
+                // A matched pair carries the greater row-level error of its two sides.
+                let error =
+                    EvalError::max_row_error(stream_row.row_error(), lookup_row.row_error());
+                if let Some(error) = error {
+                    datums_local.push(Datum::Error(error));
+                }
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder, scope);
 
@@ -587,6 +599,12 @@ where
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
+                // A matched pair carries the greater row-level error of its two sides.
+                let error =
+                    EvalError::max_row_error(stream_row.row_error(), lookup_row.row_error());
+                if let Some(error) = error {
+                    datums_local.push(Datum::Error(error));
+                }
 
                 if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
@@ -656,6 +674,12 @@ where
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
+                // A matched pair carries the greater row-level error of its two sides.
+                let error =
+                    EvalError::max_row_error(stream_row.row_error(), lookup_row.row_error());
+                if let Some(error) = error {
+                    datums_local.push(Datum::Error(error));
+                }
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder, scope);
 
@@ -703,6 +727,12 @@ where
                 datums_local.extend(key.iter());
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
+                // A matched pair carries the greater row-level error of its two sides.
+                let error =
+                    EvalError::max_row_error(stream_row.row_error(), lookup_row.row_error());
+                if let Some(error) = error {
+                    datums_local.push(Datum::Error(error));
+                }
 
                 if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
@@ -845,6 +875,9 @@ where
                                         val.extend_datums(&temp_storage, &mut datums_local, None);
 
                                         if !initial_closure.is_identity() {
+                                            if let Some(error) = val.row_error() {
+                                                datums_local.push(Datum::Error(error));
+                                            }
                                             match initial_closure
                                                 .apply(
                                                     &mut datums_local,
@@ -869,7 +902,11 @@ where
                                             }
                                         } else {
                                             let row = {
-                                                row_builder.packer().extend(&*datums_local);
+                                                let mut packer = row_builder.packer();
+                                                if let Some(error) = val.row_error() {
+                                                    packer.push_row_error(error);
+                                                }
+                                                packer.extend(&*datums_local);
                                                 row_builder.clone()
                                             };
                                             for (time, diff) in times_diffs.drain(..) {

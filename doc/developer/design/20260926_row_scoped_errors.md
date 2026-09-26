@@ -42,12 +42,21 @@ Three encodings mark a row as an error.
 
 This design uses a tag in the row.
 
-### The error column
+### The row-level error
 
-A rendered dataflow gives every row one hidden trailing error column.
-It holds `Datum::Null` for an ok row and `Datum::Error(payload)` for a tainted row, reusing the encoding of cell-scoped errors.
-MIR does not see the column, the same way it does not see arrangement permutations.
-The diff stays `i64`, and a tainted row consolidates, retracts, and arranges like any row, with the tag part of its identity.
+A tainted row stores its error in a header ahead of its datums, `RowRef::row_error`.
+The header is not a datum: `RowRef::iter` skips it, so code that reads datums by position is unaffected, and MIR does not see it.
+The diff stays `i64`, and a tainted row consolidates, retracts, and arranges like any row, with the header part of its bytes and therefore of its identity.
+
+A hidden trailing column was the alternative, and it is fragile in two places.
+Readers that decode only a prefix of a row, such as demand-pruned MFP inputs and reduce, would drop it without notice.
+Joins concatenate the values of their inputs, so a trailing column of one input would land in the middle of the output.
+A header is found by reading one byte, whatever prefix a reader decodes.
+
+The header is lost wherever a row's datums are repacked into a new row, so repacking code carries it over explicitly: MFP output, arrangement values, and join key preparation.
+Code that decodes a row for MFP evaluation appends the row-level error as an error datum after the decoded columns, where `SafeMfpPlan::evaluate_inner_scoped` expects it at index `input_arity`.
+Join closures append the greater row-level error of the two matched sides instead.
+Durable encodings refuse rows with a row-level error, and dictionary compression refuses to encode them.
 
 The payload is one `EvalError`.
 When two errors meet on one row, the payload is the `max` of the two under `EvalError`'s derived order, the combiner scalar `AND` already uses.
@@ -191,10 +200,12 @@ As hygiene, presentation can show tags only to readers that hold `SELECT` on eve
 
 ## Staging
 
-1. The error column in rendered dataflows.
+1. The row-level error in rendered dataflows.
    Predicate errors in MFPs and join closures produce tags, joins combine them, and union, negate, `Let`, `LetRec`, and arrangements pass them as data.
-   Reduce, top-k, threshold, table functions, and every boundary except the subscribe opt-in elevate.
+   Reduce, top-k, table functions, and every boundary except the subscribe opt-in elevate.
    This unblocks standing queries without aggregation.
+   The prototype implements this step, with `SUBSCRIBE ... WITH (INLINE ERRORS)` as the opt-in.
+   It keeps today's `AND` order, and threshold treats the header as data rather than applying the interval rule.
 2. The `AND` and `OR` order change, and reduce and threshold under the rules above, which `GROUP BY query_id` needs.
 3. Top-k, window functions, and temporal bounds.
 4. The row-carrying `DataflowError` variant, and subscribes over materialized views.
@@ -209,7 +220,8 @@ Payload redaction, peek opt-in, and the presentation policy can wait.
 
 ## Open questions
 
-* How the error column reaches operators that read datums by position, in particular join closures that concatenate values of several inputs.
+* Threshold in the prototype treats tainted and ok copies of a row as different values, so `A EXCEPT B` with an ok row in `A` and a tainted copy in `B` returns the row without a taint, where the interval rule returns it tainted.
+* Dictionary compression of arrangements cannot hold a row-level error.
 * Whether to include the producing operator in the payload, so that independent errors do not cancel under `EXCEPT ALL`.
 * `FoldConstants` must leave a `Join` unfolded when a constant input has an error datum in an equivalence column, as it does for an erroring `Map`.
 * A mechanized model of the tagged collection, with the new `AND` order, proving filter fusion, pushdown across joins, and the threshold rule against an enumeration of resolutions.

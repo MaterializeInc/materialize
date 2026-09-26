@@ -195,6 +195,13 @@ fn process_flat_map_row<T>(
 {
     let temp_storage = RowArena::new();
 
+    // Table functions do not propagate row-level errors yet, so they elevate them.
+    if let Some(error) = input_row.row_error() {
+        let error = mz_expr::EvalError::from_datum_error(error);
+        err_session.give((error.into(), time.clone(), *diff));
+        return;
+    }
+
     // Unpack datums for expression evaluation.
     let datums_local = datums.borrow_with(input_row);
     let args = exprs

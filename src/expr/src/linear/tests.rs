@@ -78,12 +78,43 @@ fn row_scope_elevates_error_datums_in_the_input() {
 }
 
 #[mz_ore::test]
-fn predicate_errors_are_row_scoped() {
+fn predicate_errors_taint_the_row_in_cell_scope() {
     let mfp = parse_sin()
         .filter([MirScalarExpr::column(2).call_is_null()])
         .project([0]);
     assert!(eval_one(mfp.clone(), &input(), ErrorScope::Row).is_err());
-    assert!(eval_one(mfp, &input(), ErrorScope::Cell).is_err());
+    assert!(eval_one(mfp.clone(), &input(), ErrorScope::Boundary).is_err());
+    let row = eval_one(mfp, &input(), ErrorScope::Cell).expect("the row survives, tainted");
+    assert_eq!(row.unpack(), vec![Datum::Int32(2)]);
+    assert!(
+        row.row_error().is_some(),
+        "the predicate error taints the row"
+    );
+}
+
+#[mz_ore::test]
+fn row_errors_pass_through_cell_scope_and_elevate_at_boundaries() {
+    let arena = RowArena::new();
+    let tag = EvalError::DivisionByZero.to_datum(&arena);
+    // The trailing datum beyond the input arity is the input row's row-level error.
+    let mfp = MapFilterProject::new(1).project([0]);
+    let row = eval_one(mfp.clone(), &[Datum::Int32(1), tag], ErrorScope::Cell).expect("kept");
+    assert_eq!(row.unpack(), vec![Datum::Int32(1)]);
+    assert!(row.row_error().is_some());
+    let result = eval_one(mfp, &[Datum::Int32(1), tag], ErrorScope::Boundary);
+    assert_eq!(result, Err(EvalError::DivisionByZero));
+
+    // A rejecting predicate drops a tainted row without an error.
+    let rejecting = MapFilterProject::new(1).filter([MirScalarExpr::literal_false()]);
+    let plan = rejecting
+        .into_plan()
+        .expect("valid")
+        .into_nontemporal()
+        .expect("safe");
+    let mut datums = vec![Datum::Int32(1), tag];
+    let mut row_buf = Row::default();
+    let result = plan.evaluate_into_scoped(&mut datums, &arena, &mut row_buf, ErrorScope::Boundary);
+    assert_eq!(result, Ok(None));
 }
 
 #[mz_ore::test]
@@ -133,4 +164,14 @@ fn boundary_scope_elevates_only_projected_errors() {
 
     let projected = parse_sin().project([0, 2]);
     assert!(eval_one(projected, &input(), ErrorScope::Boundary).is_err());
+}
+
+#[mz_ore::test]
+fn tainted_rows_are_deterministic() {
+    let mfp = parse_sin()
+        .filter([MirScalarExpr::column(2).call_is_null()])
+        .project([0, 1]);
+    let a = eval_one(mfp.clone(), &input(), ErrorScope::Cell).expect("tainted");
+    let b = eval_one(mfp, &input(), ErrorScope::Cell).expect("tainted");
+    assert_eq!(a, b, "retractions must reproduce the row byte for byte");
 }

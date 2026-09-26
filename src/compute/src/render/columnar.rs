@@ -116,8 +116,13 @@ where
                 // Rows are read from the borrowed column, never materialized as
                 // owned `Row`s.
                 for (v, t, d) in data.borrow().into_index_iter() {
+                    let mut borrow = datums.borrow_with_limit(v, max_demand);
+                    // See `SafeMfpPlan::evaluate_inner_scoped` for where evaluation expects it.
+                    if let Some(error) = v.row_error() {
+                        borrow.push(mz_repr::Datum::Error(error));
+                    }
                     logic(
-                        &mut datums.borrow_with_limit(v, max_demand),
+                        &mut borrow,
                         Columnar::into_owned(t),
                         Columnar::into_owned(d),
                         &mut ok_session,

@@ -270,6 +270,11 @@ impl FoldConstants {
                         Ok(rows) => Self::fold_filter_constant(predicates, rows),
                         Err(e) => Err(e.clone()),
                     };
+                    // A dataflow keeps the rows a predicate errors on and taints them, which a
+                    // constant cannot express. Leaving the `Filter` lets evaluation decide.
+                    if cell_errors && new_rows.is_err() && rows.is_ok() {
+                        return Ok(());
+                    }
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation_type.clone(),

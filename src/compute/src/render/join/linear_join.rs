@@ -600,6 +600,10 @@ where
     key.extend_datums(&temp_storage, &mut datums_local, None);
     old.extend_datums(&temp_storage, &mut datums_local, None);
     new.extend_datums(&temp_storage, &mut datums_local, None);
+    // A matched pair carries the greater row-level error of its two sides.
+    if let Some(error) = mz_expr::EvalError::max_row_error(old.row_error(), new.row_error()) {
+        datums_local.push(mz_repr::Datum::Error(error));
+    }
 
     closure
         .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
@@ -746,9 +750,11 @@ where
                                 .map(|e| e.eval(&datums_local, &temp_storage));
                             match key_buf.packer().try_extend(datums) {
                                 Ok(()) => {
-                                    val_buf
-                                        .packer()
-                                        .extend(stream_thinning.iter().map(|e| datums_local[*e]));
+                                    let mut packer = val_buf.packer();
+                                    if let Some(error) = row.row_error() {
+                                        packer.push_row_error(error);
+                                    }
+                                    packer.extend(stream_thinning.iter().map(|e| datums_local[*e]));
                                     ok_session.give(((&key_buf, &val_buf), time, diff));
                                 }
                                 Err(e) => {

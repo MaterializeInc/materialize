@@ -1629,12 +1629,13 @@ pub mod plan {
         /// not the projection keeps their column. Output rows never contain error datums.
         Row,
         /// Errors in map expressions become error datums in their cell, and error datums pass
-        /// through the projection. Projecting away a column drops its error. For evaluation
-        /// whose output stays inside the dataflow.
+        /// through the projection. Projecting away a column drops its error. Errors in
+        /// predicates become the output row's row-level error, see [`mz_repr::RowRef::row_error`].
+        /// For evaluation whose output stays inside the dataflow.
         Cell,
-        /// Like [`ErrorScope::Cell`], but error datums that survive the projection are elevated.
-        /// Output rows never contain error datums. For evaluation whose output leaves the
-        /// dataflow or feeds an operator without semantics for error datums.
+        /// Like [`ErrorScope::Cell`], but error datums that survive the projection and row-level
+        /// errors are elevated. Output rows never contain error datums. For evaluation whose
+        /// output leaves the dataflow or feeds an operator without semantics for error datums.
         Boundary,
     }
 
@@ -1685,18 +1686,18 @@ pub mod plan {
             row_buf: &'row mut Row,
             scope: ErrorScope,
         ) -> Result<Option<&'row Row>, EvalError> {
-            let passed_predicates = self.evaluate_inner_scoped(datums, arena, scope)?;
-            if !passed_predicates {
-                Ok(None)
-            } else {
-                if scope.elevates() {
-                    EvalError::elevate(self.mfp.projection.iter().map(|c| datums[*c]))?;
-                }
-                row_buf
-                    .packer()
-                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
-                Ok(Some(row_buf))
+            let Some(row_error) = self.evaluate_inner_scoped(datums, arena, scope)? else {
+                return Ok(None);
+            };
+            if scope.elevates() {
+                EvalError::elevate(self.mfp.projection.iter().map(|c| datums[*c]))?;
             }
+            let mut packer = row_buf.packer();
+            if let Some(row_error) = &row_error {
+                packer.push_row_error(row_error.to_datum_error(arena));
+            }
+            packer.extend(self.mfp.projection.iter().map(|c| datums[*c]));
+            Ok(Some(row_buf))
         }
 
         /// A version of `evaluate` which produces an iterator over `Datum`
@@ -1728,17 +1729,32 @@ pub mod plan {
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
-            self.evaluate_inner_scoped(datums, arena, ErrorScope::Row)
+            Ok(self
+                .evaluate_inner_scoped(datums, arena, ErrorScope::Row)?
+                .is_some())
         }
 
-        /// Like [`SafeMfpPlan::evaluate_inner`], with `scope` choosing where errors in map
-        /// expressions land.
+        /// Like [`SafeMfpPlan::evaluate_inner`], with `scope` choosing where errors land.
+        ///
+        /// Returns `None` if a predicate rejects the row, and otherwise the row's row-level
+        /// error, which only [`ErrorScope::Cell`] returns rather than elevating.
+        ///
+        /// An error datum at index `input_arity` of `datums` is the input row's row-level error.
+        /// Code that decodes a row for evaluation places it there, see
+        /// [`mz_repr::RowRef::row_error`].
         pub fn evaluate_inner_scoped<'b, 'a: 'b>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             scope: ErrorScope,
-        ) -> Result<bool, EvalError> {
+        ) -> Result<Option<Option<EvalError>>, EvalError> {
+            let mut row_error = None;
+            if datums.len() == self.mfp.input_arity + 1 {
+                if let Some(Datum::Error(error)) = datums.last().copied() {
+                    datums.pop();
+                    row_error = Some(EvalError::from_datum_error(error));
+                }
+            }
             let map = |expr: &'a E, datums: &[Datum<'a>]| match expr.eval(datums, arena) {
                 Err(e) if scope.cells() => Ok(e.to_datum(arena)),
                 result => result,
@@ -1759,9 +1775,9 @@ pub mod plan {
                 }
                 match predicate.eval(&datums[..], arena) {
                     Ok(Datum::True) => {}
-                    Ok(Datum::False) => return Ok(false),
+                    Ok(Datum::False) => return Ok(None),
                     Ok(_) if scope.cells() => rejected = true,
-                    Ok(_) => return Ok(false),
+                    Ok(_) => return Ok(None),
                     // Like scalar `AND`, report the greatest error, so the error does not depend
                     // on the order in which the predicates run.
                     Err(e) if scope.cells() => {
@@ -1773,17 +1789,26 @@ pub mod plan {
                     Err(e) => return Err(e),
                 }
             }
-            if let Some(e) = error {
-                return Err(e);
+            // A predicate error keeps the row and taints it, and a rejecting predicate only
+            // drops a row that no predicate failed on, which is `AND`'s order.
+            if error.is_none() && rejected {
+                return Ok(None);
             }
-            if rejected {
-                return Ok(false);
+            let row_error = match (row_error, error) {
+                (Some(a), Some(b)) => Some(std::cmp::max(a, b)),
+                (a, b) => a.or(b),
+            };
+            // Only evaluation inside the dataflow keeps row-level errors.
+            if scope != ErrorScope::Cell {
+                if let Some(e) = row_error {
+                    return Err(e);
+                }
             }
             while expression < self.mfp.expressions.len() {
                 datums.push(map(&self.mfp.expressions[expression], &datums[..])?);
                 expression += 1;
             }
-            Ok(true)
+            Ok(Some(row_error))
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -2005,15 +2030,15 @@ pub mod plan {
         ) -> impl Iterator<
             Item = Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
         > + use<Err, V, E> {
-            match self.mfp.evaluate_inner_scoped(datums, arena, scope) {
+            let row_error = match self.mfp.evaluate_inner_scoped(datums, arena, scope) {
                 Err(e) => {
                     return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                 }
-                Ok(true) => {}
-                Ok(false) => {
+                Ok(Some(row_error)) => row_error,
+                Ok(None) => {
                     return None.into_iter().chain(None);
                 }
-            }
+            };
 
             // Lower and upper bounds.
             let mut lower_bound = time;
@@ -2096,9 +2121,11 @@ pub mod plan {
                         return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                     }
                 }
-                row_builder
-                    .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                let mut packer = row_builder.packer();
+                if let Some(row_error) = &row_error {
+                    packer.push_row_error(row_error.to_datum_error(arena));
+                }
+                packer.extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));

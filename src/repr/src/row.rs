@@ -745,8 +745,21 @@ impl RowRef {
     }
 
     /// Iterate the [`Datum`] elements of the [`RowRef`].
+    ///
+    /// Skips the row-level error, see [`RowRef::row_error`].
     pub fn iter(&self) -> DatumListIter<'_> {
-        DatumListIter { data: &self.0 }
+        DatumListIter {
+            data: split_row_error(&self.0).1,
+        }
+    }
+
+    /// The row-level error this row carries, if any.
+    ///
+    /// A row-level error marks a row whose existence depends on an error. It is not a datum, so
+    /// [`RowRef::iter`] and everything built on it skip it. Code that repacks a row's datums into a
+    /// new row must carry it over explicitly.
+    pub fn row_error(&self) -> Option<DatumError<'_>> {
+        split_row_error(&self.0).0
     }
 
     /// Return the byte length of this [`RowRef`].
@@ -1269,6 +1282,9 @@ enum Tag {
     UInt64_56,
     UInt64,
     Error,
+    // The header of a row that carries a row-level error, see `RowRef::row_error`. It is not a
+    // datum, and only ever appears as the first tag of a row.
+    RowError,
 }
 
 impl Tag {
@@ -1355,6 +1371,20 @@ assert_consecutive!(
 /// Read a byte slice starting at byte `offset`.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
+/// Splits the encoding of a row into its row-level error, if any, and its datums.
+///
+/// Readers of raw row bytes, such as arrangement containers, call this before decoding datums.
+#[inline(always)]
+pub fn split_row_error(data: &[u8]) -> (Option<DatumError<'_>>, &[u8]) {
+    if data.first() == Some(&Tag::RowError.byte()) {
+        let mut rest = &data[1..];
+        let error = read_untagged_bytes(&mut rest);
+        (Some(DatumError::new(error)), rest)
+    } else {
+        (None, data)
+    }
+}
+
 fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     let len = u64::from_le_bytes(read_byte_array(data));
     let len = usize::cast_from(len);
@@ -1707,6 +1737,7 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
         Tag::Error => Datum::Error(DatumError::new(read_untagged_bytes(data))),
+        Tag::RowError => panic!("internal error: row error header read as a datum"),
         Tag::Numeric => {
             let digits = read_byte(data).into();
             let exponent = i8::reinterpret_cast(read_byte(data));
@@ -2311,6 +2342,18 @@ where
 }
 
 impl RowPacker<'_> {
+    /// Marks the row as carrying the row-level error `error`, see [`RowRef::row_error`].
+    ///
+    /// Must be called before pushing any datum.
+    pub fn push_row_error(&mut self, error: DatumError<'_>) {
+        assert!(
+            self.row.data.is_empty(),
+            "a row-level error must precede the datums"
+        );
+        self.row.data.push(Tag::RowError.into());
+        push_untagged_bytes(&mut self.row.data, error.data());
+    }
+
     /// Constructs a row packer that will pack additional datums into the
     /// provided row.
     ///

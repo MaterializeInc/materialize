@@ -68,6 +68,18 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
+        // A subscribe with inline errors receives rows with error datums and row-level errors,
+        // and presents them itself. Every other sink is a boundary for them.
+        let inline_errors = self.error_scope() == ErrorScope::Cell
+            && matches!(
+                &sink.connection,
+                ComputeSinkConnection::Subscribe(subscribe) if subscribe.inline_errors
+            );
+        let sink_scope = if inline_errors {
+            ErrorScope::Cell
+        } else {
+            self.boundary_scope()
+        };
         let (ok_collection, err_collection) = if let Some((oks, errs)) = &bundle.collection {
             (columnar_to_vec(oks.clone()), errs.clone())
         } else {
@@ -88,7 +100,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
                 mfp_plan,
                 Some((key.clone(), None)),
                 self.until.clone(),
-                self.boundary_scope(),
+                sink_scope,
             );
             (columnar_to_vec(oks), errs)
         };
@@ -96,20 +108,24 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
         // A sink is a boundary: error datums become collection-scoped errors before any row
         // leaves the dataflow. Both arms above can carry error datums, the arranged one when its
         // permutation is the identity and reading the arrangement evaluates nothing.
-        let (ok_collection, mut err_collection) = if self.error_scope() == ErrorScope::Cell {
-            type CB<C> = CapacityContainerBuilder<C>;
-            let (oks, errs) = ok_collection.map_fallible::<CB<_>, CB<_>, _, _, _>(
-                "ElevateCellErrors",
-                |row: Row| {
-                    EvalError::elevate(row.iter())
-                        .map(|()| row)
-                        .map_err(DataflowErrorSer::from)
-                },
-            );
-            (oks, err_collection.concat(errs))
-        } else {
-            (ok_collection, err_collection)
-        };
+        let (ok_collection, mut err_collection) =
+            if self.error_scope() == ErrorScope::Cell && !inline_errors {
+                type CB<C> = CapacityContainerBuilder<C>;
+                let (oks, errs) = ok_collection.map_fallible::<CB<_>, CB<_>, _, _, _>(
+                    "ElevateCellErrors",
+                    |row: Row| {
+                        if let Some(error) = row.row_error() {
+                            return Err(DataflowErrorSer::from(EvalError::from_datum_error(error)));
+                        }
+                        EvalError::elevate(row.iter())
+                            .map(|()| row)
+                            .map_err(DataflowErrorSer::from)
+                    },
+                );
+                (oks, err_collection.concat(errs))
+            } else {
+                (ok_collection, err_collection)
+            };
 
         // Attach logging of dataflow errors.
         if let Some(logger) = compute_state.compute_logger.clone() {

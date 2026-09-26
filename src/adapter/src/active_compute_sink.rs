@@ -18,7 +18,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_expr::row::RowCollection;
-use mz_expr::{RowComparator, compare_columns};
+use mz_expr::{EvalError, RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
@@ -188,6 +188,8 @@ pub struct ActiveSubscribe {
     pub max_buffered_bytes: usize,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
+    /// Whether rows with errors arrive, and are presented with a trailing `mz_error` column.
+    pub inline_errors: bool,
     /// The logical timestamp at which the subscribe began execution.
     pub as_of: Timestamp,
     /// The number of columns in the relation that was subscribed to.
@@ -316,7 +318,26 @@ impl ActiveSubscribe {
                 }
             }
 
-            packer.extend_by_row_ref(row);
+            if self.inline_errors {
+                // An error datum reads as `NULL`. `mz_error` holds the row-level error, or else
+                // the first error datum, as elevation would report it.
+                let mut error = row.row_error().map(EvalError::from_datum_error);
+                for datum in row.iter() {
+                    match datum {
+                        Datum::Error(e) => {
+                            error.get_or_insert_with(|| EvalError::from_datum_error(e));
+                            packer.push(Datum::Null);
+                        }
+                        datum => packer.push(datum),
+                    }
+                }
+                match &error {
+                    Some(error) => packer.push(Datum::String(&error.to_string())),
+                    None => packer.push(Datum::Null),
+                }
+            } else {
+                packer.extend_by_row_ref(row);
+            }
 
             output_builder.push(output_buf.as_row_ref(), NonZeroUsize::MIN);
         };

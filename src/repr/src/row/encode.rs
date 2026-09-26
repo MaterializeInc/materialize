@@ -1472,6 +1472,10 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
     }
 
     fn append(&mut self, val: &Row) {
+        assert!(
+            val.row_error().is_none(),
+            "internal error: cannot encode a row with a row-level error"
+        );
         let mut num_datums = 0;
         for (datum, encoder) in val.iter().zip_eq(self.encoders.iter_mut()) {
             encoder.push(datum);
@@ -2255,6 +2259,11 @@ impl TryFrom<&ProtoRow> for Row {
 
 impl RustType<ProtoRow> for Row {
     fn into_proto(&self) -> ProtoRow {
+        // Row-level errors are elevated before rows leave their dataflow, like error datums.
+        assert!(
+            self.row_error().is_none(),
+            "internal error: cannot encode a row with a row-level error"
+        );
         let datums = self.iter().map(|x| x.into()).collect();
         ProtoRow { datums }
     }
