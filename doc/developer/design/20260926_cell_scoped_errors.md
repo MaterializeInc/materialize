@@ -164,6 +164,9 @@ With the feature enabled, two queries that `test/sqllogictest/error_semantics.sl
 
 ## Open questions
 
+* Whether an error in a join equality surfaces depends on the plan.
+  An equality in the arrangement key raises for every row, matched or not, while an equality the planner leaves to the join closure raises only for matched pairs.
+  Elevating every column of a join equality at the join's inputs would make the result plan-independent.
 * Clusters created during catalog initialization, such as `quickstart`, do not see system parameters and use row-scoped errors.
   Tests that exercise cell-scoped errors create their own cluster.
 * There is no syntax to choose the scope per cluster, for example `CREATE CLUSTER ... FEATURES (ENABLE CELL ERRORS)`, and `SHOW CREATE CLUSTER` does not show it.

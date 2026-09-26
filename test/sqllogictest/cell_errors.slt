@@ -111,6 +111,90 @@ SELECT a.id, a.province, b.province FROM v a JOIN v b ON a.id = b.id
 query error invalid input syntax for type bigint
 SELECT a.id, b.sin_valid FROM v a JOIN v b ON a.id = b.id
 
+statement ok
+CREATE TABLE only1 (id int, flag bool)
+
+statement ok
+INSERT INTO only1 VALUES (1, true)
+
+statement ok
+CREATE TABLE both_ids (id int, flag bool)
+
+statement ok
+INSERT INTO both_ids VALUES (1, true), (2, true)
+
+# A row whose value column holds an error and that finds no match disappears
+# with its error.
+query I
+SELECT a.id FROM v a JOIN only1 b ON a.id = b.id
+----
+1
+
+query IB
+SELECT a.id, a.sin_valid FROM v a JOIN only1 b ON a.id = b.id
+----
+1  true
+
+# An error in a join key surfaces whether or not the row would match.
+query error invalid input syntax for type bigint
+SELECT a.id FROM v a JOIN only1 b ON a.sin_valid = b.flag
+
+# Every column of a join equality acts as a key, so its error surfaces whether
+# or not the row would match. Here the planner arranges both inputs by
+# `(id, sin_valid)`. An equality that the planner leaves to the join closure
+# errors only for matched pairs, see the design doc's open questions.
+query error invalid input syntax for type bigint
+SELECT a.id FROM v a JOIN only1 b ON a.id = b.id AND a.sin_valid = b.flag
+
+query error invalid input syntax for type bigint
+SELECT a.id FROM v a JOIN both_ids b ON a.id = b.id AND a.sin_valid = b.flag
+
+# Outer joins keep unmatched rows with their error cells.
+query II rowsort
+SELECT a.id, b.id FROM v a LEFT JOIN only1 b ON a.id = b.id
+----
+1  1
+2  NULL
+
+query error invalid input syntax for type bigint
+SELECT a.id, a.sin_valid FROM v a LEFT JOIN only1 b ON a.id = b.id
+
+query II rowsort
+SELECT a.id, b.id FROM only1 b RIGHT JOIN v a ON a.id = b.id
+----
+1  1
+2  NULL
+
+query II rowsort
+SELECT a.id, b.id FROM v a FULL JOIN only1 b ON a.id = b.id
+----
+1  1
+2  NULL
+
+query error invalid input syntax for type bigint
+SELECT a.sin_valid, b.id FROM v a FULL JOIN only1 b ON a.id = b.id
+
+# A three-way join over indexed inputs, which plans as a delta join.
+statement ok
+CREATE INDEX only1_idx ON only1 (id)
+
+statement ok
+CREATE INDEX both_ids_idx ON both_ids (id)
+
+query I
+SELECT a.id FROM v a JOIN only1 b ON a.id = b.id JOIN both_ids c ON a.id = c.id
+----
+1
+
+query I rowsort
+SELECT a.id FROM v a JOIN both_ids b ON a.id = b.id JOIN both_ids c ON a.id = c.id
+----
+1
+2
+
+query error invalid input syntax for type bigint
+SELECT a.sin_valid FROM v a JOIN both_ids b ON a.id = b.id JOIN both_ids c ON a.id = c.id
+
 # Grouping by the error column elevates the error.
 query error invalid input syntax for type bigint
 SELECT sin_valid, count(*) FROM v GROUP BY sin_valid
