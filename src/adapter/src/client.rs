@@ -35,7 +35,7 @@ use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::str::StrExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::InProcessContext;
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{CatalogItemId, ColumnIndex, SqlScalarType};
 use mz_sql::ast::ConstantVisitor;
@@ -120,7 +120,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     build_info: &'static BuildInfo,
-    inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+    inner_cmd_tx: mpsc::UnboundedSender<(InProcessContext, Command)>,
     id_alloc: IdAllocator<IdAllocatorInnerBitSet>,
     now: NowFn,
     metrics: Metrics,
@@ -131,7 +131,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         build_info: &'static BuildInfo,
-        cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+        cmd_tx: mpsc::UnboundedSender<(InProcessContext, Command)>,
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
@@ -632,7 +632,7 @@ Issue a SQL query to get started. Need help?
     #[instrument(level = "debug")]
     pub(crate) fn try_send(&self, cmd: Command) -> bool {
         self.inner_cmd_tx
-            .send((OpenTelemetryContext::obtain(), cmd))
+            .send((InProcessContext::obtain(), cmd))
             .is_ok()
     }
 

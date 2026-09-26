@@ -28,7 +28,7 @@ use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
 use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::InProcessContext;
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, Timestamp};
@@ -632,7 +632,7 @@ impl Coordinator {
                             // task is only dropped when the process is going
                             // down, at which point nothing records anything.
                             let command = Message::Command(
-                                OpenTelemetryContext::obtain(),
+                                InProcessContext::obtain(),
                                 Command::Execute {
                                     portal_name,
                                     session,
@@ -646,7 +646,7 @@ impl Coordinator {
                                     .expect("sending to self.internal_cmd_tx cannot fail");
                             } else {
                                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                                mz_ore::task::spawn(
+                                mz_ore::task::spawn_in_request(
                                     || "execute_after_response_barriers",
                                     async move {
                                         for barrier in response_barriers {
@@ -717,7 +717,7 @@ impl Coordinator {
                         .connection
                         .into_inline_connection(self.catalog().state());
                     let current_storage_configuration = self.controller.storage.config().clone();
-                    mz_ore::task::spawn(|| "coord::validate_connection", async move {
+                    mz_ore::task::spawn_in_request(|| "coord::validate_connection", async move {
                         let res = match connection
                             .validate(plan.id, &current_storage_configuration)
                             .await
@@ -762,22 +762,22 @@ impl Coordinator {
         // The response can need off-thread processing. Wait for it elsewhere so the coordinator can
         // continue processing.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        mz_ore::task::spawn(
+        mz_ore::task::spawn_in_request(
             || format!("execute_single_statement:{conn_id}"),
             async move {
                 let Ok(Response {
                     result,
                     session,
-                    otel_ctx,
+                    context,
                 }) = sub_rx.await
                 else {
                     // Coordinator went away.
                     return;
                 };
-                otel_ctx.attach_as_parent();
+                context.attach_legacy_parent();
                 let (sub_tx, sub_rx) = oneshot::channel();
                 let _ = internal_cmd_tx.send(Message::Command(
-                    otel_ctx,
+                    context,
                     Command::Commit {
                         action: EndTransactionAction::Commit,
                         session,

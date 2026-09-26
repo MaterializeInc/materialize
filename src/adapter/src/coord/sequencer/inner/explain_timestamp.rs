@@ -142,31 +142,34 @@ impl Coordinator {
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize explain timestamp",
-            move || {
-                span.in_scope(|| {
-                    let plan::ExplainTimestampPlan {
-                        format,
-                        raw_plan,
-                        when,
-                    } = plan;
-
-                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                    let optimized_plan = optimizer.optimize(raw_plan)?;
-
-                    let stage =
-                        ExplainTimestampStage::RealTimeRecency(ExplainTimestampRealTimeRecency {
-                            validity,
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize explain timestamp",
+                move || {
+                    span.in_scope(|| {
+                        let plan::ExplainTimestampPlan {
                             format,
-                            optimized_plan,
-                            cluster_id,
+                            raw_plan,
                             when,
-                        });
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                        } = plan;
+
+                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                        let optimized_plan = optimizer.optimize(raw_plan)?;
+
+                        let stage = ExplainTimestampStage::RealTimeRecency(
+                            ExplainTimestampRealTimeRecency {
+                                validity,
+                                format,
+                                optimized_plan,
+                                cluster_id,
+                                when,
+                            },
+                        );
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]
@@ -190,7 +193,7 @@ impl Coordinator {
             Some(fut) => {
                 let catalog = Arc::clone(&self.catalog);
                 let span = Span::current();
-                Ok(StageResult::Handle(mz_ore::task::spawn(
+                Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
                     || "explain timestamp real time recency",
                     async move {
                         let real_time_recency_ts =

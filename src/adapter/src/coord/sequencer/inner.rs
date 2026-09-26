@@ -171,7 +171,7 @@ where
     match oracle {
         Some(oracle) => {
             let span = Span::current();
-            StageResult::Handle(mz_ore::task::spawn(
+            StageResult::Handle(mz_ore::task::spawn_in_request(
                 move || name,
                 async move {
                     let oracle_read_ts = oracle.read_ts().await;
@@ -217,12 +217,21 @@ impl Coordinator {
     /// thread. Stages can either produce another stage to execute or a final
     /// response. Maintains the connection-scoped cancel watch in
     /// `connection_cancel_watches` while a stage is cancelable.
-    pub(crate) async fn sequence_staged<S>(
-        &mut self,
-        mut ctx: S::Ctx,
-        parent_span: Span,
-        mut stage: S,
-    ) where
+    pub(crate) async fn sequence_staged<S>(&mut self, ctx: S::Ctx, parent_span: Span, stage: S)
+    where
+        S: Staged + 'static,
+        S::Ctx: Send + 'static,
+    {
+        let request = ctx.request_context();
+        mz_ore::request_context::scope_if_enabled(
+            request,
+            self.sequence_staged_inner(ctx, parent_span, stage),
+        )
+        .await;
+    }
+
+    async fn sequence_staged_inner<S>(&mut self, mut ctx: S::Ctx, parent_span: Span, mut stage: S)
+    where
         S: Staged + 'static,
         S::Ctx: Send + 'static,
     {
@@ -304,17 +313,21 @@ impl Coordinator {
         } else {
             Box::pin(future::pending())
         };
-        spawn(|| "sequence_staged", async move {
-            tokio::select! {
-                res = handle => {
-                    let next = return_if_err!(res, ctx);
-                    f(ctx, next);
+        let request = ctx.request_context();
+        spawn(
+            || "sequence_staged",
+            mz_ore::request_context::scope_if_enabled(request, async move {
+                tokio::select! {
+                    res = handle => {
+                        let next = return_if_err!(res, ctx);
+                        f(ctx, next);
+                    }
+                    _ = rx, if cancel_enabled => {
+                        ctx.retire(Err(AdapterError::Canceled));
+                    }
                 }
-                _ = rx, if cancel_enabled => {
-                    ctx.retire(Err(AdapterError::Canceled));
-                }
-            }
-        });
+            }),
+        );
     }
 
     async fn create_source_inner(
@@ -794,7 +807,7 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state());
 
             let current_storage_parameters = self.controller.storage.config().clone();
-            task::spawn(|| format!("validate_connection:{conn_id}"), async move {
+            task::spawn_in_request(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match std::panic::AssertUnwindSafe(
                     connection.validate(connection_id, &current_storage_parameters),
                 )
@@ -2599,7 +2612,7 @@ impl Coordinator {
         let fut = self
             .explain_pushdown_future(ctx.session(), as_of, mz_now, imports)
             .await;
-        task::spawn(|| "render explain pushdown", async move {
+        task::spawn_in_request(|| "render explain pushdown", async move {
             // Transfer the necessary read holds over to the background task
             let _read_holds = read_holds;
             let res = fut.await;
@@ -2691,7 +2704,7 @@ impl Coordinator {
         match optimized_mir.into_inner() {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
-                mz_ore::task::spawn(|| "coord::sequence_inner", async move {
+                mz_ore::task::spawn_in_request(|| "coord::sequence_inner", async move {
                     let result =
                         Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
 
@@ -2925,20 +2938,20 @@ impl Coordinator {
         let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
 
-        task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
+        task::spawn_in_request(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
                     result: Ok(resp),
                     session,
-                    otel_ctx,
+                    context,
                 }) => {
-                    otel_ctx.attach_as_parent();
+                    context.attach_legacy_parent();
                     (resp, session)
                 }
                 Ok(Response {
                     result: Err(e),
                     session,
-                    otel_ctx,
+                    context,
                 }) => {
                     let ctx = ExecuteContext::from_parts_with_response_barriers(
                         tx,
@@ -2947,7 +2960,7 @@ impl Coordinator {
                         extra,
                         response_barriers,
                     );
-                    otel_ctx.attach_as_parent();
+                    context.attach_legacy_parent();
                     ctx.retire(Err(e));
                     return;
                 }
@@ -3838,7 +3851,7 @@ impl Coordinator {
             let role_metadata = ctx.session().role_metadata().clone();
             let current_storage_parameters = self.controller.storage.config().clone();
 
-            task::spawn(
+            task::spawn_in_request(
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
                     let resolved_ids = conn.resolved_ids.clone();
@@ -4896,19 +4909,23 @@ impl Coordinator {
         let Some(DeferredPlanStatement { ctx, ps }) = self.serialized_ddl.pop_front() else {
             return;
         };
-        match ps {
-            crate::coord::PlanStatement::Statement { stmt, params } => {
-                self.handle_execute_inner(stmt, params, ctx).await;
+        let request = ctx.request_context();
+        let execute = async {
+            match ps {
+                crate::coord::PlanStatement::Statement { stmt, params } => {
+                    self.handle_execute_inner(stmt, params, ctx).await;
+                }
+                crate::coord::PlanStatement::Plan {
+                    plan,
+                    resolved_ids,
+                    sql_impl_resolved_ids,
+                } => {
+                    self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
+                        .await;
+                }
             }
-            crate::coord::PlanStatement::Plan {
-                plan,
-                resolved_ids,
-                sql_impl_resolved_ids,
-            } => {
-                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
-                    .await;
-            }
-        }
+        };
+        mz_ore::request_context::scope_if_enabled(request, execute).await;
     }
 
     #[instrument]

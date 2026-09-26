@@ -299,6 +299,7 @@ impl RtwCaller {
             RtwCaller::Session => ActiveSubscribeOwner::Session {
                 conn_id: conn_id.clone(),
                 session_uuid,
+                request_context: mz_ore::request_context::capture(),
             },
             RtwCaller::Background { .. } => ActiveSubscribeOwner::Background,
         }

@@ -473,11 +473,12 @@ impl Coordinator {
         );
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize create materialized view",
-            move || {
-                span.in_scope(|| {
-                    let mut pipeline = || -> Result<(
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize create materialized view",
+                move || {
+                    span.in_scope(|| {
+                        let mut pipeline = || -> Result<(
                         optimize::materialized_view::LocalMirPlan,
                         optimize::materialized_view::GlobalMirPlan,
                         optimize::materialized_view::GlobalLirPlan,
@@ -497,66 +498,72 @@ impl Coordinator {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan))
                     };
 
-                    let stage = match pipeline() {
-                        Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
-                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
-                                let (_, df_meta) = global_lir_plan.unapply();
-                                CreateMaterializedViewStage::Explain(
-                                    CreateMaterializedViewExplain {
-                                        validity,
-                                        global_id,
-                                        plan,
-                                        df_meta,
-                                        explain_ctx,
-                                    },
-                                )
-                            } else {
-                                CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
-                                    item_id,
-                                    global_id,
-                                    validity,
-                                    plan,
-                                    resolved_ids,
-                                    local_mir_plan,
-                                    global_mir_plan,
-                                    global_lir_plan,
-                                    optimizer_features,
-                                })
+                        let stage = match pipeline() {
+                            Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
+                                if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                    let (_, df_meta) = global_lir_plan.unapply();
+                                    CreateMaterializedViewStage::Explain(
+                                        CreateMaterializedViewExplain {
+                                            validity,
+                                            global_id,
+                                            plan,
+                                            df_meta,
+                                            explain_ctx,
+                                        },
+                                    )
+                                } else {
+                                    CreateMaterializedViewStage::Finish(
+                                        CreateMaterializedViewFinish {
+                                            item_id,
+                                            global_id,
+                                            validity,
+                                            plan,
+                                            resolved_ids,
+                                            local_mir_plan,
+                                            global_mir_plan,
+                                            global_lir_plan,
+                                            optimizer_features,
+                                        },
+                                    )
+                                }
                             }
-                        }
-                        // Internal optimizer errors are handled differently
-                        // depending on the caller.
-                        Err(err) => {
-                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
-                                // In `sequence_~` contexts, immediately return the error.
-                                return Err(err);
-                            };
+                            // Internal optimizer errors are handled differently
+                            // depending on the caller.
+                            Err(err) => {
+                                let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                    // In `sequence_~` contexts, immediately return the error.
+                                    return Err(err);
+                                };
 
-                            if explain_ctx.broken {
-                                // In `EXPLAIN BROKEN` contexts, just log the error
-                                // and move to the next stage with default
-                                // parameters.
-                                tracing::error!("error while handling EXPLAIN statement: {}", err);
-                                CreateMaterializedViewStage::Explain(
-                                    CreateMaterializedViewExplain {
-                                        global_id,
-                                        validity,
-                                        plan,
-                                        df_meta: Default::default(),
-                                        explain_ctx,
-                                    },
-                                )
-                            } else {
-                                // In regular `EXPLAIN` contexts, immediately return the error.
-                                return Err(err);
+                                if explain_ctx.broken {
+                                    // In `EXPLAIN BROKEN` contexts, just log the error
+                                    // and move to the next stage with default
+                                    // parameters.
+                                    tracing::error!(
+                                        "error while handling EXPLAIN statement: {}",
+                                        err
+                                    );
+                                    CreateMaterializedViewStage::Explain(
+                                        CreateMaterializedViewExplain {
+                                            global_id,
+                                            validity,
+                                            plan,
+                                            df_meta: Default::default(),
+                                            explain_ctx,
+                                        },
+                                    )
+                                } else {
+                                    // In regular `EXPLAIN` contexts, immediately return the error.
+                                    return Err(err);
+                                }
                             }
-                        }
-                    };
+                        };
 
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]

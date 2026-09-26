@@ -307,71 +307,76 @@ impl Coordinator {
             optimize::view::Optimizer::new(optimizer_config, Some(self.optimizer_metrics()));
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize create view",
-            move || {
-                span.in_scope(|| {
-                    let mut pipeline =
-                        || -> Result<mz_expr::OptimizedMirRelationExpr, AdapterError> {
-                            let _dispatch_guard = explain_ctx.dispatch_guard();
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize create view",
+                move || {
+                    span.in_scope(|| {
+                        let mut pipeline =
+                            || -> Result<mz_expr::OptimizedMirRelationExpr, AdapterError> {
+                                let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                            let raw_expr = plan.view.expr.clone();
-                            let optimized_expr = optimizer.catch_unwind_optimize(raw_expr)?;
+                                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                                let raw_expr = plan.view.expr.clone();
+                                let optimized_expr = optimizer.catch_unwind_optimize(raw_expr)?;
 
-                            Ok(optimized_expr)
-                        };
-
-                    let stage = match pipeline() {
-                        Ok(optimized_expr) => {
-                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
-                                CreateViewStage::Explain(CreateViewExplain {
-                                    validity,
-                                    id: global_id,
-                                    plan,
-                                    explain_ctx,
-                                })
-                            } else {
-                                CreateViewStage::Finish(CreateViewFinish {
-                                    validity,
-                                    item_id,
-                                    global_id,
-                                    plan,
-                                    optimized_expr,
-                                    resolved_ids,
-                                })
-                            }
-                        }
-                        // Internal optimizer errors are handled differently
-                        // depending on the caller.
-                        Err(err) => {
-                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
-                                // In `sequence_~` contexts, immediately return the error.
-                                return Err(err);
+                                Ok(optimized_expr)
                             };
 
-                            if explain_ctx.broken {
-                                // In `EXPLAIN BROKEN` contexts, just log the error
-                                // and move to the next stage with default
-                                // parameters.
-                                tracing::error!("error while handling EXPLAIN statement: {}", err);
-                                CreateViewStage::Explain(CreateViewExplain {
-                                    validity,
-                                    id: global_id,
-                                    plan,
-                                    explain_ctx,
-                                })
-                            } else {
-                                // In regular `EXPLAIN` contexts, immediately return the error.
-                                return Err(err);
+                        let stage = match pipeline() {
+                            Ok(optimized_expr) => {
+                                if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                    CreateViewStage::Explain(CreateViewExplain {
+                                        validity,
+                                        id: global_id,
+                                        plan,
+                                        explain_ctx,
+                                    })
+                                } else {
+                                    CreateViewStage::Finish(CreateViewFinish {
+                                        validity,
+                                        item_id,
+                                        global_id,
+                                        plan,
+                                        optimized_expr,
+                                        resolved_ids,
+                                    })
+                                }
                             }
-                        }
-                    };
+                            // Internal optimizer errors are handled differently
+                            // depending on the caller.
+                            Err(err) => {
+                                let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                    // In `sequence_~` contexts, immediately return the error.
+                                    return Err(err);
+                                };
 
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                                if explain_ctx.broken {
+                                    // In `EXPLAIN BROKEN` contexts, just log the error
+                                    // and move to the next stage with default
+                                    // parameters.
+                                    tracing::error!(
+                                        "error while handling EXPLAIN statement: {}",
+                                        err
+                                    );
+                                    CreateViewStage::Explain(CreateViewExplain {
+                                        validity,
+                                        id: global_id,
+                                        plan,
+                                        explain_ctx,
+                                    })
+                                } else {
+                                    // In regular `EXPLAIN` contexts, immediately return the error.
+                                    return Err(err);
+                                }
+                            }
+                        };
+
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]

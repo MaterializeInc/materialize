@@ -21,6 +21,7 @@ use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::request_context::{self, RequestContext};
 use mz_repr::adt::numeric;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowRef, Timestamp};
 use mz_sql::plan::SubscribeOutput;
@@ -42,6 +43,13 @@ pub enum ActiveComputeSink {
 }
 
 impl ActiveComputeSink {
+    pub(crate) fn request_context(&self) -> Option<RequestContext> {
+        match self {
+            Self::Subscribe(subscribe) => subscribe.request_context(),
+            Self::CopyTo(copy_to) => copy_to.request_context,
+        }
+    }
+
     /// Reports the ID of the cluster on which the sink is running.
     pub fn cluster_id(&self) -> ClusterId {
         match &self {
@@ -72,10 +80,10 @@ impl ActiveComputeSink {
     /// informs the end client that the sink is finished for the specified
     /// reason.
     pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
-        match self {
+        request_context::in_scope_if_enabled(self.request_context(), || match self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.retire(reason),
             ActiveComputeSink::CopyTo(copy_to) => copy_to.retire(reason),
-        }
+        });
     }
 }
 
@@ -154,6 +162,7 @@ pub enum ActiveSubscribeOwner {
     Session {
         conn_id: ConnectionId,
         session_uuid: Uuid,
+        request_context: Option<RequestContext>,
     },
     /// The subscribe belongs to a coordinator background task.
     ///
@@ -202,6 +211,15 @@ pub struct ActiveSubscribe {
 }
 
 impl ActiveSubscribe {
+    pub(crate) fn request_context(&self) -> Option<RequestContext> {
+        match self.owner {
+            ActiveSubscribeOwner::Session {
+                request_context, ..
+            } => request_context,
+            ActiveSubscribeOwner::Background => None,
+        }
+    }
+
     /// The session uuid for this subscribe's `mz_subscriptions` row, or `None`
     /// if it does not appear there.
     pub fn introspection_session_uuid(&self) -> Option<Uuid> {
@@ -264,6 +282,12 @@ impl ActiveSubscribe {
     ///
     /// Returns `true` if the subscribe is finished.
     pub fn process_response(&self, batch: SubscribeBatch) -> bool {
+        request_context::in_scope_if_enabled(self.request_context(), || {
+            self.process_response_inner(batch)
+        })
+    }
+
+    fn process_response_inner(&self, batch: SubscribeBatch) -> bool {
         let comparator = RowComparator::new(self.output.row_order());
         let rows = match batch.updates {
             Ok(ref rows) => {
@@ -539,6 +563,7 @@ impl ActiveSubscribe {
 /// A description of an active copy to sink from the coordinator's perspective.
 #[derive(Debug)]
 pub struct ActiveCopyTo {
+    pub request_context: Option<RequestContext>,
     /// The ID of the connection which created the subscribe.
     pub conn_id: ConnectionId,
     /// The result channel for the `COPY ... TO` statement that created the copy to sink.

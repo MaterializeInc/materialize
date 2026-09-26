@@ -18,6 +18,7 @@ use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
+use mz_ore::request_context::{self, RequestContext};
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
@@ -128,7 +129,7 @@ impl CoordinatorClient {
             CoordinatorClient::Session(client) => client.try_send(command),
             CoordinatorClient::Background { tx, .. } => tx
                 .send(Message::Command(
-                    mz_ore::tracing::OpenTelemetryContext::obtain(),
+                    mz_ore::tracing::InProcessContext::obtain(),
                     command,
                 ))
                 .is_ok(),
@@ -613,6 +614,7 @@ impl PeekClient {
 
         StatementLoggingGuard {
             id,
+            request_context: request_context::capture(),
             coordinator_client: self.coordinator_client.clone(),
             now: self.statement_logging_frontend.now.clone(),
         }
@@ -709,6 +711,7 @@ impl PeekClient {
 struct StatementLoggingGuard {
     /// `None` if the statement was not sampled for logging.
     id: Option<StatementLoggingId>,
+    request_context: Option<RequestContext>,
     coordinator_client: CoordinatorClient,
     now: mz_ore::now::NowFn,
 }
@@ -717,8 +720,10 @@ impl StatementLoggingGuard {
     /// Arms a guard for the obligation the coordinator armed for `outer`, the
     /// statement whose execution the one we are about to run serves.
     fn adopt(outer: ExecuteContextGuard, peek_client: &PeekClient) -> Self {
+        let request_context = outer.request_context();
         Self {
             id: outer.defuse().retire(),
+            request_context,
             coordinator_client: peek_client.coordinator_client.clone(),
             now: peek_client.statement_logging_frontend.now.clone(),
         }
@@ -738,7 +743,7 @@ impl StatementLoggingGuard {
     /// Turns the obligation back into its transferable form, disarming this
     /// guard.
     fn release(mut self) -> ExecuteContextExtra {
-        ExecuteContextExtra::new(self.id.take())
+        ExecuteContextExtra::with_request_context(self.id.take(), self.request_context)
     }
 
     /// Hands off logging responsibility without emitting an end-execution
@@ -761,11 +766,13 @@ impl StatementLoggingGuard {
         // A guard can outlive the coordinator during shutdown. Failing to send
         // costs us one end event, panicking in `Drop` would cost the whole
         // connection.
-        let _ = self
-            .coordinator_client
-            .try_send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::EndedExecution(record),
-            ));
+        request_context::in_scope_if_enabled(self.request_context, || {
+            let _ = self
+                .coordinator_client
+                .try_send(Command::FrontendStatementLogging(
+                    FrontendStatementLoggingEvent::EndedExecution(record),
+                ));
+        });
     }
 }
 

@@ -203,7 +203,7 @@ impl Coordinator {
                     session,
                     tx,
                 } => {
-                    let otel_ctx = OpenTelemetryContext::obtain();
+                    let context = mz_ore::tracing::InProcessContext::obtain();
                     let result = self.setup_copy_from_stdin(
                         &session,
                         target_id,
@@ -215,7 +215,7 @@ impl Coordinator {
                     let _ = tx.send(Response {
                         result,
                         session,
-                        otel_ctx,
+                        context,
                     });
                 }
 
@@ -394,13 +394,16 @@ impl Coordinator {
                     match result {
                         Ok(Some(fut)) => {
                             let catalog = Arc::clone(&self.catalog);
-                            task::spawn(|| "determine real time recent timestamp", async move {
-                                let result =
-                                    Coordinator::await_real_time_recent_timestamp(catalog, fut)
-                                        .await
-                                        .map(Some);
-                                let _ = tx.send(result);
-                            });
+                            task::spawn_in_request(
+                                || "determine real time recent timestamp",
+                                async move {
+                                    let result =
+                                        Coordinator::await_real_time_recent_timestamp(catalog, fut)
+                                            .await
+                                            .map(Some);
+                                    let _ = tx.send(result);
+                                },
+                            );
                         }
                         Ok(None) => {
                             let _ = tx.send(Ok(None));
@@ -491,10 +494,13 @@ impl Coordinator {
                             // Wait for the `mz_subscriptions` bookkeeping write off the
                             // coordinator loop before returning the `SUBSCRIBE` response to
                             // the subscribing session.
-                            task::spawn(|| "execute_subscribe::await_bookkeeping", async move {
-                                write_notify.await;
-                                let _ = tx.send(Ok(resp));
-                            });
+                            task::spawn_in_request(
+                                || "execute_subscribe::await_bookkeeping",
+                                async move {
+                                    write_notify.await;
+                                    let _ = tx.send(Ok(resp));
+                                },
+                            );
                         }
                         Err(e) => {
                             // On success the guard's contents moved into the
@@ -519,7 +525,7 @@ impl Coordinator {
                     let enforce_external_addresses =
                         mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
                             .get(self.controller.storage.config().config_set());
-                    task::spawn(|| "copy_to_preflight", async move {
+                    task::spawn_in_request(|| "copy_to_preflight", async move {
                         let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
                             &s3_sink_connection.aws_connection,
@@ -832,7 +838,7 @@ impl Coordinator {
         if let Some(auth) = role_auth {
             if let Some(hash) = &auth.password_hash {
                 let hash = hash.clone();
-                task::spawn_blocking(
+                task::spawn_blocking_in_request(
                     || "auth-check-hash",
                     move || {
                         let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
@@ -1158,7 +1164,7 @@ impl Coordinator {
         // Nothing could have dropped it on the way here either, the command
         // travels a channel that only this loop drains.
         let outer_context = outer_context
-            .map(|extra| ExecuteContextGuard::new(extra.retire(), self.internal_cmd_tx.clone()));
+            .map(|extra| ExecuteContextGuard::from_extra(extra, self.internal_cmd_tx.clone()));
 
         // A new statement is starting, so discard any cancellation that was signaled while no
         // statement was running. Such a cancellation targeted an earlier statement and must not
@@ -1586,7 +1592,7 @@ impl Coordinator {
                 let now = self.now();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 let current_storage_configuration = self.controller.storage.config().clone();
-                task::spawn(|| format!("purify:{conn_id}"), async move {
+                task::spawn_in_request(|| format!("purify:{conn_id}"), async move {
                     let conn_catalog = catalog.for_session(ctx.session());
 
                     // Checks if the session is authorized to purify a statement. Usually

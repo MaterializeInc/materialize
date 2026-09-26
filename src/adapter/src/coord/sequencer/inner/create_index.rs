@@ -344,11 +344,12 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize create index",
-            move || {
-                span.in_scope(|| {
-                    let mut pipeline = || -> Result<(
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize create index",
+                move || {
+                    span.in_scope(|| {
+                        let mut pipeline = || -> Result<(
                     optimize::index::GlobalMirPlan,
                     optimize::index::GlobalLirPlan,
                 ), AdapterError> {
@@ -368,60 +369,64 @@ impl Coordinator {
                     Ok((global_mir_plan, global_lir_plan))
                 };
 
-                    let stage = match pipeline() {
-                        Ok((global_mir_plan, global_lir_plan)) => {
-                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
-                                let (_, df_meta) = global_lir_plan.unapply();
-                                CreateIndexStage::Explain(CreateIndexExplain {
-                                    validity,
-                                    exported_index_id: global_id,
-                                    plan,
-                                    df_meta,
-                                    explain_ctx,
-                                })
-                            } else {
-                                CreateIndexStage::Finish(CreateIndexFinish {
-                                    validity,
-                                    item_id,
-                                    global_id,
-                                    plan,
-                                    resolved_ids,
-                                    global_mir_plan,
-                                    global_lir_plan,
-                                    optimizer_features,
-                                })
+                        let stage = match pipeline() {
+                            Ok((global_mir_plan, global_lir_plan)) => {
+                                if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                    let (_, df_meta) = global_lir_plan.unapply();
+                                    CreateIndexStage::Explain(CreateIndexExplain {
+                                        validity,
+                                        exported_index_id: global_id,
+                                        plan,
+                                        df_meta,
+                                        explain_ctx,
+                                    })
+                                } else {
+                                    CreateIndexStage::Finish(CreateIndexFinish {
+                                        validity,
+                                        item_id,
+                                        global_id,
+                                        plan,
+                                        resolved_ids,
+                                        global_mir_plan,
+                                        global_lir_plan,
+                                        optimizer_features,
+                                    })
+                                }
                             }
-                        }
-                        // Internal optimizer errors are handled differently
-                        // depending on the caller.
-                        Err(err) => {
-                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
-                                // In `sequence_~` contexts, immediately error.
-                                return Err(err);
-                            };
+                            // Internal optimizer errors are handled differently
+                            // depending on the caller.
+                            Err(err) => {
+                                let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                    // In `sequence_~` contexts, immediately error.
+                                    return Err(err);
+                                };
 
-                            if explain_ctx.broken {
-                                // In `EXPLAIN BROKEN` contexts, just log the error
-                                // and move to the next stage with default
-                                // parameters.
-                                tracing::error!("error while handling EXPLAIN statement: {}", err);
-                                CreateIndexStage::Explain(CreateIndexExplain {
-                                    validity,
-                                    exported_index_id: global_id,
-                                    plan,
-                                    df_meta: Default::default(),
-                                    explain_ctx,
-                                })
-                            } else {
-                                // In regular `EXPLAIN` contexts, immediately error.
-                                return Err(err);
+                                if explain_ctx.broken {
+                                    // In `EXPLAIN BROKEN` contexts, just log the error
+                                    // and move to the next stage with default
+                                    // parameters.
+                                    tracing::error!(
+                                        "error while handling EXPLAIN statement: {}",
+                                        err
+                                    );
+                                    CreateIndexStage::Explain(CreateIndexExplain {
+                                        validity,
+                                        exported_index_id: global_id,
+                                        plan,
+                                        df_meta: Default::default(),
+                                        explain_ctx,
+                                    })
+                                } else {
+                                    // In regular `EXPLAIN` contexts, immediately error.
+                                    return Err(err);
+                                }
                             }
-                        }
-                    };
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                        };
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]

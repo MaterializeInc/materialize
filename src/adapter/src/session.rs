@@ -75,6 +75,7 @@ pub struct Session {
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
     uuid: Uuid,
+    next_request_id: u64,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus,
@@ -280,6 +281,21 @@ impl Session {
         self.uuid
     }
 
+    /// Allocates diagnostic identity for a frontend request, independently of SQL logging.
+    pub fn next_request_context(&mut self) -> Option<mz_ore::request_context::RequestContext> {
+        if !mz_ore::tracing::QpsTracingMode::current().request_context() {
+            return None;
+        }
+        let request_id = self.next_request_id;
+        self.next_request_id = request_id
+            .checked_add(1)
+            .expect("request sequence exhausted");
+        Some(mz_ore::request_context::RequestContext {
+            session_id: self.uuid,
+            request_id,
+        })
+    }
+
     /// Creates a new dummy session.
     ///
     /// Dummy sessions are intended for use when executing queries on behalf of
@@ -338,6 +354,7 @@ impl Session {
         Session {
             conn_id,
             uuid,
+            next_request_id: 1,
             transaction: TransactionStatus::Default,
             pcx: None,
             metrics,

@@ -87,6 +87,12 @@ pub enum DeferredOp {
 }
 
 impl DeferredOp {
+    pub(crate) fn request_context(&self) -> Option<mz_ore::request_context::RequestContext> {
+        match self {
+            Self::Plan(plan) => plan.ctx.request_context(),
+            Self::Write(write) => write.pending_txn.ctx.request_context(),
+        }
+    }
     /// Certain operations, e.g. "blind writes"/`INSERT` statements, can be optimistically retried
     /// because we can share a write lock between multiple operations. In this case we wait to
     /// acquire the locks until [`stage_group_commit`], where writes are grouped by collection and
@@ -797,83 +803,87 @@ impl Coordinator {
             tracing::warn!(%conn_id, "no deferred op found, it must have been canceled?");
             return;
         };
-        tracing::info!(%conn_id, "trying deferred plan");
+        let request = op.request_context();
+        let retry = async {
+            tracing::info!(%conn_id, "trying deferred plan");
 
-        // If we pre-acquired a lock, try to acquire the rest.
-        let write_locks = match acquired_lock {
-            Some((acquired_gid, acquired_lock)) => {
-                let mut write_locks = WriteLocks::builder(op.required_locks());
+            // If we pre-acquired a lock, try to acquire the rest.
+            let write_locks = match acquired_lock {
+                Some((acquired_gid, acquired_lock)) => {
+                    let mut write_locks = WriteLocks::builder(op.required_locks());
 
-                // Insert the one lock we already acquired into the our builder.
-                write_locks.insert_lock(acquired_gid, acquired_lock);
+                    // Insert the one lock we already acquired into the our builder.
+                    write_locks.insert_lock(acquired_gid, acquired_lock);
 
-                // Acquire the rest of our locks, filtering out the one we already have.
-                for gid in op.required_locks().filter(|gid| *gid != acquired_gid) {
-                    if let Some(lock) = self.try_grant_object_write_lock(gid) {
-                        write_locks.insert_lock(gid, lock);
+                    // Acquire the rest of our locks, filtering out the one we already have.
+                    for gid in op.required_locks().filter(|gid| *gid != acquired_gid) {
+                        if let Some(lock) = self.try_grant_object_write_lock(gid) {
+                            write_locks.insert_lock(gid, lock);
+                        }
                     }
-                }
 
-                // If we failed to acquire any locks, spawn a task that waits for them to become available.
-                let locks = match write_locks.all_or_nothing(op.conn_id()) {
-                    Ok(locks) => locks,
-                    Err(failed_to_acquire) => {
-                        let acquire_future = self
-                            .grant_object_write_lock(failed_to_acquire)
-                            .map(Option::Some);
-                        self.defer_op(acquire_future, op);
-                        return;
-                    }
-                };
-
-                Some(locks)
-            }
-            None => None,
-        };
-
-        match op {
-            DeferredOp::Plan(mut deferred) => {
-                if let Err(e) = deferred.validity.check(self.catalog()) {
-                    deferred.ctx.retire(Err(e))
-                } else {
-                    // If we pre-acquired our locks, grant them to the session.
-                    if let Some(locks) = write_locks {
-                        let conn_id = deferred.ctx.session().conn_id().clone();
-                        if let Err(existing) =
-                            deferred.ctx.session_mut().try_grant_write_locks(locks)
-                        {
-                            tracing::error!(
-                                %conn_id,
-                                ?existing,
-                                "session already write locks granted?",
-                            );
-                            return deferred.ctx.retire(Err(AdapterError::WrongSetOfLocks));
+                    // If we failed to acquire any locks, spawn a task that waits for them to become available.
+                    let locks = match write_locks.all_or_nothing(op.conn_id()) {
+                        Ok(locks) => locks,
+                        Err(failed_to_acquire) => {
+                            let acquire_future = self
+                                .grant_object_write_lock(failed_to_acquire)
+                                .map(Option::Some);
+                            self.defer_op(acquire_future, op);
+                            return;
                         }
                     };
 
-                    // Note: This plan is not guaranteed to run, it may get deferred again.
-                    self.sequence_plan(
-                        deferred.ctx,
-                        deferred.plan,
-                        deferred.resolved_ids,
-                        deferred.sql_impl_resolved_ids,
-                    )
-                    .await;
+                    Some(locks)
                 }
-            }
-            DeferredOp::Write(DeferredWrite {
-                span,
-                writes,
-                pending_txn,
-            }) => {
-                self.submit_write(PendingWriteTxn::User {
+                None => None,
+            };
+
+            match op {
+                DeferredOp::Plan(mut deferred) => {
+                    if let Err(e) = deferred.validity.check(self.catalog()) {
+                        deferred.ctx.retire(Err(e))
+                    } else {
+                        // If we pre-acquired our locks, grant them to the session.
+                        if let Some(locks) = write_locks {
+                            let conn_id = deferred.ctx.session().conn_id().clone();
+                            if let Err(existing) =
+                                deferred.ctx.session_mut().try_grant_write_locks(locks)
+                            {
+                                tracing::error!(
+                                    %conn_id,
+                                    ?existing,
+                                    "session already write locks granted?",
+                                );
+                                return deferred.ctx.retire(Err(AdapterError::WrongSetOfLocks));
+                            }
+                        };
+
+                        // Note: This plan is not guaranteed to run, it may get deferred again.
+                        self.sequence_plan(
+                            deferred.ctx,
+                            deferred.plan,
+                            deferred.resolved_ids,
+                            deferred.sql_impl_resolved_ids,
+                        )
+                        .await;
+                    }
+                }
+                DeferredOp::Write(DeferredWrite {
                     span,
                     writes,
-                    write_locks,
-                    responder: UserWriteResponder::Session(pending_txn),
-                });
+                    pending_txn,
+                }) => {
+                    self.submit_write(PendingWriteTxn::User {
+                        span,
+                        writes,
+                        write_locks,
+                        responder: UserWriteResponder::Session(pending_txn),
+                    });
+                }
             }
-        }
+        };
+        mz_ore::request_context::scope_if_enabled(request, retry).await;
     }
 
     /// Stages pending writes for the group committer.
@@ -1300,7 +1310,7 @@ impl Coordinator {
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let conn_id_ = conn_id.clone();
-        mz_ore::task::spawn(|| format!("defer op {conn_id_}"), async move {
+        mz_ore::task::spawn_in_request(|| format!("defer op {conn_id_}"), async move {
             tracing::info!(%conn_id, "deferring plan");
             // Once we can acquire the first failed lock, try running the deferred plan.
             //

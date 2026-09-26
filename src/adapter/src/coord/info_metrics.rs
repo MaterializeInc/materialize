@@ -36,7 +36,7 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_ore::task;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::InProcessContext;
 use mz_repr::CatalogItemId;
 use mz_sql::names::{FullItemName, RawDatabaseSpecifier};
 use prometheus::core::AtomicU64;
@@ -285,7 +285,7 @@ impl Coordinator {
             loop {
                 let (tx, rx) = oneshot::channel();
                 let send = internal_cmd_tx.send(Message::Command(
-                    OpenTelemetryContext::obtain(),
+                    InProcessContext::obtain(),
                     Command::CatalogSnapshot { tx },
                 ));
                 // Bail if the coordinator has gone away.

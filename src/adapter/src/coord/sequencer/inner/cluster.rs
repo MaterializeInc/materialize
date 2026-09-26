@@ -468,7 +468,7 @@ impl Coordinator {
                             let plan = plan.clone();
                             let duration = duration.clone().to_owned();
                             let workload_class = new_config.workload_class.clone();
-                            Ok(StageResult::Handle(mz_ore::task::spawn(
+                            Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
                                 || "Finalize Alter Cluster",
                                 async move {
                                     tokio::time::sleep(duration).await;
@@ -941,7 +941,7 @@ impl Coordinator {
                     .system_config()
                     .cluster_alter_check_ready_interval();
                 let span = Span::current();
-                Ok(StageResult::Handle(mz_ore::task::spawn(
+                Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
                     || "Await Cluster Reconfiguration",
                     async move {
                         tokio::time::sleep(poll_duration).await;
@@ -1134,7 +1134,7 @@ impl Coordinator {
                         .system_config()
                         .cluster_alter_check_ready_interval()
                         .clone();
-                    return Ok(StageResult::Handle(mz_ore::task::spawn(
+                    return Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
                         || "Finalize Alter Cluster",
                         async move {
                             tokio::time::sleep(poll_duration).await;
@@ -1178,7 +1178,7 @@ impl Coordinator {
         });
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn(
+        Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
             || "Alter Cluster: wait for hydrated",
             async move {
                 let compute_hydrated = compute_hydrated_fut

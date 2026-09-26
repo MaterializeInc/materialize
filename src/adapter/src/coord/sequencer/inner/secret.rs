@@ -123,7 +123,7 @@ impl Coordinator {
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut plan.secret.secret_as)?;
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn(
+        Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
             || "create secret ensure",
             async move {
                 secrets_controller.ensure(item_id, &payload).await?;
@@ -297,7 +297,7 @@ impl Coordinator {
         let contents = std::str::from_utf8(&payload).expect("validated as UTF-8 by extract_secret");
         self.check_secret_content_guards_of_dependents(id, contents)?;
         let span = Span::current();
-        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn_in_request(
             || "alter secret ensure",
             async move {
                 secrets_controller.ensure(id, &payload).await?;
@@ -345,7 +345,7 @@ impl Coordinator {
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let entry = self.catalog().get_entry(&id).clone();
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn(
+        Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
             || "rotate keys ensure",
             async move {
                 let secret = secrets_controller.reader().read(id).await?;

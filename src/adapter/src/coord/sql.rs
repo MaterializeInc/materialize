@@ -55,7 +55,7 @@ impl Coordinator {
     ) {
         let catalog = self.owned_catalog();
         let now = self.now();
-        mz_ore::task::spawn(|| "coord::declare", async move {
+        mz_ore::task::spawn_in_request(|| "coord::declare", async move {
             let result =
                 Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, params, now)
                     .map(|()| ExecuteResponse::DeclaredCursor);

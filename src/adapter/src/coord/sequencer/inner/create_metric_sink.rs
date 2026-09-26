@@ -151,37 +151,39 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize create metric sink",
-            move || {
-                span.in_scope(|| {
-                    let metric_sink = optimize::metric_sink::MetricSink::new(
-                        debug_name,
-                        optimize::metric_sink::MetricSinkFrom::Id(plan.metric_sink.from),
-                        plan.metric_sink.prefix.clone(),
-                        None,
-                    );
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize create metric sink",
+                move || {
+                    span.in_scope(|| {
+                        let metric_sink = optimize::metric_sink::MetricSink::new(
+                            debug_name,
+                            optimize::metric_sink::MetricSinkFrom::Id(plan.metric_sink.from),
+                            plan.metric_sink.prefix.clone(),
+                            None,
+                        );
 
-                    // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(metric_sink)?;
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan =
-                        optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                        // MIR ⇒ MIR optimization (global)
+                        let global_mir_plan = optimizer.catch_unwind_optimize(metric_sink)?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan =
+                            optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                    let stage = CreateMetricSinkStage::Finish(CreateMetricSinkFinish {
-                        validity,
-                        item_id,
-                        global_id,
-                        plan,
-                        resolved_ids,
-                        global_mir_plan,
-                        global_lir_plan,
-                        optimizer_features,
-                    });
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                        let stage = CreateMetricSinkStage::Finish(CreateMetricSinkFinish {
+                            validity,
+                            item_id,
+                            global_id,
+                            plan,
+                            resolved_ids,
+                            global_mir_plan,
+                            global_lir_plan,
+                            optimizer_features,
+                        });
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]

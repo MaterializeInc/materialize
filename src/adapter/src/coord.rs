@@ -131,9 +131,10 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::request_context::{self, RequestContext};
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
-use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::tracing::{InProcessContext, OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
 use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
@@ -365,7 +366,7 @@ pub struct ArrangementSizeRecord {
 
 #[derive(Debug)]
 pub enum Message {
-    Command(OpenTelemetryContext, Command),
+    Command(InProcessContext, Command),
     ControllerReady {
         controller: ControllerReadiness,
     },
@@ -499,6 +500,29 @@ pub enum Message {
 }
 
 impl Message {
+    fn request_context(&self) -> Option<RequestContext> {
+        match self {
+            Self::Command(context, _) => context.request(),
+            Self::PurifiedStatementReady(ready) => ready.ctx.request_context(),
+            Self::CreateConnectionValidationReady(ready) => ready.ctx.request_context(),
+            Self::AlterConnectionValidationReady(ready) => ready.ctx.request_context(),
+            Self::RetireExecute { data, .. } => data.request_context(),
+            Self::ExecuteSingleStatementTransaction { ctx, .. }
+            | Self::PeekStageReady { ctx, .. }
+            | Self::CreateIndexStageReady { ctx, .. }
+            | Self::CreateMetricSinkStageReady { ctx, .. }
+            | Self::CreateViewStageReady { ctx, .. }
+            | Self::CreateMaterializedViewStageReady { ctx, .. }
+            | Self::SubscribeStageReady { ctx, .. }
+            | Self::SecretStageReady { ctx, .. }
+            | Self::ClusterStageReady { ctx, .. }
+            | Self::ExplainTimestampStageReady { ctx, .. } => ctx.request_context(),
+            // Shared/background messages have no single request owner. Restore
+            // individual identities when taking their pending work or responses.
+            _ => None,
+        }
+    }
+
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -1327,9 +1351,13 @@ pub(crate) trait Staged: Send {
 pub trait StagedContext {
     fn retire(self, result: Result<ExecuteResponse, AdapterError>);
     fn session(&self) -> Option<&Session>;
+    fn request_context(&self) -> Option<RequestContext>;
 }
 
 impl StagedContext for ExecuteContext {
+    fn request_context(&self) -> Option<RequestContext> {
+        ExecuteContext::request_context(self)
+    }
     fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         self.retire(result);
     }
@@ -1340,6 +1368,9 @@ impl StagedContext for ExecuteContext {
 }
 
 impl StagedContext for () {
+    fn request_context(&self) -> Option<RequestContext> {
+        None
+    }
     fn retire(self, _result: Result<ExecuteResponse, AdapterError>) {}
 
     fn session(&self) -> Option<&Session> {
@@ -1559,6 +1590,14 @@ impl PendingReadTxn {
 
     /// Retires a linearized transaction and records its completion delay.
     fn finish(self, metrics: &Metrics, now: Instant) {
+        let request = match &self.txn {
+            PendingRead::Read { txn } => txn.ctx.request_context(),
+            PendingRead::ReadThenWrite { ctx, .. } => ctx.request_context(),
+        };
+        request_context::in_scope_if_enabled(request, || self.finish_inner(metrics, now));
+    }
+
+    fn finish_inner(self, metrics: &Metrics, now: Instant) {
         let span = tracing::debug_span!("retire_read_results");
         self.otel_ctx.attach_as_parent_to(&span);
         let _entered = span.enter();
@@ -1659,18 +1698,34 @@ impl PendingRead {
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
 ///
-/// This is a pure data struct containing only the statement logging ID.
+/// Request attribution is independent of whether a statement logging ID exists.
 /// For auto-retire-on-drop behavior, use `ExecuteContextGuard` which wraps
 /// this struct and owns the channel for sending retirement messages.
 #[derive(Debug, Default)]
 #[must_use]
 pub struct ExecuteContextExtra {
     statement_uuid: Option<StatementLoggingId>,
+    request_context: Option<RequestContext>,
 }
 
 impl ExecuteContextExtra {
     pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
-        Self { statement_uuid }
+        Self {
+            statement_uuid,
+            request_context: request_context::capture(),
+        }
+    }
+    pub(crate) fn with_request_context(
+        statement_uuid: Option<StatementLoggingId>,
+        request_context: Option<RequestContext>,
+    ) -> Self {
+        Self {
+            statement_uuid,
+            request_context,
+        }
+    }
+    pub(crate) fn request_context(&self) -> Option<RequestContext> {
+        self.request_context
     }
     pub fn is_trivial(&self) -> bool {
         self.statement_uuid.is_none()
@@ -1721,6 +1776,18 @@ impl Default for ExecuteContextGuard {
 }
 
 impl ExecuteContextGuard {
+    pub(crate) fn from_extra(
+        extra: ExecuteContextExtra,
+        coordinator_tx: mpsc::UnboundedSender<Message>,
+    ) -> Self {
+        Self {
+            extra,
+            coordinator_tx,
+        }
+    }
+    pub(crate) fn request_context(&self) -> Option<RequestContext> {
+        self.extra.request_context()
+    }
     pub(crate) fn new(
         statement_uuid: Option<StatementLoggingId>,
         coordinator_tx: mpsc::UnboundedSender<Message>,
@@ -1756,6 +1823,7 @@ impl Drop for ExecuteContextGuard {
             let msg = Message::RetireExecute {
                 data: ExecuteContextExtra {
                     statement_uuid: Some(statement_uuid),
+                    request_context: self.extra.request_context,
                 },
                 otel_ctx: OpenTelemetryContext::obtain(),
                 reason: StatementEndedExecutionReason::Aborted,
@@ -1797,20 +1865,25 @@ impl Drop for ExecuteContext {
         };
         // Destructors cannot spawn response-barrier tasks during runtime shutdown. Send the error
         // synchronously and let the statement guard report retirement.
-        tracing::warn!("execute context dropped without retirement, failing the client");
-        let ExecuteContextInner { tx, session, .. } = *inner;
-        tx.send(
-            Err(AdapterError::Internal(
-                "statement execution abandoned, outcome unknown (server shutting down)".into(),
-            )),
-            session,
-        );
+        request_context::in_scope_if_enabled(inner.request_context, || {
+            tracing::warn!("execute context dropped without retirement, failing the client");
+            let ExecuteContextInner { tx, session, .. } = *inner;
+            tx.send(
+                Err(AdapterError::Internal(
+                    "statement execution abandoned, outcome unknown (server shutting down)".into(),
+                )),
+                session,
+            );
+        });
     }
 }
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct ExecuteContextInner {
+    // Independent of `extra`: FETCH and peek handoffs can take the logging guard
+    // before this context sends its response or gets dropped.
+    request_context: Option<RequestContext>,
     tx: ClientTransmitter<ExecuteResponse>,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
@@ -1820,6 +1893,9 @@ pub struct ExecuteContextInner {
 }
 
 impl ExecuteContext {
+    pub(crate) fn request_context(&self) -> Option<RequestContext> {
+        self.request_context
+    }
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -1849,12 +1925,15 @@ impl ExecuteContext {
         tx: ClientTransmitter<ExecuteResponse>,
         internal_cmd_tx: mpsc::UnboundedSender<Message>,
         session: Session,
-        extra: ExecuteContextGuard,
+        mut extra: ExecuteContextGuard,
         response_barriers: Vec<BuiltinTableAppendNotify>,
     ) -> Self {
+        let request_context = extra.request_context().or_else(request_context::capture);
+        extra.extra.request_context = request_context;
         Self {
             inner: Some(
                 ExecuteContextInner {
+                    request_context,
                     tx,
                     session,
                     extra,
@@ -1889,18 +1968,24 @@ impl ExecuteContext {
         Vec<BuiltinTableAppendNotify>,
     ) {
         let ExecuteContextInner {
+            request_context,
             tx,
             internal_cmd_tx,
             session,
-            extra,
+            mut extra,
             response_barriers,
         } = *self.inner.take().expect("only consumed by value");
+        extra.extra.request_context = request_context;
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
-    pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
+    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+        request_context::in_scope_if_enabled(self.request_context(), || self.retire_inner(result));
+    }
+
+    fn retire_inner(mut self, result: Result<ExecuteResponse, AdapterError>) {
         let response_barriers = std::mem::take(&mut self.response_barriers);
         if response_barriers.is_empty() {
             let (tx, internal_cmd_tx, session, extra, _) = self.into_parts();
@@ -1909,7 +1994,7 @@ impl ExecuteContext {
         }
         // Keep `self` intact across the wait: if shutdown drops this task, the context's `Drop`
         // backstop answers the client. Barriers are empty on re-entry, so this terminates.
-        spawn(
+        mz_ore::task::spawn_in_request(
             || "execute_context::retire_after_response_barriers",
             async move {
                 for barrier in response_barriers {
@@ -4154,7 +4239,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
+        mut cmd_rx: mpsc::UnboundedReceiver<(InProcessContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
@@ -4401,56 +4486,60 @@ impl Coordinator {
                 message_batch.observe(f64::cast_lossy(messages.len()));
 
                 for msg in messages.drain(..) {
-                    // All message processing functions trace. Start a parent span
-                    // for them to make it easy to find slow messages.
-                    let msg_kind = msg.kind();
-                    let span = span!(
-                        target: "mz_adapter::coord::handle_message_loop",
-                        Level::INFO,
-                        "coord::handle_message",
-                        kind = msg_kind
-                    );
-
-                    // Record the last kind of message in case we get stuck. For
-                    // execute commands, we additionally stash the user's SQL,
-                    // statement, so we can log it in case we get stuck.
-                    *last_message.lock().expect("poisoned") = LastMessage {
-                        kind: msg_kind,
-                        stmt: match &msg {
-                            Message::Command(
-                                _,
-                                Command::Execute {
-                                    portal_name,
-                                    session,
-                                    ..
-                                },
-                            ) => session
-                                .get_portal_unverified(portal_name)
-                                .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
-                            _ => None,
-                        },
-                    };
-
-                    let start = Instant::now();
-                    self.handle_message(msg).instrument(span.clone()).await;
-                    let duration = start.elapsed();
-
-                    self.metrics
-                        .message_handling
-                        .with_label_values(&[msg_kind])
-                        .observe(duration.as_secs_f64());
-
-                    // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
-                    if duration > warn_threshold {
-                        let otel_context = span.context().span().span_context().clone();
-                        let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
-                        tracing::error!(
-                            ?msg_kind,
-                            ?trace_id,
-                            ?duration,
-                            "very slow coordinator message"
+                    let request = msg.request_context();
+                    let handle = async {
+                        // All message processing functions trace. Start a parent span
+                        // for them to make it easy to find slow messages.
+                        let msg_kind = msg.kind();
+                        let span = span!(
+                            target: "mz_adapter::coord::handle_message_loop",
+                            Level::INFO,
+                            "coord::handle_message",
+                            kind = msg_kind
                         );
-                    }
+
+                        // Record the last kind of message in case we get stuck. For
+                        // execute commands, we additionally stash the user's SQL,
+                        // statement, so we can log it in case we get stuck.
+                        *last_message.lock().expect("poisoned") = LastMessage {
+                            kind: msg_kind,
+                            stmt: match &msg {
+                                Message::Command(
+                                    _,
+                                    Command::Execute {
+                                        portal_name,
+                                        session,
+                                        ..
+                                    },
+                                ) => session
+                                    .get_portal_unverified(portal_name)
+                                    .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
+                                _ => None,
+                            },
+                        };
+
+                        let start = Instant::now();
+                        self.handle_message(msg).instrument(span.clone()).await;
+                        let duration = start.elapsed();
+
+                        self.metrics
+                            .message_handling
+                            .with_label_values(&[msg_kind])
+                            .observe(duration.as_secs_f64());
+
+                        // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
+                        if duration > warn_threshold {
+                            let otel_context = span.context().span().span_context().clone();
+                            let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
+                            tracing::error!(
+                                ?msg_kind,
+                                ?trace_id,
+                                ?duration,
+                                "very slow coordinator message"
+                            );
+                        }
+                    };
+                    request_context::scope_if_enabled(request, handle).await;
                 }
             }
 
@@ -4610,10 +4699,12 @@ impl Coordinator {
         reason: StatementEndedExecutionReason,
         ctx_extra: ExecuteContextExtra,
     ) {
-        if let Some(uuid) = ctx_extra.retire() {
-            let ended_at = self.now();
-            self.end_statement_execution(uuid, reason, ended_at);
-        }
+        request_context::in_scope_if_enabled(ctx_extra.request_context(), || {
+            if let Some(uuid) = ctx_extra.retire() {
+                let ended_at = self.now();
+                self.end_statement_execution(uuid, reason, ended_at);
+            }
+        });
     }
 
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
@@ -5907,6 +5998,49 @@ mod execute_context_tests {
     use crate::command::Response;
     use crate::session::Session;
     use crate::util::ClientTransmitter;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_request_identity_survives_logging_guard_transfer() {
+        let request = Some(RequestContext {
+            session_id: uuid::Uuid::from_u128(101),
+            request_id: 7,
+        });
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let extra = ExecuteContextExtra::with_request_context(None, request);
+        assert!(extra.is_trivial());
+        let guard = ExecuteContextGuard::from_extra(extra, internal_cmd_tx.clone());
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            guard,
+        );
+
+        // FETCH and peeks can hand the logging guard to a separate owner.
+        let transferred = std::mem::take(ctx.extra_mut());
+        assert_eq!(transferred.request_context(), request);
+        assert_eq!(ctx.extra().request_context(), None);
+        assert_eq!(ctx.request_context(), request);
+        let (tx, internal_cmd_tx, session, extra, barriers) = ctx.into_parts();
+        assert_eq!(extra.request_context(), request);
+        let ctx = ExecuteContext::from_parts_with_response_barriers(
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+            barriers,
+        );
+        assert_eq!(ctx.request_context(), request);
+        ctx.retire(Err(AdapterError::Canceled));
+        assert!(matches!(
+            client_rx
+                .try_recv()
+                .expect("cancellation answers client")
+                .result,
+            Err(AdapterError::Canceled)
+        ));
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn test_retire_completed_barrier_answers_without_scheduling() {

@@ -38,7 +38,9 @@ use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
+use mz_ore::request_context::{self, RequestContext};
 use mz_ore::str::StrExt;
+use mz_ore::tracing::QpsTracingMode;
 use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
@@ -141,7 +143,19 @@ where
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
 #[mz_ore::instrument(level = "debug")]
-pub async fn run<'a, A, I>(
+pub async fn run<'a, A, I>(params: RunParams<'a, A, I>) -> Result<(), io::Error>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    I: Iterator<Item = TaskMetrics> + Send,
+{
+    let context = Some(RequestContext {
+        session_id: params.conn_uuid,
+        request_id: 0,
+    });
+    request_context::scope_if_enabled(context, run_inner(params)).await
+}
+
+async fn run_inner<'a, A, I>(
     RunParams {
         tls_mode,
         adapter_client,
@@ -939,6 +953,25 @@ where
         // byte received or last byte received (for msgs that arrive in more than one network packet).
         let received = SYSTEM_TIME();
 
+        let context = self.next_request_context();
+        let future = self.process_ready_message(message, received, recv_scheduling_delay_ms);
+        if QpsTracingMode::current().request_context() {
+            request_context::scope(context, future).await
+        } else {
+            future.await
+        }
+    }
+
+    fn next_request_context(&mut self) -> Option<RequestContext> {
+        self.adapter_client.session().next_request_context()
+    }
+
+    async fn process_ready_message(
+        &mut self,
+        message: Option<FrontendMessage>,
+        received: EpochMillis,
+        recv_scheduling_delay_ms: f64,
+    ) -> Result<State, io::Error> {
         self.adapter_client
             .remove_idle_in_transaction_session_timeout();
 
@@ -1081,6 +1114,19 @@ where
 
     async fn advance_drain(&mut self) -> Result<State, io::Error> {
         let message = self.conn.recv().await?;
+        let context = self.next_request_context();
+        let future = self.process_drain_message(message);
+        if QpsTracingMode::current().request_context() {
+            request_context::scope(context, future).await
+        } else {
+            future.await
+        }
+    }
+
+    async fn process_drain_message(
+        &mut self,
+        message: Option<FrontendMessage>,
+    ) -> Result<State, io::Error> {
         if message.is_some() {
             self.adapter_client
                 .remove_idle_in_transaction_session_timeout();

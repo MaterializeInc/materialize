@@ -501,79 +501,96 @@ impl Coordinator {
         }
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize peek",
-            move || {
-                span.in_scope(|| {
-                    // Run the optimization pipeline. The dispatch guard borrows
-                    // `explain_ctx`, so we scope it in a block to drop it before
-                    // `explain_ctx` is inspected below. A failed optimization is
-                    // captured in `pipeline_result` rather than returned, so that
-                    // `EXPLAIN BROKEN` can still be handled in the match.
-                    let pipeline_result = {
-                        let _dispatch_guard = explain_ctx.dispatch_guard();
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize peek",
+                move || {
+                    span.in_scope(|| {
+                        // Run the optimization pipeline. The dispatch guard borrows
+                        // `explain_ctx`, so we scope it in a block to drop it before
+                        // `explain_ctx` is inspected below. A failed optimization is
+                        // captured in `pipeline_result` rather than returned, so that
+                        // `EXPLAIN BROKEN` can still be handled in the match.
+                        let pipeline_result = {
+                            let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                        let raw_expr = plan.source.clone();
+                            let raw_expr = plan.source.clone();
 
-                        optimizer
-                            .optimize(raw_expr, timestamp_context.clone(), &session, stats)
-                            .map_err(AdapterError::from)
-                    };
+                            optimizer
+                                .optimize(raw_expr, timestamp_context.clone(), &session, stats)
+                                .map_err(AdapterError::from)
+                        };
 
-                    let optimization_finished_at = now();
+                        let optimization_finished_at = now();
 
-                    let stage = match pipeline_result {
-                        Ok(optimize::PeekGlobalLirPlan::Select(global_lir_plan)) => {
-                            let optimizer =
-                                optimizer.into_select().expect("a SELECT/EXPLAIN optimizer");
-                            // Enable fast path cluster calculation for slow path plans.
-                            let needs_plan_insights = explain_ctx.needs_plan_insights();
-                            // Disable anything that uses the optimizer if we only want the notice and
-                            // plan optimization took longer than the threshold. This is to prevent a
-                            // situation where optimizing takes a while and there a lots of clusters,
-                            // which would delay peek execution by the product of those.
-                            let opt_limit =
-                                PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION
-                                    .get(catalog.system_config().dyncfgs());
-                            let target_instance =
-                                catalog.get_cluster(optimizer.cluster_id()).name.clone();
-                            let enable_re_optimize =
-                                !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
-                                    && optimizer.duration() > opt_limit);
-                            let insights_ctx = needs_plan_insights
-                                .then(|| PlanInsightsContext {
-                                    stmt: plan
-                                        .select
-                                        .as_deref()
-                                        .map(Clone::clone)
-                                        .map(Statement::Select),
-                                    raw_expr: plan.source.clone(),
-                                    catalog,
-                                    compute_instances,
-                                    target_instance,
-                                    metrics: optimizer.metrics().clone(),
-                                    finishing: optimizer.finishing().clone(),
-                                    optimizer_config: optimizer.config().clone(),
-                                    session,
-                                    timestamp_context,
-                                    view_id: optimizer.select_id(),
-                                    index_id: optimizer.index_id(),
-                                    enable_re_optimize,
-                                })
-                                .map(Box::new);
-                            match explain_ctx {
-                                ExplainContext::Plan(explain_ctx) => {
-                                    let (_, df_meta, _) = global_lir_plan.unapply();
-                                    PeekStage::ExplainPlan(PeekStageExplainPlan {
-                                        validity,
-                                        optimizer,
-                                        df_meta,
-                                        explain_ctx,
-                                        insights_ctx,
+                        let stage = match pipeline_result {
+                            Ok(optimize::PeekGlobalLirPlan::Select(global_lir_plan)) => {
+                                let optimizer =
+                                    optimizer.into_select().expect("a SELECT/EXPLAIN optimizer");
+                                // Enable fast path cluster calculation for slow path plans.
+                                let needs_plan_insights = explain_ctx.needs_plan_insights();
+                                // Disable anything that uses the optimizer if we only want the notice and
+                                // plan optimization took longer than the threshold. This is to prevent a
+                                // situation where optimizing takes a while and there a lots of clusters,
+                                // which would delay peek execution by the product of those.
+                                let opt_limit =
+                                    PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION
+                                        .get(catalog.system_config().dyncfgs());
+                                let target_instance =
+                                    catalog.get_cluster(optimizer.cluster_id()).name.clone();
+                                let enable_re_optimize =
+                                    !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
+                                        && optimizer.duration() > opt_limit);
+                                let insights_ctx = needs_plan_insights
+                                    .then(|| PlanInsightsContext {
+                                        stmt: plan
+                                            .select
+                                            .as_deref()
+                                            .map(Clone::clone)
+                                            .map(Statement::Select),
+                                        raw_expr: plan.source.clone(),
+                                        catalog,
+                                        compute_instances,
+                                        target_instance,
+                                        metrics: optimizer.metrics().clone(),
+                                        finishing: optimizer.finishing().clone(),
+                                        optimizer_config: optimizer.config().clone(),
+                                        session,
+                                        timestamp_context,
+                                        view_id: optimizer.select_id(),
+                                        index_id: optimizer.index_id(),
+                                        enable_re_optimize,
                                     })
-                                }
-                                ExplainContext::PlanInsightsNotice(optimizer_trace) => {
-                                    PeekStage::Finish(PeekStageFinish {
+                                    .map(Box::new);
+                                match explain_ctx {
+                                    ExplainContext::Plan(explain_ctx) => {
+                                        let (_, df_meta, _) = global_lir_plan.unapply();
+                                        PeekStage::ExplainPlan(PeekStageExplainPlan {
+                                            validity,
+                                            optimizer,
+                                            df_meta,
+                                            explain_ctx,
+                                            insights_ctx,
+                                        })
+                                    }
+                                    ExplainContext::PlanInsightsNotice(optimizer_trace) => {
+                                        PeekStage::Finish(PeekStageFinish {
+                                            validity,
+                                            plan,
+                                            max_query_result_size,
+                                            id_bundle,
+                                            target_replica,
+                                            source_ids,
+                                            determination,
+                                            cluster_id: optimizer.cluster_id(),
+                                            finishing: optimizer.finishing().clone(),
+                                            plan_insights_optimizer_trace: Some(optimizer_trace),
+                                            global_lir_plan,
+                                            optimization_finished_at,
+                                            insights_ctx,
+                                        })
+                                    }
+                                    ExplainContext::None => PeekStage::Finish(PeekStageFinish {
                                         validity,
                                         plan,
                                         max_query_result_size,
@@ -583,96 +600,89 @@ impl Coordinator {
                                         determination,
                                         cluster_id: optimizer.cluster_id(),
                                         finishing: optimizer.finishing().clone(),
-                                        plan_insights_optimizer_trace: Some(optimizer_trace),
+                                        plan_insights_optimizer_trace: None,
                                         global_lir_plan,
                                         optimization_finished_at,
                                         insights_ctx,
-                                    })
-                                }
-                                ExplainContext::None => PeekStage::Finish(PeekStageFinish {
-                                    validity,
-                                    plan,
-                                    max_query_result_size,
-                                    id_bundle,
-                                    target_replica,
-                                    source_ids,
-                                    determination,
-                                    cluster_id: optimizer.cluster_id(),
-                                    finishing: optimizer.finishing().clone(),
-                                    plan_insights_optimizer_trace: None,
-                                    global_lir_plan,
-                                    optimization_finished_at,
-                                    insights_ctx,
-                                }),
-                                ExplainContext::Pushdown => {
-                                    let (plan, _, _) = global_lir_plan.unapply();
-                                    let imports = match plan {
-                                        PeekPlan::SlowPath(plan) => plan
-                                            .desc
-                                            .source_imports
-                                            .into_iter()
-                                            .filter_map(|(id, import)| {
-                                                import.desc.arguments.operators.map(|mfp| (id, mfp))
-                                            })
-                                            .collect(),
-                                        PeekPlan::FastPath(_) => BTreeMap::default(),
-                                    };
-                                    PeekStage::ExplainPushdown(PeekStageExplainPushdown {
-                                        validity,
-                                        determination,
-                                        imports,
-                                    })
+                                    }),
+                                    ExplainContext::Pushdown => {
+                                        let (plan, _, _) = global_lir_plan.unapply();
+                                        let imports = match plan {
+                                            PeekPlan::SlowPath(plan) => plan
+                                                .desc
+                                                .source_imports
+                                                .into_iter()
+                                                .filter_map(|(id, import)| {
+                                                    import
+                                                        .desc
+                                                        .arguments
+                                                        .operators
+                                                        .map(|mfp| (id, mfp))
+                                                })
+                                                .collect(),
+                                            PeekPlan::FastPath(_) => BTreeMap::default(),
+                                        };
+                                        PeekStage::ExplainPushdown(PeekStageExplainPushdown {
+                                            validity,
+                                            determination,
+                                            imports,
+                                        })
+                                    }
                                 }
                             }
-                        }
-                        Ok(optimize::PeekGlobalLirPlan::CopyTo(global_lir_plan)) => {
-                            let optimizer = optimizer.into_copy_to().expect("a COPY TO optimizer");
-                            PeekStage::CopyToPreflight(PeekStageCopyTo {
-                                validity,
-                                optimizer,
-                                global_lir_plan,
-                                optimization_finished_at,
-                                target_replica,
-                                source_ids,
-                            })
-                        }
-                        // Internal optimizer errors are handled differently
-                        // depending on the caller.
-                        Err(err) => {
-                            let Some(optimizer) = optimizer.into_select() else {
-                                // In `COPY TO` contexts, immediately retire the
-                                // execution with the error.
-                                return Err(err);
-                            };
-                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
-                                // In `sequence_~` contexts, immediately retire the
-                                // execution with the error.
-                                return Err(err);
-                            };
-
-                            if explain_ctx.broken {
-                                // In `EXPLAIN BROKEN` contexts, just log the error
-                                // and move to the next stage with default
-                                // parameters.
-                                tracing::error!("error while handling EXPLAIN statement: {}", err);
-                                PeekStage::ExplainPlan(PeekStageExplainPlan {
+                            Ok(optimize::PeekGlobalLirPlan::CopyTo(global_lir_plan)) => {
+                                let optimizer =
+                                    optimizer.into_copy_to().expect("a COPY TO optimizer");
+                                PeekStage::CopyToPreflight(PeekStageCopyTo {
                                     validity,
                                     optimizer,
-                                    df_meta: Default::default(),
-                                    explain_ctx,
-                                    insights_ctx: None,
+                                    global_lir_plan,
+                                    optimization_finished_at,
+                                    target_replica,
+                                    source_ids,
                                 })
-                            } else {
-                                // In regular `EXPLAIN` contexts, immediately retire
-                                // the execution with the error.
-                                return Err(err);
                             }
-                        }
-                    };
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                            // Internal optimizer errors are handled differently
+                            // depending on the caller.
+                            Err(err) => {
+                                let Some(optimizer) = optimizer.into_select() else {
+                                    // In `COPY TO` contexts, immediately retire the
+                                    // execution with the error.
+                                    return Err(err);
+                                };
+                                let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                    // In `sequence_~` contexts, immediately retire the
+                                    // execution with the error.
+                                    return Err(err);
+                                };
+
+                                if explain_ctx.broken {
+                                    // In `EXPLAIN BROKEN` contexts, just log the error
+                                    // and move to the next stage with default
+                                    // parameters.
+                                    tracing::error!(
+                                        "error while handling EXPLAIN statement: {}",
+                                        err
+                                    );
+                                    PeekStage::ExplainPlan(PeekStageExplainPlan {
+                                        validity,
+                                        optimizer,
+                                        df_meta: Default::default(),
+                                        explain_ctx,
+                                        insights_ctx: None,
+                                    })
+                                } else {
+                                    // In regular `EXPLAIN` contexts, immediately retire
+                                    // the execution with the error.
+                                    return Err(err);
+                                }
+                            }
+                        };
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]
@@ -699,7 +709,7 @@ impl Coordinator {
             Some(fut) => {
                 let catalog = Arc::clone(&self.catalog);
                 let span = Span::current();
-                Ok(StageResult::Handle(mz_ore::task::spawn(
+                Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
                     || "peek real time recency",
                     async move {
                         let real_time_recency_ts =
@@ -865,7 +875,7 @@ impl Coordinator {
         let connection_context = self.connection_context().clone();
         let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
             .get(self.controller.storage.config().config_set());
-        Ok(StageResult::Handle(mz_ore::task::spawn(
+        Ok(StageResult::Handle(mz_ore::task::spawn_in_request(
             || "peek copy to preflight",
             async move {
                 let sinks = &copy_to.global_lir_plan.df_desc().sink_exports;
@@ -929,6 +939,7 @@ impl Coordinator {
         // Callback for the active copy to.
         let (tx, rx) = oneshot::channel();
         let active_copy_to = ActiveCopyTo {
+            request_context: ctx.request_context(),
             conn_id: ctx.session().conn_id().clone(),
             tx,
             cluster_id,
@@ -942,7 +953,7 @@ impl Coordinator {
             .await;
 
         let span = Span::current();
-        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn_in_request(
             || "peek copy to dataflow",
             async {
                 let res = rx.await;
@@ -997,7 +1008,7 @@ impl Coordinator {
             .explain_pushdown_future(session, as_of, mz_now, stage.imports)
             .await;
         let span = Span::current();
-        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn_in_request(
             || "peek explain pushdown",
             fut.instrument(span),
         )))

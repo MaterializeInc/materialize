@@ -65,13 +65,14 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn handle_message(&mut self, msg: Message) -> () {
         match msg {
-            Message::Command(otel_ctx, cmd) => {
-                // TODO: We need a Span that is not none for the otel_ctx to attach the parent
-                // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
-                // can downgrade this to a debug_span.
-                let span = tracing::info_span!("message_command").or_current();
-                span.in_scope(|| otel_ctx.attach_as_parent());
-                self.message_command(cmd).instrument(span).await
+            Message::Command(context, cmd) => {
+                let span = context.span(|parent| match parent {
+                    Some(parent) => tracing::info_span!(parent: parent, "message_command"),
+                    None => tracing::info_span!("message_command").or_current(),
+                });
+                context
+                    .scope(self.message_command(cmd).instrument(span))
+                    .await
             }
             Message::ControllerReady { controller: _ } => {
                 let Coordinator {
@@ -123,9 +124,14 @@ impl Coordinator {
                     self.set_statement_execution_timestamp(id, write_ts);
                 }
                 for response in responses {
-                    let (mut ctx, result) = response.finalize();
-                    ctx.session_mut().apply_write(write_ts);
-                    ctx.retire(result);
+                    mz_ore::request_context::in_scope_if_enabled(
+                        response.request_context(),
+                        || {
+                            let (mut ctx, result) = response.finalize();
+                            ctx.session_mut().apply_write(write_ts);
+                            ctx.retire(result);
+                        },
+                    );
                 }
                 // The committer applied `write_ts` to the oracle, so the read ts is at least
                 // that and we can downgrade the local read holds without an oracle round trip.
@@ -157,7 +163,13 @@ impl Coordinator {
                 table_id,
                 batches,
             } => {
-                self.commit_staged_batches(conn_id, table_id, batches);
+                let request = self
+                    .active_copies
+                    .get(&conn_id)
+                    .and_then(|copy| copy.ctx.request_context());
+                mz_ore::request_context::in_scope_if_enabled(request, || {
+                    self.commit_staged_batches(conn_id, table_id, batches);
+                });
             }
             Message::StorageUsageSchedule => {
                 self.schedule_storage_usage_collection().boxed_local().await;
@@ -790,12 +802,19 @@ impl Coordinator {
                         WatchSetResponse::StatementDependenciesReady(id, ev) => {
                             self.record_statement_lifecycle_event(&id, &ev, now);
                         }
-                        WatchSetResponse::AlterSinkReady(ctx) => {
-                            self.sequence_alter_sink_finish(ctx).await;
+                        WatchSetResponse::AlterSinkReady(mut ctx) => {
+                            mz_ore::request_context::scope_if_enabled(
+                                ctx.ctx().request_context(),
+                                self.sequence_alter_sink_finish(ctx),
+                            )
+                            .await;
                         }
-                        WatchSetResponse::AlterMaterializedViewReady(ctx) => {
-                            self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
-                                .await;
+                        WatchSetResponse::AlterMaterializedViewReady(mut ctx) => {
+                            mz_ore::request_context::scope_if_enabled(
+                                ctx.ctx().request_context(),
+                                self.sequence_alter_materialized_view_apply_replacement_finish(ctx),
+                            )
+                            .await;
                         }
                     }
                 }

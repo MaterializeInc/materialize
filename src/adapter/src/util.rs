@@ -16,7 +16,7 @@ use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
 };
 use mz_controller_types::ClusterId;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::InProcessContext;
 use mz_ore::{assert_none, exit, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, SqlScalarType};
 use mz_sql::names::FullItemName;
@@ -93,13 +93,13 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
             .send(Response {
                 result,
                 session,
-                otel_ctx: OpenTelemetryContext::obtain(),
+                context: InProcessContext::obtain(),
             })
         {
             // If the coordinator is gone too, the process is shutting down and there is no
             // session state left to clean up, so a failed send is fine.
             let send_res = self.internal_cmd_tx.send(Message::Command(
-                OpenTelemetryContext::obtain(),
+                InProcessContext::obtain(),
                 Command::Terminate {
                     conn_id: res.session.conn_id().clone(),
                     tx: None,
@@ -160,6 +160,10 @@ pub struct CompletedClientTransmitter {
 }
 
 impl CompletedClientTransmitter {
+    pub(crate) fn request_context(&self) -> Option<mz_ore::request_context::RequestContext> {
+        self.ctx.request_context()
+    }
+
     /// Creates a new completed client transmitter.
     pub fn new(
         ctx: ExecuteContext,

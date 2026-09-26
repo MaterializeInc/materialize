@@ -1448,6 +1448,19 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
     request: SqlRequest,
     sender: &mut S,
 ) -> Result<(), Error> {
+    let context = client.client.session().next_request_context();
+    mz_ore::request_context::scope_if_enabled(
+        context,
+        execute_request_inner(client, request, sender),
+    )
+    .await
+}
+
+async fn execute_request_inner<S: ResultSender>(
+    client: &mut AuthedClient,
+    request: SqlRequest,
+    sender: &mut S,
+) -> Result<(), Error> {
     let client = &mut client.client;
 
     if client.statement_arrival_logging_enabled().await {

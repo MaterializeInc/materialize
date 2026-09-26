@@ -1119,7 +1119,7 @@ impl crate::coord::Coordinator {
                     // batches already, and so we piggy-back on that, even if it
                     // might not exist as of today.
                     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                    mz_ore::task::spawn(|| "read_peek_batches", async move {
+                    mz_ore::task::spawn_in_request(|| "read_peek_batches", async move {
                         // We always send our inline rows first. Ordering
                         // doesn't matter because we can only be in this case
                         // when there is no ORDER BY.
@@ -1293,6 +1293,21 @@ impl crate::coord::Coordinator {
         notification: PeekNotification,
         otel_ctx: OpenTelemetryContext,
     ) {
+        let request = self
+            .pending_peeks
+            .get(&uuid)
+            .and_then(|peek| peek.ctx_extra.request_context());
+        mz_ore::request_context::in_scope_if_enabled(request, || {
+            self.handle_peek_notification_inner(uuid, notification, otel_ctx)
+        });
+    }
+
+    fn handle_peek_notification_inner(
+        &mut self,
+        uuid: Uuid,
+        notification: PeekNotification,
+        otel_ctx: OpenTelemetryContext,
+    ) {
         // We expect exactly one peek response, which we forward. Then we clean up the
         // peek's state in the coordinator.
         if let Some(PendingPeek {
@@ -1461,6 +1476,7 @@ impl crate::coord::Coordinator {
         // This is different from the command's tx which sends the response to the client
         let (sink_tx, sink_rx) = oneshot::channel();
         let active_copy_to = ActiveCopyTo {
+            request_context: mz_ore::request_context::capture(),
             conn_id: conn_id.clone(),
             tx: sink_tx,
             cluster_id: compute_instance,
@@ -1490,7 +1506,7 @@ impl crate::coord::Coordinator {
         // from processing the completion message. Instead, we spawn a background task that will
         // send the result through tx when the COPY TO completes.
         let span = Span::current();
-        task::spawn(
+        task::spawn_in_request(
             || "copy to completion",
             async move {
                 let res = sink_rx.await;

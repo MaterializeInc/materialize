@@ -475,7 +475,7 @@ impl Coordinator {
             // it needs to skip the CSV header on its first chunk.
             let skip_header_on_first_chunk = worker_id == 0 && first_chunk_has_header;
 
-            let handle = mz_ore::task::spawn(
+            let handle = mz_ore::task::spawn_in_request(
                 || format!("copy_from_stdin_worker:{target_id}:{worker_id}"),
                 Self::copy_from_stdin_batch_builder(
                     persist_client,
@@ -495,7 +495,7 @@ impl Coordinator {
 
         // Spawn a collector task that waits for all workers.
         let (completion_tx, completion_rx) = oneshot::channel();
-        mz_ore::task::spawn(
+        mz_ore::task::spawn_in_request(
             || format!("copy_from_stdin_collector:{target_id}"),
             async move {
                 let mut all_batches = Vec::with_capacity(num_workers);
@@ -596,7 +596,7 @@ impl Coordinator {
             let chunk_transform = Arc::clone(&column_transform);
             let chunk_target_desc = Arc::clone(&target_desc);
             let chunk_rt = rt.clone();
-            let (returned_builder, added_rows) = mz_ore::task::spawn_blocking(
+            let (returned_builder, added_rows) = mz_ore::task::spawn_blocking_in_request(
                 || "copy_from_stdin_process_chunk",
                 move || {
                     let rows = mz_pgcopy::decode_copy_format(

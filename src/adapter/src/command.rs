@@ -26,7 +26,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
-use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::tracing::InProcessContext;
 use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
@@ -565,7 +565,7 @@ impl Command {
 pub struct Response<T> {
     pub result: Result<T, AdapterError>,
     pub session: Session,
-    pub otel_ctx: OpenTelemetryContext,
+    pub context: InProcessContext,
 }
 
 #[derive(Debug, Clone, Copy)]

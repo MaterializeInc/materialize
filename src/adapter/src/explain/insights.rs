@@ -114,7 +114,7 @@ impl PlanInsights {
                     ctx.optimizer_config.clone(),
                     ctx.metrics.clone(),
                 );
-                mz_ore::task::spawn_blocking(
+                mz_ore::task::spawn_blocking_in_request(
                     || "compute fast path clusters",
                     move || {
                         // HIR ⇒ MIR lowering and MIR optimization (local)

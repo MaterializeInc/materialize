@@ -304,37 +304,40 @@ impl Coordinator {
         let catalog = self.owned_catalog();
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize subscribe (mir)",
-            move || {
-                span.in_scope(|| {
-                    let _dispatch_guard = explain_ctx.dispatch_guard();
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize subscribe (mir)",
+                move || {
+                    span.in_scope(|| {
+                        let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
-                    // Add introduced indexes as validity dependencies.
-                    validity.extend_dependencies(
-                        &catalog,
-                        global_mir_plan
-                            .id_bundle(optimizer.cluster_id())
-                            .iter()
-                            .map(|id| catalog.resolve_item_id(&id)),
-                    );
+                        // MIR ⇒ MIR optimization (global)
+                        let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
+                        // Add introduced indexes as validity dependencies.
+                        validity.extend_dependencies(
+                            &catalog,
+                            global_mir_plan
+                                .id_bundle(optimizer.cluster_id())
+                                .iter()
+                                .map(|id| catalog.resolve_item_id(&id)),
+                        );
 
-                    let stage = SubscribeStage::LinearizeTimestamp(SubscribeLinearizeTimestamp {
-                        validity,
-                        plan,
-                        timeline,
-                        optimizer,
-                        global_mir_plan,
-                        dependency_ids,
-                        replica_id,
-                        explain_ctx,
-                    });
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                        let stage =
+                            SubscribeStage::LinearizeTimestamp(SubscribeLinearizeTimestamp {
+                                validity,
+                                plan,
+                                timeline,
+                                optimizer,
+                                global_mir_plan,
+                                dependency_ids,
+                                replica_id,
+                                explain_ctx,
+                            });
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     /// Possibly linearize a timestamp from a `TimestampOracle`, off the
@@ -428,67 +431,72 @@ impl Coordinator {
 
         // Optimize LIR
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize subscribe (lir)",
-            move || {
-                span.in_scope(|| {
-                    let _dispatch_guard = explain_ctx.dispatch_guard();
+        Ok(StageResult::Handle(
+            mz_ore::task::spawn_blocking_in_request(
+                || "optimize subscribe (lir)",
+                move || {
+                    span.in_scope(|| {
+                        let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let cluster_id = optimizer.cluster_id();
+                        let cluster_id = optimizer.cluster_id();
 
-                    let mut pipeline = || -> Result<_, AdapterError> {
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan =
-                            optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
-                        Ok(global_lir_plan)
-                    };
+                        let mut pipeline = || -> Result<_, AdapterError> {
+                            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                            let global_lir_plan =
+                                optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                            Ok(global_lir_plan)
+                        };
 
-                    let stage = match pipeline() {
-                        Ok(global_lir_plan) => {
-                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
-                                let (_, df_meta) = global_lir_plan.unapply();
-                                SubscribeStage::Explain(SubscribeExplain {
-                                    validity,
-                                    optimizer,
-                                    df_meta,
-                                    cluster_id,
-                                    explain_ctx,
-                                })
-                            } else {
-                                SubscribeStage::Finish(SubscribeFinish {
-                                    validity,
-                                    cluster_id,
-                                    plan,
-                                    global_lir_plan,
-                                    dependency_ids,
-                                    replica_id,
-                                })
+                        let stage = match pipeline() {
+                            Ok(global_lir_plan) => {
+                                if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                    let (_, df_meta) = global_lir_plan.unapply();
+                                    SubscribeStage::Explain(SubscribeExplain {
+                                        validity,
+                                        optimizer,
+                                        df_meta,
+                                        cluster_id,
+                                        explain_ctx,
+                                    })
+                                } else {
+                                    SubscribeStage::Finish(SubscribeFinish {
+                                        validity,
+                                        cluster_id,
+                                        plan,
+                                        global_lir_plan,
+                                        dependency_ids,
+                                        replica_id,
+                                    })
+                                }
                             }
-                        }
-                        Err(err) => {
-                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
-                                return Err(err);
-                            };
+                            Err(err) => {
+                                let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                    return Err(err);
+                                };
 
-                            if explain_ctx.broken {
-                                tracing::error!("error while handling EXPLAIN statement: {}", err);
-                                SubscribeStage::Explain(SubscribeExplain {
-                                    validity,
-                                    optimizer,
-                                    df_meta: Default::default(),
-                                    cluster_id,
-                                    explain_ctx,
-                                })
-                            } else {
-                                return Err(err);
+                                if explain_ctx.broken {
+                                    tracing::error!(
+                                        "error while handling EXPLAIN statement: {}",
+                                        err
+                                    );
+                                    SubscribeStage::Explain(SubscribeExplain {
+                                        validity,
+                                        optimizer,
+                                        df_meta: Default::default(),
+                                        cluster_id,
+                                        explain_ctx,
+                                    })
+                                } else {
+                                    return Err(err);
+                                }
                             }
-                        }
-                    };
+                        };
 
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
+                        Ok(Box::new(stage))
+                    })
+                },
+            ),
+        ))
     }
 
     #[instrument]
@@ -529,7 +537,7 @@ impl Coordinator {
         // loop before returning the `SUBSCRIBE` response to the subscribing
         // session.
         let span = Span::current();
-        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn_in_request(
             || "subscribe_finish::await_bookkeeping",
             async move {
                 write_notify.await;
@@ -562,6 +570,7 @@ impl Coordinator {
             owner: ActiveSubscribeOwner::Session {
                 conn_id: conn_id.clone(),
                 session_uuid,
+                request_context: mz_ore::request_context::capture(),
             },
             channel: tx,
             backlog_accounting: Arc::clone(&backlog_accounting),
