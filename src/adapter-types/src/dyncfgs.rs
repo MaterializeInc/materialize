@@ -86,7 +86,7 @@ pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
 pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_stability_period",
     Duration::from_secs(10 * 60), // 10 minutes
-    "How long a caught-up cluster must have had all replicas continuously healthy before it is considered ready to cut over during a 0dt deployment.",
+    "Required continuous replica health before a caught-up cluster is ready for 0dt cutover. Capped at the leader counterpart's healthy-run age when the incoming run began, when both generations have complete health evidence.",
     ParameterScope::Environment,
 );
 
