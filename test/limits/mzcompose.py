@@ -1623,6 +1623,8 @@ class RowsOrderByLimit(Generator):
 class RowsJoinOneToOne(Generator):
     COUNT = 10_000_000
 
+    MAX_COUNT = 160_000_000  # Replica OOMs with 320_000_000
+
     @classmethod
     def body(cls) -> None:
         print(
