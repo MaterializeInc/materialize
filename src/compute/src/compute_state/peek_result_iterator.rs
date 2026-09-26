@@ -34,6 +34,8 @@ where
     cursor: TraceCursor<Tr>,
     storage: TraceStorage<Tr>,
     map_filter_project: mz_expr::SafeMfpPlan,
+    /// Where errors in `map_filter_project` land.
+    error_scope: mz_expr::ErrorScope,
     peek_timestamp: mz_repr::Timestamp,
     row_builder: Row,
     datum_vec: DatumVec,
@@ -206,6 +208,12 @@ where
         )
     }
 
+    /// Sets where errors in the MFP land. Defaults to [`mz_expr::ErrorScope::Row`].
+    pub(super) fn with_error_scope(mut self, error_scope: mz_expr::ErrorScope) -> Self {
+        self.error_scope = error_scope;
+        self
+    }
+
     /// Builds an iterator over an already-opened cursor.
     pub(super) fn from_cursor(
         target_id: GlobalId,
@@ -224,6 +232,7 @@ where
             cursor,
             storage,
             map_filter_project,
+            error_scope: mz_expr::ErrorScope::Row,
             peek_timestamp,
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
@@ -462,7 +471,7 @@ where
         }
         if let Some(result) = self
             .map_filter_project
-            .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
+            .evaluate_into_scoped(&mut borrow, &arena, &mut self.row_builder, self.error_scope)
             .map(|row| row.cloned())
             .map_err(PeekError::from)?
         {

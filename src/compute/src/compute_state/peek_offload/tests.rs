@@ -129,6 +129,7 @@ fn open(
             threshold_bytes: stash_threshold_bytes.unwrap_or(usize::MAX),
             batch_bytes: 0,
         },
+        mz_expr::ErrorScope::Row,
     )
 }
 

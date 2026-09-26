@@ -315,6 +315,18 @@ pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether clusters created from now on scope errors in map expressions to their cell rather
+/// than their row.
+///
+/// `CREATE CLUSTER` records the value, and the cluster keeps it for its lifetime. Replicas receive
+/// it through `InstanceConfig::cell_errors`, not by reading this parameter.
+pub const ENABLE_COMPUTE_CELL_ERRORS: Config<bool> = Config::new(
+    "enable_compute_cell_errors",
+    false,
+    "Whether new clusters scope errors in map expressions to their cell rather than their row.",
+    ParameterScope::Environment,
+);
+
 /// The summary to apply to the frontier in temporal bucketing in compute.
 pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
@@ -805,6 +817,7 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&ENABLE_COMPUTE_CELL_ERRORS)
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)

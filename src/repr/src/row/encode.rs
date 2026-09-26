@@ -2018,6 +2018,9 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
             Datum::MzTimestamp(x) => DatumType::MzTimestamp(x.into()),
             Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
+            // Error datums are elevated before they leave their dataflow, and durable encodings
+            // never see them.
+            Datum::Error(_) => panic!("internal error: cannot encode an error datum"),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
             Datum::Range(super::Range { inner }) => DatumType::Range(Box::new(ProtoRange {
                 inner: inner.map(|RangeInner { lower, upper }| {

@@ -578,6 +578,7 @@ impl ComputeController {
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         workload_class: Option<String>,
+        cell_errors: bool,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -597,6 +598,7 @@ impl ComputeController {
             self.build_info,
             Arc::clone(&self.storage_collections),
             self.peek_stash_persist_location.clone(),
+            cell_errors,
             logs,
             self.metrics.for_instance(id),
             self.now.clone(),

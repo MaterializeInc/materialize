@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_expr::{
+    ColumnSpecs, ErrorScope, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::redact;
@@ -180,6 +182,7 @@ pub fn persist_source<'scope, E, CB>(
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
+    error_scope: ErrorScope,
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
@@ -261,6 +264,7 @@ where
                 &name,
                 until.clone(),
                 map_filter_project,
+                error_scope,
                 |time| time.0,
             );
 
@@ -335,6 +339,7 @@ pub fn persist_source_core<'g, 'outer, E>(
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
+    error_scope: ErrorScope,
     flow_control: Option<FlowControl<'g, RefinedTime>>,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
@@ -372,6 +377,7 @@ where
         &name,
         until,
         map_filter_project,
+        error_scope,
         |time| time,
     );
     (oks, errs, token)
@@ -550,6 +556,7 @@ fn decode_and_mfp<'scope, E, RT, CB>(
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
+    error_scope: ErrorScope,
     record_time: fn(RefinedTime) -> RT,
 ) -> (
     Stream<'scope, RefinedTime, CB::Container>,
@@ -619,6 +626,7 @@ where
                     &name,
                     &until,
                     map_filter_project.as_ref(),
+                    error_scope,
                     &mut datum_vec,
                     &mut row_builder,
                     &mut work,
@@ -691,6 +699,7 @@ fn decode_part<E, F>(
     name: &str,
     until: &Antichain<Timestamp>,
     map_filter_project: Option<&MfpPlan>,
+    error_scope: ErrorScope,
     datum_vec: &mut DatumVec,
     row_builder: &mut Row,
     work: &mut usize,
@@ -729,6 +738,7 @@ where
                         diff.into(),
                         |time| !until.less_equal(time),
                         row_builder,
+                        error_scope,
                     ) {
                         // Earlier we decided this Part doesn't need to be fetched, but to
                         // audit our logic we fetched it any way. If the MFP returned data it
@@ -1693,6 +1703,7 @@ mod tests {
                     Diff::from(1),
                     |_| true,
                     &mut row_builder,
+                    ErrorScope::Row,
                 );
                 if results.next().is_some() {
                     return true;
@@ -2445,6 +2456,7 @@ mod tests {
                             Diff::from(1),
                             |time| !until.less_equal(time),
                             &mut row_builder,
+                            ErrorScope::Row,
                         );
                         if results.next().is_some() {
                             return true;

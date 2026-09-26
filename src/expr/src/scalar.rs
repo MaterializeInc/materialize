@@ -28,7 +28,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::RegexCompilationError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType};
+use mz_repr::{Datum, DatumError, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType};
 
 #[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
@@ -1180,7 +1180,12 @@ impl Eval for MirScalarExpr {
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
-            MirScalarExpr::Column(index, _name) => Ok(datums[*index]),
+            MirScalarExpr::Column(index, _name) => match datums[*index] {
+                // Reading a cell-scoped error is the same as evaluating the expression that
+                // produced it, so the error semantics of the enclosing expression apply.
+                Datum::Error(err) => Err(EvalError::from_datum_error(err)),
+                datum => Ok(datum),
+            },
             MirScalarExpr::Literal(res, _column_type) => match res {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
@@ -2213,6 +2218,40 @@ impl From<TimestampError> for EvalError {
 impl From<InvalidRangeError> for EvalError {
     fn from(e: InvalidRangeError) -> EvalError {
         EvalError::InvalidRange(e)
+    }
+}
+
+impl EvalError {
+    /// Packs `self` into a cell-scoped [`Datum::Error`] allocated in `arena`.
+    pub fn to_datum<'a>(&self, arena: &'a RowArena) -> Datum<'a> {
+        use prost::Message;
+        let bytes = arena.push_bytes(self.into_proto().encode_to_vec());
+        Datum::Error(DatumError::new(bytes))
+    }
+
+    /// Decodes the error a [`Datum::Error`] carries.
+    pub fn from_datum_error(err: DatumError<'_>) -> EvalError {
+        use prost::Message;
+        ProtoEvalError::decode(err.data())
+            .map_err(|e| e.to_string())
+            .and_then(|proto| proto.into_rust().map_err(|e| e.to_string()))
+            .unwrap_or_else(|e| {
+                mz_ore::soft_panic_or_log!("corrupt error datum: {e}");
+                EvalError::Internal(format!("corrupt error datum: {e}").into())
+            })
+    }
+
+    /// Returns the first cell-scoped error among `datums`, elevated to an `Err`.
+    ///
+    /// Operators that do not define semantics for error datums call this on their input to turn
+    /// a cell-scoped error into a collection-scoped one.
+    pub fn elevate<'a>(datums: impl IntoIterator<Item = Datum<'a>>) -> Result<(), EvalError> {
+        for datum in datums {
+            if let Datum::Error(err) = datum {
+                return Err(EvalError::from_datum_error(err));
+            }
+        }
+        Ok(())
     }
 }
 

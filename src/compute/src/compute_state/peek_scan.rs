@@ -43,6 +43,10 @@ pub(super) type RowBatch = Vec<(Row, NonZeroI64)>;
 
 /// Builds the peek's answer out of the rows a completed walk produced, sorted by `order_by`.
 pub(super) fn rows_response(rows: RowBatch, order_by: &[ColumnOrder]) -> PeekResponse {
+    crate::render::errors::soft_assert_no_error_datums(
+        rows.iter().map(|(row, _)| row.as_row_ref()),
+        "an index peek",
+    );
     let rows = rows
         .into_iter()
         .map(|(row, copies)| {
@@ -217,6 +221,7 @@ where
         oks_handle: &mut Tr,
         max_result_size: u64,
         stash: StashBounds,
+        error_scope: mz_expr::ErrorScope,
     ) -> Self {
         let error_scan = ErrorScan::new(errs_handle);
         let error_scan_time = error_scan.scan_time;
@@ -232,7 +237,8 @@ where
             oks_handle,
             None,
             0,
-        );
+        )
+        .with_error_scope(error_scope);
         let cursor_setup_time = cursor_setup_start.elapsed();
 
         let comparator = (!peek.finishing.order_by.is_empty())

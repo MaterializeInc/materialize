@@ -3457,6 +3457,17 @@ impl ClusterConfig {
             ClusterVariant::Unmanaged => None,
         }
     }
+
+    /// Whether the cluster scopes map errors to cells.
+    ///
+    /// `CREATE CLUSTER` records the value in the cluster's optimizer feature overrides, so the
+    /// optimizer and the compute instance read the same value for the cluster's lifetime.
+    /// Unmanaged clusters and clusters created without it use row-scoped errors.
+    pub fn cell_errors(&self) -> bool {
+        self.features()
+            .and_then(|features| features.enable_cell_errors)
+            .unwrap_or(false)
+    }
 }
 
 impl From<ClusterConfig> for durable::ClusterConfig {

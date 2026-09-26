@@ -1618,6 +1618,38 @@ pub mod plan {
         }
     }
 
+    /// Where errors in map expressions land during evaluation, and whether error datums may
+    /// leave it.
+    ///
+    /// Predicate errors are row-scoped in every variant, because a predicate decides whether the
+    /// row exists. See `doc/developer/design/20260926_cell_scoped_errors.md`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ErrorScope {
+        /// Cell-scoped errors are disabled. Errors in map expressions fail the row, whether or
+        /// not the projection keeps their column. Output rows never contain error datums.
+        Row,
+        /// Errors in map expressions become error datums in their cell, and error datums pass
+        /// through the projection. Projecting away a column drops its error. For evaluation
+        /// whose output stays inside the dataflow.
+        Cell,
+        /// Like [`ErrorScope::Cell`], but error datums that survive the projection are elevated.
+        /// Output rows never contain error datums. For evaluation whose output leaves the
+        /// dataflow or feeds an operator without semantics for error datums.
+        Boundary,
+    }
+
+    impl ErrorScope {
+        /// Whether errors in map expressions become error datums.
+        fn cells(self) -> bool {
+            self != ErrorScope::Row
+        }
+
+        /// Whether error datums that survive the projection are elevated.
+        fn elevates(self) -> bool {
+            self != ErrorScope::Cell
+        }
+    }
+
     impl<E: OptimizableExpr + Eval> SafeMfpPlan<E> {
         /// Evaluates the linear operator on a supplied list of datums.
         ///
@@ -1641,10 +1673,25 @@ pub mod plan {
             arena: &'a RowArena,
             row_buf: &'row mut Row,
         ) -> Result<Option<&'row Row>, EvalError> {
-            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            self.evaluate_into_scoped(datums, arena, row_buf, ErrorScope::Row)
+        }
+
+        /// Like [`SafeMfpPlan::evaluate_into`], with `scope` choosing where errors land.
+        #[inline(always)]
+        pub fn evaluate_into_scoped<'a, 'row>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            row_buf: &'row mut Row,
+            scope: ErrorScope,
+        ) -> Result<Option<&'row Row>, EvalError> {
+            let passed_predicates = self.evaluate_inner_scoped(datums, arena, scope)?;
             if !passed_predicates {
                 Ok(None)
             } else {
+                if scope.elevates() {
+                    EvalError::elevate(self.mfp.projection.iter().map(|c| datums[*c]))?;
+                }
                 row_buf
                     .packer()
                     .extend(self.mfp.projection.iter().map(|c| datums[*c]));
@@ -1667,6 +1714,7 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
+                EvalError::elevate(self.mfp.projection.iter().map(|c| datums[*c]))?;
                 Ok(Some(self.mfp.projection.iter().map(move |i| datums[*i])))
             }
         }
@@ -1674,23 +1722,60 @@ pub mod plan {
         /// Populates `datums` with `self.expressions` and tests `self.predicates`.
         ///
         /// This does not apply `self.projection`, which is up to the calling method.
+        /// Errors in map expressions fail the row, as in [`ErrorScope::Row`].
         pub fn evaluate_inner<'b, 'a: 'b>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
+            self.evaluate_inner_scoped(datums, arena, ErrorScope::Row)
+        }
+
+        /// Like [`SafeMfpPlan::evaluate_inner`], with `scope` choosing where errors in map
+        /// expressions land.
+        pub fn evaluate_inner_scoped<'b, 'a: 'b>(
+            &'a self,
+            datums: &'b mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            scope: ErrorScope,
+        ) -> Result<bool, EvalError> {
+            let map = |expr: &'a E, datums: &[Datum<'a>]| match expr.eval(datums, arena) {
+                Err(e) if scope.cells() => Ok(e.to_datum(arena)),
+                result => result,
+            };
+            // A predicate decides whether the row exists, so its errors are always row-scoped.
+            // With cell-scoped errors, the predicates combine like `AND`: `false` masks an
+            // error, and an error masks `null`. Otherwise the optimizer's choice of predicate
+            // order would decide whether a row errors, and error datums make that observable
+            // through columns the query reads only in a predicate. Map expressions cannot fail
+            // in that case, so evaluation continues past a rejecting predicate.
+            let mut error = None;
+            let mut rejected = false;
             let mut expression = 0;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                    datums.push(map(&self.mfp.expressions[expression], &datums[..])?);
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], arena)? != Datum::True {
-                    return Ok(false);
+                match predicate.eval(&datums[..], arena) {
+                    Ok(Datum::True) => {}
+                    Ok(Datum::False) => return Ok(false),
+                    Ok(_) if scope.cells() => rejected = true,
+                    Ok(_) => return Ok(false),
+                    Err(e) if scope.cells() => {
+                        error.get_or_insert(e);
+                    }
+                    Err(e) => return Err(e),
                 }
             }
+            if let Some(e) = error {
+                return Err(e);
+            }
+            if rejected {
+                return Ok(false);
+            }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                datums.push(map(&self.mfp.expressions[expression], &datums[..])?);
                 expression += 1;
             }
             Ok(true)
@@ -1911,10 +1996,11 @@ pub mod plan {
             diff: Diff,
             valid_time: V,
             row_builder: &mut Row,
+            scope: ErrorScope,
         ) -> impl Iterator<
             Item = Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
         > + use<Err, V, E> {
-            match self.mfp.evaluate_inner(datums, arena) {
+            match self.mfp.evaluate_inner_scoped(datums, arena, scope) {
                 Err(e) => {
                     return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                 }
@@ -1999,6 +2085,12 @@ pub mod plan {
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
             if Some(lower_bound) != upper_bound && !null_eval {
+                if scope.elevates() {
+                    let projected = self.mfp.mfp.projection.iter().map(|c| datums[*c]);
+                    if let Err(e) = EvalError::elevate(projected) {
+                        return Some(Err((e.into(), time, diff))).into_iter().chain(None);
+                    }
+                }
                 row_builder
                     .packer()
                     .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
@@ -2019,3 +2111,6 @@ pub mod plan {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

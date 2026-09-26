@@ -1546,7 +1546,8 @@ impl CatalogState {
                     (cached_expr, _) => {
                         let optimizer_features = optimizer_config.features.clone();
                         // Build an optimizer for this VIEW.
-                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None)
+                            .for_view_definition();
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                         let raw_expr = view.expr;

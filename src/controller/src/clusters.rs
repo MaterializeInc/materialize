@@ -57,6 +57,9 @@ pub struct ClusterConfig {
     /// An optional arbitrary string that describes the class of the workload
     /// this cluster is running (e.g., `production` or `staging`).
     pub workload_class: Option<String>,
+    /// Whether map errors are scoped to cells, see
+    /// [`mz_compute_client::protocol::command::InstanceConfig::cell_errors`].
+    pub cell_errors: bool,
 }
 
 /// The status of a cluster.
@@ -419,8 +422,12 @@ impl Controller {
     ) -> Result<(), anyhow::Error> {
         self.storage
             .create_instance(id, config.workload_class.clone());
-        self.compute
-            .create_instance(id, config.arranged_logs, config.workload_class)?;
+        self.compute.create_instance(
+            id,
+            config.arranged_logs,
+            config.workload_class,
+            config.cell_errors,
+        )?;
         Ok(())
     }
 

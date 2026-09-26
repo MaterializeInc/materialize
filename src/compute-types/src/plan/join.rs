@@ -66,12 +66,16 @@ pub struct JoinClosure {
 
 impl JoinClosure {
     /// Applies per-row filtering and logic.
+    ///
+    /// `scope` chooses where errors in the closure's map expressions land. Equivalences are
+    /// predicates, so their errors are row-scoped.
     #[inline(always)]
     pub fn apply<'a, 'row>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
         row: &'row mut Row,
+        scope: mz_expr::ErrorScope,
     ) -> Result<Option<&'row Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
@@ -82,7 +86,8 @@ impl JoinClosure {
                 }
             }
         }
-        self.before.evaluate_into(datums, temp_storage, row)
+        self.before
+            .evaluate_into_scoped(datums, temp_storage, row, scope)
     }
 
     /// Construct an instance of the closure from available columns.

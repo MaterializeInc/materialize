@@ -52,7 +52,7 @@ use crate::adt::range::{
 use crate::adt::timestamp::CheckedTimestamp;
 #[cfg(any(test, feature = "proptest"))]
 use crate::scalar::arb_datum;
-use crate::scalar::{DatumKind, SqlScalarType};
+use crate::scalar::{DatumError, DatumKind, SqlScalarType};
 use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
@@ -1268,6 +1268,7 @@ enum Tag {
     UInt64_48,
     UInt64_56,
     UInt64,
+    Error,
 }
 
 impl Tag {
@@ -1705,6 +1706,7 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
+        Tag::Error => Datum::Error(DatumError::new(read_untagged_bytes(data))),
         Tag::Numeric => {
             let digits = read_byte(data).into();
             let exponent = i8::reinterpret_cast(read_byte(data));
@@ -2100,6 +2102,10 @@ where
             data.extend_from_slice(&t.encode());
         }
         Datum::Dummy => data.push(Tag::Dummy.into()),
+        Datum::Error(err) => {
+            data.push(Tag::Error.into());
+            push_untagged_bytes(data, err.data());
+        }
         Datum::Numeric(mut n) => {
             // Pseudo-canonical representation of decimal values with
             // insignificant zeroes trimmed. This compresses the number further
@@ -2253,6 +2259,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::JsonNull => 1,
         Datum::MzTimestamp(_) => 1 + size_of::<Timestamp>(),
         Datum::Dummy => 1,
+        Datum::Error(err) => 1 + size_of::<u64>() + err.data().len(),
         Datum::Numeric(d) => {
             let mut d = d.0.clone();
             // Values must be reduced to determine appropriate number of
