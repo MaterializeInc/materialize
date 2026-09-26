@@ -1762,8 +1762,13 @@ pub mod plan {
                     Ok(Datum::False) => return Ok(false),
                     Ok(_) if scope.cells() => rejected = true,
                     Ok(_) => return Ok(false),
+                    // Like scalar `AND`, report the greatest error, so the error does not depend
+                    // on the order in which the predicates run.
                     Err(e) if scope.cells() => {
-                        error.get_or_insert(e);
+                        error = Some(match error.take() {
+                            Some(prev) => std::cmp::max(prev, e),
+                            None => e,
+                        });
                     }
                     Err(e) => return Err(e),
                 }

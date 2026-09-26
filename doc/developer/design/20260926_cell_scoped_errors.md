@@ -55,8 +55,11 @@ Each names the operator, what it does with error datums, and why.
    Dropping a column drops its error.
 4. **Filter.**
    A predicate decides whether the row exists, so an error in a predicate elevates the row.
-   The predicates of one MFP combine like `AND`: `false` masks an error, and an error masks `null`.
+   The predicates of one MFP combine like `AND`: `false` masks an error, an error masks `null`, and the reported error is the greatest one, as for scalar `AND`.
    Evaluating them in sequence and stopping at the first error would let the optimizer's predicate order decide whether a row errors, and a reader could steer that order to probe a column it reads only in a predicate.
+   This holds within one MFP only.
+   Two filters separated by a join, a `Let`, or an arrangement still decide in sequence, and with `p = NULL` before `q = ERROR` they drop a row that one fused filter would fail on.
+   Removing that dependence needs `NULL` to absorb `ERROR` in scalar `AND`.
    Join equivalences and temporal bounds are predicates, but they are evaluated in sequence.
 5. **Keys.**
    An error in an arrangement key, join key, grouping key, or the implicit key of `DISTINCT` and threshold has no defined meaning, so key evaluation raises and elevates.
