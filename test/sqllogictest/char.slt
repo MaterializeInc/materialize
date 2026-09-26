@@ -101,3 +101,110 @@ SELECT COALESCE('a'::"char", 'a'::char);
 
 query error coalesce could not convert type varchar to "char"
 SELECT COALESCE('a'::"char", 'a'::varchar);
+
+# Casts from "char" to non-string types go through text, since the "char"
+# datum is a byte rather than a string, unless a direct cast exists.
+
+query T
+SELECT '1'::"char"::int2vector;
+----
+[0:0]={1}
+
+query I
+SELECT '7'::"char"::int8;
+----
+7
+
+query B
+SELECT 't'::"char"::bool;
+----
+true
+
+query error invalid input syntax for type int2vector
+SELECT 'a'::"char"::int2vector;
+
+# "char" <-> integer is a direct cast on the byte value, as in PostgreSQL.
+
+query I
+SELECT 'a'::"char"::int4;
+----
+97
+
+query T
+SELECT 97::int4::"char";
+----
+a
+
+query error "char" out of range
+SELECT 200::int4::"char";
+
+query I
+SELECT (-1)::int4::"char"::int4;
+----
+-1
+
+# integer <-> "char" is explicit only, so it does not apply on assignment.
+
+statement ok
+CREATE TABLE char_sink (c "char");
+
+statement error column "c" is of type "char" but expression is of type integer
+INSERT INTO char_sink VALUES (97::int4);
+
+statement error column "c" is of type "char" but expression is of type integer
+INSERT INTO char_sink SELECT 97;
+
+statement ok
+INSERT INTO char_sink VALUES (97::int4::"char"), ('97'::text);
+
+query TI rowsort
+SELECT c, c::int4 FROM char_sink;
+----
+9
+57
+a
+97
+
+statement ok
+CREATE TABLE int_sink (i int4);
+
+statement error column "i" is of type integer but expression is of type "char"
+INSERT INTO int_sink VALUES ('1'::"char");
+
+statement ok
+DROP TABLE char_sink;
+
+statement ok
+DROP TABLE int_sink;
+
+query I
+SELECT ''::"char"::int4;
+----
+0
+
+statement ok
+CREATE TABLE pure_char (c "char" NOT NULL);
+
+statement ok
+INSERT INTO pure_char VALUES ('1'), ('2');
+
+query T rowsort
+SELECT c::int2vector FROM pure_char;
+----
+[0:0]={1}
+[0:0]={2}
+
+query I rowsort
+SELECT c::int8 FROM pure_char;
+----
+1
+2
+
+query I rowsort
+SELECT c::int4 FROM pure_char;
+----
+49
+50
+
+statement ok
+DROP TABLE pure_char;
