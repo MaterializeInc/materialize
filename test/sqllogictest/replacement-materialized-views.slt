@@ -234,12 +234,12 @@ CREATE TEMPORARY VIEW tv504 AS SELECT a FROM mv504
 statement ok
 ALTER MATERIALIZED VIEW mv504 APPLY REPLACEMENT rp504
 
-# The temporary view survives and was rewritten to read through the applied
-# replacement (a + 1), rather than dangling on the now-removed target.
-query I
+# The temporary view survives and still resolves, rather than dangling on the
+# now-removed target. The data it reads is checked in
+# test/testdrive/replacement-materialized-views.td, because applying a
+# replacement rewrites the target's data asynchronously.
+statement ok
 SELECT a FROM tv504
-----
-2
 
 statement ok
 DROP VIEW tv504

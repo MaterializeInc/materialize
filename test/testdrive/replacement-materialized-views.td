@@ -210,6 +210,27 @@ $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_si
 > DROP MATERIALIZED VIEW mv CASCADE
 
 
+# Test: temporary dependents read through the applied replacement (SQL-504)
+
+> CREATE TABLE t_temp_dep (a int, b int)
+> INSERT INTO t_temp_dep VALUES (1, 10)
+> CREATE MATERIALIZED VIEW mv_temp_dep AS SELECT a, b FROM t_temp_dep
+> CREATE REPLACEMENT MATERIALIZED VIEW rp_temp_dep FOR mv_temp_dep AS SELECT a + 1 AS a, b FROM t_temp_dep
+> CREATE TEMPORARY VIEW tv_temp_dep AS SELECT a FROM mv_temp_dep
+
+> SELECT a FROM tv_temp_dep
+1
+
+> ALTER MATERIALIZED VIEW mv_temp_dep APPLY REPLACEMENT rp_temp_dep
+
+> SELECT a FROM tv_temp_dep
+2
+
+> DROP VIEW tv_temp_dep
+> DROP MATERIALIZED VIEW mv_temp_dep CASCADE
+> DROP TABLE t_temp_dep
+
+
 # Test: attempting to replace constant MVs gives a helpful error
 
 > CREATE MATERIALIZED VIEW mv AS SELECT 1
