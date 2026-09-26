@@ -38,7 +38,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::shared_trace::SharedReader;
 
-pub(crate) use self::publish::{Diagnostics, PublishArrangement, Published};
+pub(crate) use self::publish::{Diagnostics, PublishArrangement, Published, adopt_trace};
 
 use crate::typedefs::{ErrSpine, RowRowSpine};
 

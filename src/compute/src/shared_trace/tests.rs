@@ -757,7 +757,7 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
 /// between their chain lengths, which is immune to the spine's particular merge policy. Absolute
 /// batch counts are not: "a merge happened" is true even when the publisher forwards the
 /// published `since`, because everything below `since` may merge either way. Merging *above*
-/// `since` is what separates the two, and neither arm calls `note_allow_compaction`, so `since`
+/// `since` is what separates the two, and neither arm compacts logically, so `since`
 /// stays at the minimum and every merge here is above it.
 ///
 /// Chain length is read off the publication point rather than through a handle, because minting a

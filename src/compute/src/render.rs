@@ -814,6 +814,12 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
+                // Borrows the arrangements, so it must precede moving their traces into the
+                // `TraceBundle` below.
+                if compute_state.role().publishes() {
+                    compute_state.sharing_registry.publish(idx_id, &oks, &errs);
+                }
+
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -823,6 +829,9 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
+                if compute_state.role().publishes() {
+                    publish_reexport(compute_state, self.scope.clone(), idx_id, gid, &trace);
+                }
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
@@ -916,6 +925,12 @@ where
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
+                // Borrows the arrangements, so it must precede moving their traces into the
+                // `TraceBundle` below.
+                if compute_state.role().publishes() {
+                    compute_state.sharing_registry.publish(idx_id, &oks, &errs);
+                }
+
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -925,6 +940,9 @@ where
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
+                if compute_state.role().publishes() {
+                    publish_reexport(compute_state, outer.clone(), idx_id, gid, &trace);
+                }
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
@@ -941,6 +959,34 @@ where
             }
         };
     }
+}
+
+/// Publishes index `idx_id`, which re-exports index `gid`'s arrangement, into the sharing registry.
+///
+/// Shares `gid`'s publication point when the registry allows it. When a reader already holds a
+/// point for `idx_id`, only publishing into that point can back it, so `gid`'s traces are attached
+/// to it as well.
+fn publish_reexport<'scope>(
+    compute_state: &ComputeState,
+    scope: Scope<'scope, mz_repr::Timestamp>,
+    idx_id: GlobalId,
+    gid: GlobalId,
+    trace: &TraceBundle,
+) {
+    let registry = &compute_state.sharing_registry;
+    if registry.publish_alias(idx_id, gid, scope.index(), scope.peers()) {
+        return;
+    }
+    // NOTE: Which branch runs is decided per worker, by whether a reader on that worker bound
+    // `idx_id` first, so neither may build operators: timely requires every worker to build the
+    // same dataflow graph. The re-export's dataflow then has no operators on any worker, as on a
+    // runtime that does not publish, and `mz_compute_error_counts` forwards `gid`'s counts to it.
+    registry.publish_traces(
+        idx_id,
+        scope.worker(),
+        trace.oks().unpadded(),
+        trace.errs().unpadded(),
+    );
 }
 
 /// Information about bindings, tracked in `render_recursive_plan` and

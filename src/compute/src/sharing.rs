@@ -29,9 +29,13 @@ use std::thread::Thread;
 
 use differential_dataflow::operators::arrange::Arranged;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use timely::PartialOrder;
 use timely::progress::Antichain;
+use timely::worker::Worker;
 
-use crate::shared_trace::{PublishArrangement, Published, SharedErrsHandle, SharedOksHandle};
+use crate::shared_trace::{
+    PublishArrangement, Published, SharedErrsHandle, SharedOksHandle, adopt_trace,
+};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
@@ -39,6 +43,9 @@ use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 /// An index's `oks` is always a `RowRowSpine` and its `errs` always an `ErrSpine`. Holding the
 /// `Published` values keeps the publication points registered and lets us mint further handles.
 pub struct SharedIndexArrangement {
+    /// The id whose slot this is, which installed its publishers. Aliases share the slot under ids
+    /// of their own, and the slot keeps its root after the root's id drops or names a new slot.
+    root: GlobalId,
     /// The published `oks` arrangement.
     pub(crate) oks: Published<RowRowSpine<Timestamp, Diff>>,
     /// The published `errs` arrangement.
@@ -63,14 +70,85 @@ struct Waker {
     dirty: BTreeSet<GlobalId>,
 }
 
-/// The registry's state: the published slots and one [`Waker`] per interactive worker index. One
-/// lock covers all of it. Every critical section is a few map operations, and the publisher takes
-/// it once per seal, not per record.
+/// The registry's state: the published slots, one [`Waker`] per interactive worker index, and the
+/// alias bookkeeping. One lock covers all of it. Every critical section is a few map operations,
+/// and the publisher takes it once per seal, not per record.
 #[derive(Default)]
 struct Inner {
     map: BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>,
     /// Indexed by worker ordinal; `None` until that interactive worker registers its waker.
     wakers: Vec<Option<Waker>>,
+    aliases: Aliases,
+}
+
+/// Indexes that re-export another index's arrangement and share its slot, see
+/// [`ArrangementSharingRegistry::publish_alias`].
+///
+/// Everything is keyed by worker, because which ids share a point is decided per worker: an index
+/// aliases its source's slot on a worker where it has none yet, and publishes a point of its own
+/// where a reader bound its id first. The standing-hold frontiers noted for every id are kept per
+/// (id, worker) so a shared point's hold can be re-derived from the ids sharing it once its root
+/// no longer governs.
+#[derive(Default)]
+struct Aliases {
+    /// A slot's root to the aliases that joined its slot, per worker.
+    ///
+    /// Outlives the root's own entry in the map, since the root's publishers keep sealing under
+    /// the root's id. After the root's id is published again the set can also name aliases of the
+    /// new slot, so a reader of it filters by slot rather than trusting membership.
+    aliases_of: BTreeMap<(GlobalId, usize), BTreeSet<GlobalId>>,
+    /// The frontier last passed to `note_standing_hold` per (id, worker).
+    holds: BTreeMap<(GlobalId, usize), Antichain<Timestamp>>,
+}
+
+impl Aliases {
+    /// The frontier that should reach `slot`, which `id` maps to on `worker_index`, or `None` if
+    /// another id governs it.
+    ///
+    /// While the slot's root still maps to the slot, the root's frontier governs: an alias
+    /// dataflow imports what it re-exports, so the controller never advances the root's `since`
+    /// past an alias's. Once the root has dropped, or its id names a different slot after being
+    /// published again, the meet of the frontiers noted by the ids still sharing the slot governs,
+    /// since the shared trace then compacts to exactly that meet.
+    fn governing_hold(
+        &self,
+        map: &BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>,
+        slot: &Arc<SharedIndexArrangement>,
+        id: GlobalId,
+        worker_index: usize,
+    ) -> Option<Antichain<Timestamp>> {
+        let root = slot.root;
+        let shares = |other: &GlobalId| {
+            slot_of(map, other, worker_index).is_some_and(|other| Arc::ptr_eq(other, slot))
+        };
+        if shares(&root) {
+            return if id == root {
+                self.holds.get(&(id, worker_index)).cloned()
+            } else {
+                None
+            };
+        }
+        self.aliases_of
+            .get(&(root, worker_index))?
+            .iter()
+            .filter(|alias| shares(alias))
+            .filter_map(|alias| self.holds.get(&(*alias, worker_index)))
+            .fold(None, |meet: Option<Antichain<Timestamp>>, frontier| {
+                Some(match meet {
+                    Some(meet) if PartialOrder::less_equal(&meet, frontier) => meet,
+                    _ => frontier.clone(),
+                })
+            })
+    }
+}
+
+/// The slot `id` maps to on `worker_index`, if any.
+fn slot_of<'a>(
+    map: &'a BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>,
+    id: &GlobalId,
+    worker_index: usize,
+) -> Option<&'a Arc<SharedIndexArrangement>> {
+    map.get(id)?.get(worker_index)?.as_ref()
 }
 
 /// Per-process registry of published index arrangements.
@@ -118,6 +196,7 @@ impl ArrangementSharingRegistry {
             .or_insert_with(|| (0..peers).map(|_| None).collect());
         Arc::clone(slots[worker_index].get_or_insert_with(|| {
             Arc::new(SharedIndexArrangement {
+                root: id,
                 oks: Published::new(),
                 errs: Published::new(),
             })
@@ -131,10 +210,6 @@ impl ArrangementSharingRegistry {
     /// already imported is backed in place. Each half signals its own seal: a peek whose result is
     /// an error carries its data on the errs arrangement, whose frontier is held back until the
     /// error is emitted, so an oks-only signal would leave that peek parked.
-    ///
-    /// Every id gets its own publication point, including an index that re-exports another's
-    /// arrangement. The point's writer frontier and standing hold are per collection, and the
-    /// controller compacts two collections independently even when they share a trace.
     pub(crate) fn publish<'scope>(
         &self,
         id: GlobalId,
@@ -151,11 +226,127 @@ impl ArrangementSharingRegistry {
         self.notify(id, worker_index);
     }
 
+    /// Publishes the traces `oks` and `errs` under `id`, like [`Self::publish`], without an
+    /// arrangement rendered for them. `worker` must be the worker that maintains the traces.
+    ///
+    /// Builds no operators, so a caller may publish on some workers of a dataflow and not on
+    /// others without their dataflow graphs diverging.
+    pub(crate) fn publish_traces(
+        &self,
+        id: GlobalId,
+        worker: &Worker,
+        oks: &RowRowAgent<Timestamp, Diff>,
+        errs: &ErrAgent<Timestamp, Diff>,
+    ) {
+        let worker_index = worker.index();
+        let slot = self.get_or_create(id, worker_index, worker.peers());
+        let registry = self.clone();
+        adopt_trace(oks, worker, &slot.oks, move || {
+            registry.notify(id, worker_index)
+        });
+        let registry = self.clone();
+        adopt_trace(errs, worker, &slot.errs, move || {
+            registry.notify(id, worker_index)
+        });
+        self.notify(id, worker_index);
+    }
+
+    /// Registers `alias` as a second name for `target`'s slot on `worker_index`, for an index that
+    /// re-exports `target`'s arrangement. Readers of either id then share one publication point, and
+    /// the re-export's dataflow needs no operators of its own.
+    ///
+    /// Returns `false` without registering when `alias` already has a slot on this worker, which a
+    /// reader created before the publisher rendered. That is the point the reader imported, and only
+    /// a publisher writing into it can back it, so the caller publishes through an import instead.
+    ///
+    /// `target` may itself be an alias, as when an index re-exports a re-export. `alias` then joins
+    /// the aliases of the slot's root on this worker. While the root maps to the slot its frontiers
+    /// govern the shared point, see [`Aliases::governing_hold`]. An alias outlives its root's
+    /// removal: the slot stays reachable under the alias and the publisher keeps running, because
+    /// the alias's `TraceBundle` holds the dataflow's tokens.
+    pub(crate) fn publish_alias(
+        &self,
+        alias: GlobalId,
+        target: GlobalId,
+        worker_index: usize,
+        peers: usize,
+    ) -> bool {
+        let mut inner = self.lock();
+        let Inner {
+            map,
+            wakers,
+            aliases,
+        } = &mut *inner;
+        let Some(shared) = slot_of(map, &target, worker_index).cloned() else {
+            return false;
+        };
+        let slots = map
+            .entry(alias)
+            .or_insert_with(|| (0..peers).map(|_| None).collect());
+        if slots[worker_index].is_some() {
+            return false;
+        }
+        // The alias joins the slot's root rather than `target`, which may itself be an alias. Seals
+        // arrive under the root's id, and `notify` fans them out exactly one level.
+        let root = shared.root;
+        slots[worker_index] = Some(shared);
+        aliases
+            .aliases_of
+            .entry((root, worker_index))
+            .or_default()
+            .insert(alias);
+        if let Some(waker) = wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
+            Self::mark(waker, alias);
+        }
+        true
+    }
+
     /// Removes all slots for `id`, called when the index drops.
+    ///
+    /// Dropping a root that still has aliases hands its shared points over to them: the points stay
+    /// reachable under the alias ids, and their frontiers move to the meet of what the aliases have
+    /// noted, since the shared trace compacts to exactly that from now on.
     pub(crate) fn remove(&self, id: &GlobalId) {
         let mut inner = self.lock();
-        let Inner { map, wakers } = &mut *inner;
-        map.remove(id);
+        let Inner {
+            map,
+            wakers,
+            aliases,
+        } = &mut *inner;
+        if let Some(slots) = map.remove(id) {
+            for (worker_index, slot) in slots.iter().enumerate() {
+                let Some(slot) = slot else { continue };
+                if slot.root == *id {
+                    continue;
+                }
+                let key = (slot.root, worker_index);
+                if let Some(set) = aliases.aliases_of.get_mut(&key) {
+                    set.remove(id);
+                    if set.is_empty() {
+                        aliases.aliases_of.remove(&key);
+                    }
+                }
+            }
+        }
+        aliases.holds.retain(|(other, _), _| other != id);
+        let handed_over: Vec<_> = aliases
+            .aliases_of
+            .range((*id, 0)..=(*id, usize::MAX))
+            .flat_map(|((_, worker_index), set)| set.iter().map(|alias| (*alias, *worker_index)))
+            .collect();
+        let mut seen = BTreeSet::new();
+        for (alias, worker_index) in handed_over {
+            let Some(slot) = slot_of(map, &alias, worker_index) else {
+                continue;
+            };
+            if slot.root != *id || !seen.insert((Arc::as_ptr(slot), worker_index)) {
+                continue;
+            }
+            if let Some(f) = aliases.governing_hold(map, slot, alias, worker_index) {
+                slot.oks.note_standing_hold(&f);
+                slot.errs.note_standing_hold(&f);
+            }
+        }
         // `remove` is not worker-specific: any interactive worker may have pending work on `id`, so
         // mark it dirty for every registered waker. A waiter re-checks and, finding the slot gone,
         // drops or keeps its item.
@@ -189,6 +380,18 @@ impl ArrangementSharingRegistry {
         let inner = self.lock();
         let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
         Some(slot.oks.logical_holds())
+    }
+
+    /// The published `oks` point's diagnostics for `id` on `worker_index`, if published. Test-only.
+    #[cfg(test)]
+    pub(crate) fn published_diagnostics(
+        &self,
+        id: &GlobalId,
+        worker_index: usize,
+    ) -> Option<crate::shared_trace::Diagnostics<Timestamp>> {
+        let inner = self.lock();
+        let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
+        Some(slot.oks.diagnostics())
     }
 
     /// Registers `worker` as interactive worker `worker_index`'s waker, growing the waker vector as
@@ -238,15 +441,15 @@ impl ArrangementSharingRegistry {
         worker_index: usize,
         frontier: &Antichain<Timestamp>,
     ) {
-        let inner = self.lock();
-        if let Some(arr) = inner
-            .map
-            .get(&id)
-            .and_then(|slots| slots.get(worker_index))
-            .and_then(|slot| slot.as_ref())
-        {
-            arr.oks.note_standing_hold(frontier);
-            arr.errs.note_standing_hold(frontier);
+        let mut inner = self.lock();
+        let Inner { map, aliases, .. } = &mut *inner;
+        let Some(slot) = slot_of(map, &id, worker_index) else {
+            return;
+        };
+        aliases.holds.insert((id, worker_index), frontier.clone());
+        if let Some(frontier) = aliases.governing_hold(map, slot, id, worker_index) {
+            slot.oks.note_standing_hold(&frontier);
+            slot.errs.note_standing_hold(&frontier);
         }
     }
 
@@ -279,8 +482,20 @@ impl ArrangementSharingRegistry {
     /// guarantees is what makes the separate critical sections lost-wakeup-free.
     pub(crate) fn notify(&self, id: GlobalId, worker_index: usize) {
         let mut inner = self.lock();
-        if let Some(waker) = inner.wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
+        let Inner {
+            wakers, aliases, ..
+        } = &mut *inner;
+        if let Some(waker) = wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
             Self::mark(waker, id);
+            // A reader waits under the id it imported, which for a shared point may be an alias.
+            for alias in aliases
+                .aliases_of
+                .get(&(id, worker_index))
+                .into_iter()
+                .flatten()
+            {
+                Self::mark(waker, *alias);
+            }
         }
     }
 

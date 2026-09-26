@@ -145,6 +145,269 @@ fn handles_available_after_insert_gone_after_remove() {
     assert!(registry.handles(&id, 0).is_none());
 }
 
+#[mz_ore::test]
+fn alias_shares_the_target_slot() {
+    let target = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = publish_index(target, test_rows());
+    registry.register_waker(0, thread::current());
+    let _ = registry.take_dirty(0);
+
+    assert!(registry.publish_alias(alias, target, 0, 1));
+    // Registering wakes readers waiting under the alias, and both names read the same rows.
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([alias]));
+    let (oks, _) = registry.handles(&alias, 0).expect("alias published");
+    assert_eq!(
+        read_rows(&oks, Timestamp::from(1_u64)),
+        expected_rows(&test_rows())
+    );
+
+    // A seal on the target reaches readers waiting under either name.
+    registry.notify(target, 0);
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([target, alias]));
+
+    // The alias outlives the target; removing the alias removes only the alias.
+    registry.remove(&target);
+    assert!(registry.handles(&target, 0).is_none());
+    assert!(registry.handles(&alias, 0).is_some());
+    registry.remove(&alias);
+    assert!(registry.handles(&alias, 0).is_none());
+}
+
+#[mz_ore::test]
+fn alias_refused_once_a_reader_holds_its_own_point() {
+    let target = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = publish_index(target, test_rows());
+
+    // A reader that bound the alias id first holds an unbacked point that only a publisher into
+    // it can back, so aliasing has to fall back to publishing.
+    let _reader_slot = registry.get_or_create(alias, 0, 1);
+    assert!(!registry.publish_alias(alias, target, 0, 1));
+    // Nor can an alias be registered for a target that has no slot on this worker.
+    assert!(!registry.publish_alias(GlobalId::User(3), GlobalId::User(9), 0, 1));
+}
+
+#[mz_ore::test]
+fn publish_traces_backs_a_reader_point_without_operators() {
+    let target = GlobalId::User(1);
+    let reexport = GlobalId::User(2);
+    let registry = ArrangementSharingRegistry::new();
+    // A reader bound the re-export's id first, so the re-export cannot alias the target's point.
+    let _reader_slot = registry.get_or_create(reexport, 0, 1);
+    let registry_in = registry.clone();
+    timely::execute_directly(move |worker| {
+        let (oks, errs, mut oks_input, mut errs_input) =
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_input, oks) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("test oks");
+                let (errs_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs).mz_arrange::<
+                    ColumnationChunker<_>,
+                    ErrBatcher<_, _>,
+                    ErrBuilder<_, _>,
+                    ErrSpine<_, _>,
+                >("test errs");
+                registry_in.publish(target, &oks, &errs);
+                (oks.trace, errs.trace, oks_input, errs_input)
+            });
+
+        // The re-export's dataflow must build the same graph on every worker whether or not a
+        // reader got there first, so publishing into the reader's point builds nothing.
+        let before = worker.peek_identifier();
+        worker.dataflow::<Timestamp, _, _>(|_| {});
+        let empty = worker.peek_identifier() - before;
+        let before = worker.peek_identifier();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            registry_in.publish_traces(reexport, scope.worker(), &oks, &errs);
+        });
+        assert_eq!(worker.peek_identifier() - before, empty);
+
+        for (k, v) in test_rows() {
+            oks_input.update((k, v), Diff::ONE);
+        }
+        oks_input.advance_to(Timestamp::from(1_u64));
+        oks_input.flush();
+        errs_input.advance_to(Timestamp::from(1_u64));
+        errs_input.flush();
+        drop((oks_input, errs_input));
+        while worker.step() {}
+        drop((oks, errs));
+    });
+
+    let (oks, _) = registry.handles(&reexport, 0).expect("re-export published");
+    assert_eq!(
+        read_rows(&oks, Timestamp::from(0_u64)),
+        expected_rows(&test_rows())
+    );
+}
+
+#[mz_ore::test]
+fn alias_standing_holds_follow_the_target_then_the_aliases_meet() {
+    let target = GlobalId::User(1);
+    let alias_a = GlobalId::User(2);
+    let alias_b = GlobalId::User(3);
+    let registry = publish_index(target, test_rows());
+    assert!(registry.publish_alias(alias_a, target, 0, 1));
+    assert!(registry.publish_alias(alias_b, target, 0, 1));
+    let standing_hold = |id: &GlobalId| {
+        registry
+            .published_diagnostics(id, 0)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+
+    // While the target lives, only its notes reach the shared point. The hold was seeded at the
+    // minimum when the arrangement was adopted.
+    registry.note_standing_hold(alias_a, 0, &at(10));
+    assert_eq!(
+        standing_hold(&alias_a),
+        Antichain::from_elem(Timestamp::MIN)
+    );
+    registry.note_standing_hold(target, 0, &at(5));
+    assert_eq!(standing_hold(&alias_a), at(5));
+    registry.note_standing_hold(alias_b, 0, &at(20));
+    assert_eq!(standing_hold(&target), at(5));
+
+    // Once the target drops, the meet of the aliases' notes governs the point.
+    registry.remove(&target);
+    assert_eq!(standing_hold(&alias_a), at(10));
+    registry.note_standing_hold(alias_a, 0, &at(30));
+    assert_eq!(standing_hold(&alias_b), at(20));
+    registry.remove(&alias_b);
+    registry.note_standing_hold(alias_a, 0, &at(40));
+    assert_eq!(standing_hold(&alias_a), at(40));
+}
+
+#[mz_ore::test]
+fn alias_of_an_alias_joins_the_root() {
+    let root = GlobalId::User(1);
+    let middle = GlobalId::User(2);
+    let leaf = GlobalId::User(3);
+    let registry = publish_index(root, test_rows());
+    registry.register_waker(0, thread::current());
+    // `middle` re-exports `root`, and `leaf` re-exports `middle`.
+    assert!(registry.publish_alias(middle, root, 0, 1));
+    assert!(registry.publish_alias(leaf, middle, 0, 1));
+    let _ = registry.take_dirty(0);
+    let standing_hold = |id: &GlobalId| {
+        registry
+            .published_diagnostics(id, 0)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+
+    // The seals come from the root's publisher, and they reach readers waiting under the leaf.
+    registry.notify(root, 0);
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([root, middle, leaf]));
+
+    // Dropping the middle alias leaves the root governing, not the leaf alongside it.
+    registry.note_standing_hold(root, 0, &at(5));
+    registry.remove(&middle);
+    registry.note_standing_hold(leaf, 0, &at(10));
+    assert_eq!(standing_hold(&leaf), at(5));
+    let _ = registry.take_dirty(0);
+    registry.notify(root, 0);
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([root, leaf]));
+
+    // Once the root drops too, the leaf governs, and a re-export of the leaf joins it there.
+    registry.remove(&root);
+    assert_eq!(standing_hold(&leaf), at(10));
+    let next = GlobalId::User(4);
+    assert!(registry.publish_alias(next, leaf, 0, 1));
+    registry.note_standing_hold(next, 0, &at(12));
+    registry.note_standing_hold(leaf, 0, &at(15));
+    assert_eq!(standing_hold(&leaf), at(12));
+    let _ = registry.take_dirty(0);
+    registry.notify(root, 0);
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([root, leaf, next]));
+}
+
+#[mz_ore::test]
+fn alias_bookkeeping_is_per_worker() {
+    let root = GlobalId::User(1);
+    let reexport = GlobalId::User(2);
+    let leaf = GlobalId::User(3);
+    let registry = ArrangementSharingRegistry::new();
+    let _root_slots = [
+        registry.get_or_create(root, 0, 2),
+        registry.get_or_create(root, 1, 2),
+    ];
+    // On worker 0 the re-export aliases the root's slot. On worker 1 a reader bound the re-export's
+    // id first, so it publishes a point of its own there.
+    assert!(registry.publish_alias(reexport, root, 0, 2));
+    let _reader_slot = registry.get_or_create(reexport, 1, 2);
+    assert!(!registry.publish_alias(reexport, root, 1, 2));
+    // A re-export of the re-export shares whichever slot the re-export has on each worker.
+    assert!(registry.publish_alias(leaf, reexport, 0, 2));
+    assert!(registry.publish_alias(leaf, reexport, 1, 2));
+    registry.register_waker(1, thread::current());
+    let standing_hold = |id: &GlobalId, worker| {
+        registry
+            .published_diagnostics(id, worker)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+
+    // Worker 1's seals under the re-export's own point reach the leaf, and the root's do not.
+    registry.notify(reexport, 1);
+    assert_eq!(registry.take_dirty(1), BTreeSet::from([reexport, leaf]));
+    registry.notify(root, 1);
+    assert_eq!(registry.take_dirty(1), BTreeSet::from([root]));
+
+    // The re-export governs its own point on worker 1, and the root governs the shared one on
+    // worker 0.
+    registry.note_standing_hold(root, 0, &at(5));
+    registry.note_standing_hold(root, 1, &at(5));
+    registry.note_standing_hold(reexport, 0, &at(10));
+    registry.note_standing_hold(reexport, 1, &at(10));
+    registry.note_standing_hold(leaf, 1, &at(20));
+    assert_eq!(standing_hold(&leaf, 0), at(5));
+    assert_eq!(standing_hold(&leaf, 1), at(10));
+    assert_eq!(standing_hold(&root, 1), at(5));
+}
+
+#[mz_ore::test]
+fn republished_root_leaves_its_old_point_to_the_aliases() {
+    let root = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = publish_index(root, test_rows());
+    assert!(registry.publish_alias(alias, root, 0, 1));
+    let standing_hold = |id: &GlobalId| {
+        registry
+            .published_diagnostics(id, 0)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+    registry.note_standing_hold(root, 0, &at(5));
+
+    // The root drops and its id is published again, over a new point. Its notes govern only that
+    // point, and the alias's notes govern the one the alias still shares.
+    registry.remove(&root);
+    let _new_root_slot = registry.get_or_create(root, 0, 1);
+    registry.note_standing_hold(root, 0, &at(7));
+    registry.note_standing_hold(alias, 0, &at(12));
+    assert_eq!(standing_hold(&alias), at(12));
+    assert_eq!(standing_hold(&root), at(7));
+
+    // A new alias of the new point stays out of the old point's meet.
+    let other = GlobalId::User(3);
+    assert!(registry.publish_alias(other, root, 0, 1));
+    registry.note_standing_hold(other, 0, &at(8));
+    registry.note_standing_hold(alias, 0, &at(15));
+    assert_eq!(standing_hold(&alias), at(15));
+    assert_eq!(standing_hold(&root), at(7));
+}
+
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
 /// keeping only entries whose accumulated diff at `at` is nonzero.
 ///

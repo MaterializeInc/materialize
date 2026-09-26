@@ -17,6 +17,7 @@ use differential_dataflow::trace::{Trace, TraceReader};
 use mz_timely_util::shared_trace::{Shared, SharedReader, SharedSpine};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
+use timely::worker::Worker;
 
 /// Why a publication point refused an `as_of`.
 ///
@@ -165,23 +166,36 @@ where
     Inner::Time: TotalOrder,
 {
     fn adopt<F: Fn() + 'static>(&self, point: &Published<SharedSpine<Inner>>, on_seal: F) {
-        let scope = self.stream.scope();
-        // Seed the standing hold at the trace's own compaction frontier. The importing runtime may
-        // not have applied any compaction for this collection yet, and until it has, this is the
-        // frontier the trace may compact to: the controller offers no `as_of` below a collection's
-        // own `since`, so no importer can need a frontier below it. Without this seed a point created
-        // before attachment holds at the minimum time and stops the arrangement compacting at all.
-        let since = self.trace.clone().get_logical_compaction().to_owned();
-        point.note_standing_hold(&since);
-
-        // A reader moving a hold wakes the arrange operator, whose `exert` applies it to the trace.
-        let activator = scope
-            .worker()
-            .sync_activator_for(self.trace.operator().address.to_vec());
-        self.trace.trace_box_unstable().borrow().trace().attach(
-            Arc::clone(&point.shared),
-            activator,
-            on_seal,
-        );
+        adopt_trace(&self.trace, self.stream.scope().worker(), point, on_seal);
     }
+}
+
+/// Attaches `trace` to `point`, as [`PublishArrangement::adopt`] does for an arrangement, for a
+/// caller that holds the trace but renders no arrangement of its own. `worker` must be the worker
+/// that maintains `trace`.
+pub(crate) fn adopt_trace<Inner, F>(
+    trace: &TraceAgent<SharedSpine<Inner>>,
+    worker: &Worker,
+    point: &Published<SharedSpine<Inner>>,
+    on_seal: F,
+) where
+    Inner: Trace + 'static,
+    Inner::Time: TotalOrder,
+    F: Fn() + 'static,
+{
+    // Seed the standing hold at the trace's own compaction frontier. The importing runtime may
+    // not have applied any compaction for this collection yet, and until it has, this is the
+    // frontier the trace may compact to: the controller offers no `as_of` below a collection's
+    // own `since`, so no importer can need a frontier below it. Without this seed a point created
+    // before attachment holds at the minimum time and stops the arrangement compacting at all.
+    let since = trace.clone().get_logical_compaction().to_owned();
+    point.note_standing_hold(&since);
+
+    // A reader moving a hold wakes the arrange operator, whose `exert` applies it to the trace.
+    let activator = worker.sync_activator_for(trace.operator().address.to_vec());
+    trace.trace_box_unstable().borrow().trace().attach(
+        Arc::clone(&point.shared),
+        activator,
+        on_seal,
+    );
 }
