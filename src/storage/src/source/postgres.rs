@@ -111,6 +111,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::Stage;
 use crate::source::types::{Probe, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -179,45 +180,56 @@ impl SourceRender for PostgresSourceConnection {
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
 
+        let stages = &config.stage_logger;
+        let worker = scope.worker();
+
         let (snapshot_updates, rewinds, slot_ready, snapshot_err, snapshot_token) =
-            snapshot::render(
-                scope.clone(),
-                config.clone(),
-                self.clone(),
-                table_info.clone(),
-                metrics.snapshot_metrics.clone(),
-            );
+            stages.shared(worker, Stage::ReaderSnapshot, || {
+                snapshot::render(
+                    scope.clone(),
+                    config.clone(),
+                    self.clone(),
+                    table_info.clone(),
+                    metrics.snapshot_metrics.clone(),
+                )
+            });
 
-        let (repl_updates, probe_stream, repl_err, repl_token) = replication::render(
-            scope.clone(),
-            config.clone(),
-            self,
-            table_info,
-            rewinds,
-            slot_ready,
-            resume_uppers,
-            metrics,
-        );
+        let (repl_updates, probe_stream, repl_err, repl_token) =
+            stages.shared(worker, Stage::ReaderReplication, || {
+                replication::render(
+                    scope.clone(),
+                    config.clone(),
+                    self,
+                    table_info,
+                    rewinds,
+                    slot_ready,
+                    resume_uppers,
+                    metrics,
+                )
+            });
 
-        let updates = snapshot_updates.concat(repl_updates);
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                |((output, data), time, diff): (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    MzOffset,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(output);
-                    (output, (data, time, diff))
-                },
-            );
-        let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
-        }
+        let data_collections = stages.shared(worker, Stage::Partition, || {
+            let updates = snapshot_updates.concat(repl_updates);
+            let partition_count = u64::cast_from(config.source_exports.len());
+            let data_streams: Vec<_> = updates
+                .inner
+                .partition::<CapacityContainerBuilder<_>, _, _>(
+                    partition_count,
+                    |((output, data), time, diff): (
+                        (usize, Result<SourceMessage, DataflowError>),
+                        MzOffset,
+                        Diff,
+                    )| {
+                        let output = u64::cast_from(output);
+                        (output, (data, time, diff))
+                    },
+                );
+            let mut data_collections = BTreeMap::new();
+            for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+                data_collections.insert(*id, data_stream.as_collection());
+            }
+            data_collections
+        });
 
         let export_ids = config.source_exports.keys().copied();
         let health_init = export_ids

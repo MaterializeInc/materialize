@@ -42,6 +42,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
+use crate::logging::{EnvelopeKind, Stage};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::{UpsertKey, UpsertSourceTime, UpsertValue};
@@ -118,11 +119,15 @@ where
     let mut health_streams = Vec::with_capacity(exports.len() + 1);
     health_streams.push(health);
 
+    let stages = &base_source_config.stage_logger;
+    let worker = scope.worker();
+
     let mut outputs = BTreeMap::new();
     for (export_id, export) in exports {
         type CB<C> = CapacityContainerBuilder<C>;
-        let (ok_stream, err_stream) =
-            export.map_fallible::<CB<_>, CB<_>, _, _, _>("export-demux-ok-err", |r| r);
+        let (ok_stream, err_stream) = stages.export(worker, export_id, Stage::Export, || {
+            export.map_fallible::<CB<_>, CB<_>, _, _, _>("export-demux-ok-err", |r| r)
+        });
 
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
@@ -147,10 +152,13 @@ where
         needed_tokens.extend(extra_tokens);
 
         // Flatten the error collections.
-        let err_collection = match error_collections.len() {
-            0 => err_stream,
-            _ => err_stream.concatenate(error_collections),
-        };
+        let err_collection = stages.export(worker, export_id, Stage::Export, || {
+            if error_collections.is_empty() {
+                err_stream
+            } else {
+                err_stream.concatenate(error_collections)
+            }
+        });
 
         outputs.insert(export_id, (ok, err_collection));
 
@@ -191,260 +199,287 @@ where
         timestamp_interval: _,
     } = description.desc;
 
-    let (decoded_stream, decode_health) = match encoding {
-        None => (
-            ok_source.map(|r| DecodeResult {
-                // This is safe because the current set of sources produce
-                // either:
-                // 1. Non-nullable keys
-                // 2. No keys at all.
-                //
-                // Please see the comment on `key_envelope_no_encoding` in
-                // `mz_sql::plan::statement::ddl` for more details.
-                key: Some(Ok(r.key)),
-                value: Some(Ok(r.value)),
-                metadata: r.metadata,
-                from_time: r.from_time,
-            }),
-            None,
-        ),
-        Some(encoding) => {
-            let (decoded_stream, decode_health) = render_decode_delimited(
-                ok_source,
-                encoding.key,
-                encoding.value,
-                dataflow_debug_name.clone(),
-                storage_state.metrics.decode_defs.clone(),
-                storage_state.storage_configuration.clone(),
-            );
-            (decoded_stream, Some(decode_health))
-        }
+    let stages = &base_source_config.stage_logger;
+    let worker = scope.worker();
+
+    // Without an encoding the decode step only reshapes messages, so it is not a stage.
+    let decode_stage = match encoding {
+        Some(_) => Stage::Decode,
+        None => Stage::Export,
     };
+    let (decoded_stream, decode_health) =
+        stages.export(worker, export_id, decode_stage, || match encoding {
+            None => (
+                ok_source.map(|r| DecodeResult {
+                    // This is safe because the current set of sources produce
+                    // either:
+                    // 1. Non-nullable keys
+                    // 2. No keys at all.
+                    //
+                    // Please see the comment on `key_envelope_no_encoding` in
+                    // `mz_sql::plan::statement::ddl` for more details.
+                    key: Some(Ok(r.key)),
+                    value: Some(Ok(r.value)),
+                    metadata: r.metadata,
+                    from_time: r.from_time,
+                }),
+                None,
+            ),
+            Some(encoding) => {
+                let (decoded_stream, decode_health) = render_decode_delimited(
+                    ok_source,
+                    encoding.key,
+                    encoding.value,
+                    dataflow_debug_name.clone(),
+                    storage_state.metrics.decode_defs.clone(),
+                    storage_state.storage_configuration.clone(),
+                );
+                (decoded_stream, Some(decode_health))
+            }
+        });
 
-    // render envelopes
-    let (envelope_ok, envelope_health) = match &envelope {
-        SourceEnvelope::Upsert(upsert_envelope) => {
-            let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
+    let envelope_kind = match &envelope {
+        SourceEnvelope::Upsert(UpsertEnvelope {
+            style: UpsertStyle::Debezium { .. },
+            ..
+        }) => EnvelopeKind::Debezium,
+        SourceEnvelope::Upsert(_) => EnvelopeKind::Upsert,
+        SourceEnvelope::None(_) => EnvelopeKind::None,
+        SourceEnvelope::CdcV2 => EnvelopeKind::Materialize,
+    };
+    let envelope_stage = Stage::Envelope(envelope_kind);
+    let (envelope_ok, envelope_health) =
+        stages.export(worker, export_id, envelope_stage, || match &envelope {
+            SourceEnvelope::Upsert(upsert_envelope) => {
+                let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
-            let persist_clients = Arc::clone(&storage_state.persist_clients);
-            // TODO: Get this to work with the as_of.
-            let resume_upper = base_source_config.resume_uppers[&export_id].clone();
+                let persist_clients = Arc::clone(&storage_state.persist_clients);
+                // TODO: Get this to work with the as_of.
+                let resume_upper = base_source_config.resume_uppers[&export_id].clone();
 
-            let upper_ts = resume_upper
-                .as_option()
-                .expect("resuming an already finished ingestion")
-                .clone();
-            let outer_mz_scope = scope.clone();
-            let (upsert, health_update) = scope.scoped(
-                &format!("upsert_rehydration_backpressure({})", export_id),
-                |scope| {
-                    let (
-                        previous_ok,
-                        previous_err,
-                        previous_token,
-                        feedback_handle,
-                        backpressure_metrics,
-                    ) = {
-                        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-
-                        let backpressure_max_inflight_bytes = get_backpressure_max_inflight_bytes(
-                            &storage_state
-                                .storage_configuration
-                                .parameters
-                                .storage_dataflow_max_inflight_bytes_config,
-                            &storage_state.instance_context.cluster_memory_limit,
-                        );
-
-                        let (feedback_handle, flow_control, backpressure_metrics) =
-                            if let Some(storage_dataflow_max_inflight_bytes) =
-                                backpressure_max_inflight_bytes
-                            {
-                                tracing::info!(
-                                    ?backpressure_max_inflight_bytes,
-                                    "timely-{} using backpressure in upsert for source {}",
-                                    base_source_config.worker_id,
-                                    export_id
-                                );
-                                if !storage_state
-                                    .storage_configuration
-                                    .parameters
-                                    .storage_dataflow_max_inflight_bytes_config
-                                    .disk_only
-                                    || storage_state.instance_context.scratch_directory.is_some()
-                                {
-                                    let (feedback_handle, feedback_data) =
-                                        scope.feedback(Default::default());
-
-                                    // TODO(guswynn): cleanup
-                                    let backpressure_metrics = Some(
-                                        base_source_config
-                                            .metrics
-                                            .get_backpressure_metrics(export_id, scope.index()),
-                                    );
-
-                                    (
-                                        Some(feedback_handle),
-                                        Some(persist_source::FlowControl {
-                                            progress_stream: feedback_data,
-                                            max_inflight_bytes: storage_dataflow_max_inflight_bytes,
-                                            summary: (Default::default(), Subtime::least_summary()),
-                                            metrics: backpressure_metrics
-                                                .as_ref()
-                                                .map(|m| m.operator_metrics()),
-                                        }),
-                                        backpressure_metrics,
-                                    )
-                                } else {
-                                    (None, None, None)
-                                }
-                            } else {
-                                (None, None, None)
-                            };
-
-                        let storage_metadata = description.source_exports[&export_id]
-                            .storage_metadata
-                            .clone();
-
-                        let error_handler =
-                            storage_state.error_handler("upsert_rehydration", export_id);
-
-                        let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
-                            outer_mz_scope,
-                            scope,
-                            export_id,
-                            persist_clients,
-                            storage_metadata,
-                            None,
-                            Some(as_of),
-                            SnapshotMode::Include,
-                            Antichain::new(),
-                            None,
-                            flow_control,
-                            false.then_some(|| unreachable!()),
-                            async {},
-                            error_handler,
-                        );
-                        (
-                            ok_stream.as_collection(),
-                            err_stream.as_collection(),
-                            Some(tok),
+                let upper_ts = resume_upper
+                    .as_option()
+                    .expect("resuming an already finished ingestion")
+                    .clone();
+                let outer_mz_scope = scope.clone();
+                let (upsert, health_update) = scope.scoped(
+                    &format!("upsert_rehydration_backpressure({})", export_id),
+                    |scope| {
+                        let (
+                            previous_ok,
+                            previous_err,
+                            previous_token,
                             feedback_handle,
                             backpressure_metrics,
-                        )
-                    };
+                        ) = {
+                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                    let export_statistics = storage_state
-                        .aggregated_statistics
-                        .get_source(&export_id)
-                        .expect("statistics initialized")
-                        .clone();
-                    let export_config = SourceExportCreationConfig {
-                        id: export_id,
-                        worker_id: base_source_config.worker_id,
-                        metrics: base_source_config.metrics.clone(),
-                        source_statistics: export_statistics,
-                    };
-                    let (upsert, health_update, snapshot_progress, upsert_token) =
-                        if dyncfgs::ENABLE_UPSERT_V2
-                            .get(storage_state.storage_configuration.config_set())
-                        {
-                            // Resolved here, at operator construction, so the
-                            // dataflow keeps one stash flavor for its whole
-                            // life even if the flag flips underneath it.
-                            let stash_flavor =
-                                crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
-                                    storage_state.storage_configuration.config_set(),
+                            let backpressure_max_inflight_bytes =
+                                get_backpressure_max_inflight_bytes(
+                                    &storage_state
+                                        .storage_configuration
+                                        .parameters
+                                        .storage_dataflow_max_inflight_bytes_config,
+                                    &storage_state.instance_context.cluster_memory_limit,
                                 );
-                            crate::upsert::upsert_v2(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                backpressure_metrics,
-                                stash_flavor,
-                            )
-                        } else {
-                            crate::upsert::upsert(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                &storage_state.instance_context,
-                                &storage_state.storage_configuration,
-                                &storage_state.dataflow_parameters,
+
+                            let (feedback_handle, flow_control, backpressure_metrics) =
+                                if let Some(storage_dataflow_max_inflight_bytes) =
+                                    backpressure_max_inflight_bytes
+                                {
+                                    tracing::info!(
+                                        ?backpressure_max_inflight_bytes,
+                                        "timely-{} using backpressure in upsert for source {}",
+                                        base_source_config.worker_id,
+                                        export_id
+                                    );
+                                    if !storage_state
+                                        .storage_configuration
+                                        .parameters
+                                        .storage_dataflow_max_inflight_bytes_config
+                                        .disk_only
+                                        || storage_state
+                                            .instance_context
+                                            .scratch_directory
+                                            .is_some()
+                                    {
+                                        let (feedback_handle, feedback_data) =
+                                            scope.feedback(Default::default());
+
+                                        // TODO(guswynn): cleanup
+                                        let backpressure_metrics = Some(
+                                            base_source_config
+                                                .metrics
+                                                .get_backpressure_metrics(export_id, scope.index()),
+                                        );
+
+                                        (
+                                            Some(feedback_handle),
+                                            Some(persist_source::FlowControl {
+                                                progress_stream: feedback_data,
+                                                max_inflight_bytes:
+                                                    storage_dataflow_max_inflight_bytes,
+                                                summary: (
+                                                    Default::default(),
+                                                    Subtime::least_summary(),
+                                                ),
+                                                metrics: backpressure_metrics
+                                                    .as_ref()
+                                                    .map(|m| m.operator_metrics()),
+                                            }),
+                                            backpressure_metrics,
+                                        )
+                                    } else {
+                                        (None, None, None)
+                                    }
+                                } else {
+                                    (None, None, None)
+                                };
+
+                            let storage_metadata = description.source_exports[&export_id]
+                                .storage_metadata
+                                .clone();
+
+                            let error_handler =
+                                storage_state.error_handler("upsert_rehydration", export_id);
+
+                            let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
+                                outer_mz_scope,
+                                scope,
+                                export_id,
+                                persist_clients,
+                                storage_metadata,
+                                None,
+                                Some(as_of),
+                                SnapshotMode::Include,
+                                Antichain::new(),
+                                None,
+                                flow_control,
+                                false.then_some(|| unreachable!()),
+                                async {},
+                                error_handler,
+                            );
+                            (
+                                ok_stream.as_collection(),
+                                err_stream.as_collection(),
+                                Some(tok),
+                                feedback_handle,
                                 backpressure_metrics,
                             )
                         };
 
-                    // Even though we register the `persist_sink` token at a top-level,
-                    // which will stop any data from being committed, we also register
-                    // a token for the `upsert` operator which may be in the middle of
-                    // rehydration processing the `persist_source` input above.
-                    needed_tokens.push(upsert_token);
+                        let export_statistics = storage_state
+                            .aggregated_statistics
+                            .get_source(&export_id)
+                            .expect("statistics initialized")
+                            .clone();
+                        let export_config = SourceExportCreationConfig {
+                            id: export_id,
+                            worker_id: base_source_config.worker_id,
+                            metrics: base_source_config.metrics.clone(),
+                            source_statistics: export_statistics,
+                        };
+                        let (upsert, health_update, snapshot_progress, upsert_token) =
+                            if dyncfgs::ENABLE_UPSERT_V2
+                                .get(storage_state.storage_configuration.config_set())
+                            {
+                                // Resolved here, at operator construction, so the
+                                // dataflow keeps one stash flavor for its whole
+                                // life even if the flag flips underneath it.
+                                let stash_flavor =
+                                crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
+                                    storage_state.storage_configuration.config_set(),
+                                );
+                                crate::upsert::upsert_v2(
+                                    upsert_input.enter(scope),
+                                    upsert_envelope.clone(),
+                                    refine_antichain(&resume_upper),
+                                    previous_ok,
+                                    previous_err,
+                                    previous_token,
+                                    export_config,
+                                    backpressure_metrics,
+                                    stash_flavor,
+                                )
+                            } else {
+                                crate::upsert::upsert(
+                                    upsert_input.enter(scope),
+                                    upsert_envelope.clone(),
+                                    refine_antichain(&resume_upper),
+                                    previous_ok,
+                                    previous_err,
+                                    previous_token,
+                                    export_config,
+                                    &storage_state.instance_context,
+                                    &storage_state.storage_configuration,
+                                    &storage_state.dataflow_parameters,
+                                    backpressure_metrics,
+                                )
+                            };
 
-                    // If configured, delay raw sources until we rehydrate the upsert
-                    // source. Otherwise, drop the token, unblocking the sources at the
-                    // end rendering.
-                    if dyncfgs::DELAY_SOURCES_PAST_REHYDRATION
-                        .get(storage_state.storage_configuration.config_set())
-                    {
-                        crate::upsert::rehydration_finished(
-                            scope.clone(),
-                            base_source_config,
-                            rehydrated_token,
-                            refine_antichain(&resume_upper),
-                            snapshot_progress.clone(),
-                        );
-                    } else {
-                        drop(rehydrated_token)
-                    };
+                        // Even though we register the `persist_sink` token at a top-level,
+                        // which will stop any data from being committed, we also register
+                        // a token for the `upsert` operator which may be in the middle of
+                        // rehydration processing the `persist_source` input above.
+                        needed_tokens.push(upsert_token);
 
-                    // If backpressure from persist is enabled, we connect the upsert operator's
-                    // snapshot progress to the persist source feedback handle.
-                    if let Some(feedback_handle) = feedback_handle {
-                        snapshot_progress.connect_loop(feedback_handle);
-                    }
+                        // If configured, delay raw sources until we rehydrate the upsert
+                        // source. Otherwise, drop the token, unblocking the sources at the
+                        // end rendering.
+                        if dyncfgs::DELAY_SOURCES_PAST_REHYDRATION
+                            .get(storage_state.storage_configuration.config_set())
+                        {
+                            crate::upsert::rehydration_finished(
+                                scope.clone(),
+                                base_source_config,
+                                rehydrated_token,
+                                refine_antichain(&resume_upper),
+                                snapshot_progress.clone(),
+                            );
+                        } else {
+                            drop(rehydrated_token)
+                        };
 
-                    (
-                        upsert.leave(outer_mz_scope),
-                        health_update
-                            .map(|(id, update)| HealthStatusMessage {
-                                id,
-                                namespace: StatusNamespace::Upsert,
-                                update,
-                            })
-                            .leave(outer_mz_scope),
-                    )
-                },
-            );
+                        // If backpressure from persist is enabled, we connect the upsert operator's
+                        // snapshot progress to the persist source feedback handle.
+                        if let Some(feedback_handle) = feedback_handle {
+                            snapshot_progress.connect_loop(feedback_handle);
+                        }
 
-            let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
-            error_collections.push(upsert_err.as_collection());
+                        (
+                            upsert.leave(outer_mz_scope),
+                            health_update
+                                .map(|(id, update)| HealthStatusMessage {
+                                    id,
+                                    namespace: StatusNamespace::Upsert,
+                                    update,
+                                })
+                                .leave(outer_mz_scope),
+                        )
+                    },
+                );
 
-            (upsert_ok.as_collection(), Some(health_update))
-        }
-        SourceEnvelope::None(none_envelope) => {
-            let results = append_metadata_to_value(decoded_stream);
+                let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
+                error_collections.push(upsert_err.as_collection());
 
-            let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
+                (upsert_ok.as_collection(), Some(health_update))
+            }
+            SourceEnvelope::None(none_envelope) => {
+                let results = append_metadata_to_value(decoded_stream);
 
-            let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
+                let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
 
-            error_collections.push(errors.as_collection());
-            (stream.as_collection(), None)
-        }
-        SourceEnvelope::CdcV2 => {
-            let (oks, token) = render_decode_cdcv2(&decoded_stream);
-            needed_tokens.push(token);
-            (oks, None)
-        }
-    };
+                let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
+
+                error_collections.push(errors.as_collection());
+                (stream.as_collection(), None)
+            }
+            SourceEnvelope::CdcV2 => {
+                let (oks, token) = render_decode_cdcv2(&decoded_stream);
+                needed_tokens.push(token);
+                (oks, None)
+            }
+        });
 
     // Return the collections and any needed tokens.
     let health = decode_health.into_iter().chain(envelope_health).collect();
