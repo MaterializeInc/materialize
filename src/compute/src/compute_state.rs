@@ -1633,6 +1633,7 @@ impl PendingPeek {
             .unwrap_or(usize::MAX)
             + peek.finishing.offset;
         let order_by = peek.finishing.order_by.clone();
+        let ignore_errors = peek.ignore_errors;
 
         // Persist peeks can include at most one literal constraint.
         let literal_constraint = peek
@@ -1652,13 +1653,17 @@ impl PendingPeek {
                     max_result_size,
                     max_results_needed,
                     row_iteration_config,
+                    ignore_errors,
                 )
                 .await
             } else {
-                Ok(vec![])
+                Ok((vec![], None))
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
+                Ok((rows, ignored_error)) => PeekResponse::Rows {
+                    rows: vec![RowCollection::new(rows, &order_by)],
+                    ignored_error,
+                },
                 Err(error) => PeekResponse::Error(error),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1724,7 +1729,12 @@ impl PersistPeek {
         max_result_size: usize,
         mut limit_remaining: usize,
         row_iteration_config: PeekRowIterationConfig,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, PeekError> {
+        ignore_errors: bool,
+    ) -> Result<(Vec<(Row, NonZeroUsize)>, Option<PeekError>), PeekError> {
+        // The first error skipped under `ignore_errors`, kept as a sample so the client can be
+        // told the answer is degraded. Never a count: the shard holds no quantity that
+        // corresponds to affected rows.
+        let mut ignored_error: Option<PeekError> = None;
         let client = persist_clients
             .open(metadata.persist_location)
             .await
@@ -1793,7 +1803,14 @@ impl PersistPeek {
                 row_iteration_tracker.set_limit(row_iteration_config.current_limit());
                 row_iteration_tracker.track_next()?;
 
-                let row = data.map_err(PeekError::from)?;
+                let row = match data {
+                    Ok(row) => row,
+                    Err(error) if ignore_errors => {
+                        ignored_error.get_or_insert_with(|| PeekError::from(error));
+                        continue;
+                    }
+                    Err(error) => return Err(PeekError::from(error)),
+                };
 
                 if let Some(literal) = &literal_constraint {
                     match row.iter().take(literal_len).cmp(literal.iter()) {
@@ -1836,7 +1853,7 @@ impl PersistPeek {
             }
         }
 
-        Ok(result)
+        Ok((result, ignored_error))
     }
 }
 
@@ -1940,7 +1957,11 @@ impl IndexPeek {
                     Ok(rows) => {
                         metrics.walk.observe_ok_phase(&phases);
                         let start = Instant::now();
-                        let response = rows_response(rows, &self.peek.finishing.order_by);
+                        let response = rows_response(
+                            rows,
+                            &self.peek.finishing.order_by,
+                            scan.take_ignored_error(),
+                        );
                         metrics.walk.observe_row_collection(start.elapsed());
                         response
                     }

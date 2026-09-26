@@ -29,6 +29,7 @@ use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::AdapterNotice;
 use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
@@ -199,6 +200,9 @@ pub struct ActiveSubscribe {
     /// If true, this is an internal subscribe that should not appear in
     /// introspection tables like mz_subscriptions.
     pub internal: bool,
+    /// Where a discarded error is reported, for a subscribe running under
+    /// `WITH (IGNORE ERRORS)`. `None` for a subscribe with no session to tell.
+    pub notice_tx: Option<mpsc::UnboundedSender<AdapterNotice>>,
 }
 
 impl ActiveSubscribe {
@@ -264,6 +268,12 @@ impl ActiveSubscribe {
     ///
     /// Returns `true` if the subscribe is finished.
     pub fn process_response(&self, batch: SubscribeBatch) -> bool {
+        // Compute sets this on the one batch that discarded an error, so this fires once per
+        // subscribe rather than once per batch of a continuously erroring stream.
+        if let (Some(error), Some(notice_tx)) = (batch.ignored_error, &self.notice_tx) {
+            let _ = notice_tx.send(AdapterNotice::IgnoredErrors { error });
+        }
+
         let comparator = RowComparator::new(self.output.row_order());
         let rows = match batch.updates {
             Ok(ref rows) => {

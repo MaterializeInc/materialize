@@ -1014,6 +1014,7 @@ impl PeekClient {
                                     plan_insights_optimizer_trace: None,
                                     finishing: select_plan.finishing,
                                     copy_to: select_plan.copy_to,
+                                    ignore_errors: select_plan.ignore_errors,
                                     insights_ctx: None,
                                 }),
                                 ExplainContext::PlanInsightsNotice(optimizer_trace) => {
@@ -1024,6 +1025,7 @@ impl PeekClient {
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         finishing: select_plan.finishing,
                                         copy_to: select_plan.copy_to,
+                                        ignore_errors: select_plan.ignore_errors,
                                         insights_ctx,
                                     })
                                 }
@@ -1063,6 +1065,7 @@ impl PeekClient {
                     view_id,
                     index_id,
                     plan.with_snapshot,
+                    plan.ignore_errors,
                     plan.up_to,
                     debug_name,
                     optimizer_config,
@@ -1200,6 +1203,7 @@ impl PeekClient {
                 plan_insights_optimizer_trace,
                 finishing,
                 copy_to,
+                ignore_errors,
                 insights_ctx,
             } => {
                 // Continue with normal execution
@@ -1311,6 +1315,8 @@ impl PeekClient {
                             source_ids,
                             watch_set,
                             logging,
+                            ignore_errors,
+                            session.retain_notice_transmitter(),
                         )
                         .await?
                     }
@@ -1331,6 +1337,8 @@ impl PeekClient {
                                 conn_id: session.conn_id().clone(),
                                 max_result_size,
                                 max_query_result_size,
+                                ignore_errors,
+                                notice_tx: session.retain_notice_transmitter(),
                                 watch_set,
                                 tx,
                             })
@@ -1403,6 +1411,7 @@ impl PeekClient {
                         read_holds,
                         plan: subscribe_plan,
                         statement_logging_id: logging.id(),
+                        notice_tx: session.retain_notice_transmitter(),
                         tx,
                     })
                     .await??;
@@ -1719,6 +1728,7 @@ enum Execution {
         plan_insights_optimizer_trace: Option<OptimizerTrace>,
         finishing: RowSetFinishing,
         copy_to: Option<plan::CopyFormat>,
+        ignore_errors: bool,
         insights_ctx: Option<Box<PlanInsightsContext>>,
     },
     Subscribe {

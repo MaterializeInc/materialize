@@ -439,6 +439,8 @@ impl Coordinator {
                     conn_id,
                     max_result_size,
                     max_query_result_size,
+                    ignore_errors,
+                    notice_tx,
                     watch_set,
                     tx,
                 } => {
@@ -454,6 +456,8 @@ impl Coordinator {
                             conn_id,
                             max_result_size,
                             max_query_result_size,
+                            ignore_errors,
+                            notice_tx,
                             watch_set,
                         )
                         .await;
@@ -470,6 +474,7 @@ impl Coordinator {
                     read_holds,
                     plan,
                     statement_logging_id,
+                    notice_tx,
                     tx,
                 } => {
                     let mut ctx_extra = ExecuteContextGuard::new(
@@ -487,6 +492,7 @@ impl Coordinator {
                             session_uuid,
                             read_holds,
                             plan,
+                            notice_tx,
                         )
                         .await
                     {

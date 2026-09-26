@@ -557,6 +557,9 @@ impl<'a> Parser<'a> {
                     }
                     Ok(Statement::Select(SelectStatement {
                         query,
+                        // Statement options, like AS OF, attach to an unparenthesized
+                        // statement only.
+                        options: vec![],
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
                     }))
                 }
@@ -7754,9 +7757,30 @@ impl<'a> Parser<'a> {
 
     /// Parses a SELECT (or WITH, VALUES, TABLE) statement with optional AS OF.
     fn parse_select_statement(&mut self) -> Result<SelectStatement<Raw>, ParserError> {
+        let query = self.parse_query()?;
+        // `WITH` is always reserved and never continues an expression or a set operation, so a
+        // `WITH` here can only introduce statement options. A leading `WITH` is consumed by
+        // `parse_query` as a CTE block, which is why this check is safe only after the query.
+        let options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Self::parse_select_statement_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
         Ok(SelectStatement {
-            query: self.parse_query()?,
+            query,
+            options,
             as_of: self.parse_optional_as_of()?,
+        })
+    }
+
+    fn parse_select_statement_option(&mut self) -> Result<SelectStatementOption<Raw>, ParserError> {
+        self.expect_keywords(&[IGNORE, ERRORS])?;
+        Ok(SelectStatementOption {
+            name: SelectStatementOptionName::IgnoreErrors,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -9189,9 +9213,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT, IGNORE])? {
             PROGRESS => SubscribeOptionName::Progress,
             SNAPSHOT => SubscribeOptionName::Snapshot,
+            IGNORE => {
+                self.expect_keyword(ERRORS)?;
+                SubscribeOptionName::IgnoreErrors
+            }
             _ => unreachable!(),
         };
         Ok(SubscribeOption {

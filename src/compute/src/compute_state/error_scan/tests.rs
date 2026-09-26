@@ -54,7 +54,7 @@ pub(crate) fn error_batch(
 pub(crate) fn error_scan(updates: ErrorUpdates, row_iteration_limit: Option<usize>) -> ErrorScan {
     let storage = vec![error_batch(updates)];
     let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
-    let mut scan = ErrorScan::from_cursor(cursor, storage);
+    let mut scan = ErrorScan::from_cursor(cursor, storage, false);
     scan.set_row_iteration_limit(row_iteration_limit);
     scan
 }

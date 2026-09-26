@@ -644,7 +644,7 @@ impl<M> PeekMetrics<M> {
         use PeekResponse::*;
 
         match response {
-            Rows(_) => &self.rows,
+            Rows { .. } => &self.rows,
             Stashed(_) => &self.rows_stashed,
             Error(_) => &self.error,
             Canceled => &self.canceled,

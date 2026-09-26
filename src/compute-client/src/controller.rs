@@ -193,7 +193,7 @@ impl PeekNotification {
     /// parameters are used to calculate the number of rows in the peek result.
     fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
-            PeekResponse::Rows(rows) => {
+            PeekResponse::Rows { rows, .. } => {
                 let num_rows = u64::cast_from(RowCollection::offset_limit(
                     rows.iter().map(|r| r.count()).sum(),
                     offset,
@@ -1037,6 +1037,7 @@ impl ComputeController {
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        ignore_errors: bool,
         read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
@@ -1070,6 +1071,7 @@ impl ComputeController {
                 result_desc,
                 finishing,
                 map_filter_project,
+                ignore_errors,
                 read_hold,
                 target_replica,
                 peek_response_tx,

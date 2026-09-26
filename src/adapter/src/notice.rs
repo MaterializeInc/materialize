@@ -160,6 +160,12 @@ pub enum AdapterNotice {
     OidcGroupSyncError {
         message: String,
     },
+    /// The statement ran under `IGNORE ERRORS` and discarded at least one error.
+    IgnoredErrors {
+        /// One discarded error. Which one is arbitrary, and it is a sample rather than a
+        /// tally: no count of affected rows exists to report.
+        error: String,
+    },
 }
 
 impl AdapterNotice {
@@ -195,6 +201,8 @@ impl AdapterNotice {
                 NoticeSeverity::Warning => Severity::Warning,
             },
             AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
+            // A warning rather than a notice: the answer may be wrong, not merely surprising.
+            AdapterNotice::IgnoredErrors { .. } => Severity::Warning,
             AdapterNotice::CascadeDroppedObject { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
@@ -245,6 +253,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
+            AdapterNotice::IgnoredErrors { error } => Some(format!("First error: {error}")),
             AdapterNotice::CascadeDroppedObject { objects } => Some(
                 objects
                     .iter()
@@ -266,6 +275,7 @@ impl AdapterNotice {
                 suggested_action,
             } => Some(suggested_action.clone()),
             AdapterNotice::NoResolvableSearchPathSchema { search_path: _ } => Some("Create a schema with CREATE SCHEMA or pick an extant schema with SET SCHEMA = name. List available schemas with SHOW SCHEMAS.".into()),
+            AdapterNotice::IgnoredErrors { .. } => Some("The rows returned are the rows that carried no error. They are not guaranteed to be correct or complete: an ignored error under an aggregation or a join leaves the result wrong by an unknown amount. Remove IGNORE ERRORS to see the error itself.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } => {
@@ -300,6 +310,7 @@ impl AdapterNotice {
     /// Reports the error code.
     pub fn code(&self) -> SqlState {
         match self {
+            AdapterNotice::IgnoredErrors { .. } => SqlState::from_code("MZ012"),
             AdapterNotice::DatabaseAlreadyExists { .. } => SqlState::DUPLICATE_DATABASE,
             AdapterNotice::SchemaAlreadyExists { .. } => SqlState::DUPLICATE_SCHEMA,
             AdapterNotice::TableAlreadyExists { .. } => SqlState::DUPLICATE_TABLE,
@@ -363,6 +374,12 @@ impl AdapterNotice {
 impl fmt::Display for AdapterNotice {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            AdapterNotice::IgnoredErrors { .. } => {
+                write!(
+                    f,
+                    "query ignored errors; results may be incorrect or incomplete"
+                )
+            }
             AdapterNotice::DatabaseAlreadyExists { name } => {
                 write!(f, "database {} already exists, skipping", name.quoted())
             }
