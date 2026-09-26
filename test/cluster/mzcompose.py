@@ -1820,7 +1820,10 @@ def workflow_sink_failure(c: Composition) -> None:
             Clusterd(name="clusterd1", workers=4, options=options)
         ):
             c.up("clusterd1")
-            c.run_testdrive_files("sink-failure/03-verify-data.td")
+            # Kafka takeover may wait for the predecessor's incarnation grace.
+            c.run_testdrive_files(
+                "--default-timeout=420s", "sink-failure/03-verify-data.td"
+            )
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
@@ -1976,7 +1979,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     replica disconnects.
     """
 
-    c.up("materialized", "clusterd1", "clusterd2")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2003,6 +2006,26 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         );
         CREATE TABLE t (a int);
         """)
+
+    replicas = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1' ORDER BY r.name""")
+    catalog_options = native_catalog_options(c)
+    for name, (cluster_id, replica_id) in zip(
+        ("clusterd1", "clusterd2"), replicas, strict=True
+    ):
+        with c.override(
+            Clusterd(
+                name=name,
+                workers=2,
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+            )
+        ):
+            c.up(name)
 
     def drop_replica_with_delay() -> None:
         time.sleep(2)
@@ -2805,7 +2828,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     Regression test for https://github.com/MaterializeInc/database-issues/issues/5676
     """
 
-    c.up("materialized", "clusterd1")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2824,6 +2847,23 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
         ));
         SET cluster = cluster1;
         """)
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        )
+    ):
+        c.up("clusterd1")
 
     def extract_since_ts(output: str) -> int:
         j = json.loads(output)
@@ -8117,7 +8157,7 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
     """
 
     with c.override(Testdrive(no_reset=True)):
-        c.up("materialized", "clusterd1")
+        c.up("materialized")
 
         c.sql(
             """
@@ -8138,6 +8178,23 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM v;
             """,
         )
+
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'compute' AND r.name = 'replica1'""")
+        catalog_options = native_catalog_options(c)
+        with c.override(
+            Clusterd(
+                name="clusterd1",
+                workers=2,
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+            )
+        ):
+            c.up("clusterd1")
 
         # Wait for dataflows to hydrate.
         c.testdrive(dedent("""
