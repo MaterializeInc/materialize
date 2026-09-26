@@ -1926,11 +1926,10 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     ):
         c.up("materialized", Service("testdrive", idle=True))
         c.testdrive(
-            input=dedent("""
+            input=dedent(f"""
                 > SELECT id FROM mz_indexes WHERE id LIKE 'u%';
-                ${created-index-id}
+                {index_id}
             """),
-            args=[f"--var=created-index-id={index_id}"],
         )
 
 
