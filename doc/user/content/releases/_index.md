@@ -109,7 +109,7 @@ Skills](/developer-tools/mcp-server/coding-agent-skills/#install-as-a-plugin).
 - Fixed `object_count` in `mz_internal.mz_replica_hydration_history` counting a replica's built-in introspection dataflows, which made it disagree with the rows recorded in `mz_internal.mz_object_hydration_history` for the same episode; introspection-only episodes are still recorded, with `object_count = 0`.
 
 ## v26.42.0
-*Released to Materialize Self-Managed: 2026-09-18* <br>
+*Released to Materialize Self-Managed: 2026-09-19* <br>
 
 ### Safely drop upstream constraints in your Postgres sources {#v26.42-constraint-exclusion-for-postgres-sources}
 Materialize now allows you to `EXCLUDE CONSTRAINTS` when creating a table from a Postgres source. You can use this workflow to safely drop an upstream constraint, without causing your source to stall. Today, the Postgres source incorporates `PRIMARY KEY`, `UNIQUE` and `NOT NULL` constraints.
