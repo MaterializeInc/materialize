@@ -152,33 +152,9 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    with c.override(
-        Clusterd(
-            name="clusterd1",
-            workers=2,
-            process_names=["clusterd1", "clusterd2"],
-        ),
-        Clusterd(
-            name="clusterd2",
-            workers=2,
-            process_names=["clusterd1", "clusterd2"],
-        ),
-        Clusterd(
-            name="clusterd3",
-            workers=2,
-            process_names=["clusterd3", "clusterd4"],
-        ),
-        Clusterd(
-            name="clusterd4",
-            workers=2,
-            process_names=["clusterd3", "clusterd4"],
-        ),
-    ):
+    with ExitStack() as stack:
         c.up("kafka", "schema-registry", "localstack")
         c.up("materialized")
-
-        # Create a cluster and verify that tests pass.
-        c.up("clusterd1", "clusterd2")
 
         # Make sure cluster1 is owned by the system so it doesn't get dropped
         # between testdrive runs.
@@ -202,12 +178,29 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             user="mz_system",
         )
 
+        catalog_options = native_catalog_options(c)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+        for name in ("clusterd1", "clusterd2"):
+            stack.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=2,
+                        process_names=["clusterd1", "clusterd2"],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+        c.up("clusterd1", "clusterd2")
         c.run_testdrive_files(*args.glob)
 
         # Add a replica to that cluster and verify that tests still pass.
-        c.up("clusterd3")
-        c.up("clusterd4")
-
         c.sql(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
@@ -222,6 +215,25 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             port=6877,
             user="mz_system",
         )
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica2'""")
+        for name in ("clusterd3", "clusterd4"):
+            stack.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=2,
+                        process_names=["clusterd3", "clusterd4"],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+        c.up("clusterd3", "clusterd4")
         c.run_testdrive_files(*args.glob)
 
         # Kill one of the nodes in the first replica of the compute cluster and
@@ -1719,19 +1731,51 @@ def workflow_test_resource_limits(c: Composition) -> None:
         c.run_testdrive_files("resources/resource-limits.td")
 
 
+def configure_storage_fault_replica(c: Composition) -> list[str]:
+    """Declare the external storage replica and return its native startup options."""
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("""
+        CREATE CLUSTER storage REPLICAS (
+            r1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 4
+            )
+        );
+        """)
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'storage' AND r.name = 'r1'""")
+    return [
+        f"--catalog-cluster-id={cluster_id}",
+        f"--catalog-replica-id={replica_id}",
+        *native_catalog_options(c),
+    ]
+
+
 def workflow_pg_snapshot_resumption(c: Composition) -> None:
     """Test PostgreSQL snapshot resumption."""
 
-    with c.override(
-        # Start postgres for the pg source
-        Testdrive(no_reset=True),
-        Clusterd(
-            name="clusterd1",
-            environment_extra=["FAILPOINTS=pg_snapshot_failure=return"],
-            workers=4,
-        ),
-    ):
-        c.up("materialized", "postgres", "clusterd1")
+    with c.override(Testdrive(no_reset=True)), ExitStack() as stack:
+        c.up("materialized", "postgres")
+        options = configure_storage_fault_replica(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    environment_extra=["FAILPOINTS=pg_snapshot_failure=return"],
+                    workers=4,
+                    options=options,
+                )
+            )
+        )
+        c.up("clusterd1")
 
         c.run_testdrive_files("pg-snapshot-resumption/01-configure-postgres.td")
         c.run_testdrive_files("pg-snapshot-resumption/02-create-sources.td")
@@ -1744,7 +1788,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="clusterd1", workers=4)
+            Clusterd(name="clusterd1", workers=4, options=options)
         ):
             c.up("clusterd1")
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
@@ -1753,23 +1797,27 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
-    with c.override(
-        # Start postgres for the pg source
-        Testdrive(no_reset=True),
-        Clusterd(
-            name="clusterd1",
-            environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
-            workers=4,
-        ),
-    ):
-        c.up("materialized", "kafka", "schema-registry", "clusterd1")
+    with c.override(Testdrive(no_reset=True)), ExitStack() as stack:
+        c.up("materialized", "kafka", "schema-registry")
+        options = configure_storage_fault_replica(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
+                    workers=4,
+                    options=options,
+                )
+            )
+        )
+        c.up("clusterd1")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="clusterd1", workers=4)
+            Clusterd(name="clusterd1", workers=4, options=options)
         ):
             c.up("clusterd1")
             c.run_testdrive_files("sink-failure/03-verify-data.td")
