@@ -1201,8 +1201,20 @@ Target cluster: quickstart
 
 EOF
 
+# u_d was planned to read from u_c, so dropping u_c alone needs the unsafe
+# flag. The orphaned u_c does not affect the plans below.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
 statement ok
 DROP INDEX u_c;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0
 
 # Let's test the weird situation that two identical indexes exist.
 

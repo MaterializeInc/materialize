@@ -128,8 +128,15 @@ b  max
 1  3
 2  1
 
-# Unmaterialize data view.
+# Unmaterialize data view. test4 was planned to read from the index, so
+# dropping it without CASCADE needs the unsafe flag.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+
 > DROP INDEX data_view_primary_idx
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
 
 # Can continue to select from view that depends on the unmaterialized view.
 > SELECT * FROM test4
@@ -201,8 +208,15 @@ b  c
 contains:index materialize.public.idx1 cannot be depended upon
 
 # If there exists a second primary index, dropping one primary index will not
-# unmaterialize the view.
+# unmaterialize the view. idx1 reads from test5_primary_idx, so dropping it
+# alone needs the unsafe flag.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+
 > DROP INDEX test5_primary_idx
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM test5
 Explained Query (fast path):
@@ -310,8 +324,15 @@ b  c
 2  1
 
 # Delete the first copy of the same index and ensure everything selects as
-# normal.
+# normal. data_view_idx2 reads from data_view_idx, so dropping it alone needs
+# the unsafe flag.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+
 > DROP INDEX data_view_idx
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
 
 > SELECT * from data_view
 a b
@@ -376,7 +397,15 @@ mat_data          kafka     ${arg.single-replica-cluster}  ""
 
 > CREATE DEFAULT INDEX ON mat_data
 
+# mat_data_primary_idx1 reads from mat_data_primary_idx, so dropping it alone
+# needs the unsafe flag.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+
 > DROP INDEX mat_data_primary_idx
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
 
 > SELECT a+b from mat_data_tbl
 -1

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* Drop indexes with `CASCADE` in `drop_relation`, matching the other relation
+  types. Materialize now refuses to drop an index that a materialized view or
+  another index reads from unless `CASCADE` is given.
+
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
   behind. It read the second row of the first column instead of the second
   column of the only row, so every tag said `Deployment by <user> on ` with

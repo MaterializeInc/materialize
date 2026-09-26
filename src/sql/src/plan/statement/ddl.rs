@@ -6014,6 +6014,7 @@ pub fn plan_drop_objects(
         referenced_ids,
         drop_ids,
         object_type,
+        cascade,
     }))
 }
 
@@ -6511,6 +6512,7 @@ pub fn plan_drop_owned(
         drop_ids,
         privilege_revokes,
         default_privilege_revokes,
+        cascade,
     }))
 }
 

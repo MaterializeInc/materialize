@@ -285,6 +285,13 @@ pub enum AdapterError {
     ///
     /// The map keys are role names and values are detailed error messages.
     DependentObject(BTreeMap<String, Vec<String>>),
+    /// A statement tried to drop an index without `CASCADE` while other dataflows read from it.
+    ///
+    /// `dependents` holds `(object type, name)` pairs.
+    IndexInUse {
+        index_name: String,
+        dependents: Vec<(String, String)>,
+    },
     /// When performing an `ALTER` of some variety, re-planning the statement
     /// errored.
     InvalidAlter(&'static str, PlanError),
@@ -636,6 +643,11 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
+            AdapterError::IndexInUse { index_name, .. } => Some(format!(
+                "The dependent objects are live dataflows that read from index {}, so the index \
+                 cannot be dropped while they exist.",
+                index_name.quoted()
+            )),
             AdapterError::DependentObject(dependent_objects) => Some(
                 dependent_objects
                     .iter()
@@ -793,6 +805,12 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::IndexInUse { .. } => Some(
+                "Add CASCADE to the statement to drop the index together with its dependent \
+                 objects, or drop the dependent objects yourself and recreate them once the \
+                 index is gone."
+                    .to_string(),
+            ),
             AdapterError::SubscribeFellBehind { .. } => Some(
                 "The client is not reading results fast enough. Use a client that reads output \
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
@@ -1085,6 +1103,7 @@ impl AdapterError {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+            AdapterError::IndexInUse { .. } => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
@@ -1529,6 +1548,24 @@ impl fmt::Display for AdapterError {
                     f,
                     "{role_str} \"{}\" cannot be dropped because some objects depend on it",
                     dependent_objects.keys().join(", ")
+                )
+            }
+            AdapterError::IndexInUse {
+                index_name,
+                dependents,
+            } => {
+                // Mirrors `PlanError::DependentObjectsStillExist` so clients see one shape of
+                // RESTRICT failure regardless of which layer detected the dependency.
+                let dependents = dependents
+                    .iter()
+                    .map(|(dependent_type, dependent_name)| {
+                        format!("{} {}", dependent_type, dependent_name.quoted())
+                    })
+                    .join(", ");
+                write!(
+                    f,
+                    "cannot drop index {}: still depended upon by {dependents}",
+                    index_name.quoted()
                 )
             }
             AdapterError::InvalidAlter(t, e) => {

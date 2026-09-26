@@ -27,7 +27,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogItem, Connection, DataSourceDesc, Index, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -106,6 +106,7 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
 
+use crate::active_compute_sink::ActiveComputeSink;
 use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
@@ -123,7 +124,7 @@ use crate::coord::{
     WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
-use crate::notice::{AdapterNotice, DroppedInUseIndex};
+use crate::notice::{AdapterNotice, DroppedInUseIndex, InFlightIndexReaders};
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
 use crate::session::{
@@ -200,7 +201,17 @@ struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
-    dropped_in_use_indexes: Vec<DroppedInUseIndex>,
+}
+
+/// The outcome of [`Coordinator::resolve_index_dependents`].
+struct ResolvedIndexDependents {
+    /// The drop set, extended with the readers of dropped indexes when `CASCADE` was given.
+    drop_ids: Vec<ObjectId>,
+    /// Indexes dropped while durable readers survive. Non-empty only when
+    /// `enable_unsafe_drop_index` let a non-`CASCADE` drop through.
+    orphaned: Vec<DroppedInUseIndex>,
+    /// Indexes still read by one-shot dataflows, which never block a drop.
+    in_flight: Vec<InFlightIndexReaders>,
 }
 
 // A bundle of values returned from create_source_inner
@@ -1316,8 +1327,15 @@ impl Coordinator {
             drop_ids,
             object_type,
             referenced_ids,
+            cascade,
         }: plan::DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let ResolvedIndexDependents {
+            drop_ids,
+            orphaned,
+            in_flight,
+        } = self.resolve_index_dependents(ctx.session(), drop_ids, cascade)?;
+
         let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
         let mut objects = Vec::new();
         for obj_id in &drop_ids {
@@ -1350,7 +1368,6 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-            dropped_in_use_indexes,
         } = self.sequence_drop_common(ctx.session(), drop_ids)?;
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
@@ -1379,14 +1396,7 @@ impl Coordinator {
                     name: ctx.session().vars().cluster().to_string(),
                 });
         }
-        for dropped_in_use_index in dropped_in_use_indexes {
-            ctx.session()
-                .add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
-            self.metrics
-                .optimization_notices
-                .with_label_values(&["DroppedInUseIndex"])
-                .inc_by(1);
-        }
+        self.emit_index_drop_notices(ctx.session(), orphaned, in_flight);
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
 
@@ -1611,12 +1621,16 @@ impl Coordinator {
                 variant: UpdatePrivilegeVariant::Revoke,
             },
         );
+        let ResolvedIndexDependents {
+            drop_ids,
+            orphaned,
+            in_flight,
+        } = self.resolve_index_dependents(session, plan.drop_ids, plan.cascade)?;
         let DropOps {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
-            dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        } = self.sequence_drop_common(session, drop_ids)?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1635,10 +1649,209 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
-        for dropped_in_use_index in dropped_in_use_indexes {
-            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
-        }
+        self.emit_index_drop_notices(session, orphaned, in_flight);
         Ok(ExecuteResponse::DroppedOwned)
+    }
+
+    /// Accounts for dataflows that read from indexes in `drop_ids`.
+    ///
+    /// With `cascade`, the readers and their catalog dependents join the drop set, iterating
+    /// until no dropped index has a surviving reader. Without it, a surviving reader is an
+    /// error unless `enable_unsafe_drop_index` is set, in which case the drop proceeds and
+    /// the orphaned indexes are reported for a warning.
+    ///
+    /// One-shot dataflows (`SUBSCRIBE`, `COPY TO`, slow-path `SELECT`) never block a drop.
+    /// They finish on their own and are reported only for a notice.
+    ///
+    /// TODO: once pinned LIR makes a dataflow's index imports a durable property, record them
+    /// as catalog dependencies so the planner can do this with its regular dependency walk.
+    fn resolve_index_dependents(
+        &self,
+        session: &Session,
+        mut drop_ids: Vec<ObjectId>,
+        cascade: bool,
+    ) -> Result<ResolvedIndexDependents, AdapterError> {
+        let humanizer = self.catalog().for_session(session);
+        let unsafe_drop_allowed = self.catalog().system_config().enable_unsafe_drop_index();
+        let humanize_index = |index: &Index, item_id: &CatalogItemId| {
+            humanizer
+                .humanize_id(index.global_id())
+                .unwrap_or_else(|| item_id.to_string())
+        };
+
+        let mut drop_set: BTreeSet<ObjectId> = drop_ids.iter().cloned().collect();
+        let mut frontier = drop_ids.clone();
+        let mut orphaned = Vec::new();
+        // Every index in the final drop set passes through the frontier exactly once, and the
+        // loop scans the whole frontier before it can exit, so its transient readers are
+        // collected here rather than by a second scan of the compute controller.
+        let mut transient_by_index = Vec::new();
+        loop {
+            // Durable readers of the frontier's indexes that are not already being dropped.
+            let mut readers_by_index = Vec::new();
+            for id in &frontier {
+                let ObjectId::Item(item_id) = id else {
+                    continue;
+                };
+                let Some(index) = self.catalog().get_entry(item_id).index() else {
+                    continue;
+                };
+                let (durable, transient) = self.index_readers(index, &drop_set);
+                if !transient.is_empty() {
+                    transient_by_index.push((index, *item_id, transient));
+                }
+                if !durable.is_empty() {
+                    readers_by_index.push((index, *item_id, durable));
+                }
+            }
+            if readers_by_index.is_empty() {
+                break;
+            }
+
+            if !cascade {
+                if !unsafe_drop_allowed {
+                    let (_, item_id, dependents) = readers_by_index
+                        .into_iter()
+                        .next()
+                        .expect("checked non-empty above");
+                    let dependents = dependents
+                        .into_iter()
+                        .map(|dependent_id| {
+                            let entry = self.catalog().get_entry(&dependent_id);
+                            (
+                                entry.item_type().to_string(),
+                                humanizer.minimal_qualification(entry.name()).to_string(),
+                            )
+                        })
+                        .collect();
+                    // Minimal qualification, like the planner's RESTRICT error.
+                    let index_name = humanizer
+                        .minimal_qualification(self.catalog().get_entry(&item_id).name())
+                        .to_string();
+                    return Err(AdapterError::IndexInUse {
+                        index_name,
+                        dependents,
+                    });
+                }
+                for (index, item_id, dependents) in readers_by_index {
+                    let dependant_objects = dependents
+                        .into_iter()
+                        .filter_map(|dependent_id| {
+                            let entry = self.catalog().get_entry(&dependent_id);
+                            humanizer.humanize_id(entry.latest_global_id())
+                        })
+                        .collect();
+                    orphaned.push(DroppedInUseIndex {
+                        index_name: humanize_index(index, &item_id),
+                        dependant_objects,
+                    });
+                }
+                break;
+            }
+
+            // The readers' own catalog dependents (sinks, downstream materialized views and
+            // indexes) come along, exactly as the planner's CASCADE expansion would have
+            // included them had the reader been named in the statement.
+            let new_items: Vec<ObjectId> = readers_by_index
+                .into_iter()
+                .flat_map(|(_, _, dependents)| dependents)
+                .map(ObjectId::Item)
+                .collect();
+            let dependents = self
+                .catalog()
+                .object_dependents(&new_items, session.conn_id());
+            frontier = dependents
+                .into_iter()
+                .filter(|id| drop_set.insert(id.clone()))
+                .collect();
+            drop_ids.extend(frontier.iter().cloned());
+        }
+
+        let mut in_flight = Vec::new();
+        for (index, item_id, transient) in transient_by_index {
+            let mut readers = InFlightIndexReaders {
+                index_name: humanize_index(index, &item_id),
+                ..Default::default()
+            };
+            for gid in transient {
+                match self.active_compute_sinks.get(&gid) {
+                    Some(ActiveComputeSink::Subscribe(_)) => readers.subscribes += 1,
+                    Some(ActiveComputeSink::CopyTo(_)) => readers.copy_tos += 1,
+                    None if self.introspection_subscribes.contains_key(&gid) => readers.system += 1,
+                    // Slow-path peeks are the remaining owners of transient compute
+                    // collections that import user indexes.
+                    None => readers.selects += 1,
+                }
+            }
+            in_flight.push(readers);
+        }
+
+        Ok(ResolvedIndexDependents {
+            drop_ids,
+            orphaned,
+            in_flight,
+        })
+    }
+
+    /// Compute collections that read from `index`, split into catalog items not in `drop_set`
+    /// and transient (one-shot) dataflows.
+    fn index_readers(
+        &self,
+        index: &Index,
+        drop_set: &BTreeSet<ObjectId>,
+    ) -> (Vec<CatalogItemId>, Vec<GlobalId>) {
+        let mut durable = Vec::new();
+        let mut transient = Vec::new();
+        let readers = self
+            .controller
+            .compute
+            .collection_reverse_dependencies(index.cluster_id, index.global_id())
+            .ok()
+            .into_iter()
+            .flatten();
+        for gid in readers {
+            if gid.is_transient() {
+                transient.push(gid);
+                continue;
+            }
+            // A collection whose item is gone from the catalog is already being torn down.
+            let Some(entry) = self.catalog().try_get_entry_by_global_id(&gid) else {
+                continue;
+            };
+            if !drop_set.contains(&ObjectId::Item(entry.id())) {
+                durable.push(entry.id());
+            }
+        }
+        (durable, transient)
+    }
+
+    /// Reports the outcome of [`Coordinator::resolve_index_dependents`] to the session.
+    ///
+    /// An orphaned index is loud on purpose: it only happens under `enable_unsafe_drop_index`,
+    /// and every occurrence should be visible to us as well as to the user.
+    fn emit_index_drop_notices(
+        &self,
+        session: &Session,
+        orphaned: Vec<DroppedInUseIndex>,
+        in_flight: Vec<InFlightIndexReaders>,
+    ) {
+        for orphaned in orphaned {
+            tracing::error!(
+                index = %orphaned.index_name,
+                dependents = ?orphaned.dependant_objects,
+                "dropped an index that other dataflows read from because enable_unsafe_drop_index is set"
+            );
+            self.metrics
+                .optimization_notices
+                .with_label_values(&["DroppedInUseIndex"])
+                .inc();
+            session.add_notice(AdapterNotice::DroppedInUseIndex(orphaned));
+        }
+        session.add_notices(
+            in_flight
+                .into_iter()
+                .map(AdapterNotice::DroppedIndexReadByInFlightStatements),
+        );
     }
 
     fn sequence_drop_common(
@@ -1648,7 +1861,6 @@ impl Coordinator {
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
-        let mut dropped_in_use_indexes = Vec::new();
         let mut dropped_roles = BTreeMap::new();
         let mut dropped_databases = BTreeSet::new();
         let mut dropped_schemas = BTreeSet::new();
@@ -1663,7 +1875,6 @@ impl Coordinator {
         // Clusters we're dropping
         let mut clusters_to_drop = BTreeSet::new();
 
-        let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1698,54 +1909,6 @@ impl Coordinator {
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
                         role_revokes.insert((*group_id, *id, *grantor_id));
-                    }
-                }
-                ObjectId::Item(id) => {
-                    if let Some(index) = self.catalog().get_entry(id).index() {
-                        let humanizer = self.catalog().for_session(session);
-                        let dependants = self
-                            .controller
-                            .compute
-                            .collection_reverse_dependencies(index.cluster_id, index.global_id())
-                            .ok()
-                            .into_iter()
-                            .flatten()
-                            .filter(|dependant_id| {
-                                // Transient Ids belong to Peeks. We are not interested for now in
-                                // peeks depending on a dropped index.
-                                // TODO: show a different notice in this case. Something like
-                                // "There is an in-progress ad hoc SELECT that uses the dropped
-                                // index. The resources used by the index will be freed when all
-                                // such SELECTs complete."
-                                if dependant_id.is_transient() {
-                                    return false;
-                                }
-                                // The item should exist, but don't panic if it doesn't.
-                                let Some(dependent_id) = humanizer
-                                    .try_get_item_by_global_id(dependant_id)
-                                    .map(|item| item.id())
-                                else {
-                                    return false;
-                                };
-                                // If the dependent object is also being dropped, then there is no
-                                // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::Item(dependent_id))
-                            })
-                            .flat_map(|dependant_id| {
-                                // If we are not able to find a name for this ID it probably means
-                                // we have already dropped the compute collection, in which case we
-                                // can ignore it.
-                                humanizer.humanize_id(dependant_id)
-                            })
-                            .collect_vec();
-                        if !dependants.is_empty() {
-                            dropped_in_use_indexes.push(DroppedInUseIndex {
-                                index_name: humanizer
-                                    .humanize_id(index.global_id())
-                                    .unwrap_or_else(|| id.to_string()),
-                                dependant_objects: dependants,
-                            });
-                        }
                     }
                 }
                 _ => {}
@@ -1839,7 +2002,6 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-            dropped_in_use_indexes,
         })
     }
 

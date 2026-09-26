@@ -839,6 +839,12 @@ pub struct DropObjectsPlan {
     /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
     /// objects of different types due to CASCADE.
     pub object_type: ObjectType,
+    /// Whether the statement specified `CASCADE`.
+    ///
+    /// The planner has already folded catalog dependents into `drop_ids`. The sequencer
+    /// consults this for dependencies only it can see, such as dataflows that read from a
+    /// dropped index.
+    pub cascade: bool,
 }
 
 #[derive(Debug)]
@@ -851,6 +857,8 @@ pub struct DropOwnedPlan {
     pub privilege_revokes: Vec<(SystemObjectId, MzAclItem)>,
     /// The default privileges to revoke.
     pub default_privilege_revokes: Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>,
+    /// Whether the statement specified `CASCADE`. See [`DropObjectsPlan::cascade`].
+    pub cascade: bool,
 }
 
 #[derive(Debug)]
