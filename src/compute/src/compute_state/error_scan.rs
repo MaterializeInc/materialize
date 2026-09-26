@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::Cursor;
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::order::PartialOrder;
@@ -55,7 +55,7 @@ impl ErrorScan {
     /// supply through [`ErrorScan::set_row_iteration_limit`] before each step.
     pub(super) fn new(errs: &mut ErrsHandle) -> Self {
         let scan_start = Instant::now();
-        let (cursor, storage) = errs.cursor();
+        let (cursor, storage) = peek_result_iterator::trace_cursor(errs);
         let mut scan = Self::from_cursor(cursor, storage);
         scan.scan_time = scan_start.elapsed();
         scan

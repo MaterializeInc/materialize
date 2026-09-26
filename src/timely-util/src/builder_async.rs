@@ -33,9 +33,10 @@ use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
-use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
+use timely::dataflow::operators::{Capability, CapabilitySet, CapabilityTrait, InputCapability};
 use timely::dataflow::{Scope, Stream as TimelyStream, StreamVec};
-use timely::progress::{Antichain, Timestamp};
+use timely::order::TotalOrder;
+use timely::progress::{Antichain, Stamp, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
@@ -215,7 +216,7 @@ struct AsyncOutputHandleInner<T: Timestamp, CB: ContainerBuilder> {
     /// Handle to write to the output stream.
     output: Output<T, CB::Container>,
     /// Current capability held by this output handle.
-    capability: Option<Capability<T>>,
+    capability: Option<CapabilitySet<T>>,
     /// Container builder to accumulate data before sending at `capability`.
     builder: CB,
 }
@@ -236,20 +237,21 @@ impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
         self.capability = None;
     }
 
-    /// Provides data at the time specified by the capability. Flushes automatically when the
-    /// capability time changes.
-    fn give<D>(&mut self, cap: &Capability<T>, data: D)
+    /// Provides data under the given capability. Flushes automatically when the capability
+    /// changes, so each output message carries the capability its data was given under.
+    fn give<D, C>(&mut self, cap: &C, data: D)
     where
         CB: PushInto<D>,
+        C: ShipUnder<T>,
     {
         if let Some(capability) = &self.capability
-            && cap.time() != capability.time()
+            && !cap.same_times(capability)
         {
             self.flush();
             self.capability = None;
         }
         if self.capability.is_none() {
-            self.capability = Some(cap.clone());
+            self.capability = Some(cap.to_set());
         }
 
         self.builder.push_into(data);
@@ -271,7 +273,7 @@ where
     C: Container + Clone + 'static,
 {
     #[inline]
-    pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
+    pub fn give_container<Cap: ShipUnder<T>>(&self, cap: &Cap, container: &mut C) {
         let mut inner = self.inner.borrow_mut();
         inner.flush();
         inner.output.give(cap, container);
@@ -305,7 +307,7 @@ where
     T: Timestamp,
     CB: ContainerBuilder,
 {
-    pub fn give<D>(&self, cap: &Capability<T>, data: D)
+    pub fn give<D, Cap: ShipUnder<T>>(&self, cap: &Cap, data: D)
     where
         CB: PushInto<D>,
     {
@@ -324,7 +326,7 @@ where
     /// charges `size_bytes` against the builder's fuel counter. Once at least
     /// [`Self::MAX_OUTSTANDING_BYTES`] have been emitted since the last yield
     /// this method yields back to timely and resets the counter.
-    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2, size_bytes: usize)
+    pub async fn give_fueled<D2, Cap: ShipUnder<T>>(&self, cap: &Cap, data: D2, size_bytes: usize)
     where
         FueledBuilder<CapacityContainerBuilder<Vec<D>>>: PushInto<D2>,
     {
@@ -356,6 +358,12 @@ impl<T: Timestamp, CB: ContainerBuilder> Clone for AsyncOutputHandle<T, CB> {
 
 /// A trait describing the connection behavior between an input of an operator and zero or more of
 /// its outputs.
+///
+/// The connected inputs ([`ConnectedToOne`], [`ConnectedToMany`]) hand the operator body the
+/// message's capabilities as a [`CapabilitySet`] per output, which works in any scope. An operator
+/// that wants a single point calls `CapabilitySet::delayed`, or [`sole_capability`] in a totally
+/// ordered scope. [`Disconnected`] holds no capability at all and so reports the message's stamp as
+/// plain times.
 pub trait InputConnection<T: Timestamp> {
     /// The capability type associated with this connection behavior.
     type Capability;
@@ -371,14 +379,14 @@ pub trait InputConnection<T: Timestamp> {
 pub struct Disconnected;
 
 impl<T: Timestamp> InputConnection<T> for Disconnected {
-    type Capability = T;
+    type Capability = Stamp<T>;
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
         vec![Antichain::new(); outputs]
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        input_cap.time().clone()
+        input_cap.stamp().clone()
     }
 }
 
@@ -386,7 +394,7 @@ impl<T: Timestamp> InputConnection<T> for Disconnected {
 pub struct ConnectedToOne(usize);
 
 impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
-    type Capability = Capability<T>;
+    type Capability = CapabilitySet<T>;
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
         let mut summary = vec![Antichain::new(); outputs];
@@ -395,7 +403,7 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        input_cap.retain(self.0)
+        input_cap.retain_stamp(self.0)
     }
 }
 
@@ -403,7 +411,7 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
 pub struct ConnectedToMany<const N: usize>([usize; N]);
 
 impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
-    type Capability = [Capability<T>; N];
+    type Capability = [CapabilitySet<T>; N];
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
         let mut summary = vec![Antichain::new(); outputs];
@@ -414,7 +422,60 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        self.0.map(|output| input_cap.retain(output))
+        self.0.map(|output| input_cap.retain_stamp(output))
+    }
+}
+
+/// The one capability of a message in a totally ordered scope.
+///
+/// A capability set over a totally ordered timestamp holds at most one capability. It holds none
+/// for a message sent under no capabilities, which makes no progress claims, and this function
+/// panics on such a set.
+pub fn sole_capability<T: Timestamp + TotalOrder>(
+    capabilities: &CapabilitySet<T>,
+) -> &Capability<T> {
+    match &capabilities[..] {
+        [capability] => capability,
+        [] => panic!("message stamped with no capabilities"),
+        _ => unreachable!("a capability set over a total order holds at most one capability"),
+    }
+}
+
+/// A capability an output handle can ship data under: one capability, or a whole set.
+///
+/// The set is the general form. A lone [`Capability`] is the one-element case, which is what an
+/// operator in a totally ordered scope holds.
+pub trait ShipUnder<T: Timestamp>: CapabilityTrait<T> {
+    /// The capabilities to hold while the data is buffered.
+    fn to_set(&self) -> CapabilitySet<T>;
+
+    /// Whether `set` holds capabilities for exactly the times of `self`.
+    ///
+    /// Called per record, so it compares borrowed times rather than building stamps.
+    fn same_times(&self, set: &CapabilitySet<T>) -> bool;
+}
+
+impl<T: Timestamp> ShipUnder<T> for Capability<T> {
+    fn to_set(&self) -> CapabilitySet<T> {
+        std::iter::once(self.clone()).collect()
+    }
+
+    fn same_times(&self, set: &CapabilitySet<T>) -> bool {
+        matches!(&set[..], [only] if only.time() == self.time())
+    }
+}
+
+impl<T: Timestamp> ShipUnder<T> for CapabilitySet<T> {
+    fn to_set(&self) -> CapabilitySet<T> {
+        self.clone()
+    }
+
+    fn same_times(&self, set: &CapabilitySet<T>) -> bool {
+        // Both sets are antichains, so equal lengths and containment make them equal.
+        self.len() == set.len()
+            && self
+                .iter()
+                .all(|cap| set.iter().any(|other| other.time() == cap.time()))
     }
 }
 

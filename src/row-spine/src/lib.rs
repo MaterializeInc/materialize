@@ -19,9 +19,10 @@ pub use self::dictionary::DatumSeq;
 pub use self::dictionary::builders::RowRowColPagedState;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, RowBatcher, RowBuilder,
-    RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowColPagedBuilder, ValRowSpine,
+    ArcOrdKeyBatcher, ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBatcher, ArcOrdValBuilder,
+    ArcOrdValSpine, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder,
+    RowRowSpine, RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
+    ValRowColPagedBuilder, ValRowSpine,
 };
 
 mod arc_batch;
@@ -39,7 +40,9 @@ mod spines {
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::Vector;
-    use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+    use differential_dataflow::trace::implementations::merge_batcher::{
+        MergeBatcher, chunker::ContainerChunker, vec::VecMerger,
+    };
     use differential_dataflow::trace::implementations::ord_neu::{
         OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
     };
@@ -52,11 +55,12 @@ mod spines {
 
     /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
     /// locally so this crate does not need to depend on `mz_compute`.
-    type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
-    type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
+    type KeyValBatcher<K, V, T, D, Chu, Se> =
+        MergeBatcher<Chu, ColInternalMerger<(K, V), T, D>, Se>;
+    type KeyBatcher<K, T, D, Chu, Se> = KeyValBatcher<K, (), T, D, Chu, Se>;
 
     pub type RowRowSpine<T, R> = Spine<ArcBatch<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
-    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
+    pub type RowRowBatcher<T, R, Chu> = KeyValBatcher<Row, Row, T, R, Chu, RowRowBuilder<T, R>>;
     pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
     /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with any
@@ -74,24 +78,25 @@ mod spines {
         ArcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
 
     pub type RowValSpine<V, T, R> = Spine<ArcBatch<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
-    pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
+    pub type RowValBatcher<V, T, R, Chu> = KeyValBatcher<Row, V, T, R, Chu, RowValBuilder<V, T, R>>;
     pub type RowValBuilder<V, T, R> =
         ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
     /// Key-only `Row` spine. `DC` is the diff container, see `RowLayout`.
     pub type RowSpine<T, R, DC = ColumnationStack<R>> =
         Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>>>;
-    pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
+    pub type RowBatcher<T, R, Chu, DC = ColumnationStack<R>> =
+        KeyBatcher<Row, T, R, Chu, RowBuilder<T, R, DC>>;
     pub type RowBuilder<T, R, DC = ColumnationStack<R>> =
         ArcBuilder<crate::dictionary::builders::RowBuilder<T, R, DC>>;
 
     pub type ValRowSpine<K, T, R> = Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
-    pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
+    pub type ValRowBatcher<K, T, R, Chu> = KeyValBatcher<K, Row, T, R, Chu, ValRowBuilder<K, T, R>>;
     pub type ValRowBuilder<K, T, R> =
         ArcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
 
     /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where
+    /// `Col2ValPagedBatcher<K, Row, T, R, Chu, Se>` for the spillable arrange path where
     /// keys are arbitrary `Columnar` values (e.g. `UpsertKey`) and values are
     /// packed `Row` bytes. Installs a dictionary codec on the value container at
     /// seal time, gathering statistics from the sealed `Column` chain; keys are
@@ -113,6 +118,18 @@ mod spines {
     /// Builder pairing with [`ArcOrdKeySpine`].
     pub type ArcOrdKeyBuilder<K, T, R> =
         ArcBuilder<OrdKeyBuilder<Vector<((K, ()), T, R)>, Vec<((K, ()), T, R)>>>;
+    /// Batcher pairing with [`ArcOrdValSpine`], over `Vec` input.
+    pub type ArcOrdValBatcher<K, V, T, R> = MergeBatcher<
+        ContainerChunker<Vec<((K, V), T, R)>>,
+        VecMerger<(K, V), T, R>,
+        ArcOrdValBuilder<K, V, T, R>,
+    >;
+    /// Batcher pairing with [`ArcOrdKeySpine`], over `Vec` input.
+    pub type ArcOrdKeyBatcher<K, T, R> = MergeBatcher<
+        ContainerChunker<Vec<((K, ()), T, R)>>,
+        VecMerger<(K, ()), T, R>,
+        ArcOrdKeyBuilder<K, T, R>,
+    >;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
@@ -219,12 +236,12 @@ mod tests {
     fn chunked_seal_installs_codecs() {
         use std::sync::atomic::Ordering;
 
+        use differential_dataflow::trace::implementations::merge_batcher::Sealer;
         use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
-        use differential_dataflow::trace::{Builder, Description};
         use mz_timely_util::columnar::Column;
         use mz_timely_util::columnar::chunk::{ColumnChunk, UnchunkBuilder};
         use timely::container::PushInto;
-        use timely::progress::{Antichain, Timestamp as _};
+        use timely::progress::Timestamp as _;
 
         use crate::ArcBatch;
 
@@ -261,25 +278,17 @@ mod tests {
                 })
                 .collect()
         };
-        let description = || {
-            Description::new(
-                Antichain::from_elem(time),
-                Antichain::new(),
-                Antichain::from_elem(time),
-            )
-        };
-
         type Paged = crate::RowRowColPagedBuilder<Timestamp, i64>;
         type Chunked = UnchunkBuilder<Paged, (Row, Row), Timestamp, i64>;
 
         let mut chain = columns();
-        let from_columns = <Paged as Builder>::seal(&mut chain, description());
+        let from_columns = <Paged as Sealer<_>>::seal(&mut chain).expect("chain holds updates");
 
         let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64>> = columns()
             .into_iter()
             .map(ColumnChunk::from_column)
             .collect();
-        let from_chunks = <Chunked as Builder>::seal(&mut chain, description());
+        let from_chunks = <Chunked as Sealer<_>>::seal(&mut chain).expect("chain holds updates");
 
         assert!(
             from_chunks.0.storage.keys.has_codec() && from_chunks.0.storage.vals.vals.has_codec(),
@@ -1002,14 +1011,18 @@ mod dictionary {
     /// then construct codecs that are used to encode the row-shaped keys and values. There are
     /// several variants, corresponding to the RowRow, RowVal, and Row-only spine types.
     pub mod builders {
+        // TODO(differential): pre-size each builder from `BuilderInput::key_val_upd_counts` over
+        // the chain it seals. The inner `OrdValBuilder::with_capacity` and
+        // `OrdKeyBuilder::with_capacity` are private to differential, so a wrapping builder
+        // cannot pass the counts on and every seal re-pays the grow cycle.
 
         use columnar::{Columnar, Index};
         use columnation::Columnation;
         use differential_dataflow::difference::Semigroup;
         use differential_dataflow::lattice::Lattice;
         use differential_dataflow::trace::Builder;
-        use differential_dataflow::trace::Description;
         use differential_dataflow::trace::implementations::BatchContainer;
+        use differential_dataflow::trace::implementations::merge_batcher::Sealer;
         use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
         use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
         use mz_timely_util::columnar::Column;
@@ -1020,7 +1033,7 @@ mod dictionary {
         use mz_repr::{Row, RowRef};
 
         use super::super::row_codec::ColumnsCodec;
-        use super::{DatumContainer, DatumSeq};
+        use super::DatumSeq;
         use crate::DICTIONARY_COMPRESSION;
         use crate::spines::{RowLayout, RowRowLayout, RowValLayout, ValRowLayout};
 
@@ -1073,15 +1086,10 @@ mod dictionary {
             type Time = T;
             type Output = OrdValBatch<RowRowLayout<((Row, Row), T, R)>>;
 
-            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-                Self {
-                    inner: Builder::with_capacity(keys, vals, upds),
-                }
-            }
             fn push(&mut self, chunk: &mut Self::Input) {
                 self.inner.push(chunk)
             }
-            fn done(self, description: Description<Self::Time>) -> Self::Output {
+            fn done(self) -> Option<Self::Output> {
                 // The push/done build path (e.g. the `reduce` operator, which builds
                 // batches with `Builder::new()` + `push` + `done` rather than `seal`)
                 // never runs `seal`'s codec install. Install a codec here from the
@@ -1092,12 +1100,26 @@ mod dictionary {
                 let mut inner = self.inner;
                 inner.result.keys.promote_stats_to_codec();
                 inner.result.vals.vals.promote_stats_to_codec();
-                inner.done(description)
+                inner.done()
             }
-            fn seal(
-                chain: &mut Vec<Self::Input>,
-                description: Description<Self::Time>,
-            ) -> Self::Output {
+        }
+
+        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
+            Default for RowRowBuilder<T, R>
+        {
+            fn default() -> Self {
+                Self {
+                    inner: Default::default(),
+                }
+            }
+        }
+
+        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
+            Sealer<TimelyStack<((Row, Row), T, R)>> for RowRowBuilder<T, R>
+        {
+            type Output = OrdValBatch<RowRowLayout<((Row, Row), T, R)>>;
+
+            fn seal(chain: &mut Vec<TimelyStack<((Row, Row), T, R)>>) -> Option<Self::Output> {
                 let key_codec = build_codec(
                     chain
                         .iter()
@@ -1109,15 +1131,9 @@ mod dictionary {
                         .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
                 );
 
-                use differential_dataflow::trace::implementations::BuilderInput;
-
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    DatumContainer,
-                    DatumContainer,
-                >>::key_val_upd_counts(&chain[..]);
-                let mut builder = Self::with_capacity(keys, vals, upds);
+                let mut builder = Self::default();
                 // The seal path installs a codec directly, so the per-container stats
-                // gatherer (which `with_capacity` may have allocated) is dead weight and
+                // gatherer (which the default builder may have allocated) is dead weight and
                 // would contradict the `stats: None once codec installed` invariant.
                 builder.inner.result.keys.codec = key_codec;
                 builder.inner.result.keys.stats = None;
@@ -1128,7 +1144,7 @@ mod dictionary {
                     builder.push(&mut chunk);
                 }
 
-                builder.done(description)
+                builder.done()
             }
         }
 
@@ -1150,38 +1166,47 @@ mod dictionary {
             type Time = T;
             type Output = OrdValBatch<RowValLayout<((Row, V), T, R)>>;
 
-            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-                Self {
-                    inner: Builder::with_capacity(keys, vals, upds),
-                }
-            }
             fn push(&mut self, chunk: &mut Self::Input) {
                 self.inner.push(chunk)
             }
-            fn done(self, description: Description<Self::Time>) -> Self::Output {
+            fn done(self) -> Option<Self::Output> {
                 // See `RowRowBuilder::done`: install a codec on the `Row`-shaped key
                 // container for the push/done (e.g. `reduce`) path that skips `seal`.
                 let mut inner = self.inner;
                 inner.result.keys.promote_stats_to_codec();
-                inner.done(description)
+                inner.done()
             }
-            fn seal(
-                chain: &mut Vec<Self::Input>,
-                description: Description<Self::Time>,
-            ) -> Self::Output {
+        }
+
+        impl<
+            V: Ord + Clone + Columnation,
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+        > Default for RowValBuilder<V, T, R>
+        {
+            fn default() -> Self {
+                Self {
+                    inner: Default::default(),
+                }
+            }
+        }
+
+        impl<
+            V: Ord + Clone + Columnation,
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+        > Sealer<TimelyStack<((Row, V), T, R)>> for RowValBuilder<V, T, R>
+        {
+            type Output = OrdValBatch<RowValLayout<((Row, V), T, R)>>;
+
+            fn seal(chain: &mut Vec<TimelyStack<((Row, V), T, R)>>) -> Option<Self::Output> {
                 let key_codec = build_codec(
                     chain
                         .iter()
                         .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
                 );
 
-                use differential_dataflow::trace::implementations::BuilderInput;
-
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    DatumContainer,
-                    TimelyStack<V>,
-                >>::key_val_upd_counts(&chain[..]);
-                let mut builder = Self::with_capacity(keys, vals, upds);
+                let mut builder = Self::default();
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.keys.codec = key_codec;
                 builder.inner.result.keys.stats = None;
@@ -1190,7 +1215,7 @@ mod dictionary {
                     builder.push(&mut chunk);
                 }
 
-                builder.done(description)
+                builder.done()
             }
         }
 
@@ -1212,38 +1237,47 @@ mod dictionary {
             type Time = T;
             type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>;
 
-            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-                Self {
-                    inner: Builder::with_capacity(keys, vals, upds),
-                }
-            }
             fn push(&mut self, chunk: &mut Self::Input) {
                 self.inner.push(chunk)
             }
-            fn done(self, description: Description<Self::Time>) -> Self::Output {
+            fn done(self) -> Option<Self::Output> {
                 // See `RowRowBuilder::done`: install a codec on the `Row`-shaped key
                 // container for the push/done (e.g. `reduce`) path that skips `seal`.
                 let mut inner = self.inner;
                 inner.result.keys.promote_stats_to_codec();
-                inner.done(description)
+                inner.done()
             }
-            fn seal(
-                chain: &mut Vec<Self::Input>,
-                description: Description<Self::Time>,
-            ) -> Self::Output {
+        }
+
+        impl<T, R, DC> Default for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
+        {
+            fn default() -> Self {
+                Self {
+                    inner: Default::default(),
+                }
+            }
+        }
+
+        impl<T, R, DC> Sealer<TimelyStack<((Row, ()), T, R)>> for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
+        {
+            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>;
+
+            fn seal(chain: &mut Vec<TimelyStack<((Row, ()), T, R)>>) -> Option<Self::Output> {
                 let key_codec = build_codec(
                     chain
                         .iter()
                         .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
                 );
 
-                use differential_dataflow::trace::implementations::BuilderInput;
-
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    DatumContainer,
-                    TimelyStack<()>,
-                >>::key_val_upd_counts(&chain[..]);
-                let mut builder = Self::with_capacity(keys, vals, upds);
+                let mut builder = Self::default();
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.keys.codec = key_codec;
                 builder.inner.result.keys.stats = None;
@@ -1252,7 +1286,7 @@ mod dictionary {
                     builder.push(&mut chunk);
                 }
 
-                builder.done(description)
+                builder.done()
             }
         }
 
@@ -1277,38 +1311,47 @@ mod dictionary {
             type Time = T;
             type Output = OrdValBatch<ValRowLayout<((K, Row), T, R)>>;
 
-            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-                Self {
-                    inner: Builder::with_capacity(keys, vals, upds),
-                }
-            }
             fn push(&mut self, chunk: &mut Self::Input) {
                 self.inner.push(chunk)
             }
-            fn done(self, description: Description<Self::Time>) -> Self::Output {
+            fn done(self) -> Option<Self::Output> {
                 // See `RowRowBuilder::done`: install a codec on the `Row`-shaped value
                 // container for the push/done (e.g. `reduce`) path that skips `seal`.
                 let mut inner = self.inner;
                 inner.result.vals.vals.promote_stats_to_codec();
-                inner.done(description)
+                inner.done()
             }
-            fn seal(
-                chain: &mut Vec<Self::Input>,
-                description: Description<Self::Time>,
-            ) -> Self::Output {
+        }
+
+        impl<
+            K: Ord + Clone + Columnation,
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+        > Default for ValRowBuilder<K, T, R>
+        {
+            fn default() -> Self {
+                Self {
+                    inner: Default::default(),
+                }
+            }
+        }
+
+        impl<
+            K: Ord + Clone + Columnation,
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+        > Sealer<TimelyStack<((K, Row), T, R)>> for ValRowBuilder<K, T, R>
+        {
+            type Output = OrdValBatch<ValRowLayout<((K, Row), T, R)>>;
+
+            fn seal(chain: &mut Vec<TimelyStack<((K, Row), T, R)>>) -> Option<Self::Output> {
                 let val_codec = build_codec(
                     chain
                         .iter()
                         .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
                 );
 
-                use differential_dataflow::trace::implementations::BuilderInput;
-
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    TimelyStack<K>,
-                    DatumContainer,
-                >>::key_val_upd_counts(&chain[..]);
-                let mut builder = Self::with_capacity(keys, vals, upds);
+                let mut builder = Self::default();
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.vals.vals.codec = val_codec;
                 builder.inner.result.vals.vals.stats = None;
@@ -1317,7 +1360,7 @@ mod dictionary {
                     builder.push(&mut chunk);
                 }
 
-                builder.done(description)
+                builder.done()
             }
         }
 
@@ -1342,15 +1385,10 @@ mod dictionary {
             type Time = T;
             type Output = OrdValBatch<RowRowLayout<((Row, Row), T, R)>>;
 
-            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-                Self {
-                    inner: Builder::with_capacity(keys, vals, upds),
-                }
-            }
             fn push(&mut self, chunk: &mut Self::Input) {
                 self.inner.push(chunk)
             }
-            fn done(self, description: Description<Self::Time>) -> Self::Output {
+            fn done(self) -> Option<Self::Output> {
                 // See `RowRowBuilder::done`: a builder driven by `push` and `done`
                 // alone gets its codec from the statistics gathered during the
                 // pushes, since a codec-less batch poisons the merges it joins.
@@ -1358,12 +1396,30 @@ mod dictionary {
                 let mut inner = self.inner;
                 inner.result.keys.promote_stats_to_codec();
                 inner.result.vals.vals.promote_stats_to_codec();
-                inner.done(description)
+                inner.done()
             }
-            fn seal(
-                chain: &mut Vec<Self::Input>,
-                description: Description<Self::Time>,
-            ) -> Self::Output {
+        }
+
+        impl<
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > Default for RowRowColPagedBuilder<T, R>
+        {
+            fn default() -> Self {
+                Self {
+                    inner: Default::default(),
+                }
+            }
+        }
+
+        impl<
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > Sealer<Column<((Row, Row), T, R)>> for RowRowColPagedBuilder<T, R>
+        {
+            type Output = OrdValBatch<RowRowLayout<((Row, Row), T, R)>>;
+
+            fn seal(chain: &mut Vec<Column<((Row, Row), T, R)>>) -> Option<Self::Output> {
                 // `into_index_iter` yields the value column's `Row`s as `&RowRef`,
                 // which `build_codec` consumes directly.
                 let key_codec = build_codec(
@@ -1377,13 +1433,7 @@ mod dictionary {
                         .flat_map(|c| c.borrow().into_index_iter().map(|((_, v), _, _)| v)),
                 );
 
-                use differential_dataflow::trace::implementations::BuilderInput;
-
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    DatumContainer,
-                    DatumContainer,
-                >>::key_val_upd_counts(&chain[..]);
-                let mut builder = Self::with_capacity(keys, vals, upds);
+                let mut builder = Self::default();
                 // See `RowRowBuilder::seal`: install the codecs and drop the
                 // now-redundant per-container stats gatherer.
                 builder.inner.result.keys.codec = key_codec;
@@ -1395,13 +1445,12 @@ mod dictionary {
                     builder.push(&mut chunk);
                 }
 
-                builder.done(description)
+                builder.done()
             }
         }
 
         /// The chain-wide state of [`RowRowColPagedBuilder`]: the statistics its
-        /// key and value codecs are built from, and the container sizes the
-        /// chain implies.
+        /// key and value codecs are built from.
         ///
         /// [`RowRowColPagedBuilder`]: crate::RowRowColPagedBuilder
         #[derive(Default)]
@@ -1410,7 +1459,6 @@ mod dictionary {
             vals: ColumnsCodec,
             /// Whether `keys` and `vals` hold statistics from any body.
             gathered: bool,
-            counts: (usize, usize, usize),
         }
 
         impl<
@@ -1438,28 +1486,15 @@ mod dictionary {
                     );
                     state.gathered = true;
                 }
-
-                use differential_dataflow::trace::implementations::BuilderInput;
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    DatumContainer,
-                    DatumContainer,
-                >>::key_val_upd_counts(
-                    std::slice::from_ref(input)
-                );
-                state.counts.0 += keys;
-                state.counts.1 += vals;
-                state.counts.2 += upds;
             }
 
-            fn observe_records(state: &mut Self::State, records: usize) {
-                // Key and value counts need the bodies. Sizing the update
-                // containers alone is what a record count buys.
-                state.counts.2 += records;
+            fn observe_records(_state: &mut Self::State, _records: usize) {
+                // A record count could only size the builder, which the
+                // builders module's TODO explains it cannot be.
             }
 
             fn from_state(state: Self::State) -> Self {
-                let mut builder =
-                    Self::with_capacity(state.counts.0, state.counts.1, state.counts.2);
+                let mut builder = Self::default();
                 // Install from the statistics that were gathered, not from the
                 // compression flag: the flag is process-global and a worker can
                 // flip it mid-seal, and a codec built from no observations would
@@ -1504,34 +1539,51 @@ mod dictionary {
             type Time = T;
             type Output = OrdValBatch<ValRowLayout<((K, Row), T, R)>>;
 
-            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-                Self {
-                    inner: Builder::with_capacity(keys, vals, upds),
-                }
-            }
             fn push(&mut self, chunk: &mut Self::Input) {
                 self.inner.push(chunk)
             }
-            fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+            fn done(self) -> Option<Self::Output> {
+                self.inner.done()
             }
-            fn seal(
-                chain: &mut Vec<Self::Input>,
-                description: Description<Self::Time>,
-            ) -> Self::Output {
+        }
+
+        impl<
+            K: Ord + Clone + Columnation + Columnar + 'static,
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > Default for ValRowColPagedBuilder<K, T, R>
+        where
+            for<'a> columnar::Ref<'a, K>: Copy + Ord,
+            for<'a, 'b> &'a K: PartialEq<columnar::Ref<'b, K>>,
+            for<'a> TimelyStack<K>: timely::container::PushInto<columnar::Ref<'a, K>>,
+        {
+            fn default() -> Self {
+                Self {
+                    inner: Default::default(),
+                }
+            }
+        }
+
+        impl<
+            K: Ord + Clone + Columnation + Columnar + 'static,
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > Sealer<Column<((K, Row), T, R)>> for ValRowColPagedBuilder<K, T, R>
+        where
+            for<'a> columnar::Ref<'a, K>: Copy + Ord,
+            for<'a, 'b> &'a K: PartialEq<columnar::Ref<'b, K>>,
+            for<'a> TimelyStack<K>: timely::container::PushInto<columnar::Ref<'a, K>>,
+        {
+            type Output = OrdValBatch<ValRowLayout<((K, Row), T, R)>>;
+
+            fn seal(chain: &mut Vec<Column<((K, Row), T, R)>>) -> Option<Self::Output> {
                 let val_codec = build_codec(
                     chain
                         .iter()
                         .flat_map(|c| c.borrow().into_index_iter().map(|((_, v), _, _)| v)),
                 );
 
-                use differential_dataflow::trace::implementations::BuilderInput;
-
-                let (keys, vals, upds) = <Self::Input as BuilderInput<
-                    TimelyStack<K>,
-                    DatumContainer,
-                >>::key_val_upd_counts(&chain[..]);
-                let mut builder = Self::with_capacity(keys, vals, upds);
+                let mut builder = Self::default();
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.vals.vals.codec = val_codec;
                 builder.inner.result.vals.vals.stats = None;
@@ -1540,7 +1592,7 @@ mod dictionary {
                     builder.push(&mut chunk);
                 }
 
-                builder.done(description)
+                builder.done()
             }
         }
     }

@@ -22,6 +22,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    sole_capability,
 };
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
@@ -359,6 +360,7 @@ where
                     while let Some(event) = input.next_sync() {
                         match event {
                             AsyncEvent::Data(cap, mut data) => {
+                                let cap = sole_capability(&cap).clone();
                                 tracing::trace!(
                                     worker_id = %source_config.worker_id,
                                     source_id = %source_config.id,

@@ -15,9 +15,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use columnar::Index;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_row_spine::RowRowBuilder;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
@@ -30,8 +32,8 @@ use timely::dataflow::operators::generic::operator::empty;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
+use crate::typedefs::ConsolidateColumnBatcher;
 use crate::typedefs::RowRowSpine;
-use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -69,7 +71,7 @@ pub(super) fn construct(
         };
         let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
+                input.for_each_stamp(|time, data| {
                     output
                         .session_with_builder(&time)
                         .give_iterator(data.flat_map(|d| {
@@ -97,9 +99,9 @@ pub(super) fn construct(
         let worker_id = scope.index();
 
         let updates = consolidate_and_pack::<
-            batcher::Chunker<_>,
-            Col2ValBatcher<UpdatesKey, _, _, _>,
+            ConsolidateColumnBatcher<UpdatesKey, _, _, _>,
             ColumnBuilder<_>,
+            _,
             _,
             _,
             _,
@@ -133,11 +135,9 @@ pub(super) fn construct(
                     .clone()
                     .mz_arrange_core::<
                         _,
-                        batcher::Chunker<_>,
-                        Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
+                        Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
                         RowRowSpine<_, _>,
-                    >(exchange, &format!("Arrange {variant:?}"))
+                    >(exchange, &format!("Arrange {variant:?}"), MergeBatcher::new)
                     .trace;
                 let collection = LogCollection {
                     trace,

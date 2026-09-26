@@ -114,14 +114,14 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::{StorageDiff, dyncfgs};
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, sole_capability,
 };
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{Capability, CapabilitySet, InspectCore};
+use timely::dataflow::operators::{Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
@@ -676,11 +676,9 @@ fn write_batches<'scope>(
                             }
                             match in_flight_batches.entry(description) {
                                 std::collections::hash_map::Entry::Vacant(v) => {
-                                    // This _should_ be `.retain`, but rust
-                                    // currently thinks we can't use `cap`
-                                    // as an owned value when using the
-                                    // match guard `Some(event)`
-                                    v.insert(cap.delayed(cap.time()));
+                                    // `cap` is borrowed once per description, so each
+                                    // in-flight batch holds its own copy.
+                                    v.insert(sole_capability(&cap).clone());
                                 }
                                 std::collections::hash_map::Entry::Occupied(o) => {
                                     let (description, _) = o.remove_entry();
@@ -858,15 +856,15 @@ fn write_batches<'scope>(
         }
     });
 
-    // Use `InspectCore::inspect_container` instead of `Inspect::inspect`.
-    // `Inspect` carries a `where for<'a> &'a C: IntoIterator` bound, and on
-    // macOS the solver can satisfy that bound by chasing objc2's
-    // `&Retained<T>: IntoIterator` blanket impl into an endless
-    // `Retained<Retained<…>>` chain, overflowing the recursion limit.
-    // `InspectCore` has no such bound, so the cascade never starts. We
-    // iterate the container by hand to recover the per-item callback.
+    // Use `inspect_core` instead of `inspect`. `inspect` carries a
+    // `where for<'a> &'a C: IntoIterator` bound, and on macOS the solver can
+    // satisfy that bound by chasing objc2's `&Retained<T>: IntoIterator`
+    // blanket impl into an endless `Retained<Retained<…>>` chain, overflowing
+    // the recursion limit. `inspect_core` has no such bound, so the cascade
+    // never starts. We iterate the container by hand to recover the per-item
+    // callback.
     let output_stream = if collection_id.is_user() {
-        InspectCore::inspect_container(output_stream, |event| {
+        Inspect::inspect_core(output_stream, |event| {
             if let Ok((_, data)) = event {
                 for d in data {
                     trace!("batch: {:?}", d);

@@ -13,14 +13,14 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
-/// Whether rendering should use `half_join2` rather than DD's `half_join` for delta joins.
+/// Has no effect: differential folded `half_join2` into `half_join`, which delta joins always use.
 ///
-/// `half_join2` avoids quadratic behavior in certain join patterns. This flag exists as an escape
-/// hatch to revert to the old implementation if issues arise.
+/// TODO: Remove, together with its entries in the LaunchDarkly consistency test, mzcompose and
+/// parallel workload.
 pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "enable_compute_half_join2",
     true,
-    "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
+    "Has no effect. Delta joins always render with differential's `half_join`.",
     ParameterScope::Environment,
 );
 

@@ -18,6 +18,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -31,16 +32,15 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, UnchunkBuilder};
+use mz_timely_util::columnar::chunk::AccountedChunkBatcher;
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::NoopBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::{Scope, Stream};
@@ -54,9 +54,9 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowChunkedBatcher,
+    RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowEnter, RowRowSpine,
 };
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -432,10 +432,10 @@ pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
     errs: VecCollection<'a, T, DataflowErrorSer, Diff>,
 ) -> VecCollection<'a, T, DataflowErrorSer, Diff> {
     let errs: KeyCollection<_, _, _> = errs.into();
-    let errs = errs
-        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
-            "Arrange errors",
-        );
+    let errs = errs.mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
+        "Arrange errors",
+        MergeBatcher::new,
+    );
     distinct_arranged_errs(errs, "Distinct errors").as_collection(|err, _| err.clone())
 }
 
@@ -761,9 +761,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 input.for_each(|time, data| {
                     // Retain a capability for each output, as the work may complete across
                     // multiple activations.
-                    let ok_cap = time.retain(0);
-                    let err_cap = time.retain(1);
-                    for batch in data.iter() {
+                    let ok_cap = time.retain_stamp(0);
+                    let err_cap = time.retain_stamp(1);
+                    for span in data.iter() {
+                        let Some(batch) = &span.inner else {
+                            continue;
+                        };
                         todo.push_back(PendingWork::new(
                             ok_cap.clone(),
                             err_cap.clone(),
@@ -867,8 +870,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let mut ok_output = ok_output.activate();
 
                 input.for_each(|time, data| {
-                    let cap = time.retain(0);
-                    for batch in data.iter() {
+                    let cap = time.retain_stamp(0);
+                    for span in data.iter() {
+                        let Some(batch) = &span.inner else {
+                            continue;
+                        };
                         todo.push_back(PendingWorkOk::new(
                             cap.clone(),
                             batch.cursor(),
@@ -1138,14 +1144,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
-                let errs =
-                    errs_concat.mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >(
+                let errs = errs_concat
+                    .mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
                         &format!("{}-errors", name),
+                        MergeBatcher::new,
                     );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
@@ -1241,37 +1243,38 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
         let oks = match batcher {
-            ArrangementBatcher::Chunked => ok_stream.mz_arrange_core::<
-                _,
-                ChunkChunker<(Row, Row), T, Diff>,
-                AccountedChunkBatcher<(Row, Row), T, Diff>,
-                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-            ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
-                _,
-                batcher::ColumnChunker<_>,
-                Col2ValColBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
-                _,
-                batcher::Chunker<_>,
-                Col2ValBatcher<_, _, _, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
+            ArrangementBatcher::Chunked => ok_stream
+                .mz_arrange_core::<_, RowRowChunkedBatcher<T>, RowRowSpine<_, _>>(
+                    exchange,
+                    name,
+                    AccountedChunkBatcher::new,
+                ),
+            ArrangementBatcher::Columnar => ok_stream
+                .mz_arrange_core::<_, RowRowColumnarBatcher<T>, RowRowSpine<_, _>>(
+                    exchange,
+                    name,
+                    MergeBatcher::new,
+                ),
+            ArrangementBatcher::Columnation => ok_stream
+                .mz_arrange_core::<_, RowRowColumnationBatcher<_, T>, RowRowSpine<_, _>>(
+                    exchange,
+                    name,
+                    MergeBatcher::new,
+                ),
         };
         (oks, err_stream.as_collection(), passthrough)
     }
 }
 
-/// Type alias for a timely output `Session` whose capability is a `Capability<T>`. The container
-/// builder `CB` is left to the caller; sessions can therefore drive consolidating, capacity, or
-/// (in the future) columnar output builders without changing call sites.
+/// A session over one output of an arrangement-reading operator.
+///
+/// The container builder `CB` is left to the caller, so sessions can drive consolidating,
+/// capacity, or columnar output builders without changing call sites.
+///
+/// The capability is a whole [`CapabilitySet`]: a batch message's stamp carries every capability
+/// the arrange operator retired with it, and need not be a singleton.
 pub(crate) type Session<'a, 'b, T, CB> =
-    timely::dataflow::operators::generic::Session<'a, 'b, T, CB, Capability<T>>;
+    timely::dataflow::operators::generic::Session<'a, 'b, T, CB, CapabilitySet<T>>;
 
 /// Container builder used for the err output of every flat_map variant. Pre-refactor the
 /// merged Ok/Err stream flowed through a [`ConsolidatingContainerBuilder`] before the
@@ -1288,10 +1291,10 @@ struct PendingWork<C>
 where
     C: Cursor,
 {
-    /// Capability for the `ok` output (output port 0).
-    ok_capability: Capability<C::Time>,
-    /// Capability for the `err` output (output port 1).
-    err_capability: Capability<C::Time>,
+    /// Capabilities for the `ok` output (output port 0), covering the batch's stamp.
+    ok_capability: CapabilitySet<C::Time>,
+    /// Capabilities for the `err` output (output port 1), covering the batch's stamp.
+    err_capability: CapabilitySet<C::Time>,
     cursor: C,
     batch: C::Storage,
 }
@@ -1303,8 +1306,8 @@ where
     /// Create a new bundle of pending work, from a pair of capabilities (one per output),
     /// a cursor, and backing storage.
     fn new(
-        ok_capability: Capability<C::Time>,
-        err_capability: Capability<C::Time>,
+        ok_capability: CapabilitySet<C::Time>,
+        err_capability: CapabilitySet<C::Time>,
         cursor: C,
         batch: C::Storage,
     ) -> Self {
@@ -1349,7 +1352,7 @@ struct PendingWorkOk<C>
 where
     C: Cursor,
 {
-    capability: Capability<C::Time>,
+    capability: CapabilitySet<C::Time>,
     cursor: C,
     batch: C::Storage,
 }
@@ -1358,7 +1361,7 @@ impl<C> PendingWorkOk<C>
 where
     C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
 {
-    fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
+    fn new(capability: CapabilitySet<C::Time>, cursor: C, batch: C::Storage) -> Self {
         Self {
             capability,
             cursor,
@@ -1781,12 +1784,10 @@ mod tests {
                     );
                 let err_arranged = {
                     let kc: KeyCollection<_, _, _> = arr_errs.into();
-                    kc.mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >("agg-errs")
+                    kc.mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
+                        "agg-errs",
+                        MergeBatcher::new,
+                    )
                 };
                 // An arrangement-only bundle, as Reduce/Threshold/TopK produce.
                 let bundle = CollectionBundle::from_columns(

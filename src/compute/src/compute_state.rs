@@ -67,6 +67,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::compute_state::peek_budget::InlineBudget;
 use crate::compute_state::peek_metrics::{IndexPeekMetrics, PeekWalkMetrics};
+
 pub(crate) use crate::compute_state::peek_offload::PeekPermits;
 use crate::compute_state::peek_offload::{OffloadConfig, OffloadedPeek};
 use crate::compute_state::peek_scan::{

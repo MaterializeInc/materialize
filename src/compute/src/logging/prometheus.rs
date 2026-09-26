@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use mz_compute_types::dyncfgs::COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -20,6 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::soft_panic_or_log;
 use mz_repr::{Datum, Timestamp};
+use mz_row_spine::RowRowBuilder;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
@@ -35,7 +37,6 @@ use crate::logging::{
     emit_snapshot_diff,
 };
 use crate::typedefs::RowRowSpine;
-use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -142,11 +143,9 @@ pub(super) fn construct(
     let trace = stream
         .mz_arrange_core::<
             _,
-            batcher::Chunker<_>,
-            Col2ValBatcher<_, _, _, _>,
-            RowRowBuilder<_, _>,
+            Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
             RowRowSpine<_, _>,
-        >(exchange, "Arrange PrometheusMetrics")
+        >(exchange, "Arrange PrometheusMetrics", MergeBatcher::new)
         .trace;
     let token: Rc<dyn std::any::Any> = Rc::new(());
     let collection = LogCollection { trace, token };

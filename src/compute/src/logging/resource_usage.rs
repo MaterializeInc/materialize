@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use mz_metrics::usage::{MetricKey, observations};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -113,11 +114,9 @@ pub(super) fn construct(
     let trace = stream
         .mz_arrange_core::<
             _,
-            batcher::Chunker<_>,
-            Col2ValBatcher<_, _, _, _>,
-            RowRowBuilder<_, _>,
+            Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
             RowRowSpine<_, _>,
-        >(exchange, "Arrange ResourceUsage")
+        >(exchange, "Arrange ResourceUsage", MergeBatcher::new)
         .trace;
     let token: Rc<dyn std::any::Any> = Rc::new(());
     let collection = LogCollection { trace, token };
