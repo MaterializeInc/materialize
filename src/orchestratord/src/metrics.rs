@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{Extension, Router, body::Body, routing::get};
@@ -19,10 +20,16 @@ use tracing::{Level, Span};
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 
+use crate::reconcile;
+
 #[derive(Debug)]
 pub struct Metrics {
     pub is_leader: UIntGauge,
     pub environmentd_needs_update: UIntGauge,
+    /// Metrics covering the reconciliation loop itself, shared by every
+    /// controller. Held behind an `Arc` because the controllers and the
+    /// wrappers that observe them each need a handle.
+    pub reconcile: Arc<reconcile::Metrics>,
 }
 
 impl Metrics {
@@ -38,6 +45,7 @@ impl Metrics {
                     name: "environmentd_needs_update",
                     help: "Count of organizations in this cluster which are running outdated pod templates. Only the operator replica holding the leadership lease reconciles, so the others report zero.",
                 }),
+            reconcile: Arc::new(reconcile::Metrics::register_into(registry)),
         }
     }
 

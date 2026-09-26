@@ -25,6 +25,7 @@ use kube::{
     Api, Client, Resource, ResourceExt,
     api::{ListParams, PostParams},
     runtime::controller::Action,
+    runtime::events::{Event, EventType},
 };
 use tracing::{debug, trace, warn};
 use uuid::Uuid;
@@ -36,6 +37,7 @@ use crate::{
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
     parse_image_tag,
+    reconcile::{self, Outcome},
     tls::{DefaultCertificateSpecs, issuer_ref_defined, resolved_dns_names},
 };
 use mz_cloud_provider::CloudProvider;
@@ -53,6 +55,11 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
 pub mod generation;
 pub mod global;
+
+/// The `controller` label that this controller's metrics and Kubernetes events
+/// carry. Shared by `Observed` and by every step this controller records, which
+/// must agree for a pass and its steps to line up.
+pub const CONTROLLER_NAME: &str = "materialize";
 
 #[derive(Clone)]
 pub struct Config {
@@ -135,11 +142,16 @@ pub struct Config {
 pub struct Context {
     config: Config,
     metrics: Arc<Metrics>,
+    publisher: Arc<reconcile::Publisher>,
     needs_update: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Context {
-    pub fn new(config: Config, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        config: Config,
+        metrics: Arc<Metrics>,
+        publisher: Arc<reconcile::Publisher>,
+    ) -> Self {
         if config.cloud_provider == CloudProvider::Aws {
             assert!(
                 config.aws_account_id.is_some(),
@@ -150,8 +162,32 @@ impl Context {
         Self {
             config,
             metrics,
+            publisher,
             needs_update: Default::default(),
         }
+    }
+
+    /// Starts recording the step named `step` of this controller's
+    /// reconciliation.
+    fn step(&self, step: &'static str) -> reconcile::Step<'_> {
+        self.metrics.reconcile.step(CONTROLLER_NAME, step)
+    }
+
+    /// Deletes `generation`'s resources, releasing the read holds its
+    /// environmentd was keeping.
+    async fn teardown_generation(
+        &self,
+        client: &Client,
+        mz: &Materialize,
+        resources: &generation::Resources,
+        generation: u64,
+    ) -> Result<(), Error> {
+        let step = self.step("teardown_generation");
+        resources
+            .teardown_generation(client, mz, generation)
+            .await?;
+        step.finish(Outcome::Applied);
+        Ok(())
     }
 
     fn set_needs_update(&self, mz: &Materialize, needs_update: bool) {
@@ -164,6 +200,39 @@ impl Context {
         self.metrics
             .environmentd_needs_update
             .set(u64::cast_from(needs_update_set.len()));
+    }
+
+    /// Reports a lifecycle transition as a Kubernetes event on the resource.
+    ///
+    /// The condition's own `reason` and `message` become the event's, so the
+    /// vocabulary an operator sees in `kubectl describe` is the one the status
+    /// already reports: `Applying`, `ReadyToPromote`, `Promoting`, `Applied`,
+    /// `WaitingForApproval`, `RolloutTimeout`, `FailedDeploy`. Keep those
+    /// stable, since they are what a dashboard groups on.
+    ///
+    /// A `FailedDeploy` reports here and again from the generic reconciliation
+    /// wrapper, which files the error itself. The two carry different halves of
+    /// the picture, the phase and the cause, and the reasons tell them apart.
+    ///
+    /// These do not aggregate the way repeated failures do, so each transition
+    /// is its own event carrying its own message. Two things make that so: a
+    /// transition only reports when the status actually moved, and a pass that
+    /// ends cleanly forgets what the resource published. A transition reported
+    /// from a pass that then fails is the exception, and there aggregating is
+    /// right, since the retry is reporting the same phase again.
+    async fn publish_transition(&self, mz: &Materialize, condition: &Condition) {
+        self.publisher
+            .publish(
+                mz,
+                Event {
+                    type_: transition_event_type(condition),
+                    reason: condition.reason.clone(),
+                    action: "Reconcile".into(),
+                    note: Some(condition.message.clone()),
+                    secondary: None,
+                },
+            )
+            .await;
     }
 
     async fn update_status(
@@ -184,10 +253,26 @@ impl Context {
             return Ok(new_mz);
         }
 
+        // Reaching here is the definition of a transition: the guard above
+        // returns early unless the status moved, comparing everything but the
+        // timestamp. That is what keeps this to one event per transition in a
+        // reconciler that re-runs on every watch event.
+        //
+        // The exception is the pass that gives a new resource its first status,
+        // which carries no conditions yet and so reports no phase.
+        let condition = status.conditions.first().cloned();
         new_mz.status = Some(status);
-        mz_api
+        let new_mz = mz_api
             .replace_status(&mz.name_unchecked(), &PostParams::default(), &new_mz)
-            .await
+            .await?;
+
+        // Only once the status is durable, so that no event claims a transition
+        // that failed to persist.
+        if let Some(condition) = condition {
+            self.publish_transition(mz, &condition).await;
+        }
+
+        Ok(new_mz)
     }
 
     async fn promote(
@@ -199,11 +284,14 @@ impl Context {
         desired_generation: u64,
         resources_hash: String,
     ) -> Result<Option<Action>, Error> {
+        let step = self.step("promote");
         if let Some(action) = resources.promote_services(client, &mz.namespace()).await? {
+            step.finish(Outcome::Waiting);
             return Ok(Some(action));
         }
-        resources
-            .teardown_generation(client, mz, active_generation)
+        step.finish(Outcome::Applied);
+
+        self.teardown_generation(client, mz, &resources, active_generation)
             .await?;
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
         self.update_status(
@@ -291,12 +379,19 @@ impl k8s_controller::Context for Context {
 
         let status = mz.status();
         if mz.status.is_none() {
+            let step = self.step("initialize_status");
             self.update_status(&mz_api, mz, status, true).await?;
+            step.finish(Outcome::Applied);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
         }
 
+        // Everything from reading the license key through the uniqueness check
+        // is one step: it is all about settling on the environment id, and it
+        // is where a misconfigured license key stops a new environment before
+        // any of its resources exist.
+        let step = self.step("resolve_environment_id");
         let backend_secret = secret_api.get(&mz.spec.backend_secret_name).await?;
         let license_key_environment_id: Option<Uuid> = if let Some(license_key) = backend_secret
             .data
@@ -352,6 +447,7 @@ impl k8s_controller::Context for Context {
             mz_api
                 .replace(&mz.name_unchecked(), &PostParams::default(), &mz)
                 .await?;
+            step.finish(Outcome::Applied);
             // Updating the spec should also trigger a reconciliation.
             // We can't do that as part of the above check because you can't
             // update both the spec and the status in a single api call.
@@ -372,10 +468,13 @@ impl k8s_controller::Context for Context {
         }
 
         self.check_environment_id_conflicts(&client, mz).await?;
+        step.finish(Outcome::Applied);
 
+        let step = self.step("global_resources");
         global::Resources::new(&self.config, mz)?
             .apply(&client, &mz.namespace())
             .await?;
+        step.finish(Outcome::Applied);
 
         // we compare the hash against the environment resources generated
         // for the current active generation, since that's what we expect to
@@ -441,8 +540,7 @@ impl k8s_controller::Context for Context {
                             );
                             // Tear down the un-promoted generation to release
                             // its read holds.
-                            resources
-                                .teardown_generation(&client, mz, next_generation)
+                            self.teardown_generation(&client, mz, &resources, next_generation)
                                 .await?;
                             self.update_status(
                                 &mz_api,
@@ -577,16 +675,17 @@ impl k8s_controller::Context for Context {
                     // The only reason someone would choose this strategy is if they didn't have
                     // space for the two generations of pods.
                     // Lets make room for the new ones by deleting the old generation.
-                    resources
-                        .teardown_generation(&client, mz, active_generation)
+                    self.teardown_generation(&client, mz, &resources, active_generation)
                         .await?;
                 }
 
                 trace!("applying environment resources");
-                match resources
+                let step = self.step("generation_resources");
+                let applied = resources
                     .apply(&client, mz.should_force_promote(), &mz.namespace())
-                    .await
-                {
+                    .await;
+                step.finish_with(&applied);
+                match applied {
                     Ok(Some(action)) => {
                         trace!("new environment is not yet ready");
                         Ok(Some(action))
@@ -721,8 +820,7 @@ impl k8s_controller::Context for Context {
             (false, true, false) => {
                 let mut needs_update = mz.conditions_need_update();
                 if mz.update_in_progress() {
-                    resources
-                        .teardown_generation(&client, mz, next_generation)
+                    self.teardown_generation(&client, mz, &resources, next_generation)
                         .await?;
                     needs_update = true;
                 }
@@ -764,8 +862,7 @@ impl k8s_controller::Context for Context {
                 // WaitingForApproval.
                 let mut needs_update = mz.conditions_need_update() || mz.rollout_requested();
                 if mz.update_in_progress() {
-                    resources
-                        .teardown_generation(&client, mz, next_generation)
+                    self.teardown_generation(&client, mz, &resources, next_generation)
                         .await?;
                     needs_update = true;
                 }
@@ -809,6 +906,7 @@ impl k8s_controller::Context for Context {
         // enforced by the environmentd rollout process being able to call
         // into the promotion endpoint
 
+        let step = self.step("balancer");
         if self.config.create_balancers {
             let balancer = Balancer {
                 metadata: mz.managed_resource_meta(mz.name_unchecked()),
@@ -838,8 +936,14 @@ impl k8s_controller::Context for Context {
             };
             let balancer = apply_resource(&balancer_api, &balancer).await?;
             result = wait_for_balancer(&balancer)?;
+            step.finish(match result {
+                // The balancer is not ready yet, so we will be back.
+                Some(_) => Outcome::Waiting,
+                None => Outcome::Applied,
+            });
         } else {
             delete_resource(&balancer_api, &mz.name_unchecked()).await?;
+            step.finish(Outcome::Skipped);
         }
 
         if let Some(action) = result {
@@ -849,6 +953,7 @@ impl k8s_controller::Context for Context {
         // and the console relies on the balancer service existing, which is
         // enforced by wait_for_balancer
 
+        let step = self.step("console");
         if self.config.create_console {
             let active_environmentd_image_ref = mz.active_environmentd_image_ref();
             let environmentd_image_tag =
@@ -895,8 +1000,10 @@ impl k8s_controller::Context for Context {
                 status: None,
             };
             apply_resource(&console_api, &console).await?;
+            step.finish(Outcome::Applied);
         } else {
             delete_resource(&console_api, &mz.name_unchecked()).await?;
+            step.finish(Outcome::Skipped);
         }
 
         Ok(result)
@@ -915,6 +1022,26 @@ impl k8s_controller::Context for Context {
     }
 }
 
+/// The severity to report a lifecycle transition at.
+///
+/// `UpToDate=False` says the environment is not up to date, which is worth
+/// flagging for every reason that reports it but one. Waiting for approval is
+/// the operator doing exactly what it was configured to do, and a rollout
+/// nobody has requested yet is not a problem; reporting it as a warning would
+/// teach people to ignore warnings on Materialize resources. `Unknown` is a
+/// rollout under way, which is also not a problem.
+///
+/// A reason this does not recognize falls back to the condition's status, so a
+/// failure reason added later reports as a warning without having to be named
+/// here.
+fn transition_event_type(condition: &Condition) -> EventType {
+    match condition.reason.as_str() {
+        "WaitingForApproval" => EventType::Normal,
+        _ if condition.status == "False" => EventType::Warning,
+        _ => EventType::Normal,
+    }
+}
+
 fn wait_for_balancer(balancer: &Balancer) -> Result<Option<Action>, Error> {
     if let Some(conditions) = balancer
         .status
@@ -930,4 +1057,45 @@ fn wait_for_balancer(balancer: &Balancer) -> Result<Option<Action>, Error> {
     }
 
     Ok(Some(Action::requeue(Duration::from_secs(1))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn condition(status: &str, reason: &str) -> Condition {
+        Condition {
+            type_: "UpToDate".into(),
+            status: status.into(),
+            reason: reason.into(),
+            message: String::new(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: None,
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_transition_event_type() {
+        // Every condition this controller writes, and how loudly it should be
+        // reported. Keep this in step with the `Condition`s built above.
+        for (status, reason, expected) in [
+            ("True", "Applied", EventType::Normal),
+            ("Unknown", "Applying", EventType::Normal),
+            ("Unknown", "ReadyToPromote", EventType::Normal),
+            ("Unknown", "Promoting", EventType::Normal),
+            // Not up to date, but by configuration rather than by failure.
+            ("False", "WaitingForApproval", EventType::Normal),
+            ("False", "FailedDeploy", EventType::Warning),
+            ("False", "RolloutTimeout", EventType::Warning),
+            // An unrecognized reason is judged by its status.
+            ("False", "SomeFutureFailure", EventType::Warning),
+            ("Unknown", "SomeFuturePhase", EventType::Normal),
+        ] {
+            assert_eq!(
+                transition_event_type(&condition(status, reason)),
+                expected,
+                "status={status} reason={reason}",
+            );
+        }
+    }
 }
