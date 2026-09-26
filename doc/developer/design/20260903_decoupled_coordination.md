@@ -482,6 +482,17 @@ completion covers C, directly or through a barrier at least C.
 This coordination cost is accepted. Batching remains an implementation choice.
 Replicas write independently, not through the adapter or table-write worker.
 
+Inherited oracle/catalog progress and its necessary monotonic advancement retain
+log-and-proceed behavior. A future timestamp already inherited from that state
+must not block bootstrap or heartbeats. Genuinely new future jumps remain subject
+to precommit protection, including when advancing an empty catalog upper. This
+does not add clock synchronization or new clock-recovery guarantees.
+
+Clock fixtures may explicitly enable a fixture-owned shared mock clock for
+catalog/oracle allocation and checks, supporting clock changes and restarts.
+Source clocks, Persist lease clocks and scheduling timers remain unchanged.
+The fixture clock is not a production clock service or a timestamp-policy bypass.
+
 ### Planning and catalog freshness
 
 A current-data strict serializable statement selecting its own timestamp T on

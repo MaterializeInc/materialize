@@ -1303,8 +1303,10 @@ impl<'a> RunnerInner<'a> {
         let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
         let server_config = mz_environmentd::Config {
             catalog_config,
-            timestamp_oracle_url: Some(timestamp_oracle_url),
+            timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
             controller: ControllerConfig {
+                timestamp_oracle_url: Some(timestamp_oracle_url),
+                timestamp_oracle_clock_file: None,
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,
                 clusterd_image: "clusterd".into(),

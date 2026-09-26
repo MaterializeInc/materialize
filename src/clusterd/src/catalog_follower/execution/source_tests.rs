@@ -74,6 +74,7 @@ async fn catalog_counter_ingests_after_writer_and_query_drop() {
         replica_id: cluster.replicas().next().unwrap().replica_id,
         deploy_generation: 0,
         persist_location: location,
+        timestamp_oracle: follower::tests::timestamp_oracle(),
         build_info: writer.config().build_info,
     };
 

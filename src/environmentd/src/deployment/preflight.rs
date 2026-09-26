@@ -40,6 +40,7 @@ pub struct CatchupConfig {
     pub deploy_generation: u64,
     pub deployment_state: DeploymentState,
     pub catalog_metrics: Arc<Metrics>,
+    pub timestamp_oracle: mz_catalog::durable::CatalogTimestampOracle,
     pub caught_up_max_wait: Duration,
     pub ddl_check_interval: Duration,
     pub panic_after_timeout: bool,
@@ -84,6 +85,7 @@ pub fn spawn_catchup(
         deploy_generation,
         deployment_state,
         catalog_metrics,
+        timestamp_oracle,
         caught_up_max_wait,
         ddl_check_interval,
         panic_after_timeout,
@@ -202,6 +204,7 @@ pub fn spawn_catchup(
             BUILD_INFO.semver_version(),
             Some(deploy_generation),
             Arc::clone(&catalog_metrics),
+            Some(timestamp_oracle),
         )
         .await
         .expect("incompatible catalog/persist version");
@@ -234,6 +237,7 @@ async fn check_ddl_changes(
         BUILD_INFO.semver_version(),
         Some(deploy_generation),
         catalog_metrics,
+        None,
     )
     .await
     .expect("incompatible catalog/persist version");
@@ -370,6 +374,25 @@ mod tests {
 
     use crate::deployment::state::DeploymentStateHandle;
 
+    #[derive(Debug)]
+    struct PromotionOracle;
+
+    #[async_trait::async_trait]
+    impl mz_timestamp_oracle::TimestampOracle<Timestamp> for PromotionOracle {
+        async fn write_ts(&self) -> mz_timestamp_oracle::WriteTimestamp<Timestamp> {
+            panic!("readiness checks must not write promotion timestamps")
+        }
+        async fn peek_write_ts(&self) -> Timestamp {
+            panic!("readiness checks must not access the promotion oracle")
+        }
+        async fn read_ts(&self) -> Timestamp {
+            panic!("readiness checks must not access the promotion oracle")
+        }
+        async fn apply_write(&self, _: Timestamp) {
+            panic!("readiness checks must not complete promotion timestamps")
+        }
+    }
+
     async fn setup() -> (
         TestCatalogStateBuilder,
         CatchupConfig,
@@ -406,6 +429,10 @@ mod tests {
             deploy_generation: 1,
             deployment_state,
             catalog_metrics: metrics,
+            timestamp_oracle: mz_catalog::durable::CatalogTimestampOracle::new(
+                Arc::new(PromotionOracle),
+                SYSTEM_TIME.clone(),
+            ),
             caught_up_max_wait: Duration::from_secs(1),
             ddl_check_interval: Duration::from_millis(10),
             panic_after_timeout: false,

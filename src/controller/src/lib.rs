@@ -78,6 +78,11 @@ pub struct ControllerConfig {
     pub orchestrator: Arc<dyn Orchestrator>,
     /// The persist location where all storage collections will be written to.
     pub persist_location: PersistLocation,
+    /// The shared EpochMilliseconds oracle used by replica catalog writers.
+    pub timestamp_oracle_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Explicit fixture clock shared with local replica catalog writers.
+    /// Only timestamp allocation and policy checks may use this clock.
+    pub timestamp_oracle_clock_file: Option<std::path::PathBuf>,
     /// A process-global cache of (blob_uri, consensus_uri) ->
     /// PersistClient.
     /// This is intentionally shared between workers.
@@ -177,6 +182,8 @@ pub struct Controller {
 
     /// Catalog access supplied to replicas in writable protected environments.
     catalog_persist_location: Option<PersistLocation>,
+    catalog_timestamp_oracle_url: Option<mz_ore::url::SensitiveUrl>,
+    timestamp_oracle_clock_file: Option<std::path::PathBuf>,
 
     /// Opaque serialized reconstruction inputs supplied by the catalog owner.
     catalog_follower_config: Option<String>,
@@ -314,6 +321,8 @@ impl Controller {
             now: _,
             persist_pubsub_url: _,
             catalog_persist_location: _,
+            catalog_timestamp_oracle_url: _,
+            timestamp_oracle_clock_file: _,
             catalog_follower_config: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
@@ -768,6 +777,8 @@ impl Controller {
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
             catalog_persist_location,
+            catalog_timestamp_oracle_url: config.timestamp_oracle_url,
+            timestamp_oracle_clock_file: config.timestamp_oracle_clock_file,
             catalog_follower_config: None,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),

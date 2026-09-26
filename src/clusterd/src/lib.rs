@@ -113,7 +113,7 @@ struct Args {
     persist_pubsub_url: String,
 
     /// The cluster whose committed catalog state this replica follows.
-    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_config"])]
+    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_timestamp_oracle_url", "catalog_config"])]
     catalog_cluster_id: Option<mz_controller_types::ClusterId>,
     /// Serialized non-runtime configuration for catalog reconstruction.
     #[clap(long, requires = "catalog_cluster_id")]
@@ -130,6 +130,12 @@ struct Args {
     /// Persist consensus location for committed catalog and written plans.
     #[clap(long, requires = "catalog_cluster_id")]
     catalog_persist_consensus_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Shared EpochMilliseconds oracle for catalog publications.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_timestamp_oracle_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Fixture-owned clock file for catalog timestamp allocation and policy checks only.
+    #[clap(long, hide = true, requires = "catalog_cluster_id")]
+    timestamp_oracle_clock_file: Option<PathBuf>,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -450,7 +456,31 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .as_deref()
                 .expect("required with cluster identity"),
         )?;
+        // Reject incompatible plan namespaces before opening network backends.
+        reconstruction.plan_build_version(&BUILD_INFO)?;
+        let oracle_config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
+            args.catalog_timestamp_oracle_url
+                .as_ref()
+                .expect("required with cluster identity"),
+            &metrics_registry,
+        )?;
+        let timestamp_oracle_now = match args.timestamp_oracle_clock_file {
+            Some(path) => mz_timestamp_oracle::fixture_clock::open(path)?,
+            None => SYSTEM_TIME.clone(),
+        };
+        let timestamp_oracle = mz_catalog::durable::CatalogTimestampOracle::new(
+            oracle_config
+                .open(
+                    mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                    mz_repr::Timestamp::MIN,
+                    timestamp_oracle_now.clone(),
+                    false,
+                )
+                .await,
+            timestamp_oracle_now,
+        );
         let config = catalog_follower::Config {
+            timestamp_oracle,
             reconstruction,
             environment_id,
             connection_context: connection_context.clone(),

@@ -416,6 +416,11 @@ impl Controller {
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let catalog_persist_location = self.catalog_persist_location.clone();
         let catalog_follower_config = self.catalog_follower_config.clone();
+        let catalog_timestamp_oracle_url = self.catalog_timestamp_oracle_url.clone();
+        let timestamp_oracle_clock_file = self.timestamp_oracle_clock_file.clone();
+        if catalog_persist_location.is_some() && catalog_timestamp_oracle_url.is_none() {
+            anyhow::bail!("catalog timestamp oracle URL must be set before provisioning replicas");
+        }
         if catalog_persist_location.is_some() && catalog_follower_config.is_none() {
             anyhow::bail!("catalog follower config must be set before provisioning replicas");
         }
@@ -516,6 +521,13 @@ impl Controller {
                             format!("--catalog-replica-id={replica_id}"),
                             format!("--catalog-deploy-generation={deploy_generation}"),
                             format!(
+                                "--catalog-timestamp-oracle-url={}",
+                                catalog_timestamp_oracle_url
+                                    .as_ref()
+                                    .expect("checked before provisioning")
+                                    .to_string_unredacted()
+                            ),
+                            format!(
                                 "--catalog-config={}",
                                 catalog_follower_config
                                     .as_ref()
@@ -530,6 +542,9 @@ impl Controller {
                                 location.consensus_uri.to_string_unredacted()
                             ),
                         ]);
+                        if let Some(path) = &timestamp_oracle_clock_file {
+                            args.push(format!("--timestamp-oracle-clock-file={}", path.display()));
+                        }
                     }
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(

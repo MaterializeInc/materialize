@@ -90,6 +90,9 @@ pub struct Args {
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: SensitiveUrl,
+    /// Shared EpochMilliseconds oracle URL. Required for edit and delete.
+    #[clap(long, env = "TIMESTAMP_ORACLE_URL")]
+    timestamp_oracle_url: Option<SensitiveUrl>,
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -214,6 +217,26 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
+    let timestamp_oracle = if matches!(&args.action, Action::Edit { .. } | Action::Delete { .. }) {
+        let url = args
+            .timestamp_oracle_url
+            .as_ref()
+            .context("catalog writes require an explicit --timestamp-oracle-url")?;
+        let config = mz_timestamp_oracle::TimestampOracleConfig::from_url(url, &metrics_registry)?;
+        Some(mz_catalog::durable::CatalogTimestampOracle::new(
+            config
+                .open(
+                    mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                    Timestamp::MIN,
+                    SYSTEM_TIME.clone(),
+                    false,
+                )
+                .await,
+            SYSTEM_TIME.clone(),
+        ))
+    } else {
+        None
+    };
     let start = Instant::now();
     // It's important that the version in this `BUILD_INFO` is kept in sync with the build
     // info used to write data to the persist catalog.
@@ -234,6 +257,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         BUILD_INFO.semver_version(),
         args.deploy_generation,
         metrics,
+        timestamp_oracle,
     )
     .await?;
 

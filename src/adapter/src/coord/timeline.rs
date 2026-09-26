@@ -155,7 +155,7 @@ impl Coordinator {
         &self,
         timestamp: Timestamp,
     ) -> impl Future<Output = ()> + Send + 'static {
-        let now = self.now().into();
+        let now = (self.timestamp_oracle_now)().into();
         check_runaway_write_ts(&now, timestamp);
 
         let oracle = self.get_local_timestamp_oracle();
@@ -198,7 +198,7 @@ impl Coordinator {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
-            self.catalog().config().now.clone(),
+            self.timestamp_oracle_now.clone(),
             self.timestamp_oracle_config.clone(),
             &mut self.global_timelines,
             self.read_only_controllers,
@@ -371,20 +371,7 @@ impl Coordinator {
     }
 }
 
-/// The highest timestamp the `EpochMilliseconds` write timeline may be advanced to
-/// while the wall clock reads `now`.
-///
-/// A write above this is a runaway: the oracle is monotone and durable, so every later
-/// write and strict-serializable read on the timeline blocks until the wall clock catches
-/// up, across restarts. Group commit stays under it by allocating from the oracle, which
-/// clamps to the clock. A caller that chooses its own write timestamp has to be checked
-/// against it, see `GroupCommitter::commit_timestamped`.
-pub(crate) fn write_ts_upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
-    const TIMESTAMP_INTERVAL_MS: u64 = 5000;
-    const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
-
-    now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
-}
+pub(crate) use mz_timestamp_oracle::write_ts_upper_bound;
 
 /// Reports a write timestamp that is further ahead of `now` than
 /// [`write_ts_upper_bound`] allows, the signal that the `EpochMilliseconds` timeline has

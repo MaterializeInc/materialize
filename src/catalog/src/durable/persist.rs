@@ -400,6 +400,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     bootstrap_complete: bool,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
+    timestamp_oracle: Option<crate::durable::CatalogTimestampOracle>,
     /// Snapshot size at the last amortized consolidation, used by
     /// [`Self::maybe_consolidate`] to decide when to consolidate. Initialized
     /// lazily on the first call.
@@ -438,6 +439,16 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         updates: Vec<(S, Diff)>,
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
+        self.validate_runtime()?;
+        let (commit_ts, allocation) = if let Some(oracle) = &self.timestamp_oracle {
+            // Every entry point, including bootstrap, upgrades and debug edits,
+            // must allocate after preceding reads. A rebased upper is a lower
+            // bound, not a substitute for that oracle allocation.
+            let allocated = oracle.oracle.write_ts().await.timestamp;
+            (max(commit_ts, max(self.upper, allocated)), Some(allocated))
+        } else {
+            (commit_ts, None)
+        };
         let mut traffic = [(0u64, 0u64); 3];
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
@@ -452,9 +463,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 .expect("row length fits in u64");
             ((row, ()), commit_ts, diff.into_inner())
         });
-        let next_upper = commit_ts.step_forward();
         // Upper mismatches are classified by the commit and advance callers.
-        self.compare_and_append_inner(updates, next_upper).await?;
+        let next_upper = self
+            .compare_and_append_inner(updates, commit_ts, allocation)
+            .await?;
 
         // Publication succeeded even if the subsequent local sync fails.
         for ((updates, bytes), (update_count, byte_count)) in
@@ -467,7 +479,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         Ok(next_upper)
     }
 
-    /// Compare-and-append `updates` to the catalog shard, advancing the upper to `next_upper`.
+    /// Compare-and-append `updates` at `commit_ts`, returning its successor upper.
+    /// An oracle allocation identifies a content commit requiring completion.
+    /// Empty prefix advances do not complete an oracle write.
     ///
     /// On success, updating `self.upper` is left to the caller. The caller can thus decide whether
     /// or not it needs to sync the catalog.
@@ -475,20 +489,42 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// # Panics
     ///
     /// Panics if not in `Writable` mode.
-    /// Panics if `next_upper` is not greater than `self.upper`.
+    /// Panics if `commit_ts` is less than `self.upper`.
     async fn compare_and_append_inner(
         &mut self,
         updates: impl IntoIterator<Item = ((SourceData, ()), Timestamp, StorageDiff)>,
-        next_upper: Timestamp,
-    ) -> Result<(), CompareAndAppendError> {
+        commit_ts: Timestamp,
+        allocation: Option<Timestamp>,
+    ) -> Result<Timestamp, CompareAndAppendError> {
         self.validate_runtime()?;
         assert_eq!(self.mode, Mode::Writable);
         assert!(
-            next_upper > self.upper,
-            "next_upper ({next_upper}) not greater than current upper ({})",
+            commit_ts >= self.upper,
+            "commit timestamp ({commit_ts}) is less than current upper ({})",
             self.upper,
         );
 
+        if let Some(oracle) = self.timestamp_oracle.clone() {
+            // Ordinary empty prefix advances need no extra oracle call. Only
+            // outliers need to establish inherited progress beyond this handle.
+            let inherited = self.upper.max(allocation.unwrap_or(Timestamp::MIN));
+            if oracle.check_timestamp(commit_ts, inherited).is_err() {
+                // A peer may have durably introduced this progress since our
+                // snapshot. Refresh before classifying it as a new jump. Return
+                // any advancement to the caller's normal conflict validation.
+                let expected_upper = self.upper;
+                self.sync_to_current_upper().await?;
+                if self.upper != expected_upper {
+                    return Err(CompareAndAppendError::UpperMismatch {
+                        expected_upper,
+                        actual_upper: self.upper,
+                    });
+                }
+                let inherited = self.upper.max(oracle.oracle.peek_write_ts().await);
+                oracle.check_timestamp(commit_ts, inherited)?;
+            }
+        }
+        let next_upper = commit_ts.step_forward();
         let res = self
             .write_handle
             .compare_and_append(
@@ -504,6 +540,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             // Sync to the current upper to detect that.
             self.sync_to_current_upper().await?;
             return Err(e.into());
+        }
+
+        if allocation.is_some()
+            && let Some(oracle) = &self.timestamp_oracle
+        {
+            // Durability precedes completion, which precedes acknowledgement.
+            // Do this before any local sync that can fail after publication.
+            oracle.oracle.apply_write(commit_ts).await;
         }
 
         // Lag the shard's upper by 1 to keep it readable.
@@ -522,7 +566,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}");
         }
 
-        Ok(())
+        Ok(next_upper)
     }
 
     /// Accepts an upper mismatch caused only by empty progress.
@@ -1106,6 +1150,7 @@ impl UnopenedPersistCatalogState {
         version: semver::Version,
         deploy_generation: Option<u64>,
         metrics: Arc<Metrics>,
+        timestamp_oracle: Option<crate::durable::CatalogTimestampOracle>,
     ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
         let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
         debug!(?catalog_shard_id, "new persist backed catalog state");
@@ -1205,6 +1250,7 @@ impl UnopenedPersistCatalogState {
             catalog_content_version: version,
             bootstrap_complete: false,
             metrics,
+            timestamp_oracle,
             size_at_last_consolidation: None,
             updates_applied: 0,
         };
@@ -1451,6 +1497,7 @@ impl UnopenedPersistCatalogState {
             catalog_content_version: self.catalog_content_version,
             bootstrap_complete: false,
             metrics: self.metrics,
+            timestamp_oracle: self.timestamp_oracle,
             size_at_last_consolidation: None,
             updates_applied: 0,
         };
@@ -1953,6 +2000,7 @@ impl CatalogSnapshotReader {
             version,
             None,
             Arc::new(Metrics::new(&mz_ore::metrics::MetricsRegistry::new())),
+            None,
         )
         .await?
         .open_inner(
@@ -2333,8 +2381,14 @@ impl DurableCatalogState for PersistCatalogState {
                 }
             }
 
-            match self.compare_and_append_inner([], new_upper).await {
-                Ok(()) => {
+            // This only certifies an empty catalog prefix. In particular, a
+            // table writer calls it before its own durable append, so it must
+            // not announce completion of that writer's timestamp.
+            match self
+                .compare_and_append_inner([], new_upper.step_back().expect("advancing upper"), None)
+                .await
+            {
+                Ok(_) => {
                     self.upper = new_upper;
                     // No sync needed since no data was written.
                     return Ok(());

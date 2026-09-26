@@ -74,6 +74,13 @@ pub enum DurableCatalogError {
     /// The proposed transaction violates durable read protection.
     #[error("invalid read protection: {0}")]
     InvalidReadProtection(String),
+    /// The caller tried to introduce a future jump beyond both wall-clock policy
+    /// and inherited oracle/catalog progress.
+    #[error("catalog timestamp {timestamp} exceeds permitted upper bound {limit}")]
+    TimestampTooFarAhead {
+        timestamp: Timestamp,
+        limit: Timestamp,
+    },
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),

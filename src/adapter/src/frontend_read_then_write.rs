@@ -933,6 +933,7 @@ impl PeekClient {
         let (determination, read_holds) = self
             .frontend_determine_timestamp(
                 session,
+                catalog.state(),
                 &bundle,
                 &QueryWhen::FreshestTableWrite,
                 cluster_id,

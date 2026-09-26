@@ -19,11 +19,26 @@ use mz_ore::now::{EpochMillis, NowFn};
 
 pub mod batching_oracle;
 pub mod config;
+pub mod fixture_clock;
 pub mod metrics;
 pub mod postgres_oracle;
 pub mod retry;
 
 pub use config::TimestampOracleConfig;
+
+/// Largest timestamp that an EpochMilliseconds writer may introduce while the
+/// wall clock reads `now`. Check the actual candidate before making it durable,
+/// including after rebasing against another writer's progress.
+///
+/// The oracle is monotone across restarts. A timestamp far ahead of the clock
+/// stalls subsequent writes and strict-serializable reads until the clock catches
+/// up. Oracle allocation alone is not a bound on this skew.
+pub fn write_ts_upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
+    const TIMESTAMP_INTERVAL_MS: u64 = 5000;
+    const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
+
+    now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
+}
 
 /// Timestamps used by writes in an Append command.
 #[derive(Debug)]

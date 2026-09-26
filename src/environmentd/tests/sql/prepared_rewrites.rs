@@ -111,6 +111,7 @@ async fn run_inner(conflict: Conflict) {
         Arc::new(mz_catalog::durable::Metrics::new(
             &mz_ore::metrics::MetricsRegistry::new(),
         )),
+        Some(server.catalog_timestamp_oracle().await),
     )
     .await
     .unwrap();
