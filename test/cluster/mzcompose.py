@@ -1913,10 +1913,8 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
             redacted_create_sql \
         FROM mz_views;
         CREATE DEFAULT INDEX ON v_mz_views;
-
-        > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u2
     """))
+        [(index_id,)] = c.sql_query("SELECT id FROM mz_indexes WHERE id LIKE 'u%'")
         c.kill("materialized")
 
     with c.override(
@@ -1924,10 +1922,13 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         Materialized(),
     ):
         c.up("materialized", Service("testdrive", idle=True))
-        c.testdrive(input=dedent("""
-        > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u2
-    """))
+        c.testdrive(
+            input=dedent("""
+                > SELECT id FROM mz_indexes WHERE id LIKE 'u%';
+                ${created-index-id}
+            """),
+            args=[f"--var=created-index-id={index_id}"],
+        )
 
 
 def workflow_test_timestamp_interval_catalog_persistence(c: Composition) -> None:
@@ -6825,7 +6826,9 @@ def workflow_test_adhoc_system_indexes(
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name = 'mz_test_idx1'
         """)
-    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
+    index1_id = output[0][0]
+    assert index1_id.startswith("u"), output
+    assert output[0] == (index1_id, "mz_tables", "mz_catalog_server"), output
     output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert "mz_test_idx1" in output[0][0], output
     output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 8")
@@ -6852,8 +6855,10 @@ def workflow_test_adhoc_system_indexes(
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name = 'mz_test_idx2'
         """)
+    index2_id = output[0][0]
+    assert index2_id.startswith("u") and index2_id != index1_id, output
     assert output[0] == (
-        "u2",
+        index2_id,
         "mz_compute_hydration_statuses",
         "mz_catalog_server",
     ), output
@@ -6877,11 +6882,11 @@ def workflow_test_adhoc_system_indexes(
         JOIN mz_objects o ON (i.on_id = o.id)
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name LIKE 'mz_test_idx%'
-        ORDER BY id
+        ORDER BY i.name
         """)
-    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
+    assert output[0] == (index1_id, "mz_tables", "mz_catalog_server"), output
     assert output[1] == (
-        "u2",
+        index2_id,
         "mz_compute_hydration_statuses",
         "mz_catalog_server",
     ), output
