@@ -1605,7 +1605,18 @@ fn test_cancel_read_then_write() {
                 );
             });
             std::thread::sleep(Duration::from_millis(100));
-            cancel_token.cancel_query(postgres::NoTls)?;
+            // Cancellation can arrive before the implicit commit queues for its
+            // lock. Keep requesting it until the operation ends. The joined
+            // thread must still report cancellation, not a successful write.
+            Retry::default()
+                .clamp_backoff(Duration::from_millis(100))
+                .max_duration(Duration::from_secs(10))
+                .retry(|_| {
+                    cancel_token.cancel_query(postgres::NoTls)?;
+                    anyhow::ensure!(handle2.is_finished(), "write has not finished cancellation");
+                    Ok::<_, anyhow::Error>(())
+                })
+                .unwrap();
             let mut client1 = handle1.join().unwrap();
             handle2.join().unwrap();
             let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);

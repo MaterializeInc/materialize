@@ -2110,13 +2110,6 @@ impl Coordinator {
                 return;
             }
 
-            tracing::info!(
-                %conn_id,
-                deferred_write = self.deferred_write_ops.contains_key(id_handle),
-                has_cancel_watch = self.connection_cancel_watches.contains_key(id_handle),
-                "PostgreSQL cancellation admitted",
-            );
-
             // Now that we've verified the secret key, this is a privileged
             // cancellation request. We can upgrade the raw connection ID to a
             // proper `IdHandle`.
