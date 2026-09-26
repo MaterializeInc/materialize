@@ -143,7 +143,7 @@ fn handles_available_after_insert_gone_after_remove() {
     assert!(registry.handles(&id, 1).is_none());
     assert!(registry.handles(&GlobalId::User(2), 0).is_none());
 
-    registry.remove(&id);
+    registry.remove(&id, 0);
     assert!(registry.handles(&id, 0).is_none());
 }
 
@@ -169,10 +169,10 @@ fn alias_shares_the_target_slot() {
     assert_eq!(registry.take_dirty(0), BTreeSet::from([target, alias]));
 
     // The alias outlives the target; removing the alias removes only the alias.
-    registry.remove(&target);
+    registry.remove(&target, 0);
     assert!(registry.handles(&target, 0).is_none());
     assert!(registry.handles(&alias, 0).is_some());
-    registry.remove(&alias);
+    registry.remove(&alias, 0);
     assert!(registry.handles(&alias, 0).is_none());
 }
 
@@ -278,11 +278,11 @@ fn alias_standing_holds_follow_the_target_then_the_aliases_meet() {
     assert_eq!(standing_hold(&target), at(5));
 
     // Once the target drops, the meet of the aliases' notes governs the point.
-    registry.remove(&target);
+    registry.remove(&target, 0);
     assert_eq!(standing_hold(&alias_a), at(10));
     registry.note_standing_hold(alias_a, 0, &at(30));
     assert_eq!(standing_hold(&alias_b), at(20));
-    registry.remove(&alias_b);
+    registry.remove(&alias_b, 0);
     registry.note_standing_hold(alias_a, 0, &at(40));
     assert_eq!(standing_hold(&alias_a), at(40));
 }
@@ -312,7 +312,7 @@ fn alias_of_an_alias_joins_the_root() {
 
     // Dropping the middle alias leaves the root governing, not the leaf alongside it.
     registry.note_standing_hold(root, 0, &at(5));
-    registry.remove(&middle);
+    registry.remove(&middle, 0);
     registry.note_standing_hold(leaf, 0, &at(10));
     assert_eq!(standing_hold(&leaf), at(5));
     let _ = registry.take_dirty(0);
@@ -320,7 +320,7 @@ fn alias_of_an_alias_joins_the_root() {
     assert_eq!(registry.take_dirty(0), BTreeSet::from([root, leaf]));
 
     // Once the root drops too, the leaf governs, and a re-export of the leaf joins it there.
-    registry.remove(&root);
+    registry.remove(&root, 0);
     assert_eq!(standing_hold(&leaf), at(10));
     let next = GlobalId::User(4);
     assert!(registry.publish_alias(next, leaf, 0, 1));
@@ -378,6 +378,63 @@ fn alias_bookkeeping_is_per_worker() {
 }
 
 #[mz_ore::test]
+fn root_removal_hands_over_only_its_worker() {
+    let root = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = ArrangementSharingRegistry::new();
+    for worker in 0..2 {
+        registry.get_or_create(root, worker, 2);
+        assert!(registry.publish_alias(alias, root, worker, 2));
+    }
+    let standing_hold = |worker| {
+        registry
+            .published_diagnostics(&alias, worker)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+    for worker in 0..2 {
+        registry.note_standing_hold(root, worker, &at(5));
+        registry.note_standing_hold(alias, worker, &at(10));
+    }
+
+    // Worker 0 drops the root. The alias governs worker 0's point, and the root still governs
+    // worker 1's.
+    registry.remove(&root, 0);
+    assert_eq!(standing_hold(0), at(10));
+    registry.note_standing_hold(alias, 1, &at(12));
+    assert_eq!(standing_hold(1), at(5));
+    registry.note_standing_hold(root, 1, &at(7));
+    assert_eq!(standing_hold(1), at(7));
+}
+
+#[mz_ore::test]
+fn alias_removal_keeps_its_holds_on_other_workers() {
+    let root = GlobalId::User(1);
+    let early = GlobalId::User(2);
+    let late = GlobalId::User(3);
+    let registry = ArrangementSharingRegistry::new();
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+    for worker in 0..2 {
+        registry.get_or_create(root, worker, 2);
+        assert!(registry.publish_alias(early, root, worker, 2));
+        assert!(registry.publish_alias(late, root, worker, 2));
+        registry.note_standing_hold(early, worker, &at(10));
+        registry.note_standing_hold(late, worker, &at(20));
+    }
+
+    // Worker 0 drops `early`. Worker 1 still has it, so when worker 1 drops the root, `early`'s
+    // hold bounds worker 1's point.
+    registry.remove(&early, 0);
+    registry.remove(&root, 1);
+    let standing_hold = registry
+        .published_diagnostics(&late, 1)
+        .expect("published")
+        .standing_hold;
+    assert_eq!(standing_hold, at(10));
+}
+
+#[mz_ore::test]
 fn republished_root_leaves_its_old_point_to_the_aliases() {
     let root = GlobalId::User(1);
     let alias = GlobalId::User(2);
@@ -394,7 +451,7 @@ fn republished_root_leaves_its_old_point_to_the_aliases() {
 
     // The root drops and its id is published again, over a new point. Its notes govern only that
     // point, and the alias's notes govern the one the alias still shares.
-    registry.remove(&root);
+    registry.remove(&root, 0);
     let _new_root_slot = registry.get_or_create(root, 0, 1);
     registry.note_standing_hold(root, 0, &at(7));
     registry.note_standing_hold(alias, 0, &at(12));
@@ -511,7 +568,7 @@ fn insert_dirties_only_its_worker() {
 }
 
 #[mz_ore::test]
-fn remove_dirties_all_registered_workers() {
+fn remove_dirties_its_worker() {
     let id = GlobalId::User(1);
     let registry = ArrangementSharingRegistry::new();
     registry.register_waker(0, thread::current());
@@ -521,10 +578,35 @@ fn remove_dirties_all_registered_workers() {
     publish_index_into(&registry, id, test_rows());
     let _ = registry.take_dirty(0);
 
-    // `remove` is not worker-specific: every registered worker must re-check `id`.
-    registry.remove(&id);
+    registry.remove(&id, 0);
     assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
-    assert_eq!(registry.take_dirty(1), BTreeSet::from([id]));
+    assert!(registry.take_dirty(1).is_empty());
+}
+
+#[mz_ore::test]
+fn remove_leaves_other_workers_slots() {
+    let id = GlobalId::User(1);
+    let registry = ArrangementSharingRegistry::new();
+    let first = registry.get_or_create(id, 0, 2);
+    registry.get_or_create(id, 1, 2);
+
+    registry.remove(&id, 0);
+    assert!(registry.handles(&id, 0).is_none());
+    assert!(
+        registry.handles(&id, 1).is_some(),
+        "worker 1's slot survives"
+    );
+
+    // Worker 0 publishes `id` again before worker 1 has dropped the old one. Worker 1's drop must
+    // not take worker 0's new slot.
+    let second = registry.get_or_create(id, 0, 2);
+    assert!(!Arc::ptr_eq(&first, &second));
+    registry.remove(&id, 1);
+    assert!(registry.handles(&id, 1).is_none());
+    assert!(
+        Arc::ptr_eq(&registry.get_or_create(id, 0, 2), &second),
+        "worker 0's new slot survives worker 1's drop"
+    );
 }
 
 #[mz_ore::test]

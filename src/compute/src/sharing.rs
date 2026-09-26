@@ -19,10 +19,6 @@
 //! is shared. Worker `i` publishes into slot `i`; a reader on worker `i` of another runtime looks up
 //! slot `i`, which is sound only because both sides shard keys by the same `key.hashed() % peers`.
 
-// TODO(CPU-215): drop once `crate::render` and `crate::compute_state` call this registry. Only the
-// registry's constructor is reachable yet, so the rest reads as dead.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Thread;
@@ -301,24 +297,28 @@ impl ArrangementSharingRegistry {
         true
     }
 
-    /// Removes all slots for `id`, called when the index drops.
+    /// Removes `id`'s slot on `worker_index`, called when that worker drops the index.
     ///
-    /// Dropping a root that still has aliases hands its shared points over to them: the points stay
-    /// reachable under the alias ids, and their frontiers move to the meet of what the aliases have
-    /// noted, since the shared trace compacts to exactly that from now on.
-    pub(crate) fn remove(&self, id: &GlobalId) {
+    /// Leaves the other workers' slots in place. Workers drop and re-create an index under the
+    /// same id without a barrier, so a worker that drops late must not take a slot a faster peer
+    /// has already published again.
+    ///
+    /// Dropping a root that still has aliases on `worker_index` hands its shared point over to
+    /// them: the point stays reachable under the alias ids, and its frontier moves to the meet of
+    /// what the aliases have noted, since the shared trace compacts to exactly that from now on.
+    pub(crate) fn remove(&self, id: &GlobalId, worker_index: usize) {
         let mut inner = self.lock();
         let Inner {
             map,
             wakers,
             aliases,
         } = &mut *inner;
-        if let Some(slots) = map.remove(id) {
-            for (worker_index, slot) in slots.iter().enumerate() {
-                let Some(slot) = slot else { continue };
-                if slot.root == *id {
-                    continue;
-                }
+        if let Some(slots) = map.get_mut(id) {
+            let removed = slots.get_mut(worker_index).and_then(Option::take);
+            if slots.iter().all(Option::is_none) {
+                map.remove(id);
+            }
+            if let Some(slot) = removed.filter(|slot| slot.root != *id) {
                 let key = (slot.root, worker_index);
                 if let Some(set) = aliases.aliases_of.get_mut(&key) {
                     set.remove(id);
@@ -328,29 +328,28 @@ impl ArrangementSharingRegistry {
                 }
             }
         }
-        aliases.holds.retain(|(other, _), _| other != id);
-        let handed_over: Vec<_> = aliases
-            .aliases_of
-            .range((*id, 0)..=(*id, usize::MAX))
-            .flat_map(|((_, worker_index), set)| set.iter().map(|alias| (*alias, *worker_index)))
-            .collect();
+        aliases.holds.remove(&(*id, worker_index));
         let mut seen = BTreeSet::new();
-        for (alias, worker_index) in handed_over {
-            let Some(slot) = slot_of(map, &alias, worker_index) else {
+        for alias in aliases
+            .aliases_of
+            .get(&(*id, worker_index))
+            .into_iter()
+            .flatten()
+        {
+            let Some(slot) = slot_of(map, alias, worker_index) else {
                 continue;
             };
-            if slot.root != *id || !seen.insert((Arc::as_ptr(slot), worker_index)) {
+            if slot.root != *id || !seen.insert(Arc::as_ptr(slot)) {
                 continue;
             }
-            if let Some(f) = aliases.governing_hold(map, slot, alias, worker_index) {
+            if let Some(f) = aliases.governing_hold(map, slot, *alias, worker_index) {
                 slot.oks.note_standing_hold(&f);
                 slot.errs.note_standing_hold(&f);
             }
         }
-        // `remove` is not worker-specific: any interactive worker may have pending work on `id`, so
-        // mark it dirty for every registered waker. A waiter re-checks and, finding the slot gone,
-        // drops or keeps its item.
-        for waker in wakers.iter_mut().flatten() {
+        // Only the reader on `worker_index` reads this slot. It re-checks and, finding the slot
+        // gone, drops or keeps its item.
+        if let Some(waker) = wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
             Self::mark(waker, *id);
         }
     }
