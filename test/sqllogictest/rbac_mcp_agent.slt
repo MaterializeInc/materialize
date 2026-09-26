@@ -513,7 +513,7 @@ COMPLETE 1
 # =============================================================================
 
 simple conn=mz_system,user=mz_system
-CREATE MATERIALIZED VIEW agent_objects.multi_indexed AS SELECT 1 AS id;
+CREATE MATERIALIZED VIEW agent_objects.multi_indexed IN CLUSTER quickstart AS SELECT 1 AS id;
 ----
 COMPLETE 0
 
