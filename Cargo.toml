@@ -312,7 +312,7 @@ buildid = "1.0.4"
 bytefmt = "0.1.7"
 bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stable_rust"] }
 byteorder = "1.5"
-bytes = "1.11.1"
+bytes = "1.12.1"
 bytesize = "2.3.1"
 cc = "1.2.62"
 cfg-if = "1.0.4"
