@@ -29,18 +29,20 @@ mzcompose() {
 }
 
 run_mzcompose() {
+    # NOTE: stdout and stderr are merged inside the container. Without a TTY,
+    # dockerd forwards the two streams separately, so a merge on the host
+    # reorders them at arbitrary points, even mid-line. That splits error
+    # lines in run.log so that they no longer match known-issue patterns.
+    local cmd=(sh -c 'exec "$@" 2>&1' sh bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@")
     if [ -n "${BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT:-}" ]; then
         # NOTE: The timeout must run inside the container. Wrapping the
         # `docker run` in host-side timeout(1) moves the docker CLI into a new
         # process group, and under the Buildkite agent the CLI then reliably
         # fails to exit after the container is done, so every run hangs from
         # workflow completion until the timeout expires and counts as failed.
-        stdbuf --output=L --error=L bin/ci-builder run "$builder" \
-            timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" \
-            bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
-    else
-        mzcompose "$@"
+        cmd=(timeout --signal=TERM --kill-after=30s "$BUILDKITE_PLUGIN_MZCOMPOSE_RUN_TIMEOUT" "${cmd[@]}")
     fi
+    stdbuf --output=L --error=L bin/ci-builder run "$builder" "${cmd[@]}"
 }
 
 kubectl() {
