@@ -21,29 +21,29 @@
 //!
 //! Reuses the resident building blocks from [`super::batcher`]: the inherent
 //! `Column::merge_from` / `Column::extract` methods (per-chunk merge / split).
-//! Input consolidation happens upstream: the chunker
-//! ([`super::batcher::ColumnChunker`]) is supplied to the arrange operator
-//! separately, so this batcher receives already-consolidated [`Column`] chunks
-//! via [`PushInto`].
+//! Input consolidation happens upstream: the chunker ([`PagedChunker`]) is
+//! supplied to the arrange operator separately, so this batcher receives
+//! already-consolidated [`Column`] chunks via [`PushInto`].
 //!
 //! [`differential_dataflow`]: differential_dataflow::trace::implementations::merge_batcher
 
 use std::collections::VecDeque;
 
-use columnar::{Columnar, Index, Len};
+use columnar::{Clear, Columnar, Index, Len};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::logging::{BatcherEvent, Logger};
 use differential_dataflow::trace::{Batcher, Description};
 use timely::Accountable;
 use timely::PartialOrder;
-use timely::container::{PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::column_pager::{self, ColumnPager, PagedColumn};
 use crate::columnar::Column;
-use crate::columnar::batcher::{empty_chunk, recycle_chunk};
+use crate::columnar::batcher::ColumnChunker;
+use crate::columnar::body::ColumnBody;
 
 /// Max recycled empty chunks held in the per-batcher stash. Deliberately
 /// tight: the stash is a hot-buffer cache for the result/keep/ship churn,
@@ -76,6 +76,72 @@ const MAX_RECYCLE_BYTES: usize = 1 << 22;
 fn recycle_capped<C: Columnar>(chunk: Column<C>, stash: &mut Vec<Column<C>>) {
     if stash.len() < STASH_CAP && chunk.length_in_bytes() <= MAX_RECYCLE_BYTES {
         recycle_chunk(chunk, stash);
+    }
+}
+
+/// Pop a chunk from `stash` or allocate a fresh one. Stashed chunks are
+/// already cleared via `recycle_chunk`, so they're ready for push.
+#[inline]
+fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
+    stash.pop().unwrap_or_default()
+}
+
+/// Reset `chunk` to an empty `Typed` and push it to `stash` for reuse. Only
+/// typed chunks carry an allocation worth keeping, so a serialized chunk is
+/// dropped instead.
+#[inline]
+fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
+    if let Column::Typed(c) = &mut chunk {
+        c.clear();
+        stash.push(chunk);
+    }
+}
+
+/// [`ColumnChunker`] for this batcher, whose chains are still [`Column`]s:
+/// each body the chunker produces goes back onto the edge container, a move.
+pub struct PagedChunker<U: Columnar> {
+    inner: ColumnChunker<U>,
+    staged: Column<U>,
+}
+
+impl<U: Columnar> Default for PagedChunker<U> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+            staged: Default::default(),
+        }
+    }
+}
+
+impl<'a, D, T, R> PushInto<&'a mut Column<(D, T, R)>> for PagedChunker<(D, T, R)>
+where
+    D: Columnar,
+    T: Columnar,
+    R: Columnar,
+    ColumnChunker<(D, T, R)>: PushInto<&'a mut Column<(D, T, R)>>,
+{
+    fn push_into(&mut self, item: &'a mut Column<(D, T, R)>) {
+        self.inner.push_into(item);
+    }
+}
+
+impl<U: Columnar + 'static> ContainerBuilder for PagedChunker<U>
+where
+    U::Container: Clone + 'static,
+    ColumnChunker<U>: ContainerBuilder<Container = ColumnBody<U>>,
+{
+    type Container = Column<U>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        let body = self.inner.extract()?;
+        self.staged = Column::from(std::mem::take(body));
+        Some(&mut self.staged)
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        let body = self.inner.finish()?;
+        self.staged = Column::from(std::mem::take(body));
+        Some(&mut self.staged)
     }
 }
 

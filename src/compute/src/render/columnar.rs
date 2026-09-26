@@ -25,10 +25,9 @@ use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::columnar_consolidate_exchange;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, NoopBuilder};
@@ -303,7 +302,7 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-/// A [`ColumnChunker`] sorts and consolidates the input columns and a
+/// A [`PagedChunker`] sorts and consolidates the input columns and a
 /// [`ColumnMergeBatcher`] merges them, both holding their data in [`Column`], so nothing
 /// outside the exchange pact visits a record or materializes an owned [`Row`].
 ///
@@ -324,7 +323,7 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ColumnChunker<(Row, T, Diff)>,
+        PagedChunker<(Row, T, Diff)>,
         ColumnMergeBatcher<Row, T, Diff>,
         _,
         _,

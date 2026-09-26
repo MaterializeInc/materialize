@@ -229,7 +229,7 @@ fn bench_merge(c: &mut Criterion) {
                         let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
                         let mut output = Vec::new();
                         let mut stash = Vec::new();
-                        merger.merge(vec![ka], vec![kb], &mut output, &mut stash);
+                        merger.merge(vec![ka.into()], vec![kb.into()], &mut output, &mut stash);
                         output
                     },
                     BatchSize::LargeInput,

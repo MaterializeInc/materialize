@@ -157,12 +157,11 @@ use mz_ore::pool::ChunkHandle;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Row, Timestamp};
-use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::body::ColumnBody;
 use mz_timely_util::columnar::chunk;
 use mz_timely_util::temporal::{Bucket, BucketChain};
 use timely::PartialOrder;
-use timely::container::{PushInto, SizableContainer};
-use timely::dataflow::channels::ContainerBytes;
+use timely::container::PushInto;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{ChannelLogging, SizeMetrics};
@@ -1545,7 +1544,7 @@ struct Chunk<D: Data> {
     ///
     /// Empty when the body stays on the heap, which is what
     /// [`mz_timely_util::columnar::chunk::try_spill_ref`] decides, and emptied again by
-    /// [`Chunk::column`]: a materialized chunk holds its body on the heap for the rest of its
+    /// [`Chunk::body`]: a materialized chunk holds its body on the heap for the rest of its
     /// life, so keeping the pool's copy alive would only double the footprint and hold budget
     /// the pool could give to a chunk that still needs it.
     ///
@@ -1554,13 +1553,13 @@ struct Chunk<D: Data> {
     /// the persist writer's `await`, so `&Chunk` must be `Send`. The lock is taken once, at
     /// materialization, and is otherwise uncontended (the sink runs single-threaded per worker).
     pooled: Mutex<Option<ChunkHandle>>,
-    /// The materialized form, populated lazily by [`Chunk::column`] on first access.
+    /// The materialized form, populated lazily by [`Chunk::body`] on first access.
     ///
     /// An `OnceLock` for the same `Sync` reason as `pooled`. Once set the slot is never
     /// cleared, so its address is stable and [`Chunk::index`] can hand out `Ref<'_>` borrows
     /// tied to `&self`. The allocation is freed when the chunk drops, which bounds resident
     /// memory to the chunks under an active merge front.
-    resident: OnceLock<Column<(D, Timestamp, Diff)>>,
+    resident: OnceLock<ColumnBody<(D, Timestamp, Diff)>>,
     /// Number of updates, cached so `len` and chain bookkeeping never page the chunk in.
     len: usize,
     /// Serialized size of the body in words, cached so size accounting never pages it in.
@@ -1579,45 +1578,45 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Mint a chunk from the given non-empty column, emptying it.
+    /// Mint a chunk from the given non-empty body, emptying it.
     ///
     /// Reads the metadata a resting chunk must answer (length, size, boundary times) while the
-    /// column is still in hand, then offers the body to the buffer pool. A body the pool takes
-    /// is encoded straight into its slot, which leaves the column's allocation behind for the
-    /// caller to refill, and materializes lazily on first read. A body the pool declines is
-    /// taken from the column instead, because a resident chunk has to own it.
+    /// body is still in hand, then offers it to the buffer pool. A body the pool takes is
+    /// encoded straight into its slot, which leaves the typed allocation behind for the caller
+    /// to refill, and materializes lazily on first read. A body the pool declines is
+    /// serialized out of the typed allocation instead, because a resident chunk has to own it.
     ///
     /// # Panics
     ///
-    /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`]
-    /// only ever mints from a populated column.
-    fn mint(column: &mut Column<(D, Timestamp, Diff)>) -> Self {
+    /// Panics if the body is empty. Chunks are non-empty by construction; [`ChunkBuilder`]
+    /// only ever mints from a populated body.
+    fn mint(body: &mut ColumnBody<(D, Timestamp, Diff)>) -> Self {
         let (len, first_time, last_time) = {
-            let borrowed = Column::borrow(column);
+            let borrowed = body.borrow();
             let len = borrowed.len();
             assert!(len > 0, "chunks are non-empty");
             (len, borrowed.get(0).1, borrowed.get(len - 1).1)
         };
-        let body_words = column.length_in_bytes() / std::mem::size_of::<u64>();
+        let body_words = body.length_in_bytes() / std::mem::size_of::<u64>();
 
         // Depth 0: a correction chunk is rewritten by the next merge that reaches it, so the
         // pool stores it uncompressed and in its hottest eviction band.
         // TODO: chunks resting in the far-future buckets outlive that assumption and want a
         // depth that reflects how long they have gone untouched.
-        let (pooled, resident) = match chunk::try_spill_ref(column, 0) {
+        let (pooled, resident) = match chunk::try_spill_ref(body, 0) {
             Some(spilled) => {
-                column.clear();
+                body.clear();
                 (Mutex::new(Some(spilled.handle)), OnceLock::new())
             }
             None => {
-                // Serialize into an exactly sized vector, which leaves the column's allocation
-                // in place for the caller and keeps the typed container's spare capacity out
-                // of a body that is held for the rest of the chunk's life.
+                // Serialize into an exactly sized vector, which leaves the typed allocation
+                // in place for the caller and keeps its spare capacity out of a body that is
+                // held for the rest of the chunk's life.
                 let mut words = Vec::with_capacity(body_words);
-                indexed::encode(&mut words, &Column::borrow(column));
-                column.clear();
+                indexed::encode(&mut words, &body.borrow());
+                body.clear();
                 let cell = OnceLock::new();
-                if cell.set(Column::Align(words)).is_err() {
+                if cell.set(ColumnBody::Words(words)).is_err() {
                     unreachable!("cell is fresh");
                 }
                 (Mutex::new(None), cell)
@@ -1633,12 +1632,12 @@ impl<D: Data> Chunk<D> {
         }
     }
 
-    /// Materialize the chunk's column, taking it out of the pool on first access.
+    /// Materialize the chunk's body, taking it out of the pool on first access.
     ///
     /// The returned reference is valid for as long as `&self`: the `OnceLock` slot is never
     /// cleared once populated, so its contents have a stable address. Taking the body frees the
     /// pool's copy, so the chunk holds exactly one.
-    fn column(&self) -> &Column<(D, Timestamp, Diff)> {
+    fn body(&self) -> &ColumnBody<(D, Timestamp, Diff)> {
         self.resident.get_or_init(|| {
             let handle = self
                 .pooled
@@ -1648,7 +1647,7 @@ impl<D: Data> Chunk<D> {
                 .expect("a chunk the pool declined is materialized at construction");
             let mut words = Vec::new();
             handle.take(&mut words);
-            Column::Align(words)
+            ColumnBody::Words(words)
         })
     }
 
@@ -1657,14 +1656,14 @@ impl<D: Data> Chunk<D> {
         self.len
     }
 
-    /// Borrow the chunk's column, paging it in if necessary.
+    /// Borrow the chunk's body, paging it in if necessary.
     ///
     /// Any caller that touches more than one update must hoist this out of its loop and index the
-    /// returned view. `Column::borrow` on a serialized column rebuilds the struct-of-arrays view
-    /// from the serialized header on every call, so borrowing per element pays that decode per
-    /// element.
+    /// returned view. `ColumnBody::borrow` on a serialized body rebuilds the struct-of-arrays
+    /// view from the serialized header on every call, so borrowing per element pays that decode
+    /// per element.
     fn view(&self) -> ChunkView<'_, D> {
-        self.column().borrow()
+        self.body().borrow()
     }
 
     /// Return the update at the given index, paging the chunk in if necessary.
@@ -1735,13 +1734,12 @@ impl<D: Data> Chunk<D> {
 
 /// Builder that mints fixed-size [`Chunk`]s from a stream of updates.
 ///
-/// Updates accumulate in one column, which is minted into a chunk as soon as the column reports
-/// itself at capacity, so every chunk is a single, predictably sized body. Minting a spilled body
-/// leaves the column's allocation in place, so a builder that mints many chunks grows one column
-/// once.
+/// Updates accumulate in one body, which is minted into a chunk as soon as it reports itself at
+/// capacity, so every chunk is a single, predictably sized body. Minting a spilled body leaves
+/// the typed allocation in place, so a builder that mints many chunks grows one allocation once.
 struct ChunkBuilder<D: Data> {
     /// The updates pushed since the last mint.
-    current: Column<(D, Timestamp, Diff)>,
+    current: ColumnBody<(D, Timestamp, Diff)>,
 }
 
 impl<D: Data> Default for ChunkBuilder<D> {
@@ -1755,7 +1753,7 @@ impl<D: Data> Default for ChunkBuilder<D> {
 impl<D: Data> ChunkBuilder<D> {
     /// Push an update, returning a chunk if the push completed one.
     ///
-    /// Accepts whatever [`Column`]'s [`PushInto`] impl accepts, both the
+    /// Accepts whatever [`ColumnBody`]'s [`PushInto`] impl accepts, both the
     /// `Ref<'_, (D, T, R)>` refs produced by cursors and `&(D, T, R)` references to owned
     /// tuples drained from the staging buffer.
     ///
@@ -1763,10 +1761,10 @@ impl<D: Data> ChunkBuilder<D> {
     #[inline]
     fn push<T>(&mut self, item: T) -> Option<Chunk<D>>
     where
-        Column<(D, Timestamp, Diff)>: PushInto<T>,
+        ColumnBody<(D, Timestamp, Diff)>: PushInto<T>,
     {
         PushInto::push_into(&mut self.current, item);
-        // The ship test walks the column's slice lengths, so it costs per push, not per byte.
+        // The ship test walks the body's slice lengths, so it costs per push, not per byte.
         self.current
             .at_capacity()
             .then(|| Chunk::mint(&mut self.current))
