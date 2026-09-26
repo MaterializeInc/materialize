@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_dyncfg::ConfigSet;
+use mz_ore::error::ErrorExt;
 use mz_ore::url::SensitiveUrl;
 use tracing::warn;
 
@@ -57,9 +58,8 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
 ///
 /// Errors opening the sibling degrade to [HedgeSibling::Unavailable] with a
 /// warning rather than failing: persist must come up even if hedging cannot.
-/// A process that hits this keeps hedging unavailable until restart, visible
-/// as `mz_persist_blob_hedges_skipped{reason="unavailable"}` and
-/// `mz_persist_blob_hedge_armed` staying 0.
+/// What a caller does with that is its own contract, see
+/// [crate::hedge::HedgedBlob::new_arming].
 pub async fn open_hedge_sibling(
     url: &SensitiveUrl,
     knobs: Box<dyn BlobKnobs>,
@@ -70,7 +70,7 @@ pub async fn open_hedge_sibling(
         Err(err) => {
             warn!(
                 "hedged blob gets unavailable, sibling config failed: {}",
-                err
+                err.display_with_causes()
             );
             return HedgeSibling::Unavailable;
         }
@@ -81,7 +81,10 @@ pub async fn open_hedge_sibling(
         config @ (BlobConfig::S3(_) | BlobConfig::Azure(_)) => match config.open().await {
             Ok(blob) => HedgeSibling::Isolated(blob),
             Err(err) => {
-                warn!("hedged blob gets unavailable, sibling open failed: {}", err);
+                warn!(
+                    "hedged blob gets unavailable, sibling open failed: {}",
+                    err.display_with_causes()
+                );
                 HedgeSibling::Unavailable
             }
         },
