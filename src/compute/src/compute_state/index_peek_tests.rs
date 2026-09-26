@@ -14,14 +14,14 @@ use differential_dataflow::trace::{Batcher, Builder, Trace};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, RelationDesc, SqlScalarType};
-use mz_row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
+use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationStack;
 use timely::container::PushInto;
 use timely::dataflow::operators::generic::OperatorInfo;
 
 use crate::metrics::ComputeMetrics;
 use crate::server::ComputeRuntimeRole;
-use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent};
+use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 use super::error_scan::tests::{
     ErrorUpdates, PEEK_TIMESTAMP, cancelling, error, error_batch, holding,

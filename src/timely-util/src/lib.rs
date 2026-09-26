@@ -33,4 +33,5 @@ pub mod probe;
 pub mod reclock;
 pub mod replay;
 pub mod scope_label;
+pub mod shared_trace;
 pub mod temporal;
