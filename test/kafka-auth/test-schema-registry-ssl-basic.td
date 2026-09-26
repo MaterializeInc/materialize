@@ -142,7 +142,7 @@ $ set-sql-timeout duration=120s
 > SELECT count(status) > 0 FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON sink_id = id WHERE name = 'snk_backup' AND status = 'stalled';
 true
 
-$ set-sql-timeout duration=default
+$ set-sql-timeout duration=60s
 
 > ALTER CONNECTION kafka_backup SET (BROKER 'kafka:9092');
 

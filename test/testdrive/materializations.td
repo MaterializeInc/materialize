@@ -531,6 +531,7 @@ c    d
 # Include retained physical dataflows even after their catalog exports are dropped.
 # data_view_idx2 retains data_view_idx's trace. test4 consumes its producer as a
 # stream, so dropping data_view_primary_idx releases its last trace-sharing handle.
+# Live MVs also need their export identities: their internal build IDs are transient.
 > SET cluster_replica = r1
 
 
@@ -539,6 +540,9 @@ c    d
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   WHERE EXISTS (
+    SELECT 1 FROM mz_introspection.mz_compute_exports e
+    WHERE e.dataflow_id = mdod.dataflow_id AND e.export_id LIKE 'u%'
+  ) OR EXISTS (
     SELECT 1 FROM mz_introspection.mz_dataflow_global_ids g
     WHERE g.id = mdod.dataflow_id AND g.global_id LIKE 'u%'
   )

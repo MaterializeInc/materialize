@@ -1881,11 +1881,8 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     Test that compute reconciliation reuses existing dataflows.
     """
 
-    with c.override(
-        Clusterd(name="clusterd1", workers=1),
-        Clusterd(name="clusterd2", workers=1),
-    ):
-        c.up("materialized", "clusterd1", "clusterd2")
+    with ExitStack() as stack:
+        c.up("materialized")
 
         c.sql(
             """
@@ -1930,6 +1927,28 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
+            """)
+
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+        catalog_options = native_catalog_options(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    workers=1,
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *catalog_options,
+                    ],
+                ),
+            )
+        )
+        c.up("clusterd1")
+
+        c.sql("""
             SET cluster = cluster1;
 
             -- index on table
@@ -1999,6 +2018,28 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             port=6877,
             user="mz_system",
         )
+
+        # The replacement catalog-server replica cannot serve its own ID lookup.
+        with c.sql_cursor() as cursor:
+            cursor.execute("SET auto_route_catalog_queries = false")
+            cursor.execute("""SELECT c.id, r.id
+                FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                WHERE c.name = 'mz_catalog_server' AND r.name = 'r1'""")
+            [(cluster_id, replica_id)] = cursor.fetchall()
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd2",
+                    workers=1,
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *catalog_options,
+                    ],
+                ),
+            )
+        )
+        c.up("clusterd2")
 
         # Give the dataflows some time to make progress and get compacted.
         # This is done to trigger the bug described in database-issues#5113.
@@ -2227,15 +2268,6 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             },
             support_external_clusterd=True,
         ),
-        Clusterd(
-            name="clusterd1",
-            environment_extra=[
-                # Disable GRPC host checking. We are connecting through a
-                # proxy, so the host in the request URI doesn't match
-                # clusterd's fqdn.
-                "CLUSTERD_GRPC_HOST=",
-            ],
-        ),
         Testdrive(
             no_reset=True,
             default_timeout="30s",
@@ -2243,7 +2275,6 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
     ):
         c.up(
             "materialized",
-            "clusterd1",
             "toxiproxy",
             Service("testdrive", idle=True),
         )
@@ -2270,42 +2301,67 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
-            SET cluster = cluster1;
-
-            CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
-            CREATE TABLE s_tbl FROM SOURCE s;
-            CREATE DEFAULT INDEX on s_tbl;
-            CREATE MATERIALIZED VIEW mv AS SELECT * FROM s_tbl;
             """)
 
-        # Wait for objects to be installed on the cluster.
-        c.sql("SELECT * FROM mv")
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+        catalog_options = native_catalog_options(c)
+        with c.override(
+            Clusterd(
+                name="clusterd1",
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+                environment_extra=[
+                    # Disable GRPC host checking. We are connecting through a
+                    # proxy, so the host in the request URI doesn't match
+                    # clusterd's fqdn.
+                    "CLUSTERD_GRPC_HOST=",
+                ],
+            ),
+        ):
+            c.up("clusterd1")
 
-        # Sever the connection between envd and clusterd.
-        for port in (2100, 2101):
-            c.testdrive(dedent(f"""
-                    $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
-                    {{"enabled": false}}
+            c.sql("""
+                SET cluster = cluster1;
+
+                CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
+                CREATE TABLE s_tbl FROM SOURCE s;
+                CREATE DEFAULT INDEX on s_tbl;
+                CREATE MATERIALIZED VIEW mv AS SELECT * FROM s_tbl;
+                """)
+
+            # Wait for objects to be installed on the cluster.
+            c.sql("SELECT * FROM mv")
+
+            # Sever the connection between envd and clusterd.
+            for port in (2100, 2101):
+                c.testdrive(dedent(f"""
+                        $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
+                        {{"enabled": false}}
+                        """))
+
+            # Drop all objects installed on the cluster.
+            c.sql("DROP SOURCE s CASCADE")
+
+            # Restore the connection between envd and clusterd, causing a
+            # reconciliation.
+            for port in (2100, 2101):
+                c.testdrive(dedent(f"""
+                        $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
+                        {{"enabled": true}}
+                        """))
+
+            # Confirm the cluster is still healthy and the compute objects have
+            # been dropped. We can't verify the dropping of storage objects due to
+            # the lack of introspection for storage dataflows.
+            c.testdrive(dedent("""
+                    > SET cluster = cluster1;
+                    > SELECT * FROM mz_introspection.mz_compute_exports WHERE export_id LIKE 'u%';
                     """))
-
-        # Drop all objects installed on the cluster.
-        c.sql("DROP SOURCE s CASCADE")
-
-        # Restore the connection between envd and clusterd, causing a
-        # reconciliation.
-        for port in (2100, 2101):
-            c.testdrive(dedent(f"""
-                    $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
-                    {{"enabled": true}}
-                    """))
-
-        # Confirm the cluster is still healthy and the compute objects have
-        # been dropped. We can't verify the dropping of storage objects due to
-        # the lack of introspection for storage dataflows.
-        c.testdrive(dedent("""
-                > SET cluster = cluster1;
-                > SELECT * FROM mz_introspection.mz_compute_exports WHERE export_id LIKE 'u%';
-                """))
 
 
 def workflow_test_mz_subscriptions(c: Composition) -> None:
@@ -7992,22 +8048,36 @@ def workflow_github_9961(c: Composition):
 
     c.down(destroy_volumes=True)
 
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER test REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        """)
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'test' AND r.name = 'replica1'""")
+    catalog_options = native_catalog_options(c)
     with c.override(
         Clusterd(
             name="clusterd1",
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
             environment_extra=["FAILPOINTS=mv_advanced_upper=pause"],
         ),
     ):
-        c.up("materialized", "clusterd1")
+        c.up("clusterd1")
 
         c.sql("""
-            CREATE CLUSTER test REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
-            ));
             SET cluster = test;
 
             CREATE TABLE t (a int);
