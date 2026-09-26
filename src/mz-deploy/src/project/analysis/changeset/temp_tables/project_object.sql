@@ -7,11 +7,9 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- Every object in the compiled project, tagged with its statement kind.
--- `kind` drives IsSink and IsApplyManaged in `dirty_propagation.sql`.
---
--- Column semantics and what populates this table are documented in the
--- header of `../dirty_propagation.sql`, which owns the fact contract.
+-- Every object in the compiled project. `kind` is one of 'view',
+-- 'materialized_view', 'sink', 'table', 'table_from_source', 'source',
+-- 'secret', 'connection'. The rules derive IsSink and IsApplyManaged from it.
 
 CREATE TEMPORARY TABLE project_object (
     db text, sch text, obj text, kind text

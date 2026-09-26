@@ -7,10 +7,10 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- The same hashes for the deployment currently in production.
---
--- Column semantics and what populates this table are documented in the
--- header of `../dirty_propagation.sql`, which owns the fact contract.
+-- One content hash for each object in the production deployment, read from
+-- the deployment history. Hashes are computed as for `new_object`, so an
+-- object is unchanged exactly when its two hashes are equal. The table is
+-- empty on a first deploy, so every object reads as added.
 
 CREATE TEMPORARY TABLE old_object (
     db text, sch text, obj text, hash text

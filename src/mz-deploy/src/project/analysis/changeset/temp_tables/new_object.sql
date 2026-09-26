@@ -7,12 +7,9 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- A content hash per object in the project being deployed. Two objects hash
--- equal exactly when deploying them would produce the same thing. Excludes
--- the apply-managed kinds, so those never diff.
---
--- Column semantics and what populates this table are documented in the
--- header of `../dirty_propagation.sql`, which owns the fact contract.
+-- One content hash for each object in the compiled project. Two hashes are
+-- equal exactly when deploying the two objects produces the same result.
+-- Apply-managed kinds have no row, so they never read as changed.
 
 CREATE TEMPORARY TABLE new_object (
     db text, sch text, obj text, hash text

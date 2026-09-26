@@ -7,10 +7,7 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- `IN CLUSTER` on an object's main CREATE statement.
---
--- Column semantics and what populates this table are documented in the
--- header of `../dirty_propagation.sql`, which owns the fact contract.
+-- The `IN CLUSTER` of an object's own CREATE statement.
 
 CREATE TEMPORARY TABLE project_stmt_cluster (
     db text, sch text, obj text, cluster text

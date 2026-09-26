@@ -12,22 +12,28 @@
 //! A `ChangeSet` is the decoded result of `dirty_propagation.sql`: everything
 //! `stage` needs to decide what to redeploy, which resources to create, and
 //! how to route each object. The rules that produce each field are documented
-//! in that file's header, which owns the rule semantics.
+//! in that file.
 //!
 //! ## Field relationships
 //!
-//! - `changed_objects` ⊆ `objects_to_deploy` — a directly changed object is
+//! [`ChangeSet::check_invariants`] enforces these on every decoded result.
+//!
+//! - `changed_objects` ⊆ `objects_to_deploy`. A directly changed object is
 //!   always deployed, and `objects_to_deploy` additionally holds everything
 //!   pulled in by dependency, cluster, or schema propagation.
-//! - `stage_objects`, `stage_sinks`, and `stage_replacement_mvs` partition the
-//!   deployable part of `objects_to_deploy`. The remainder is the
-//!   apply-managed objects, counted by `apply_managed_count`, and any deleted
-//!   object, which has no project statement to deploy.
-//! - `schemas_to_create` and `clusters_to_create` cover
-//!   `stage_objects ∪ stage_replacement_mvs`. They describe resources to
+//! - `stage_objects`, `stage_sinks`, and `stage_replacement_mvs` are disjoint
+//!   subsets of `objects_to_deploy`. The remainder is the apply-managed
+//!   objects, counted by `apply_managed_count`, and any deleted object, which
+//!   has no project statement to deploy.
+//! - `new_replacement_objects` ⊆ `objects_to_deploy` and is disjoint from
+//!   `stage_replacement_mvs`.
+//! - `schemas_to_create` is exactly the schemas of
+//!   `stage_objects ∪ stage_replacement_mvs`, and `clusters_to_create` is the
+//!   clusters those objects and their indexes use. They describe resources to
 //!   provision, so they are wider than the relations that propagate
 //!   dirtiness inside the fixed point: a cluster or schema reached only by
-//!   propagation still needs creating.
+//!   propagation still needs creating. The cluster side is not checked,
+//!   because a `ChangeSet` carries no cluster assignments.
 
 use crate::project::SchemaQualifier;
 use crate::project::ir::object_id::ObjectId;
@@ -39,9 +45,6 @@ use std::fmt::{Display, Formatter};
 pub(crate) struct ChangeSet {
     /// Objects whose content hash differs between the two snapshots.
     pub changed_objects: BTreeSet<ObjectId>,
-
-    /// Schemas that propagate dirtiness to the objects they contain.
-    pub dirty_schemas: BTreeSet<SchemaQualifier>,
 
     /// Every object reached by the fixed point, including sinks, apply-managed
     /// objects, and objects deleted from the project.
@@ -76,6 +79,88 @@ impl ChangeSet {
     pub(crate) fn is_empty(&self) -> bool {
         self.objects_to_deploy.is_empty()
     }
+
+    /// Check the field relationships in the module docs, naming the first one
+    /// that fails.
+    pub(crate) fn check_invariants(&self) -> Result<(), String> {
+        let subset = |name: &str, set: &BTreeSet<ObjectId>| match set
+            .difference(&self.objects_to_deploy)
+            .next()
+        {
+            Some(id) => Err(format!(
+                "{name} holds {id}, which is not in objects_to_deploy"
+            )),
+            None => Ok(()),
+        };
+        let disjoint = |a: &str, x: &BTreeSet<ObjectId>, b: &str, y: &BTreeSet<ObjectId>| match x
+            .intersection(y)
+            .next()
+        {
+            Some(id) => Err(format!("{id} is in both {a} and {b}")),
+            None => Ok(()),
+        };
+
+        subset("changed_objects", &self.changed_objects)?;
+        subset("stage_objects", &self.stage_objects)?;
+        subset("stage_sinks", &self.stage_sinks)?;
+        subset("stage_replacement_mvs", &self.stage_replacement_mvs)?;
+        subset("new_replacement_objects", &self.new_replacement_objects)?;
+
+        disjoint(
+            "stage_objects",
+            &self.stage_objects,
+            "stage_sinks",
+            &self.stage_sinks,
+        )?;
+        disjoint(
+            "stage_objects",
+            &self.stage_objects,
+            "stage_replacement_mvs",
+            &self.stage_replacement_mvs,
+        )?;
+        disjoint(
+            "stage_sinks",
+            &self.stage_sinks,
+            "stage_replacement_mvs",
+            &self.stage_replacement_mvs,
+        )?;
+        disjoint(
+            "new_replacement_objects",
+            &self.new_replacement_objects,
+            "stage_replacement_mvs",
+            &self.stage_replacement_mvs,
+        )?;
+
+        let staged = self.stage_objects.len()
+            + self.stage_sinks.len()
+            + self.stage_replacement_mvs.len()
+            + self.apply_managed_count;
+        if staged > self.objects_to_deploy.len() {
+            return Err(format!(
+                "{staged} staged and apply-managed objects exceed {} objects_to_deploy",
+                self.objects_to_deploy.len()
+            ));
+        }
+
+        let staged_schemas: BTreeSet<SchemaQualifier> = self
+            .stage_objects
+            .iter()
+            .chain(&self.stage_replacement_mvs)
+            .map(|id| {
+                SchemaQualifier::new(
+                    id.database().unwrap_or("").to_string(),
+                    id.schema().to_string(),
+                )
+            })
+            .collect();
+        if staged_schemas != self.schemas_to_create {
+            return Err(
+                "schemas_to_create is not the set of schemas of the staged objects".to_string(),
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl Display for ChangeSet {
@@ -93,9 +178,9 @@ impl Display for ChangeSet {
             }
         }
 
-        if !self.dirty_schemas.is_empty() {
-            writeln!(f, "Dirty schemas:")?;
-            for sq in &self.dirty_schemas {
+        if !self.schemas_to_create.is_empty() {
+            writeln!(f, "Schemas to create:")?;
+            for sq in &self.schemas_to_create {
                 writeln!(f, "  - {}.{}", sq.database, sq.schema)?;
             }
         }

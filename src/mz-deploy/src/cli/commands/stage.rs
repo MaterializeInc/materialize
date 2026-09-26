@@ -466,11 +466,10 @@ async fn analyze_project_changes<'a>(
     // schemas with existing production objects are rejected.
     if !first_deploy {
         validate_no_new_objects_in_existing_stable_schemas(&change_set, &production_snapshot)?;
-    }
-
-    if !first_deploy && change_set.is_empty() {
-        progress::success("No changes detected compared to production, skipping deployment");
-        return Ok(None);
+        if change_set.is_empty() {
+            progress::success("No changes detected compared to production, skipping deployment");
+            return Ok(None);
+        }
     }
 
     if first_deploy {

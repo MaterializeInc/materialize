@@ -7,10 +7,7 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- Schemas whose materialized views use the in-place replacement protocol.
---
--- Column semantics and what populates this table are documented in the
--- header of `../dirty_propagation.sql`, which owns the fact contract.
+-- Schemas whose materialized views deploy through the replacement protocol.
 
 CREATE TEMPORARY TABLE replacement_schema (
     db text, sch text

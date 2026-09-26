@@ -17,6 +17,13 @@
 -- The rules are the specification. This header gives the data that you must
 -- know before you read the rules.
 --
+-- ## Notation
+--
+-- In a rule, `O` is an object key: the three components `(Db, Sch, Obj)`. A
+-- rule writes the three components only when it needs one of them, for
+-- example to join on the schema. Thus `ProjectObject(O, K)` and
+-- `ProjectObject(Db, Sch, Obj, K)` are the same atom.
+--
 -- Two names in the rules have no binding. Each of these names is a source
 -- table without one column. ObjectInSchema is the table project_object
 -- without the column `kind`. StmtUsesCluster is the table
@@ -44,62 +51,13 @@
 --
 -- ## Input
 --
--- The query reads temporary tables in the schema `mz_temp`. The Rust module
--- `facts.rs` makes these tables and fills them before this query starts. All
--- columns have the type text.
+-- The query reads temporary tables in the schema `mz_temp`. The directory
+-- `temp_tables/` holds one CREATE statement for each table, with a comment
+-- that gives the meaning of its rows. The Rust module `facts.rs` makes these
+-- tables and fills them before this query starts.
 --
 -- Materialize looks in `mz_temp` before it looks at the search path.
 -- Therefore each binding uses the short name of the table.
---
--- This section gives the meaning of each column. The directory
--- `temp_tables/` holds one CREATE statement for each table.
---
---   project_object(db, sch, obj, kind)
---       Each object in the compiled project. The column `kind` has one of
---       these values: 'view', 'materialized_view', 'sink', 'table',
---       'table_from_source', 'source', 'secret', 'connection'.
---
---   project_depends_on(child_db, child_sch, child_obj,
---                      parent_db, parent_sch, parent_obj)
---       The query of the child refers to the parent. A parent that is not in
---       the project has no row in project_object. Such a parent has the empty
---       text in `parent_db`.
---
---   project_stmt_cluster(db, sch, obj, cluster)
---       The clause `IN CLUSTER` of the CREATE statement of the object.
---
---   project_index_cluster(db, sch, obj, idx, cluster)
---       The clause `IN CLUSTER` of a CREATE INDEX statement on the object.
---
---   replacement_schema(db, sch)
---       The schemas that use the replacement protocol for their materialized
---       views.
---
---   new_object(db, sch, obj, hash)
---       One content hash for each object in the project that you deploy. Two
---       objects have the same hash only if a deploy of the two objects gives
---       the same result. This table does not contain the kinds that `apply`
---       controls.
---
---   old_object(db, sch, obj, hash)
---       The same hashes for the deployment in production.
---
---   old_schema_kind(db, sch, kind)
---       The method that deployed each schema in production. The column `kind`
---       has one of these values: 'objects', 'replacement', 'sinks', 'tables'.
---       The rules use only the value 'replacement'.
---
---   forced_schema(db, sch)
---       The schemas that the caller deploys again at all times. The option
---       `--redeploy-schema` fills this table.
---
--- The tables `old_object` and `old_schema_kind` come from the deployment
--- history. The history keeps the three name components in three fields. The
--- load does not change these names. Therefore no side of the comparison
--- changes a name.
---
--- If the table `old_object` is empty, each object looks new. Therefore the
--- first deploy obeys the same rules as all other deploys.
 --
 -- You cannot read and write in one transaction in Materialize. Therefore the
 -- COPY statements and this SELECT statement run in different transactions.
@@ -116,38 +74,28 @@
 -- schema in the output has the fields "database" and "schema". Therefore no
 -- caller must divide a name into its components. The Rust type `ChangeSet` in
 -- `types.rs` gives the name and the function of each field.
---
--- The fields `dirty_schemas` and `dirty_clusters` only show data to the user.
--- The rules do not read these two fields. A deploy reads the stage fields and
--- the two `_to_create` fields. The `_to_create` fields contain each object
--- that the deploy makes. Therefore they contain more objects than the dirty
--- fields.
---
--- The field `objects_to_deploy` also contains the objects that only the old
--- deployment has. These objects have no statement in the project. Therefore
--- the query does not put them in a stage field.
 WITH MUTUALLY RECURSIVE
-    -- IsSink(O) :- ProjectObject(Db, Sch, Obj, 'sink').
+    -- IsSink(O) :- ProjectObject(O, 'sink').
     is_sink (db text, sch text, obj text) AS (
         SELECT db, sch, obj FROM project_object WHERE kind = 'sink'
     ),
 
-    -- IsApplyManaged(O) :- ProjectObject(Db, Sch, Obj, K), K IN (...).
+    -- IsApplyManaged(O) :- ProjectObject(O, K), K IN (...).
     is_apply_managed (db text, sch text, obj text) AS (
         SELECT db, sch, obj
         FROM project_object
         WHERE kind IN ('table', 'table_from_source', 'source', 'secret', 'connection')
     ),
 
-    -- IsReplacement(O) :- ProjectObject(Db, Sch, Obj, _), ReplacementSchema(Db, Sch).
+    -- IsReplacement(Db, Sch, Obj) :- ProjectObject(Db, Sch, Obj, _), ReplacementSchema(Db, Sch).
     is_replacement (db text, sch text, obj text) AS (
         SELECT p.db, p.sch, p.obj
         FROM project_object p
         JOIN replacement_schema r ON r.db = p.db AND r.sch = p.sch
     ),
 
-    -- UsesCluster(O, C) :- ProjectStmtCluster(Db, Sch, Obj, C).
-    -- UsesCluster(O, C) :- ProjectIndexCluster(Db, Sch, Obj, _, C).
+    -- UsesCluster(O, C) :- ProjectStmtCluster(O, C).
+    -- UsesCluster(O, C) :- ProjectIndexCluster(O, _, C).
     uses_cluster (db text, sch text, obj text, cluster text) AS (
         SELECT db, sch, obj, cluster FROM project_stmt_cluster
 
@@ -170,11 +118,12 @@ WITH MUTUALLY RECURSIVE
         WHERE n.hash IS DISTINCT FROM o.hash
     ),
 
-    -- DirtyStmt(O)           :- ChangedStmt(O).
-    -- DirtyStmt(Db, Sch, O)  :- ForcedSchema(Db, Sch), ObjectInSchema(Db, Sch, O).
-    -- DirtyStmt(O2)          :- ChangedStmt(O1), NOT IsSink(O1), UsesCluster(O1, C), StmtUsesCluster(O2, C).
-    -- DirtyStmt(O)           :- DependsOn(O, P), DirtyStmt(P), NOT IsReplacement(P).
-    -- DirtyStmt(Db, Sch, O2) :- DirtyStmt(Db, Sch, O1), NOT IsSink(O1), ObjectInSchema(Db, Sch, O2).
+    -- DirtyStmt(O)             :- ChangedStmt(O).
+    -- DirtyStmt(Db, Sch, Obj)  :- ForcedSchema(Db, Sch), ObjectInSchema(Db, Sch, Obj).
+    -- DirtyStmt(O2)            :- ChangedStmt(O1), NOT IsSink(O1), UsesCluster(O1, C), StmtUsesCluster(O2, C).
+    -- DirtyStmt(O)             :- DependsOn(O, P), DirtyStmt(P), NOT IsReplacement(P).
+    -- DirtyStmt(Db, Sch, Obj2) :- DirtyStmt(Db, Sch, Obj1), NOT IsSink(Db, Sch, Obj1),
+    --                             ObjectInSchema(Db, Sch, Obj2).
     --
     -- NOTE: the cluster rule reads ChangedStmt, not DirtyStmt. If this rule
     -- reads DirtyStmt, an object that a different rule made dirty sends its
@@ -229,29 +178,15 @@ WITH MUTUALLY RECURSIVE
         )
     ),
 
-    -- DirtyCluster(C) :- ChangedStmt(O), UsesCluster(O, C), NOT IsSink(O).
-    dirty_cluster (cluster text) AS (
-        SELECT u.cluster
-        FROM changed_stmt s
-        JOIN uses_cluster u ON u.db = s.db AND u.sch = s.sch AND u.obj = s.obj
-        WHERE NOT EXISTS (
-            SELECT 1 FROM is_sink k
-            WHERE k.db = s.db AND k.sch = s.sch AND k.obj = s.obj
-        )
-    ),
-
-    -- DirtySchema(Db, Sch) :- DirtyStmt(Db, Sch, O), NOT IsSink(O).
-    dirty_schema (db text, sch text) AS (
-        SELECT DISTINCT s.db, s.sch
-        FROM dirty_stmt s
-        WHERE NOT EXISTS (
-            SELECT 1 FROM is_sink k
-            WHERE k.db = s.db AND k.sch = s.sch AND k.obj = s.obj
-        )
-    ),
-
-    -- DeployStmt(O) :- DirtyStmt(O), ProjectObject(Db, Sch, Obj, K),
+    -- DeployStmt(O) :- DirtyStmt(O), ProjectObject(O, K),
     --                  K IN ('view', 'materialized_view').
+    --
+    -- NOTE: the join on ProjectObject keeps a deleted object out of every
+    -- stage relation. ChangedStmt holds an object that only OldObject has,
+    -- so DirtyStmt and `objects_to_deploy` hold it too. Such an object has
+    -- no ProjectObject row and no statement to deploy. Each stage relation
+    -- reads DeployStmt, or IsSink or IsApplyManaged, which also read
+    -- ProjectObject, so none of them can hold a deleted object.
     deploy_stmt (db text, sch text, obj text) AS (
         SELECT s.db, s.sch, s.obj
         FROM dirty_stmt s
@@ -259,7 +194,7 @@ WITH MUTUALLY RECURSIVE
         WHERE p.kind IN ('view', 'materialized_view')
     ),
 
-    -- DeploySchema(Db, Sch) :- DeployStmt(Db, Sch, Obj).
+    -- DeploySchema(Db, Sch) :- DeployStmt(Db, Sch, _).
     deploy_schema (db text, sch text) AS (
         SELECT DISTINCT db, sch FROM deploy_stmt
     ),
@@ -271,8 +206,9 @@ WITH MUTUALLY RECURSIVE
         JOIN uses_cluster u ON u.db = d.db AND u.sch = d.sch AND u.obj = d.obj
     ),
 
-    -- ReplacementChanged(O) :- DirtyStmt(Db, Sch, Obj), IsReplacement(O),
-    --                          OldObject(O, _), OldSchemaKind(Db, Sch, 'replacement').
+    -- ReplacementChanged(Db, Sch, Obj) :- DirtyStmt(Db, Sch, Obj), IsReplacement(Db, Sch, Obj),
+    --                                     OldObject(Db, Sch, Obj, _),
+    --                                     OldSchemaKind(Db, Sch, 'replacement').
     replacement_changed (db text, sch text, obj text) AS (
         SELECT s.db, s.sch, s.obj
         FROM dirty_stmt s
@@ -294,8 +230,7 @@ WITH MUTUALLY RECURSIVE
         )
     ),
 
-    -- StageReplacementMv(O) :- DeployStmt(Db, Sch, Obj),
-    --                          ProjectObject(Db, Sch, Obj, 'materialized_view'),
+    -- StageReplacementMv(O) :- DeployStmt(O), ProjectObject(O, 'materialized_view'),
     --                          ReplacementChanged(O).
     stage_replacement_mv (db text, sch text, obj text) AS (
         SELECT d.db, d.sch, d.obj
@@ -351,20 +286,6 @@ SELECT jsonb_build_object(
             '[]'::jsonb
         )
         FROM dirty_stmt
-    ),
-    'dirty_schemas', (
-        SELECT coalesce(
-            jsonb_agg(
-                jsonb_build_object('database', db, 'schema', sch)
-                ORDER BY db, sch
-            ),
-            '[]'::jsonb
-        )
-        FROM dirty_schema
-    ),
-    'dirty_clusters', (
-        SELECT coalesce(jsonb_agg(cluster ORDER BY cluster), '[]'::jsonb)
-        FROM dirty_cluster
     ),
     'schemas_to_create', (
         SELECT coalesce(

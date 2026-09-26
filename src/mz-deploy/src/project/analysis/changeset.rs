@@ -14,10 +14,10 @@
 //! decoding the result into a [`ChangeSet`].
 //!
 //! The rules are a Datalog fixed point expressed as a `WITH MUTUALLY
-//! RECURSIVE` query in `changeset/dirty_propagation.sql`. That file's header
-//! is the owning documentation for the rule semantics, the fact contract, and
-//! why each rule is shaped the way it is. This module only loads facts, runs
-//! the query, and decodes its single jsonb row.
+//! RECURSIVE` query in `changeset/dirty_propagation.sql`. That file documents
+//! each rule and why it is shaped the way it is, and `changeset/temp_tables/`
+//! documents the input tables. This module only loads the tables, runs the
+//! query, and decodes its single jsonb row.
 //!
 //! Running the fixed point server-side keeps one description of the rules
 //! rather than a SQL one and a Rust one that can drift, and `stage` already
@@ -138,10 +138,11 @@ fn names(plan: &Value, key: &str) -> Result<BTreeSet<String>, ConnectionError> {
         .collect()
 }
 
+/// Decode the query's row, rejecting a result that breaks the `ChangeSet`
+/// field relationships rather than deploying from it.
 fn decode(plan: &Value) -> Result<ChangeSet, ConnectionError> {
-    Ok(ChangeSet {
+    let change_set = ChangeSet {
         changed_objects: object_ids(plan, "changed_objects")?,
-        dirty_schemas: schema_qualifiers(plan, "dirty_schemas")?,
         objects_to_deploy: object_ids(plan, "objects_to_deploy")?,
         stage_objects: object_ids(plan, "stage_objects")?,
         stage_sinks: object_ids(plan, "stage_sinks")?,
@@ -155,7 +156,13 @@ fn decode(plan: &Value) -> Result<ChangeSet, ConnectionError> {
                 .ok_or_else(|| malformed("apply_managed_count"))?,
         )
         .map_err(|_| malformed("apply_managed_count"))?,
-    })
+    };
+    change_set.check_invariants().map_err(|e| {
+        ConnectionError::Message(format!(
+            "dirty propagation returned an inconsistent plan: {e}"
+        ))
+    })?;
+    Ok(change_set)
 }
 
 #[cfg(test)]
@@ -170,9 +177,10 @@ mod tests {
             ],
             "objects_to_deploy": [
                 {"database": "db", "schema": "core", "object": "orders"},
-                {"database": "db", "schema": "core", "object": "orders_sink"}
+                {"database": "db", "schema": "core", "object": "orders_sink"},
+                {"database": "db", "schema": "raw", "object": "orders_src"},
+                {"database": "db", "schema": "raw", "object": "orders_tbl"}
             ],
-            "dirty_schemas": [{"database": "db", "schema": "core"}],
             "schemas_to_create": [{"database": "db", "schema": "core"}],
             "clusters_to_create": ["ingest", "serve"],
             "stage_objects": [{"database": "db", "schema": "core", "object": "orders"}],
@@ -187,7 +195,7 @@ mod tests {
     fn decodes_every_field() {
         let cs = decode(&full_plan()).unwrap();
         assert_eq!(cs.changed_objects.len(), 1);
-        assert_eq!(cs.objects_to_deploy.len(), 2);
+        assert_eq!(cs.objects_to_deploy.len(), 4);
         assert!(!cs.is_empty());
         assert_eq!(
             cs.clusters_to_create,
@@ -220,6 +228,41 @@ mod tests {
     fn a_missing_field_is_an_error() {
         let mut plan = full_plan();
         plan.as_object_mut().unwrap().remove("clusters_to_create");
+        assert!(decode(&plan).is_err());
+    }
+
+    #[mz_ore::test]
+    fn a_staged_object_outside_objects_to_deploy_is_an_error() {
+        let mut plan = full_plan();
+        plan["stage_objects"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"database": "db", "schema": "core", "object": "ghost"}));
+        assert!(decode(&plan).is_err());
+    }
+
+    #[mz_ore::test]
+    fn an_object_in_two_stage_fields_is_an_error() {
+        let mut plan = full_plan();
+        plan["stage_replacement_mvs"] =
+            json!([{"database": "db", "schema": "core", "object": "orders"}]);
+        assert!(decode(&plan).is_err());
+    }
+
+    #[mz_ore::test]
+    fn a_schema_to_create_without_staged_objects_is_an_error() {
+        let mut plan = full_plan();
+        plan["schemas_to_create"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"database": "db", "schema": "raw"}));
+        assert!(decode(&plan).is_err());
+    }
+
+    #[mz_ore::test]
+    fn too_many_apply_managed_objects_is_an_error() {
+        let mut plan = full_plan();
+        plan["apply_managed_count"] = json!(3);
         assert!(decode(&plan).is_err());
     }
 }

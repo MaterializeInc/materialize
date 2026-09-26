@@ -11,8 +11,8 @@
 //!
 //! Translates the compiled project and the two deployment snapshots into the
 //! temporary tables that `dirty_propagation.sql` reads, and bulk-loads them
-//! over `COPY`. The fact contract, including every column's meaning, is
-//! documented in that file's header.
+//! over `COPY`. Each table's `CREATE` statement in `temp_tables/` documents
+//! what its rows mean.
 //!
 //! Object keys travel as three raw name components. `ObjectId`'s `Display`
 //! quotes identifiers that need it, so a rendered key would not match the raw
@@ -81,22 +81,6 @@ fn schema_key(sq: &SchemaQualifier) -> String {
     format!("{}\t{}", copy_escape(&sq.database), copy_escape(&sq.schema))
 }
 
-/// Create the fact tables on the session.
-///
-/// Executes one statement at a time: Materialize rejects DDL inside the
-/// implicit transaction that a multi-statement simple query creates.
-///
-/// The tables are session-scoped and created once per command, so a plain
-/// `CREATE` is used rather than `IF NOT EXISTS`. A second creation in one
-/// session means the analysis ran twice, which is worth an error rather than
-/// stale rows surviving into the second run.
-async fn create_temp_tables(client: &Client) -> Result<(), ConnectionError> {
-    for statement in TEMP_TABLES {
-        client.execute(statement, &[]).await?;
-    }
-    Ok(())
-}
-
 /// Create the fact tables and load every relation the query reads.
 ///
 /// The loads are writes, so the caller must run the query itself outside this
@@ -108,7 +92,9 @@ pub(super) async fn load(
     new_snapshot: &DeploymentSnapshot,
     forced_dirty_schemas: &BTreeSet<SchemaQualifier>,
 ) -> Result<(), ConnectionError> {
-    create_temp_tables(client).await?;
+    for statement in TEMP_TABLES {
+        client.execute(statement, &[]).await?;
+    }
 
     let mut objects = Vec::new();
     let mut depends_on = Vec::new();
