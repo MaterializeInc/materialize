@@ -15,12 +15,11 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::{CheckedTimestamp, DateLike, TimestampPrecision};
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
 use crate::func::most_significant_unit;
-use crate::scalar::func::EagerUnaryFunc;
 
 #[sqlfunc(
     sqlname = "date_to_text",
@@ -46,38 +45,19 @@ fn cast_date_to_string(a: Date) -> String {
 )]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
 
-impl EagerUnaryFunc for CastDateToTimestamp {
-    type Input<'a> = Date;
-    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let out =
-            CheckedTimestamp::from_timestamplike(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
-        let updated = out.round_to_precision(self.0)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampToDate)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastDateToTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("date_to_timestamp")
-    }
+#[sqlfunc(
+    CastDateToTimestamp,
+    sqlname = "date_to_timestamp",
+    output_type_expr = SqlScalarType::Timestamp { precision: self.0 }.nullable(input_type.nullable),
+    preserves_uniqueness = true,
+    inverse = super::CastTimestampToDate,
+    is_monotone = true
+)]
+fn cast_date_to_timestamp(&self, a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    let out =
+        CheckedTimestamp::from_timestamplike(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
+    let updated = out.round_to_precision(self.0)?;
+    Ok(updated)
 }
 
 #[derive(
@@ -93,41 +73,22 @@ impl fmt::Display for CastDateToTimestamp {
 )]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
-impl EagerUnaryFunc for CastDateToTimestampTz {
-    type Input<'a> = Date;
-    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let out =
-            CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_naive_utc_and_offset(
-                NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
-                Utc,
-            ))?;
-        let updated = out.round_to_precision(self.0)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampTzToDate)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastDateToTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("date_to_timestamp_with_timezone")
-    }
+#[sqlfunc(
+    CastDateToTimestampTz,
+    sqlname = "date_to_timestamp_with_timezone",
+    output_type_expr = SqlScalarType::TimestampTz { precision: self.0 }
+        .nullable(input_type.nullable),
+    preserves_uniqueness = true,
+    inverse = super::CastTimestampTzToDate,
+    is_monotone = true
+)]
+fn cast_date_to_timestamp_tz(&self, a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    let out = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_naive_utc_and_offset(
+        NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
+        Utc,
+    ))?;
+    let updated = out.round_to_precision(self.0)?;
+    Ok(updated)
 }
 
 pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numeric, EvalError> {
@@ -175,21 +136,13 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
 )]
 pub struct ExtractDate(pub DateTimeUnits);
 
-impl EagerUnaryFunc for ExtractDate {
-    type Input<'a> = Date;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        extract_date_inner(self.0, a.into())
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        most_significant_unit(self.0)
-    }
+#[sqlfunc(
+    ExtractDate,
+    skip_display = true,
+    is_monotone = most_significant_unit(self.0)
+)]
+fn extract_date(&self, a: Date) -> Result<Numeric, EvalError> {
+    extract_date_inner(self.0, a.into())
 }
 
 impl fmt::Display for ExtractDate {
