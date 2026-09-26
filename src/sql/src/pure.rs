@@ -680,6 +680,20 @@ async fn purify_create_sink(
                 .await
                 .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
         }
+        CreateSinkConnection::Postgres { connection, .. } => {
+            // Only check that the referenced connection is a Postgres one.
+            // TODO: reach the upstream server here, the way the Kafka arm above
+            // proves the broker is reachable.
+            let scx = StatementContext::new(None, &catalog);
+            let item = scx.get_item_by_resolved_name(connection)?;
+            match item.connection()? {
+                Connection::Postgres(_) => {}
+                _ => sql_bail!(
+                    "{} is not a postgres connection",
+                    scx.catalog.resolve_full_name(item.name())
+                ),
+            }
+        }
     }
 
     let mut csr_connection_ids = BTreeSet::new();

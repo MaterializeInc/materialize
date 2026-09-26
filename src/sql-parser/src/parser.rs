@@ -2890,6 +2890,20 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_postgres_sink_config_option(
+        &mut self,
+    ) -> Result<PostgresSinkConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SCHEMA, TABLE])? {
+            SCHEMA => PostgresSinkConfigOptionName::Schema,
+            TABLE => PostgresSinkConfigOptionName::Table,
+            _ => unreachable!(),
+        };
+        Ok(PostgresSinkConfigOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
     fn parse_kafka_sink_config_option(
         &mut self,
     ) -> Result<KafkaSinkConfigOption<Raw>, ParserError> {
@@ -3571,6 +3585,43 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_create_postgres_sink(
+        &mut self,
+        name: Option<UnresolvedItemName>,
+        in_cluster: Option<RawClusterName>,
+        from: RawItemName,
+        if_not_exists: bool,
+        connection: CreateSinkConnection<Raw>,
+    ) -> Result<CreateSinkStatement<Raw>, ParserError> {
+        let envelope = if self.parse_keyword(ENVELOPE) {
+            Some(self.parse_sink_envelope()?)
+        } else {
+            None
+        };
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        Ok(CreateSinkStatement {
+            name,
+            in_cluster,
+            from,
+            connection,
+            // Rows are written as SQL, so there is no wire format to choose.
+            format: None,
+            envelope,
+            mode: None,
+            if_not_exists,
+            with_options,
+        })
+    }
+
     fn parse_create_kafka_sink(
         &mut self,
         name: Option<UnresolvedItemName>,
@@ -3652,6 +3703,9 @@ impl<'a> Parser<'a> {
             }
             conn @ CreateSinkConnection::Iceberg { .. } => {
                 self.parse_create_iceberg_sink(name, in_cluster, from, if_not_exists, conn)
+            }
+            conn @ CreateSinkConnection::Postgres { .. } => {
+                self.parse_create_postgres_sink(name, in_cluster, from, if_not_exists, conn)
             }
         }?;
 
@@ -4141,13 +4195,47 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_create_postgres_sink_connection(
+        &mut self,
+    ) -> Result<CreateSinkConnection<Raw>, ParserError> {
+        self.expect_keyword(CONNECTION)?;
+        let connection = self.parse_raw_name()?;
+
+        let options = if self.consume_token(&Token::LParen) {
+            let options = self.parse_comma_separated(Parser::parse_postgres_sink_config_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        let key = if self.parse_keyword(KEY) {
+            let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+
+            let not_enforced = self.parse_keywords(&[NOT, ENFORCED]);
+            Some(SinkKey {
+                key_columns,
+                not_enforced,
+            })
+        } else {
+            None
+        };
+
+        Ok(CreateSinkConnection::Postgres {
+            connection,
+            key,
+            options,
+        })
+    }
+
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, ICEBERG])? {
+        match self.expect_one_of_keywords(&[KAFKA, ICEBERG, POSTGRES])? {
             KAFKA => self.parse_create_kafka_sink_connection(),
             ICEBERG => {
                 self.expect_keyword(CATALOG)?;
                 self.parse_create_iceberg_sink_connection()
             }
+            POSTGRES => self.parse_create_postgres_sink_connection(),
             _ => unreachable!(),
         }
     }
