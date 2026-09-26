@@ -19,6 +19,7 @@ use mz_audit_log::VersionedEvent;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
 use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlScalarType};
@@ -84,6 +85,45 @@ pub struct BootstrapArgs {
 }
 
 pub type Epoch = NonZeroI64;
+
+/// The shared EpochMilliseconds oracle and clock used by a durable catalog writer.
+/// Every production writer supplies this before opening, including generation
+/// admission and independent replica publication.
+#[derive(Clone, Debug)]
+pub struct CatalogTimestampOracle {
+    oracle: Arc<dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync>,
+    now: NowFn,
+}
+
+impl CatalogTimestampOracle {
+    pub fn new(
+        oracle: Arc<dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync>,
+        now: NowFn,
+    ) -> Self {
+        Self { oracle, now }
+    }
+
+    /// Refuse new future jumps, but preserve inherited progress and the next
+    /// timestamp needed to advance it. A backwards clock step must not prevent
+    /// bootstrap or heartbeat publication.
+    fn check_timestamp(
+        &self,
+        timestamp: mz_repr::Timestamp,
+        inherited: mz_repr::Timestamp,
+    ) -> Result<(), DurableCatalogError> {
+        let now = (self.now)().into();
+        let wall_limit = mz_timestamp_oracle::write_ts_upper_bound(&now);
+        let limit = wall_limit.max(inherited);
+        if timestamp > limit {
+            return Err(DurableCatalogError::TimestampTooFarAhead { timestamp, limit });
+        }
+        if timestamp > wall_limit {
+            tracing::warn!(%timestamp, %now, %inherited,
+                "preserving inherited catalog progress beyond the wall-clock bound");
+        }
+        Ok(())
+    }
+}
 
 /// An API for opening a durable catalog state.
 ///
@@ -343,6 +383,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// current catalog upper.
     ///
     /// Returns what the upper was directly after the transaction committed.
+    /// A production writer allocates through the shared oracle and acknowledges
+    /// only after oracle completion covers the actual durable timestamp. The
+    /// future-timestamp bound is enforced before each durable attempt.
     ///
     /// Empty concurrent progress is retried. Concurrent content returns
     /// `CatalogOutOfSync` without replaying the batch, so callers must refresh and
@@ -359,6 +402,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// A durable attempt observes fencing and retries concurrent content while retaining
     /// projection updates. Bootstrap-bound changes require restart rather than retry.
     /// A no-op only validates fencing and runtime identity already observed by this handle.
+    /// Empty progress does not allocate or complete an oracle write.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
@@ -466,6 +510,7 @@ pub struct TestCatalogStateBuilder {
     version: semver::Version,
     deploy_generation: Option<u64>,
     metrics: Arc<Metrics>,
+    timestamp_oracle: Option<CatalogTimestampOracle>,
 }
 
 impl TestCatalogStateBuilder {
@@ -476,6 +521,7 @@ impl TestCatalogStateBuilder {
             version: semver::Version::new(0, 0, 0),
             deploy_generation: None,
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
+            timestamp_oracle: None,
         }
     }
 
@@ -503,6 +549,11 @@ impl TestCatalogStateBuilder {
         self
     }
 
+    pub fn with_timestamp_oracle(mut self, timestamp_oracle: CatalogTimestampOracle) -> Self {
+        self.timestamp_oracle = Some(timestamp_oracle);
+        self
+    }
+
     pub async fn build(self) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
         persist_backed_catalog_state(
             self.persist_client,
@@ -510,6 +561,7 @@ impl TestCatalogStateBuilder {
             self.version,
             self.deploy_generation,
             self.metrics,
+            self.timestamp_oracle,
         )
         .await
     }
@@ -526,12 +578,15 @@ impl TestCatalogStateBuilder {
 /// Creates an openable durable catalog state implemented using persist.
 ///
 /// `deploy_generation` MUST be `Some` to initialize a new catalog.
+/// Production writers must supply the shared EpochMilliseconds `timestamp_oracle`.
+/// `None` is for readers, savepoints, and isolated durable-catalog unit fixtures.
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
     version: semver::Version,
     deploy_generation: Option<u64>,
     metrics: Arc<Metrics>,
+    timestamp_oracle: Option<CatalogTimestampOracle>,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
     let state = UnopenedPersistCatalogState::new(
         persist_client,
@@ -539,6 +594,7 @@ pub async fn persist_backed_catalog_state(
         version,
         deploy_generation,
         metrics,
+        timestamp_oracle,
     )
     .await?;
     Ok(Box::new(state))
@@ -552,11 +608,19 @@ pub async fn persist_backed_catalog_join_active(
     organization_id: Uuid,
     version: semver::Version,
     metrics: Arc<Metrics>,
+    timestamp_oracle: Option<CatalogTimestampOracle>,
 ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-    persist_backed_catalog_state(persist_client, organization_id, version, None, metrics)
-        .await?
-        .join_active()
-        .await
+    persist_backed_catalog_state(
+        persist_client,
+        organization_id,
+        version,
+        None,
+        metrics,
+        timestamp_oracle,
+    )
+    .await?
+    .join_active()
+    .await
 }
 
 pub fn test_bootstrap_args() -> BootstrapArgs {

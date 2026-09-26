@@ -330,6 +330,7 @@ impl ShouldTerminateGracefully for DurableCatalogError {
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DryRunTransaction
             | DurableCatalogError::InvalidReadProtection(_)
+            | DurableCatalogError::TimestampTooFarAhead { .. }
             | DurableCatalogError::DuplicateKey
             | DurableCatalogError::UniquenessViolation
             | DurableCatalogError::Storage(_)

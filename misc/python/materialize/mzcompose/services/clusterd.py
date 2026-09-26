@@ -32,7 +32,7 @@ def native_catalog_options(
     """Copy the shared native catalog options from one managed clusterd.
 
     Capture the JSON, generation and URL arguments without printing credentials.
-    Fail if no running managed process provides all four options.
+    Fail if no running managed process provides all shared options.
     """
     result = c.exec(
         mz_service,
@@ -41,21 +41,22 @@ def native_catalog_options(
         r"""
         for args in /proc/[0-9]*/cmdline; do
             [[ -r "$args" ]] || continue
-            config= generation= blob= consensus=
+            config= generation= blob= consensus= oracle=
             while IFS= read -r -d '' argument; do
                 case "$argument" in
                     --catalog-config=*) config="$argument" ;;
                     --catalog-deploy-generation=*) generation="$argument" ;;
                     --catalog-persist-blob-url=*) blob="$argument" ;;
                     --catalog-persist-consensus-url=*) consensus="$argument" ;;
+                    --catalog-timestamp-oracle-url=*) oracle="$argument" ;;
                 esac
             done < "$args"
-            if [[ -n "$config" && -n "$generation" && -n "$blob" && -n "$consensus" ]]; then
-                printf '%s\0' "$config" "$generation" "$blob" "$consensus"
+            if [[ -n "$config" && -n "$generation" && -n "$blob" && -n "$consensus" && -n "$oracle" ]]; then
+                printf '%s\0' "$config" "$generation" "$blob" "$consensus" "$oracle"
                 exit 0
             fi
         done
-        echo 'No managed clusterd with all four native catalog options found' >&2
+        echo 'No managed clusterd with all shared native catalog options found' >&2
         exit 1
         """,
         capture=True,

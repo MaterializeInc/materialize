@@ -471,12 +471,38 @@ impl Listeners {
             .open(config.controller.persist_location.clone())
             .await
             .context("opening persist client")?;
+        let timestamp_oracle_url = config.timestamp_oracle_url.as_ref().context(
+            "catalog writes require a timestamp oracle URL (--timestamp-oracle-url or --metadata-backend-url)",
+        )?;
+        let oracle_config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
+            timestamp_oracle_url,
+            &config.metrics_registry,
+        )?;
+        let timestamp_oracle_now = match &config.controller.timestamp_oracle_clock_file {
+            Some(path) => mz_timestamp_oracle::fixture_clock::open(path.clone())
+                .context("opening fixture timestamp clock")?,
+            None => config.now.clone(),
+        };
+        // Protection writes and deployment promotion need a writable oracle even
+        // when the main controllers are starting in read-only mode.
+        let catalog_timestamp_oracle = mz_catalog::durable::CatalogTimestampOracle::new(
+            oracle_config
+                .open(
+                    mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                    mz_repr::Timestamp::MIN,
+                    timestamp_oracle_now.clone(),
+                    false,
+                )
+                .await,
+            timestamp_oracle_now.clone(),
+        );
         let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
             persist_client.clone(),
             config.environment_id.organization_id(),
             BUILD_INFO.semver_version(),
             Some(config.controller.deploy_generation),
             Arc::clone(&config.catalog_config.metrics),
+            Some(catalog_timestamp_oracle.clone()),
         )
         .await?;
 
@@ -677,6 +703,7 @@ impl Listeners {
             deployment_state: deployment_state.clone(),
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+            timestamp_oracle: catalog_timestamp_oracle.clone(),
             caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
             bootstrap_args,
@@ -746,6 +773,7 @@ impl Listeners {
                 // Adopt the active generation so promotion fences this reader.
                 None,
                 Arc::clone(&config.catalog_config.metrics),
+                None,
             )
             .await?
             .open_read_only(&bootstrap_args)
@@ -809,6 +837,7 @@ impl Listeners {
                     config.environment_id.organization_id(),
                     config.controller.build_info.semver_version(),
                     Arc::clone(&config.catalog_config.metrics),
+                    Some(catalog_timestamp_oracle.clone()),
                 )
                 .await?,
             )
@@ -824,7 +853,8 @@ impl Listeners {
             storage: adapter_storage,
             client_protection_storage,
             compaction_bound_subscriber,
-            timestamp_oracle_url: config.timestamp_oracle_url,
+            timestamp_oracle_config: Some(oracle_config),
+            timestamp_oracle_now,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,

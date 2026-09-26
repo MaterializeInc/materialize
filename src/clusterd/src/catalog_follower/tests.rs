@@ -22,6 +22,45 @@ use mz_storage_client::controller::StorageTxn;
 
 pub(super) const BUILD: &str = "1.0.0";
 
+pub(super) fn timestamp_oracle() -> CatalogTimestampOracle {
+    CatalogTimestampOracle::new(
+        Arc::new(TestTimestampOracle::default()),
+        mz_ore::now::SYSTEM_TIME.clone(),
+    )
+}
+
+/// Process-local oracle for followers backed by in-memory Persist.
+#[derive(Debug, Default)]
+struct TestTimestampOracle {
+    times: std::sync::Mutex<(mz_repr::Timestamp, mz_repr::Timestamp)>,
+}
+
+#[async_trait::async_trait]
+impl mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> for TestTimestampOracle {
+    async fn write_ts(&self) -> mz_timestamp_oracle::WriteTimestamp {
+        let mut times = self.times.lock().unwrap();
+        times.1 = times.1.step_forward();
+        mz_timestamp_oracle::WriteTimestamp {
+            timestamp: times.1,
+            advance_to: times.1.step_forward(),
+        }
+    }
+
+    async fn peek_write_ts(&self) -> mz_repr::Timestamp {
+        self.times.lock().unwrap().1
+    }
+
+    async fn read_ts(&self) -> mz_repr::Timestamp {
+        self.times.lock().unwrap().0
+    }
+
+    async fn apply_write(&self, timestamp: mz_repr::Timestamp) {
+        let mut times = self.times.lock().unwrap();
+        times.0 = times.0.max(timestamp);
+        times.1 = times.1.max(timestamp);
+    }
+}
+
 pub(super) async fn debug_catalog(persist: &PersistClient, wal: Option<ShardId>) -> Catalog {
     let organization = Uuid::new_v4();
     let bootstrap = test_bootstrap_args();

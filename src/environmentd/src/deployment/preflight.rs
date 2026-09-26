@@ -37,6 +37,7 @@ pub struct PreflightInput {
     pub deployment_state: DeploymentState,
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
+    pub timestamp_oracle: mz_catalog::durable::CatalogTimestampOracle,
     pub caught_up_max_wait: Duration,
     pub ddl_check_interval: Duration,
     pub panic_after_timeout: bool,
@@ -63,6 +64,7 @@ pub async fn preflight_0dt(
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
+        timestamp_oracle,
         caught_up_max_wait,
         ddl_check_interval,
         panic_after_timeout,
@@ -196,6 +198,7 @@ pub async fn preflight_0dt(
                 BUILD_INFO.semver_version(),
                 Some(deploy_generation),
                 Arc::clone(&catalog_metrics),
+                Some(timestamp_oracle),
             )
             .await
             .expect("incompatible catalog/persist version");
@@ -248,6 +251,7 @@ async fn check_ddl_changes(
         BUILD_INFO.semver_version(),
         Some(deploy_generation),
         catalog_metrics,
+        None,
     )
     .await
     .expect("incompatible catalog/persist version");
@@ -341,6 +345,7 @@ async fn get_next_ids(
         BUILD_INFO.semver_version(),
         Some(deploy_generation),
         catalog_metrics,
+        None,
     )
     .await
     .expect("incompatible catalog/persist version");

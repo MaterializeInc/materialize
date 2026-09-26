@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Context;
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::config::ReplicaCatalogConfig;
-use mz_catalog::durable::{Metrics, persist_backed_catalog_state};
+use mz_catalog::durable::{CatalogTimestampOracle, Metrics, persist_backed_catalog_state};
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions};
 use mz_catalog::memory::implications::{CatalogImplications, ParsedStateUpdate};
 use mz_catalog::memory::objects::CatalogItem;
@@ -48,6 +48,7 @@ pub(crate) struct Config {
     pub replica_id: ReplicaId,
     pub deploy_generation: u64,
     pub persist_location: PersistLocation,
+    pub timestamp_oracle: CatalogTimestampOracle,
     pub build_info: &'static mz_build_info::BuildInfo,
 }
 
@@ -249,6 +250,7 @@ pub(crate) async fn run(
         config.build_info.semver_version(),
         Some(config.deploy_generation),
         Arc::new(Metrics::new(&registry)),
+        Some(config.timestamp_oracle.clone()),
     )
     .await?
     .join()

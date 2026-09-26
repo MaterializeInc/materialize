@@ -368,6 +368,8 @@ pub(crate) struct GroupCommitter {
     catalog_upper: CatalogUpperHandle,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     now: NowFn,
+    /// Timestamp policy can use the shared fixture clock without changing throttling.
+    timestamp_oracle_now: NowFn,
     metrics: Metrics,
     max_attempts: ConfigValHandle<usize>,
 }
@@ -477,7 +479,7 @@ impl GroupCommitter {
 
         // Committing here would apply the target to the oracle below, which is what makes
         // it stick. See `write_ts_upper_bound`.
-        let now: Timestamp = (self.now)().into();
+        let now: Timestamp = (self.timestamp_oracle_now)().into();
         let limit = write_ts_upper_bound(&now);
         if target_timestamp > limit {
             result.send(WriteResult::TimestampTooFarAhead {
@@ -611,7 +613,7 @@ impl GroupCommitter {
             Err(_recv) => return TxnsWriteAttempt::WorkerGone,
         }
 
-        let now: Timestamp = (self.now)().into();
+        let now: Timestamp = (self.timestamp_oracle_now)().into();
         crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
 
         // The append above is already readable in Persist and has advanced the
@@ -757,6 +759,7 @@ pub(crate) fn spawn_group_committer(
     catalog_upper: CatalogUpperHandle,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     now: NowFn,
+    timestamp_oracle_now: NowFn,
     metrics: Metrics,
     dyncfgs: &ConfigSet,
 ) {
@@ -767,6 +770,7 @@ pub(crate) fn spawn_group_committer(
         catalog_upper,
         internal_cmd_tx,
         now,
+        timestamp_oracle_now,
         metrics,
         max_attempts: GROUP_COMMIT_MAX_ATTEMPTS.handle(dyncfgs),
     };
@@ -1856,6 +1860,7 @@ mod tests {
                 catalog_upper: catalog.upper_handle(),
                 internal_cmd_tx,
                 now: SYSTEM_TIME.clone(),
+                timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
                 max_attempts: ConfigValHandle::disconnected(2),
             };
@@ -1919,6 +1924,7 @@ mod tests {
                 catalog_upper: catalog.upper_handle(),
                 internal_cmd_tx,
                 now: SYSTEM_TIME.clone(),
+                timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
                 max_attempts: ConfigValHandle::disconnected(0),
             };

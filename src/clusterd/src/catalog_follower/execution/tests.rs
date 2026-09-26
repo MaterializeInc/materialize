@@ -75,6 +75,7 @@ async fn startup_rejects_mismatched_plan_versions() {
             replica_id: config.replica_id,
             deploy_generation: config.deploy_generation,
             persist_location: config.persist_location.clone(),
+            timestamp_oracle: config.timestamp_oracle.clone(),
             build_info: config.build_info,
         };
         let error = timeout(
@@ -390,6 +391,7 @@ impl Fixture {
             replica_id,
             deploy_generation: 0,
             persist_location: location,
+            timestamp_oracle: follower::tests::timestamp_oracle(),
             build_info: writer.config().build_info,
         };
 

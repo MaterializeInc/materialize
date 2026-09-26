@@ -133,7 +133,6 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::url::SensitiveUrl;
 use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
 };
@@ -1331,7 +1330,9 @@ pub struct Config {
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     pub client_protection_storage: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub compaction_bound_subscriber: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
-    pub timestamp_oracle_url: Option<SensitiveUrl>,
+    pub timestamp_oracle_config: Option<TimestampOracleConfig>,
+    /// Clock for timestamp allocation and policy checks, shared with catalog writers.
+    pub timestamp_oracle_now: NowFn,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -2283,6 +2284,8 @@ pub struct Coordinator {
     /// Optional config for the timestamp oracle. This is _required_ when
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
+    /// Clock for timestamp allocation and policy checks, not other adapter consumers.
+    timestamp_oracle_now: NowFn,
 
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
     /// clusters/collections whether they are caught up.
@@ -5567,7 +5570,8 @@ pub fn serve(
         mut storage,
         client_protection_storage,
         compaction_bound_subscriber,
-        timestamp_oracle_url,
+        timestamp_oracle_config,
+        timestamp_oracle_now,
         unsafe_mode,
         all_features,
         build_info,
@@ -5646,9 +5650,6 @@ pub fn serve(
         let oracle_init_start = Instant::now();
         info!("startup: coordinator init: timestamp oracle init beginning");
 
-        let timestamp_oracle_config = timestamp_oracle_url
-            .map(|url| TimestampOracleConfig::from_url(&url, &metrics_registry))
-            .transpose()?;
         let mut initial_timestamps =
             get_initial_oracle_timestamps(&timestamp_oracle_config).await?;
 
@@ -5663,7 +5664,7 @@ pub fn serve(
             Coordinator::ensure_timeline_state_with_initial_time(
                 &timeline,
                 initial_timestamp,
-                now.clone(),
+                timestamp_oracle_now.clone(),
                 timestamp_oracle_config.clone(),
                 &mut timestamp_oracles,
                 read_only_controllers,
@@ -5671,9 +5672,9 @@ pub fn serve(
             .await;
         }
 
-        // Opening the durable catalog uses one or more timestamps without communicating with
-        // the timestamp oracle. Here we make sure to apply the catalog upper with the timestamp
-        // oracle to linearize future operations with opening the catalog.
+        // Bootstrap also orders its table and builtin initialization beyond the
+        // observed catalog prefix. Durable catalog writers complete their own
+        // commits through the shared oracle.
         let catalog_upper = storage.current_upper().await;
         // Choose a time at which to boot. This is used, for example, to prune
         // old storage usage data or migrate audit log entries.
@@ -5689,7 +5690,7 @@ pub fn serve(
         // clock is re-applied to the oracle here on every boot and cannot be waited out. We
         // report it rather than refusing to start: the timeline is stalled either way, and a
         // process that will not boot turns that into a total outage plus a crash loop.
-        let boot_now: mz_repr::Timestamp = (now)().into();
+        let boot_now: mz_repr::Timestamp = (timestamp_oracle_now)().into();
         if catalog_upper > timeline::write_ts_upper_bound(&boot_now) {
             tracing::error!(
                 %catalog_upper, %boot_now,
@@ -6058,6 +6059,7 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
+                    timestamp_oracle_now,
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
@@ -6080,6 +6082,7 @@ pub fn serve(
                         coord.catalog().upper_handle(),
                         coord.internal_cmd_tx.clone(),
                         coord.catalog().config().now.clone(),
+                        coord.timestamp_oracle_now.clone(),
                         coord.metrics.clone(),
                         coord.catalog().system_config().dyncfgs(),
                     );

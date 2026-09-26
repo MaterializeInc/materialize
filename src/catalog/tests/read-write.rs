@@ -34,6 +34,9 @@ use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, Sche
 use mz_storage_client::controller::StorageTxn;
 use uuid::Uuid;
 
+#[path = "read-write/oracle.rs"]
+mod oracle;
+
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_advance_upper_fencing() {
