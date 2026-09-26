@@ -1366,6 +1366,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 })
                 .unwrap_or(0);
 
+            let healthy_since = pod_healthy_since(&pod);
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -1389,6 +1390,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 process_id,
                 status,
                 restart_count,
+                healthy_since,
                 time: DateTime::from_timestamp_nanos(
                     time.as_nanosecond().try_into().expect("must fit"),
                 ),
@@ -1831,9 +1833,82 @@ fn topology_spread_min_domains(
     if soft || az_pinned { None } else { min_domains }
 }
 
+/// Reconstruct health across watch reconnects without counting time before a
+/// container restart. A fast restart need not produce an observed Ready flap.
+fn pod_healthy_since(pod: &Pod) -> Option<DateTime<chrono::Utc>> {
+    let status = pod.status.as_ref()?;
+    let ready = status
+        .conditions
+        .as_ref()?
+        .iter()
+        .find(|c| c.type_ == "Ready")?;
+    if ready.status != "True" {
+        return None;
+    }
+    let mut since = ready.last_transition_time.as_ref()?.0;
+    let containers = status.container_statuses.as_ref()?;
+    if containers.is_empty() {
+        return None;
+    }
+    for container in containers {
+        let started = container
+            .state
+            .as_ref()?
+            .running
+            .as_ref()?
+            .started_at
+            .as_ref()?
+            .0;
+        since = since.max(started);
+    }
+    DateTime::from_timestamp_nanos(since.as_nanosecond().try_into().expect("must fit")).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn health_anchor_survives_reconnect_but_not_restart() {
+        let mut pod: Pod = serde_json::from_value(serde_json::json!({
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True",
+                    "lastTransitionTime": "2026-09-25T12:00:00Z"}],
+                "containerStatuses": [{"name": "clusterd", "image": "test",
+                    "imageID": "test", "ready": true, "restartCount": 0,
+                    "state": {"running": {"startedAt": "2026-09-25T11:59:00Z"}}}]
+            }
+        }))
+        .unwrap();
+        let ready = "2026-09-25T12:00:00Z"
+            .parse::<DateTime<chrono::Utc>>()
+            .unwrap();
+        assert_eq!(pod_healthy_since(&pod), Some(ready));
+        assert_eq!(pod_healthy_since(&pod.clone()), Some(ready));
+
+        let status = pod.status.as_mut().unwrap();
+        let container = &mut status.container_statuses.as_mut().unwrap()[0];
+        container.restart_count = 1;
+        container
+            .state
+            .as_mut()
+            .unwrap()
+            .running
+            .as_mut()
+            .unwrap()
+            .started_at =
+            Some(serde_json::from_value(serde_json::json!("2026-09-25T12:10:00Z")).unwrap());
+        assert_eq!(
+            pod_healthy_since(&pod),
+            Some(ready + chrono::Duration::minutes(10))
+        );
+
+        pod.status.as_mut().unwrap().conditions.as_mut().unwrap()[0].status = "False".into();
+        assert_eq!(pod_healthy_since(&pod), None);
+        pod.status.as_mut().unwrap().conditions.as_mut().unwrap()[0].status = "True".into();
+        pod.status.as_mut().unwrap().container_statuses = None;
+        assert_eq!(pod_healthy_since(&pod), None);
+    }
 
     #[mz_ore::test]
     fn topology_spread_min_domains_suppression() {

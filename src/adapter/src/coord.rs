@@ -1921,6 +1921,7 @@ impl ClusterReplicaStatuses {
                 let status = ClusterReplicaProcessStatus {
                     status: ClusterStatus::Offline(Some(OfflineReason::Initializing)),
                     restart_count: 0,
+                    healthy_since: None,
                     time: time.clone(),
                 };
                 (u64::cast_from(process_id), status)

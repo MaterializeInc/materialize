@@ -403,6 +403,8 @@ pub struct ClusterEvent {
     /// Cumulative restart count of the process, propagated from the orchestrator.
     /// See [`mz_orchestrator::ServiceEvent::restart_count`].
     pub restart_count: u64,
+    /// See [`mz_orchestrator::ServiceEvent::healthy_since`].
+    pub healthy_since: Option<DateTime<Utc>>,
     pub time: DateTime<Utc>,
 }
 
@@ -645,6 +647,7 @@ impl Controller {
                 process_id: event.process_id,
                 status: event.status,
                 restart_count: event.restart_count,
+                healthy_since: event.healthy_since,
                 time: event.time,
             };
 

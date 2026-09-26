@@ -380,6 +380,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         process_id: u64::cast_from(process_id),
                         status: process_state.status.into(),
                         restart_count: process_state.restart_count,
+                        healthy_since: matches!(process_state.status, ProcessStatus::Ready { .. })
+                            .then_some(process_state.status_time),
                         time: process_state.status_time,
                     });
                 }
@@ -1178,6 +1180,7 @@ impl ProcessStateUpdater {
             process_id: u64::cast_from(self.i),
             status: status.into(),
             restart_count: process_state.restart_count,
+            healthy_since: matches!(status, ProcessStatus::Ready { .. }).then_some(status_time),
             time: status_time,
         });
     }
