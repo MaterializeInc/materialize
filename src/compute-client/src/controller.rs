@@ -869,13 +869,15 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only sink exports are allowed to have a `target_replica`: materialized views, subscribes,
-    /// and metric sinks. A user's `CREATE METRIC SINK` runs untargeted, so every replica renders it
-    /// into its own registry. The coordinator's curated metric sinks are installed per replica and
-    /// do target one, so each replica's series are attributable to it.
+    /// A dataflow with a `target_replica` is installed on that replica only, and every reader of
+    /// its index exports must target the same replica. A user's `CREATE METRIC SINK` runs
+    /// untargeted, so every replica renders it into its own registry. The coordinator's curated
+    /// metric sinks are installed per replica and do target one, so each replica's series are
+    /// attributable to it.
     ///
-    /// Panics if called with a dataflow description that has index exports
-    /// when `target_replica` is set.
+    /// # Panics
+    ///
+    /// Panics if `target_replica` is set and the dataflow exports a non-transient index.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
@@ -891,9 +893,12 @@ impl ComputeController {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            // A targeted index needs readers that target the same replica. Only a transient index,
+            // read by the single peek it was built for, can promise that.
             assert!(
-                dataflow.exported_index_ids().next().is_none(),
-                "Replica-targeted indexes are not supported"
+                dataflow.exported_index_ids().all(|id| id.is_transient()),
+                "replica-targeted dataflow {} exports a non-transient index",
+                dataflow.debug_name,
             );
         }
 
