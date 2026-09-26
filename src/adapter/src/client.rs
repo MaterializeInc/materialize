@@ -823,6 +823,7 @@ impl SessionClient {
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
         let cancel_future = cancel_future.map(|_| ()).shared();
+        let new_statement = outer_ctx_extra.is_none();
 
         // Owning the end-of-execution obligation in this frame is what lets
         // cancellation report an error: the inner future can be dropped without
@@ -836,6 +837,7 @@ impl SessionClient {
             &mut logging,
             cancel_future,
             execute_started,
+            new_statement,
         ))
         .await;
 
@@ -853,7 +855,40 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send + Clone,
         execute_started: Instant,
+        new_statement: bool,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // All execution paths share this admission boundary. Only a new outer
+        // statement discards an earlier cancellation. Replanning, fallback, and
+        // cursor execution inside FETCH must retain an in-flight request.
+        let conn_id = self.session().conn_id().clone();
+        let timeout = *self.session().vars().statement_timeout();
+        let expires = (!timeout.is_zero())
+            .then_some(timeout)
+            .and_then(|timeout| execute_started.checked_add(timeout));
+        let mut connection_cancel = crate::util::run_cancellable(
+            cancel_future.clone(),
+            expires,
+            self.peek_client
+                .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
+                    conn_id,
+                    reset: new_statement,
+                    tx,
+                }),
+        )
+        .await?;
+        let cancel_future = async move {
+            tokio::select! {
+                _ = cancel_future => (),
+                _ = async {
+                    if connection_cancel.wait_for(|canceled| *canceled).await.is_err() {
+                        futures::future::pending::<()>().await;
+                    }
+                } => (),
+            }
+        }
+        .boxed()
+        .shared();
+
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
         // flows through `try_frontend_peek` /
         // `try_frontend_read_then_write` below, rather than being
@@ -870,8 +905,8 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // Diagnostic I/O observes disconnects. Other frontend stages retain their
-        // own execution and cancellation boundaries.
+        // Pre-execution waits observe disconnects and connection cancellation.
+        // Dispatch paths retain their own execution and cleanup boundaries.
         let peek_result = self
             .try_frontend_peek(
                 &portal_name,
@@ -1560,9 +1595,8 @@ impl SessionClient {
     ///
     /// The gate is deliberately cheap, a flag read and a portal lookup, because
     /// every statement that reaches `execute_attempts` without being handled by
-    /// the peek path is tested against it. Everything expensive, including the
-    /// coordinator round-trip that registers the connection cancel watch, sits
-    /// behind it.
+    /// the peek path is tested against it. Unsupported statements must not enter
+    /// write planning or allocate write-attempt state.
     fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
         if !self.peek_client.frontend_read_then_write_enabled {
             return false;
@@ -1593,10 +1627,8 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        // Bail out before the cancel-watch registration below, which is a
-        // synchronous round-trip through the coordinator's command loop. A
-        // statement this path will not take over must not pay for it, and must
-        // not add queueing latency for other sessions either.
+        // Only statements this path takes over need a write attempt and its
+        // submission-aware cancellation boundary.
         if !self.frontend_read_then_write_applies(portal_name) {
             return Ok(None);
         }
@@ -1616,45 +1648,6 @@ impl SessionClient {
         };
         tokio::pin!(statement_timeout);
 
-        // Registering installs a fresh channel, so this cannot observe a
-        // cancellation aimed at an earlier statement. The entry it leaves behind
-        // is replaced by the next registration and removed when a statement
-        // reaches the coordinator or the connection's state is cleared, so there
-        // is nothing to unregister here.
-        let mut connection_cancel_rx = {
-            let register =
-                self.peek_client
-                    .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
-                        conn_id: conn_id.clone(),
-                        tx,
-                    });
-            tokio::pin!(register);
-            tokio::select! {
-                rx = &mut register => rx?,
-                _ = &mut cancel_future => {
-                    inner_client.try_send(Command::PrivilegedCancelRequest {
-                        conn_id: conn_id.clone(),
-                    });
-                    return Err(AdapterError::Canceled);
-                }
-                _ = &mut statement_timeout => {
-                    inner_client.try_send(Command::PrivilegedCancelRequest {
-                        conn_id: conn_id.clone(),
-                    });
-                    return Err(AdapterError::StatementTimeout);
-                }
-            }
-        };
-        if *connection_cancel_rx.borrow() {
-            return Err(AdapterError::Canceled);
-        }
-        let connection_cancel = async move {
-            if connection_cancel_rx.wait_for(|v| *v).await.is_err() {
-                futures::future::pending::<()>().await;
-            }
-        };
-        tokio::pin!(connection_cancel);
-
         let frontend_read_then_write =
             self.try_frontend_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
         tokio::pin!(frontend_read_then_write);
@@ -1662,7 +1655,6 @@ impl SessionClient {
         let requested = tokio::select! {
             response = &mut frontend_read_then_write => return response,
             _ = &mut cancel_future => FrontendWriteCancellation::Canceled,
-            _ = &mut connection_cancel => FrontendWriteCancellation::Canceled,
             _ = &mut statement_timeout => FrontendWriteCancellation::StatementTimeout,
         };
 

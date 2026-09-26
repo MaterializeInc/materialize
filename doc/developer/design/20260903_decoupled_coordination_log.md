@@ -1370,3 +1370,8 @@ Its earlier catalog certification is not a substitute for that data timestamp.
 Query catch-up applies the requested complete prefix from the durable handle,
 including buffered updates, without treating a fetched or synchronized upper as
 an already-applied projection.
+
+Catalog certification can wait before a peek is registered. Cancellation admission
+belongs to the outer execution boundary and must survive frontend replanning,
+coordinator fallback, and nested FETCH. Only a new outer statement discards a prior
+cancellation. Submitted writes still require a definitive result.

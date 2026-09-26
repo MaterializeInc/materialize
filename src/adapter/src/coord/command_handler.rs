@@ -680,18 +680,15 @@ impl Coordinator {
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
-                Command::RegisterConnectionCancelWatch { conn_id, tx } => {
-                    // Always replace any existing entry. Another code path
-                    // (e.g. `sequence_staged`) may have left a stale watch
-                    // here, possibly already signaled `true` from a prior
-                    // cancel. Reusing it via `or_insert_with` would hand out
-                    // a `Receiver` that already reads `true`, causing the new
-                    // operation to immediately return `Canceled` even though
-                    // it hasn't been cancelled.
-                    let (watch_tx, watch_rx) = watch::channel(false);
-                    self.connection_cancel_watches
-                        .insert(conn_id, (watch_tx, watch_rx.clone()));
-                    let _ = tx.send(watch_rx);
+                Command::RegisterConnectionCancelWatch { conn_id, reset, tx } => {
+                    if reset {
+                        self.connection_cancel_watches.remove(&conn_id);
+                    }
+                    let (_, watch_rx) = self
+                        .connection_cancel_watches
+                        .entry(conn_id)
+                        .or_insert_with(|| watch::channel(false));
+                    let _ = tx.send(watch_rx.clone());
                 }
                 Command::CreateInternalSubscribe {
                     catalog,
@@ -1232,18 +1229,8 @@ impl Coordinator {
         let outer_context = outer_context
             .map(|extra| ExecuteContextGuard::new(extra.retire(), self.internal_cmd_tx.clone()));
 
-        // A new statement is starting, so discard any cancellation that was signaled while no
-        // statement was running. Such a cancellation targeted an earlier statement and must not
-        // cancel the new one. (Like in PostgreSQL, a cancel request that arrives when nothing is
-        // running has no effect.) The watch would otherwise retain a stale `true` within an
-        // explicit transaction, because it is removed only when the transaction is cleared, not
-        // at statement end.
-        //
-        // Don't do this for nested executes (e.g., FETCH executing its cursor's statement): the
-        // outer statement is still running and a pending cancellation may target it.
-        if outer_context.is_none() {
-            self.connection_cancel_watches.remove(session.conn_id());
-        }
+        // SessionClient establishes cancellation admission before frontend
+        // planning. Retain that watch through fallback and nested execution.
 
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()

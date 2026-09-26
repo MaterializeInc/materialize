@@ -419,10 +419,11 @@ pub enum Command {
     /// Registers a connection-scoped cancellation watch and returns a receiver
     /// that becomes `true` when cancellation is requested for the connection.
     ///
-    /// Registration always installs a fresh channel, so the caller cannot
-    /// observe a cancellation aimed at an earlier statement.
+    /// New outer statements reset the channel. Continuations retain any
+    /// cancellation already requested for the execution they belong to.
     RegisterConnectionCancelWatch {
         conn_id: ConnectionId,
+        reset: bool,
         tx: oneshot::Sender<watch::Receiver<bool>>,
     },
 

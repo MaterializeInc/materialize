@@ -98,11 +98,17 @@ impl PeekClient {
             }
         }
 
+        let timeout = *session.vars().statement_timeout();
+        let expires = (!timeout.is_zero())
+            .then_some(timeout)
+            .and_then(|timeout| execute_started.checked_add(timeout));
         let diagnostic_cancel = diagnostic_cancel.boxed().shared();
-        let (mut catalog, mut catalog_read_ts) = tokio::select! {
-            result = self.fresh_catalog_snapshot("try_frontend_peek") => result?,
-            _ = diagnostic_cancel.clone() => return Err(AdapterError::Canceled),
-        };
+        let (mut catalog, mut catalog_read_ts) = crate::util::run_cancellable(
+            diagnostic_cancel.clone(),
+            expires,
+            self.fresh_catalog_snapshot("try_frontend_peek"),
+        )
+        .await?;
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement
@@ -217,7 +223,7 @@ impl PeekClient {
                     &params,
                     logging,
                     diagnostic_cancel.clone(),
-                    execute_started,
+                    expires,
                 )
                 .await?;
             if response.is_some() {
@@ -225,10 +231,12 @@ impl PeekClient {
             }
             // No execution or transaction timestamp was installed. A newer
             // definition prefix requires planning again, not replaying old work.
-            (catalog, catalog_read_ts) = tokio::select! {
-                result = self.fresh_catalog_snapshot("replan frontend peek") => result?,
-                _ = diagnostic_cancel.clone() => return Err(AdapterError::Canceled),
-            };
+            (catalog, catalog_read_ts) = crate::util::run_cancellable(
+                diagnostic_cancel.clone(),
+                expires,
+                self.fresh_catalog_snapshot("replan frontend peek"),
+            )
+            .await?;
             Coordinator::verify_portal(&catalog, session, portal_name)?;
         }
     }
@@ -250,7 +258,7 @@ impl PeekClient {
         params: &Params,
         logging: &mut ExecutionLogging,
         diagnostic_cancel: impl std::future::Future<Output = ()> + Send + Clone,
-        execute_started: std::time::Instant,
+        expires: Option<std::time::Instant>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -746,14 +754,14 @@ impl PeekClient {
                     } = &determination.timestamp_context
                     && *timestamp > validated_at
                 {
-                    let current = tokio::select! {
-                        result = async {
+                    let current =
+                        crate::util::run_cancellable(diagnostic_cancel.clone(), expires, async {
                             self.oracle_read_ts_at_least(Timeline::EpochMilliseconds, *timestamp)
                                 .await?;
-                            self.catalog_snapshot_at(Arc::clone(&catalog), *timestamp).await
-                        } => result?,
-                        _ = diagnostic_cancel.clone() => return Err(AdapterError::Canceled),
-                    };
+                            self.catalog_snapshot_at(Arc::clone(&catalog), *timestamp)
+                                .await
+                        })
+                        .await?;
                     if current.planning_position() != catalog.planning_position() {
                         return Ok(None);
                     }
@@ -1350,29 +1358,18 @@ impl PeekClient {
                     // Diagnostic work has not dispatched a peek. It can stop on
                     // disconnect, cancellation, or the original execution budget
                     // without abandoning an executing query.
-                    let timeout = *session.vars().statement_timeout();
-                    let expires = (!timeout.is_zero())
-                        .then_some(timeout)
-                        .and_then(|timeout| execute_started.checked_add(timeout));
                     let observe = async {
-                        let mut cancel = self
-                            .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
-                                conn_id: session.conn_id().clone(),
-                                tx,
-                            })
-                            .await?;
-                        tokio::select! {
-                            biased;
-                            _ = cancel.wait_for(|canceled| *canceled) => {
-                                Err(AdapterError::Canceled)
-                            },
-                            explanation = client.explain_timestamp(
-                                &catalog, session.conn_id(), session.pcx().wall_time,
-                                &input_id_bundle, determination,
-                            ) => Ok(explanation),
-                        }
+                        Ok(client
+                            .explain_timestamp(
+                                &catalog,
+                                session.conn_id(),
+                                session.pcx().wall_time,
+                                &input_id_bundle,
+                                determination,
+                            )
+                            .await)
                     };
-                    Some(crate::util::run_diagnostic(diagnostic_cancel, expires, observe).await?)
+                    Some(crate::util::run_cancellable(diagnostic_cancel, expires, observe).await?)
                 } else {
                     None
                 };

@@ -382,7 +382,7 @@ impl Coordinator {
             let canceled = async {
                 let _ = cancel.wait_for(|canceled| *canceled).await;
             };
-            crate::util::run_diagnostic(canceled, expires, async {
+            crate::util::run_cancellable(canceled, expires, async {
                 Ok(client
                     .explain_timestamp(&catalog, &conn_id, wall_time, &id_bundle, determination)
                     .await)

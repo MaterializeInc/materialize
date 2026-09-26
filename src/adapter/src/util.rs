@@ -33,10 +33,10 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::{ExecuteContext, ExecuteResponse};
 
-/// Run diagnostic I/O within the execution's existing budget. Cancellation and
+/// Run cancellation-safe work within the execution's existing budget. Cancellation and
 /// expiration take precedence over ready work, including work that would dispatch
 /// another request. Dropping the work must be cancellation-safe.
-pub(crate) async fn run_diagnostic<T>(
+pub(crate) async fn run_cancellable<T>(
     cancel: impl std::future::Future<Output = ()>,
     expires: Option<std::time::Instant>,
     work: impl std::future::Future<Output = Result<T, AdapterError>>,
@@ -498,7 +498,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    async fn diagnostic_cancellation_and_expiration_precede_work() {
+    async fn cancellation_and_expiration_precede_work() {
         use std::future::{pending, poll_fn, ready};
         use std::task::Poll;
         use std::time::{Duration, Instant};
@@ -506,21 +506,21 @@ mod tests {
         let expired = Some(Instant::now() - Duration::from_secs(1));
         let must_not_run = || {
             poll_fn(|_| -> Poll<Result<(), AdapterError>> {
-                panic!("canceled or expired diagnostic work was polled")
+                panic!("canceled or expired work was polled")
             })
         };
         assert!(matches!(
-            run_diagnostic(ready(()), expired, must_not_run()).await,
+            run_cancellable(ready(()), expired, must_not_run()).await,
             Err(AdapterError::Canceled)
         ));
         assert!(matches!(
-            run_diagnostic(pending(), expired, must_not_run()).await,
+            run_cancellable(pending(), expired, must_not_run()).await,
             Err(AdapterError::StatementTimeout)
         ));
         assert_eq!(
-            run_diagnostic(pending(), None, ready(Ok(7)))
+            run_cancellable(pending(), None, ready(Ok(7)))
                 .await
-                .expect("uncanceled diagnostic succeeds"),
+                .expect("uncanceled work succeeds"),
             7
         );
     }
