@@ -33,11 +33,13 @@ design a same-version-only shortcut that needs another ownership model for
 version overlap.
 
 Close the known serving-compatibility gaps at their owning boundaries:
-- Index candidates and transaction eligibility come from the catalog. Repair
-  the handoff to justified read protection and import readiness, rather than
-  hiding pending indexes or weakening the transaction check. Preserve fixed
-  timestamps and existing concurrent-DDL semantics.
-- Restore statement-specific timeout scope at admission, retaining freshness,
+- Establish the index's initial as_of, bound and logical/actual-input protection
+  with its definition and selected plan in the DDL transaction. Plan changes
+  update import protection atomically. SELECT and EXPLAIN share acquisition
+  before installation. Preserve fixed timestamps, transaction effects and
+  zero-replica EXPLAIN, without observation-dependent candidates or EXPLAIN
+  workarounds. Protection follows current requirements, not a birth-time pin.
+- Preserve statement-specific timeout scope at admission, retaining freshness,
   explicit cancellation and definitive completion for submitted writes. No
   universal deadline or SET-only workaround.
 - Remove obsolete controller accounting. Keep meaningful public lag, frontier,

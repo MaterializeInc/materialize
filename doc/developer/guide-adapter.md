@@ -342,13 +342,17 @@ progress alone does not establish completion of source output.
 
 The catalog determines index candidates and transaction eligibility, even
 before replica installation. Runtime observations must not change that logical
-domain without DDL. Read acquisition must establish a justified protected
-frontier before fixing a transaction timestamp, while execution checks actual
-import readability and waits for required progress. Pending installation is not
-object absence. A fresh index can have neither a reported read frontier nor a
-published bound. Do not invent one, weaken protection, or hide the index to
-avoid read admission. Pure EXPLAIN may describe a plan without waiting for its
-hypothetical execution.
+domain without DDL. Index creation commits a justified initial `as_of` and
+compaction bound with protection for both logical inputs and the selected plan's
+actual imports. Read acquisition uses that committed protection before fixing a
+transaction timestamp, without requiring an installed trace. Neither a bare
+catalog entry nor an assumed `MIN` establishes a valid frontier.
+
+SELECT and nonexecuting EXPLAIN share read-hold acquisition and preserve their
+transaction effects. EXPLAIN does not wait for hypothetical execution, including
+on zero-replica clusters. Actual execution separately checks import readability
+and waits for required progress. Installation and plan changes must honor valid
+protection, not skip required history because a chosen import compacted further.
 
 ## Rejected Optimizations
 

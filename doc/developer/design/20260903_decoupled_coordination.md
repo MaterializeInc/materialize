@@ -179,6 +179,10 @@ boundaries. Persisted inputs do: reading an upstream MV protects its output,
 while that MV's maintenance separately protects its own inputs. Indexes remain
 replaceable access paths, not the authority for recovery dependencies.
 
+[Selected written plans](#written-plans) also carry catalog-owned protection for
+actual imports, including other indexes, independently of adapter or replica
+lifetimes.
+
 Protection follows the history needed for installation and recovery, rather than
 pinning creation-time history forever. For MVs it can advance with durable output
 progress and cease when no further input reads are needed for recovery. Execution
@@ -196,11 +200,11 @@ valid, compute and persist compaction must respect it, including through
 dependencies, installation, and ownership handover. One client cannot release
 another's protection.
 
-Installation `as_of` selection respects committed permission, with the replacement
-semantics for indexes described in [Index reconstruction](#index-reconstruction).
-An MV's initial storage visibility boundary remains a distinct concept. The
-representation and accounting mechanisms for individual read requirements remain
-implementation choices.
+Installation `as_of` selection respects committed permission, with the index
+contract described in
+[Index creation and reconstruction](#index-creation-and-reconstruction). An MV's
+initial storage visibility boundary remains distinct. Representation and
+accounting mechanisms are implementation choices.
 
 Propagation to persist critical since handles must respect all valid read
 requirements. Those handles are the durable backstop, not a substitute for
@@ -242,10 +246,10 @@ transparent session or query failover.
 ### Admission
 
 Admission of maintained read requirements respects committed compaction permission
-for all logical inputs, rather than relying on lagging physical compaction.
-Automatically selected creation timestamps must be compatible with all those
-inputs. Explicit historical refresh requests are rejected if any logical input
-cannot support them, even when optimization removes that input.
+for logical inputs and actual plan imports, not lagging physical compaction.
+Automatically selected creation timestamps must be compatible with those inputs.
+Explicit historical refresh requests are rejected if any logical input cannot
+support them, even when optimization removes that input.
 
 ### Visibility and execution
 
@@ -260,11 +264,12 @@ replicas.
 The catalog determines index candidates and transaction eligibility.
 Installation or hydration must not make an index appear or disappear from that
 logical view. Read acquisition establishes a justified protected frontier
-before fixing the transaction's timestamp and time domain. Pending installation
-belongs at read preparation and execution admission, not in a filter that hides
-declared indexes. A catalog entry or missing compaction bound is not proof of
-readability. With no intervening DDL, physical readiness alone cannot break
-repeated logical reads.
+before fixing the transaction's timestamp and time domain, without requiring
+index installation. SELECT and nonexecuting EXPLAIN share this protection
+machinery and preserve their existing transaction effects. EXPLAIN can return
+with zero replicas, while actual execution checks import readability and waits
+for required progress. With no intervening DDL, physical readiness alone cannot
+break repeated logical reads.
 
 Catalog certification and readiness waits remain cancellable and preserve
 statement-specific timeout semantics. They do not impose a common deadline on
@@ -299,18 +304,21 @@ physical compaction lags. Existing sinks retain pending output through alteratio
 and recovery. Their requirements advance with durable output progress, not merely
 with input compaction permission.
 
-### Index reconstruction
+### Index creation and reconstruction
 
-An index's compaction bound is its published since, not by itself a promise to
-reconstruct at every previously published frontier. Reconstruction must preserve
-history still required by [object-owned retention](#object-owned-retention) or
-other valid read requirements. A fresh index has no bound until first publication.
-Recovery installs at the least readable frontier, capped by committed permission
-where permission is at or above readability. Where permission is below readability,
-replacement at readability is allowed only if no retention or read requirement
-depends on the gap, with the bound following through publication. Skipping required
-history is not valid recovery. Installation does not wait for a bound-publication
-write. Live readers of an existing trace remain protected by execution holds.
+The index-creation catalog transaction commits the selected plan, an admitted
+initial `as_of`, and protection on logical inputs and actual plan imports.
+This establishes the initial index compaction bound and a frontier against which
+clients can acquire holds before replica installation, including with zero
+replicas. The frontier is justified by the protected inputs, not a placeholder
+`MIN`. No extra pre-installation commit or replica acknowledgment is required.
+
+Installation and reconstruction honor committed frontiers and valid read
+requirements, including through imported indexes. Protection advances with
+[object-owned retention](#object-owned-retention) and recovery needs rather than
+permanently pinning the initial `as_of`. A past bound is not a promise to
+reconstruct history no longer required. Live execution holds continue to protect
+existing traces.
 
 ### Read-only prewarming
 
@@ -318,9 +326,10 @@ Prewarming uses
 [deployment-scoped replicas](#deployment-coexistence-and-native-prewarming).
 They follow committed definitions, written plans and compaction permission for
 their deployment. Read-only bootstrap follows
-[Index reconstruction](#index-reconstruction) without depending on the serving
-adapter to grant permission. A SQL savepoint or adapter-local read-only setting
-grants neither compaction permission nor output-write authority.
+[Index creation and reconstruction](#index-creation-and-reconstruction) without
+depending on the serving adapter to grant permission. A SQL savepoint or
+adapter-local read-only setting grants neither compaction permission nor
+output-write authority.
 
 ### Lifecycle placement
 
@@ -355,6 +364,12 @@ builds rewrite theirs when they observe the change, and a plan whose import is
 gone is not installable until then. No build writes another's plans. A new index
 does not change existing plans. A new generation's adapters write plans for their
 version before that generation's components install.
+
+Selecting or rewriting a plan admits its import protection in the same catalog
+transaction. Protection follows the selected plans and their required frontiers
+across live builds and deployments, while running executions retain their own
+holds. Replacing or retiring a selection must preserve valid protection.
+This does not make cross-build plan repair a synchronous DROP barrier.
 
 ### Query client
 
@@ -402,7 +417,8 @@ replanning.
 
 A plan-specific design needs a recovery contract beyond an input-ID set, such as
 durable logical recovery expressions with upgrade compatibility. We choose
-logical-input protection rather than making optimization decisions authoritative.
+logical-input protection for recovery, supplemented by protection of selected
+plans' actual imports. Physical dependencies alone do not define recovery.
 
 ### Delegated compaction advancement
 
