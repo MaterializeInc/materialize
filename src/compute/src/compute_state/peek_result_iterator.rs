@@ -469,12 +469,28 @@ where
                 .expect("literal position must be at a matching literal during row extraction");
             maybe_literal.extend_datums(&arena, &mut borrow, None);
         }
-        if let Some(result) = self
+        let result = self
             .map_filter_project
             .evaluate_into_scoped(&mut borrow, &arena, &mut self.row_builder, self.error_scope)
-            .map(|row| row.cloned())
-            .map_err(PeekError::from)?
-        {
+            .map(|row| row.cloned());
+        let result = match result {
+            Ok(result) => result,
+            // The error belongs to this value only if the value exists at the peek time. A value
+            // whose updates cancel, such as a retracted row with an error datum, has none.
+            Err(error) => {
+                let mut copies = Diff::ZERO;
+                self.cursor.map_times(&self.storage, |time, diff| {
+                    if time.less_equal(&self.peek_timestamp) {
+                        copies += diff;
+                    }
+                });
+                if copies.is_zero() {
+                    return Ok(None);
+                }
+                return Err(PeekError::from(error));
+            }
+        };
+        if let Some(result) = result {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
                 if time.less_equal(&self.peek_timestamp) {

@@ -365,6 +365,16 @@ SELECT a FROM (SELECT a, 10 / (a - 1) AS z FROM c_table)
 0
 1
 
+# Retracting the row whose error datum the index holds removes the error. A
+# peek sees the error datum only while its row exists.
+statement ok
+DELETE FROM customers WHERE id = 2
+
+query ITB
+SELECT * FROM v
+----
+1  ON  true
+
 statement ok
 RESET cluster
 
