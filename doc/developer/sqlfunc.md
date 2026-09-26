@@ -101,6 +101,15 @@ Monotone functions map ranges to ranges: given a range of possible inputs, the r
 * **Default:** `false` for unary and variadic; `(false, false)` for binary
 * **Applies to:** all arities
 
+### `is_infinity_monotone`
+
+Whether `is_monotone`'s endpoint-sampling guarantee still holds when an operand may be infinite, such as a floating-point `inf`.
+Multiplication and division set it to `false`, because `0 * inf` and `inf / inf` produce results that the range endpoints do not bound.
+
+* **Type:** boolean expression
+* **Default:** `true`
+* **Applies to:** binary only
+
 ### `preserves_uniqueness`
 
 Whether the function is injective: if `f(x) = f(y)` then `x = y`.
@@ -174,6 +183,10 @@ Generate a snapshot test for the macro expansion.
 
 Snapshot files are stored in `src/expr-derive-impl/src/snapshots/`.
 Update them with `cargo insta accept` after running `cargo test -p mz-expr-derive-impl`.
+
+Which modifiers apply to which arity is declared in
+`src/expr-derive-impl/src/shape.rs`, one table per arity. A modifier absent from an
+arity's table is rejected with an error naming both the modifier and the arity.
 
 ## Variadic functions
 
