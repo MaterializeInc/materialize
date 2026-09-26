@@ -77,6 +77,17 @@ impl<Tr: TraceReader> Published<Tr> {
     }
 }
 
+/// Drops every dataflow installed on `worker`, as compute drops a collection's dataflow.
+///
+/// A live import never completes on its own, because a dropped writer leaves it at the last
+/// published `upper`, so a test that ends with one installed must drop it before
+/// `execute_directly` waits for its dataflows to finish.
+pub(crate) fn drop_dataflows(worker: &mut timely::worker::Worker) {
+    for dataflow in worker.installed_dataflows() {
+        worker.drop_dataflow(dataflow);
+    }
+}
+
 /// Test-only observations on a publication point reached through one of its readers.
 ///
 /// `SharedReader` is defined in `mz-timely-util`, so these cannot be inherent methods here.
@@ -991,7 +1002,7 @@ fn live_import_does_not_pin_merging() {
             );
             drop(arranged.trace);
         });
-        // Drop the minting handle, as `crate::render::import_shared_index` does: the import owns
+        // Drop the minting handle, as `crate::render::import_published_index` does: the import owns
         // its own clone, and a live mint would pin the floor at its own registration coverage and
         // mask what this test is about.
         drop(handle);
