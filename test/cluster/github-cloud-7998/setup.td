@@ -16,6 +16,15 @@
 
 > CREATE TABLE source (a int)
 > CREATE INDEX source_idx IN CLUSTER compute ON source (a)
+
+# The producer index must be available when the dependent MV is planned.
+> SELECT i.name
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id
+  JOIN mz_indexes i ON i.id = g.id
+  WHERE i.name = 'source_idx' AND f.read_frontier IS NOT NULL
+source_idx
+
 > CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute AS SELECT * FROM source
 > CREATE INDEX mv1_idx IN CLUSTER serving ON mv1 (a)
 
@@ -28,6 +37,14 @@
 > CREATE INDEX v2_idx IN CLUSTER compute ON v2 (c);
 > CREATE VIEW v3 AS SELECT c + 1 AS d FROM v2;
 > CREATE INDEX v3_idx IN CLUSTER compute ON v3 (d);
+
+> SELECT i.name
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id
+  JOIN mz_indexes i ON i.id = g.id
+  WHERE i.name = 'v3_idx' AND f.read_frontier IS NOT NULL
+v3_idx
+
 > CREATE MATERIALIZED VIEW mv2 IN CLUSTER compute AS SELECT * FROM v3
 > CREATE INDEX mv2_idx IN CLUSTER serving ON mv2 (d)
 
@@ -37,6 +54,16 @@
 > CREATE INDEX v4_idx IN CLUSTER compute ON v4 (e);
 > CREATE VIEW v5 AS SELECT a + 1 AS f FROM source;
 > CREATE INDEX v5_idx IN CLUSTER compute ON v5 (f);
+
+> SELECT i.name
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id
+  JOIN mz_indexes i ON i.id = g.id
+  WHERE i.name IN ('v4_idx', 'v5_idx') AND f.read_frontier IS NOT NULL
+  ORDER BY i.name
+v4_idx
+v5_idx
+
 > CREATE MATERIALIZED VIEW mv3 IN CLUSTER compute AS SELECT e + f AS g FROM v4, v5
 > CREATE INDEX mv3_idx IN CLUSTER serving ON mv3 (g)
 
