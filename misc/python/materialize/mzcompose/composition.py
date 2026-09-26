@@ -540,7 +540,7 @@ class Composition:
                     )
             except subprocess.CalledProcessError as e:
                 if e.stdout and not capture_and_print:
-                    print(e.stdout)
+                    print(e.stdout, flush=True)
                 if e.stderr and not capture_and_print:
                     print(e.stderr, file=sys.stderr)
 
