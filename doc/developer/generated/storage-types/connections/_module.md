@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/connections.rs
-revision: 6e55add85b
+revision: 2774411110
 ---
 
 # storage-types::connections
