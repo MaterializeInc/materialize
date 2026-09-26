@@ -102,8 +102,7 @@ query T multiline
 EXPLAIN CREATE STANDING QUERY explain_test (cid INT) AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid
 ----
 materialize.public.explain_test:
-  →Differential Join %0 » %1
-    Join stage 0 in %1 with lookup key #1{customer_id}
+  →Differential Join %0:Explained Query[#1] » %1:orders[#1{customer_id}]
     →Arrange (#1)
       →Read Explained Query
     →Arrange (#1{customer_id})
@@ -192,3 +191,102 @@ EXECUTE STANDING QUERY orders_by_customer (10)
 
 statement ok
 DROP STANDING QUERY all_orders_for_customer
+
+# --- Errors localized to the request that raised them ---
+#
+# A standing query serves every session through one dataflow. On a cluster
+# created with cell-scoped errors, an error in one request's evaluation fails
+# that request only, and other requests, from this session or another, keep
+# working. A cluster records the setting when it is created.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_cell_errors TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER sq_cell SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster = sq_cell
+
+statement ok
+CREATE STANDING QUERY share (cid INT, d INT) AS SELECT id, amount / d AS share FROM orders WHERE customer_id = cid
+
+query II rowsort
+EXECUTE STANDING QUERY share (10, 10)
+----
+1  10
+2  20
+
+query error division by zero
+EXECUTE STANDING QUERY share (10, 0)
+
+query II rowsort
+EXECUTE STANDING QUERY share (20, 100)
+----
+3  3
+4  4
+
+simple conn=other_session,user=materialize
+SET cluster = sq_cell;
+EXECUTE STANDING QUERY share (30, 50);
+----
+COMPLETE 0
+5,10
+COMPLETE 1
+
+statement ok
+CREATE STANDING QUERY positive (cid INT, d INT) AS SELECT id FROM orders WHERE customer_id = cid AND amount / d > 0
+
+query error division by zero
+EXECUTE STANDING QUERY positive (10, 0)
+
+query I rowsort
+EXECUTE STANDING QUERY positive (20, 1)
+----
+3
+4
+
+statement ok
+DROP CLUSTER sq_cell CASCADE
+
+# On a cluster with row-scoped errors, one request's error poisons the
+# standing query, and every later request fails, in any session.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_cell_errors TO false;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER sq_row SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster = sq_row
+
+statement ok
+CREATE STANDING QUERY share_row (cid INT, d INT) AS SELECT id, amount / d AS share FROM orders WHERE customer_id = cid
+
+query II rowsort
+EXECUTE STANDING QUERY share_row (10, 10)
+----
+1  10
+2  20
+
+query error division by zero
+EXECUTE STANDING QUERY share_row (10, 0)
+
+query error division by zero
+EXECUTE STANDING QUERY share_row (20, 100)
+
+statement ok
+RESET cluster
+
+statement ok
+DROP CLUSTER sq_row CASCADE
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_cell_errors;
+----
+COMPLETE 0
