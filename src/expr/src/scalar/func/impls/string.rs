@@ -16,6 +16,7 @@ use mz_expr_derive::sqlfunc;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
+use mz_repr::adt::array::Array;
 use mz_repr::adt::char::{Char, format_str_trim};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -26,7 +27,7 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{Datum, ExcludeNull, Int2Vector, RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{Datum, Int2Vector, RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -883,9 +884,7 @@ fn cast_string_to_int2_vector<'a>(
         };
         INT2VECTOR_CAST_EXPR.eval(&[Datum::String(elem_text)], temp_storage)
     })?;
-    Ok(Int2Vector(
-        array_create_scalar(&datums, temp_storage)?.unwrap_array(),
-    ))
+    Ok(Int2Vector(array_create_scalar(&datums, temp_storage)?))
 }
 
 #[sqlfunc(
@@ -1063,10 +1062,10 @@ pub struct RegexpMatch(pub Regex);
 )]
 fn regexp_match<'a>(
     &self,
-    haystack: ExcludeNull<Datum<'a>>,
+    haystack: &'a str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    regexp_match_static(*haystack, temp_storage, &self.0)
+) -> Result<Option<Array<'a>>, EvalError> {
+    regexp_match_static(haystack, temp_storage, &self.0)
 }
 
 impl fmt::Display for RegexpMatch {
@@ -1099,14 +1098,13 @@ pub struct RegexpSplitToArray(pub Regex);
     RegexpSplitToArray,
     skip_display = true,
     output_type_expr = SqlScalarType::Array(Box::new(SqlScalarType::String))
-        .nullable(input_type.nullable),
-    introduces_nulls = false
+        .nullable(input_type.nullable)
 )]
 fn regexp_split_to_array<'a>(
     &self,
     haystack: &'a str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     regexp_split_to_array_re(haystack, &self.0, temp_storage)
 }
 
