@@ -3511,7 +3511,7 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
             Materialized(
                 deploy_generation=1,
                 sanity_restart=False,
-                system_parameter_defaults={
+                additional_system_parameter_defaults={
                     "enable_catalog_read_protection": str(protected).lower(),
                 },
             )
@@ -3726,7 +3726,9 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
                 deploy_generation=2,
                 sanity_restart=False,
                 restart="on-failure",
-                system_parameter_defaults={"enable_catalog_read_protection": "true"},
+                additional_system_parameter_defaults={
+                    "enable_catalog_read_protection": "true"
+                },
             )
         ):
             c.up("materialized")
