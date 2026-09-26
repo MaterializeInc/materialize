@@ -2536,6 +2536,48 @@ def workflow_catalog_publication_measurement(
                 "catalog_and_persist_series": counters,
             }
         end = time.monotonic()
+        shard_samples = {}
+        for name, shard in shards.items():
+            try:
+                shard_samples[name] = _catalog_protection_metrics(response.text, shard)
+            except AssertionError:
+                # Preserve the failing scrape and a bounded view of its lifetime.
+                # Follow-up observations are diagnostics, never substitute results.
+                observed = response
+                scrape_start, scrape_end = start, environmentd_end
+                for attempt in range(3):
+                    print(
+                        json.dumps(
+                            {
+                                "metric_failure_endpoint": response.url,
+                                "collection": name,
+                                "shard": shard,
+                                "diagnostic_sample": attempt,
+                                "scrape_start": scrape_start,
+                                "scrape_end": scrape_end,
+                                "series": [
+                                    line
+                                    for line in observed.text.splitlines()
+                                    if line.startswith("mz_persist_shard_")
+                                    and f'shard="{shard}"' in line
+                                ],
+                            }
+                        ),
+                        flush=True,
+                    )
+                    if attempt < 2:
+                        time.sleep(1)
+                        try:
+                            scrape_start = time.monotonic()
+                            observed = requests.get(response.url, timeout=2)
+                            scrape_end = time.monotonic()
+                            observed.raise_for_status()
+                        except requests.RequestException as error:
+                            print(
+                                f"Follow-up metrics scrape failed: {error}", flush=True
+                            )
+                            break
+                raise
         return {
             "start": start,
             "end": end,
@@ -2550,10 +2592,7 @@ def workflow_catalog_publication_measurement(
             "catalog_committed_updates": _catalog_committed_update_metrics(
                 response.text
             ),
-            "shards": {
-                name: _catalog_protection_metrics(response.text, shard)
-                for name, shard in shards.items()
-            },
+            "shards": shard_samples,
         }
 
     def catalog_bounds(timeout: float | tuple[float, float] | None = None) -> dict:
