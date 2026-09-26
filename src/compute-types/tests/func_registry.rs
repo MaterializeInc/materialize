@@ -320,9 +320,9 @@ fn func_registry_records_sqlfunc_sources() {
     assert_eq!(abs.properties.output_type.as_deref(), Some("Int16:NotNull"));
 
     // Hand-written functions have no source to record.
-    let record_get = &registry.unary["record_get"];
-    assert_eq!(record_get.source.sqlfunc_decl, None);
-    assert_eq!(record_get.source.body_fingerprint, None);
+    let extract_interval = &registry.unary["extract_interval"];
+    assert_eq!(extract_interval.source.sqlfunc_decl, None);
+    assert_eq!(extract_interval.source.body_fingerprint, None);
 }
 
 #[mz_ore::test]

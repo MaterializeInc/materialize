@@ -10,7 +10,8 @@
 use std::fmt;
 
 use itertools::Itertools;
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
+use mz_expr_derive::sqlfunc;
+use mz_repr::{Datum, DatumList, ExcludeNull, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
@@ -31,56 +32,16 @@ pub struct CastRecordToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastRecordToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a impl Eval,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? if we moved typeconv into expr, we could evaluate this
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastRecordToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("recordtostr")
-    }
+// TODO? if we moved typeconv into expr, we could evaluate the inverse of this cast
+#[sqlfunc(
+    CastRecordToString,
+    sqlname = "recordtostr",
+    preserves_uniqueness = true
+)]
+fn cast_record_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, *a, &self.ty)?;
+    Ok(buf)
 }
 
 /// Casts between two record types by casting each element of `a` ("record1") using
@@ -200,59 +161,20 @@ impl<E> fmt::Display for CastRecord1ToRecord2<E> {
 )]
 pub struct RecordGet(pub usize);
 
-impl LazyUnaryFunc for RecordGet {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a impl Eval,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        Ok(a.unwrap_list().iter().nth(self.0).unwrap())
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        match input_type.scalar_type {
-            SqlScalarType::Record { fields, .. } => {
-                let (_name, ty) = &fields[self.0];
-                let mut ty = ty.clone();
-                ty.nullable = ty.nullable || input_type.nullable;
-                ty
-            }
-            _ => unreachable!(
-                "RecordGet on non-record input: {:?}",
-                input_type.scalar_type
-            ),
-        }
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        // Return null if the inner field is null
-        true
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
+// The unary tail ORs the input's nullability onto whatever the expression returns,
+// so the expression hands back the field's own column type unchanged.
+#[sqlfunc(
+    RecordGet,
+    skip_display = true,
+    output_type_expr = match &input_type.scalar_type {
+        SqlScalarType::Record { fields, .. } => fields[self.0].1.clone(),
+        other => unreachable!("RecordGet on non-record input: {other:?}"),
+    },
+    // A nullable field yields NULL for a record that is itself not NULL.
+    could_error = true
+)]
+fn record_get<'a>(&self, a: DatumList<'a>) -> Datum<'a> {
+    a.iter().nth(self.0).unwrap()
 }
 
 impl fmt::Display for RecordGet {
