@@ -64,16 +64,6 @@ struct StageAnalysis<'a> {
     cluster_set: BTreeSet<String>,
 }
 
-/// Classification result for objects considered during staging.
-///
-/// Separates deploy-now objects from deferred/special-case categories that apply handles later.
-struct PartitionedObjects<'a> {
-    objects: Vec<ObjectRef<'a>>,
-    sinks: Vec<ObjectRef<'a>>,
-    replacement_mvs: Vec<ObjectRef<'a>>,
-    table_count: usize,
-}
-
 /// Summary returned after a successful stage run, used for terminal output
 /// and `--json`.
 #[derive(serde::Serialize)]
@@ -446,187 +436,124 @@ async fn analyze_project_changes<'a>(
         forced_dirty_schemas
     };
 
-    let change_set = if production_snapshot.objects.is_empty() {
-        None
-    } else {
-        Some(ChangeSet::from_deployment_snapshot_comparison(
-            &production_snapshot,
-            &new_snapshot,
-            planned_project,
-            &dirty_schemas,
-        ))
-    };
+    // A first deploy has no production objects to diff against. An empty old
+    // snapshot makes every object read as added, so the fixed point handles it
+    // without a separate full-deploy path, but the stable-schema check below
+    // only applies once production exists.
+    let first_deploy = production_snapshot.objects.is_empty();
 
-    // Reject adding brand-new objects to a schema that already has production objects.
-    // During incremental deployment:
+    let change_set = ChangeSet::compute(
+        client,
+        planned_project,
+        &production_snapshot,
+        &new_snapshot,
+        &dirty_schemas,
+    )
+    .await?;
+
+    // Reject adding brand-new objects to a schema that already has production
+    // objects. A new MV in a stable schema is classified as a new replacement
+    // object and deploys by blue-green swap, but the changed MVs alongside it
+    // set the production schema's metadata to `DeploymentKind::Replacement`.
+    // Promote then skips that schema from the swap and drops the staging schema
+    // CASCADE, losing the new MV.
     //
-    //   1. The changeset correctly classifies these as `new_replacement_objects`
-    //   2. But `new_replacement_objects` is never consumed by `partition_objects` —
-    //      only `changed_replacement_objects` feeds into it
-    //   3. The new MV ends up in the regular `objects` partition and deploys to the
-    //      staging schema (e.g. `core_v3`)
-    //   4. Metadata for the production schema (`core`) gets overwritten to
-    //      `DeploymentKind::Replacement` by the changed MVs
-    //   5. During promote, the staging schema is skipped from swap and dropped CASCADE
-    //      — the new MV is lost
+    // The fix is `ALTER MATERIALIZED VIEW ... SET SCHEMA`: new MVs could deploy
+    // to the staging schema alongside changed ones and be relocated on promote
+    // rather than swapped, which removes the need for mixed deployment kinds.
     //
-    // The proper long-term fix is to support `ALTER MATERIALIZED VIEW ... SET SCHEMA`.
-    // With that, new MVs could be deployed to the staging schema alongside changed MVs,
-    // then moved into the production schema during promote via `SET SCHEMA` instead of
-    // relying on schema swap. This would eliminate the need for mixed deployment kinds
-    // or special-casing in `partition_objects` — new objects simply deploy to staging
-    // and get relocated on promote, just like changed objects get swapped.
-    //
-    // A brand-new stable schema (no prior production objects) deploys fine via normal
-    // blue-green swap — only schemas with existing production objects are affected.
-    if let Some(ref cs) = change_set {
-        validate_no_new_objects_in_existing_stable_schemas(cs, &production_snapshot)?;
+    // A brand-new stable schema deploys fine through the normal swap, so only
+    // schemas with existing production objects are rejected.
+    if !first_deploy {
+        validate_no_new_objects_in_existing_stable_schemas(&change_set, &production_snapshot)?;
+        if change_set.is_empty() {
+            progress::success("No changes detected compared to production, skipping deployment");
+            return Ok(None);
+        }
     }
 
-    let objects = select_stage_objects(planned_project, change_set.as_ref())?;
-    if objects.is_empty() && change_set.as_ref().is_some_and(ChangeSet::is_empty) {
-        progress::success("No changes detected compared to production, skipping deployment");
-        return Ok(None);
+    if first_deploy {
+        verbose!("Full deployment: no production deployment found");
     }
+    verbose!("{}", change_set);
+    let analysis = partition_objects(planned_project, &change_set)?;
+    log_partition_summary(&analysis, change_set.apply_managed_count);
 
-    let replacement_object_ids = change_set
-        .as_ref()
-        .map(|cs| cs.changed_replacement_objects.clone())
-        .unwrap_or_default();
-    let partitioned = partition_objects(objects, &replacement_object_ids);
-    log_partition_summary(&partitioned);
-
-    let object_ids: BTreeSet<_> = partitioned
-        .objects
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
+    let object_ids: BTreeSet<_> = analysis.objects.iter().map(|(id, _)| id.clone()).collect();
     client
         .validation()
         .validate_table_dependencies(planned_project, &object_ids)
         .await?;
 
-    let (schema_set, cluster_set) =
-        collect_stage_resources(&partitioned.objects, &partitioned.replacement_mvs);
-
     let analyze_duration = analyze_start.elapsed();
     progress::stage_success(
         &format!(
             "Ready to deploy {} view(s)/materialized view(s)",
-            partitioned.objects.len()
+            analysis.objects.len()
         ),
         analyze_duration,
     );
 
-    Ok(Some(StageAnalysis {
-        objects: partitioned.objects,
-        sinks: partitioned.sinks,
-        replacement_mvs: partitioned.replacement_mvs,
-        schema_set,
-        cluster_set,
-    }))
+    Ok(Some(analysis))
 }
 
-/// Chooses the initial object set for stage before stage-specific partitioning.
+/// Splits the objects the change set routes to stage into execution buckets,
+/// preserving the project's topological deployment order.
 ///
-/// Incremental mode uses the change set; full mode uses all sorted project objects.
-fn select_stage_objects<'a>(
-    planned_project: &'a Project,
-    change_set: Option<&ChangeSet>,
-) -> Result<Vec<ObjectRef<'a>>, CliError> {
-    if let Some(cs) = change_set {
-        if cs.is_empty() {
-            return Ok(Vec::new());
-        }
-        verbose!("{}", cs);
-        Ok(planned_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?)
-    } else {
-        verbose!("Full deployment: no production deployment found");
-        Ok(planned_project.get_sorted_objects()?)
-    }
-}
-
-/// Splits objects into stage execution categories.
-///
-/// Tables/sources are excluded, sinks are deferred to apply, and changed replacement MVs
-/// are tracked for special replacement handling.
+/// Membership comes from the fixed point; ordering comes from the project.
+/// An id the change set names but the project does not contain is a deleted
+/// object with no statement to deploy, and the sort drops it.
 fn partition_objects<'a>(
-    objects: Vec<ObjectRef<'a>>,
-    replacement_object_ids: &BTreeSet<ObjectId>,
-) -> PartitionedObjects<'a> {
-    let mut kept = Vec::new();
+    planned_project: &'a Project,
+    change_set: &ChangeSet,
+) -> Result<StageAnalysis<'a>, CliError> {
+    let mut deployable: BTreeSet<ObjectId> = change_set.stage_objects.clone();
+    deployable.extend(change_set.stage_sinks.iter().cloned());
+    deployable.extend(change_set.stage_replacement_mvs.iter().cloned());
+
+    let mut objects = Vec::new();
     let mut sinks = Vec::new();
     let mut replacement_mvs = Vec::new();
-    let mut table_count = 0;
 
-    for (object_id, typed_obj) in objects {
-        match &typed_obj.stmt {
-            Statement::CreateTable(_)
-            | Statement::CreateTableFromSource(_)
-            | Statement::CreateSource(_)
-            | Statement::CreateSecret(_)
-            | Statement::CreateConnection(_) => {
-                table_count += 1;
-            }
-            Statement::CreateSink(_) => sinks.push((object_id, typed_obj)),
-            Statement::CreateMaterializedView(_) if replacement_object_ids.contains(&object_id) => {
-                replacement_mvs.push((object_id, typed_obj));
-            }
-            _ => kept.push((object_id, typed_obj)),
+    for (object_id, typed_obj) in planned_project.get_sorted_objects_filtered(&deployable)? {
+        if change_set.stage_sinks.contains(&object_id) {
+            sinks.push((object_id, typed_obj));
+        } else if change_set.stage_replacement_mvs.contains(&object_id) {
+            replacement_mvs.push((object_id, typed_obj));
+        } else {
+            objects.push((object_id, typed_obj));
         }
     }
 
-    PartitionedObjects {
-        objects: kept,
+    Ok(StageAnalysis {
+        objects,
         sinks,
         replacement_mvs,
-        table_count,
-    }
+        schema_set: change_set.schemas_to_create.clone(),
+        cluster_set: change_set.clusters_to_create.clone(),
+    })
 }
 
 /// Reports the partitioning decisions visible to users in verbose mode.
-fn log_partition_summary(partitioned: &PartitionedObjects<'_>) {
-    if partitioned.table_count > 0 {
+fn log_partition_summary(analysis: &StageAnalysis<'_>, apply_managed_count: usize) {
+    if apply_managed_count > 0 {
         verbose!(
             "Skipped {} table(s)/source(s) - use 'mz-deploy apply' for those",
-            partitioned.table_count
+            apply_managed_count
         );
     }
-    if !partitioned.sinks.is_empty() {
+    if !analysis.sinks.is_empty() {
         verbose!(
             "Found {} sink(s) - will be created during apply after swap",
-            partitioned.sinks.len()
+            analysis.sinks.len()
         );
     }
-    if !partitioned.replacement_mvs.is_empty() {
+    if !analysis.replacement_mvs.is_empty() {
         verbose!(
             "Found {} replacement MV(s) - will use CREATE REPLACEMENT protocol",
-            partitioned.replacement_mvs.len()
+            analysis.replacement_mvs.len()
         );
     }
-}
-
-/// Derives schema/cluster prerequisites for resource creation.
-///
-/// Builds schema and cluster sets solely from the objects being staged.
-/// Apply-managed objects (sources, tables, secrets, connections) are excluded
-/// by `partition_objects`, so their schemas and clusters are never staged.
-fn collect_stage_resources(
-    objects: &[ObjectRef<'_>],
-    replacement_mvs: &[ObjectRef<'_>],
-) -> (BTreeSet<SchemaQualifier>, BTreeSet<String>) {
-    let mut schema_set = BTreeSet::new();
-    let mut cluster_set = BTreeSet::new();
-
-    for (object_id, typed_obj) in objects.iter().chain(replacement_mvs.iter()) {
-        schema_set.insert(SchemaQualifier::new(
-            object_id.expect_database().to_string(),
-            object_id.schema().to_string(),
-        ));
-        cluster_set.extend(typed_obj.clusters());
-    }
-
-    (schema_set, cluster_set)
 }
 
 /// Runs all preflight database validations required before mutating deployment state.
@@ -1485,342 +1412,8 @@ mod tests {
         Project::from(typed_project)
     }
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-    #[mz_ore::test]
-    fn test_full_deploy_view_not_indexed_mixed_types() {
-        let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
-        let table_obj = make_typed_object(&["CREATE TABLE my_table (id INT)"]);
-        let source_obj = make_typed_object(&[
-            "CREATE SOURCE my_source IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER",
-        ]);
-        let conn_obj =
-            make_typed_object(&["CREATE CONNECTION my_conn TO KAFKA (BROKER 'localhost:9092')"]);
-        let secret_obj = make_typed_object(&["CREATE SECRET my_secret AS 'hunter2'"]);
-
-        let objects: Vec<ObjectRef> = vec![
-            (
-                ObjectId::new("db".into(), "public".into(), "my_view".into()),
-                &view_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_table".into()),
-                &table_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_source".into()),
-                &source_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_conn".into()),
-                &conn_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_secret".into()),
-                &secret_obj,
-            ),
-        ];
-
-        let replacement_ids = BTreeSet::new();
-        let partitioned = partition_objects(objects, &replacement_ids);
-
-        // Only the view should be in staged objects
-        assert_eq!(
-            partitioned.objects.len(),
-            1,
-            "Only the view should be staged"
-        );
-        assert_eq!(partitioned.objects[0].0.object(), "my_view");
-
-        // Table, source, connection, secret should be counted as skipped
-        assert_eq!(
-            partitioned.table_count, 4,
-            "Table, source, connection, and secret should all be skipped"
-        );
-
-        // No sinks or replacement MVs
-        assert!(partitioned.sinks.is_empty());
-        assert!(partitioned.replacement_mvs.is_empty());
-
-        // Collect stage resources
-        let (schema_set, cluster_set) =
-            collect_stage_resources(&partitioned.objects, &partitioned.replacement_mvs);
-
-        // Should have the view's schema
-        assert_eq!(schema_set.len(), 1);
-        assert!(schema_set.contains(&SchemaQualifier::new("db".into(), "public".into())));
-
-        // View has no cluster, so cluster_set should be empty
-        assert!(
-            cluster_set.is_empty(),
-            "View without index should not require any clusters"
-        );
-    }
-
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-    #[mz_ore::test]
-    fn test_full_deploy_view_indexed_different_cluster() {
-        let view_obj = make_typed_object(&[
-            "CREATE VIEW my_view AS SELECT 1",
-            "CREATE INDEX my_idx IN CLUSTER index_cluster ON my_view (column1)",
-        ]);
-        let table_obj = make_typed_object(&["CREATE TABLE my_table (id INT)"]);
-        let source_obj = make_typed_object(&[
-            "CREATE SOURCE my_source IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER",
-        ]);
-        let conn_obj =
-            make_typed_object(&["CREATE CONNECTION my_conn TO KAFKA (BROKER 'localhost:9092')"]);
-        let secret_obj = make_typed_object(&["CREATE SECRET my_secret AS 'hunter2'"]);
-
-        let objects: Vec<ObjectRef> = vec![
-            (
-                ObjectId::new("db".into(), "public".into(), "my_view".into()),
-                &view_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_table".into()),
-                &table_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_source".into()),
-                &source_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_conn".into()),
-                &conn_obj,
-            ),
-            (
-                ObjectId::new("db".into(), "public".into(), "my_secret".into()),
-                &secret_obj,
-            ),
-        ];
-
-        let replacement_ids = BTreeSet::new();
-        let partitioned = partition_objects(objects, &replacement_ids);
-
-        // Only the view should be staged
-        assert_eq!(partitioned.objects.len(), 1);
-        assert_eq!(partitioned.objects[0].0.object(), "my_view");
-        assert_eq!(partitioned.table_count, 4);
-
-        // Collect stage resources
-        let (schema_set, cluster_set) =
-            collect_stage_resources(&partitioned.objects, &partitioned.replacement_mvs);
-
-        // Should have view's schema
-        assert_eq!(schema_set.len(), 1);
-        assert!(schema_set.contains(&SchemaQualifier::new("db".into(), "public".into())));
-
-        // Should stage index_cluster (from the view's index), NOT source_cluster
-        assert_eq!(
-            cluster_set.len(),
-            1,
-            "Should only have index_cluster, got: {:?}",
-            cluster_set
-        );
-        assert!(
-            cluster_set.contains("index_cluster"),
-            "Should stage index_cluster from the view's index"
-        );
-        assert!(
-            !cluster_set.contains("source_cluster"),
-            "Should NOT stage source_cluster (source is not staged)"
-        );
-    }
-
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-    #[mz_ore::test]
-    fn test_incremental_deploy_view_updated_not_indexed() {
-        // Build planned project with all object types
-        let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
-        let table_obj = make_typed_object(&["CREATE TABLE my_table (id INT)"]);
-        let source_obj = make_typed_object(&[
-            "CREATE SOURCE my_source IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER",
-        ]);
-        let conn_obj =
-            make_typed_object(&["CREATE CONNECTION my_conn TO KAFKA (BROKER 'localhost:9092')"]);
-        let secret_obj = make_typed_object(&["CREATE SECRET my_secret AS 'hunter2'"]);
-
-        let planned_project = make_planned_project(vec![
-            ("db", "public", "my_view", view_obj),
-            ("db", "storage", "my_table", table_obj),
-            ("db", "storage", "my_source", source_obj),
-            ("db", "storage", "my_conn", conn_obj),
-            ("db", "storage", "my_secret", secret_obj),
-        ]);
-
-        // Build new snapshot from planned project
-        let new_snapshot = build_snapshot_from_planned(&planned_project).unwrap();
-
-        // Build old snapshot: same hashes for everything EXCEPT the view
-        let mut old_snapshot = DeploymentSnapshot::default();
-        for (object_id, hash) in &new_snapshot.objects {
-            if object_id.object() == "my_view" {
-                // Different hash to simulate the view having changed
-                old_snapshot
-                    .objects
-                    .insert(object_id.clone(), "old_hash".to_string());
-            } else {
-                old_snapshot.objects.insert(object_id.clone(), hash.clone());
-            }
-        }
-
-        // Compute changeset
-        let change_set = ChangeSet::from_deployment_snapshot_comparison(
-            &old_snapshot,
-            &new_snapshot,
-            &planned_project,
-            &BTreeSet::new(),
-        );
-
-        // The view should be in objects_to_deploy
-        assert!(
-            change_set.objects_to_deploy.contains(&ObjectId::new(
-                "db".into(),
-                "public".into(),
-                "my_view".into()
-            )),
-            "Changed view should be in objects_to_deploy"
-        );
-
-        // Get filtered objects and partition
-        let objects = planned_project
-            .get_sorted_objects_filtered(&change_set.objects_to_deploy)
-            .unwrap();
-
-        let partitioned = partition_objects(objects, &change_set.changed_replacement_objects);
-
-        // Only the view should be staged
-        assert_eq!(
-            partitioned.objects.len(),
-            1,
-            "Only the changed view should be staged, got: {:?}",
-            partitioned
-                .objects
-                .iter()
-                .map(|(id, _)| id.object())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(partitioned.objects[0].0.object(), "my_view");
-
-        let (schema_set, cluster_set) =
-            collect_stage_resources(&partitioned.objects, &partitioned.replacement_mvs);
-
-        assert_eq!(schema_set.len(), 1);
-        assert!(schema_set.contains(&SchemaQualifier::new("db".into(), "public".into())));
-        assert!(
-            cluster_set.is_empty(),
-            "View without index should not require any clusters"
-        );
-    }
-
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-    #[mz_ore::test]
-    fn test_incremental_deploy_view_updated_indexed_different_cluster() {
-        // Build planned project with indexed view and other object types
-        let view_obj = make_typed_object(&[
-            "CREATE VIEW my_view AS SELECT 1",
-            "CREATE INDEX my_idx IN CLUSTER index_cluster ON my_view (column1)",
-        ]);
-        let table_obj = make_typed_object(&["CREATE TABLE my_table (id INT)"]);
-        let source_obj = make_typed_object(&[
-            "CREATE SOURCE my_source IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER",
-        ]);
-        let conn_obj =
-            make_typed_object(&["CREATE CONNECTION my_conn TO KAFKA (BROKER 'localhost:9092')"]);
-        let secret_obj = make_typed_object(&["CREATE SECRET my_secret AS 'hunter2'"]);
-
-        let planned_project = make_planned_project(vec![
-            ("db", "public", "my_view", view_obj),
-            ("db", "storage", "my_table", table_obj),
-            ("db", "storage", "my_source", source_obj),
-            ("db", "storage", "my_conn", conn_obj),
-            ("db", "storage", "my_secret", secret_obj),
-        ]);
-
-        // Build new snapshot from planned project
-        let new_snapshot = build_snapshot_from_planned(&planned_project).unwrap();
-
-        // Build old snapshot: same hashes except the view
-        let mut old_snapshot = DeploymentSnapshot::default();
-        for (object_id, hash) in &new_snapshot.objects {
-            if object_id.object() == "my_view" {
-                old_snapshot
-                    .objects
-                    .insert(object_id.clone(), "old_hash".to_string());
-            } else {
-                old_snapshot.objects.insert(object_id.clone(), hash.clone());
-            }
-        }
-
-        // Compute changeset
-        let change_set = ChangeSet::from_deployment_snapshot_comparison(
-            &old_snapshot,
-            &new_snapshot,
-            &planned_project,
-            &BTreeSet::new(),
-        );
-
-        assert!(
-            change_set.objects_to_deploy.contains(&ObjectId::new(
-                "db".into(),
-                "public".into(),
-                "my_view".into()
-            )),
-            "Changed view should be in objects_to_deploy"
-        );
-
-        // Get filtered objects and partition
-        let objects = planned_project
-            .get_sorted_objects_filtered(&change_set.objects_to_deploy)
-            .unwrap();
-
-        let partitioned = partition_objects(objects, &change_set.changed_replacement_objects);
-
-        // Only the view should be staged
-        assert_eq!(
-            partitioned.objects.len(),
-            1,
-            "Only the changed view should be staged, got: {:?}",
-            partitioned
-                .objects
-                .iter()
-                .map(|(id, _)| id.object())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(partitioned.objects[0].0.object(), "my_view");
-
-        let (schema_set, cluster_set) =
-            collect_stage_resources(&partitioned.objects, &partitioned.replacement_mvs);
-
-        assert_eq!(schema_set.len(), 1);
-        assert!(schema_set.contains(&SchemaQualifier::new("db".into(), "public".into())));
-
-        // Should stage index_cluster only, NOT source_cluster
-        assert_eq!(
-            cluster_set.len(),
-            1,
-            "Should only have index_cluster, got: {:?}",
-            cluster_set
-        );
-        assert!(
-            cluster_set.contains("index_cluster"),
-            "Should stage index_cluster from the view's index"
-        );
-        assert!(
-            !cluster_set.contains("source_cluster"),
-            "Should NOT stage source_cluster"
-        );
-    }
-
     fn make_empty_change_set() -> ChangeSet {
-        ChangeSet {
-            changed_objects: BTreeSet::new(),
-            dirty_schemas: BTreeSet::new(),
-            dirty_clusters: BTreeSet::new(),
-            objects_to_deploy: BTreeSet::new(),
-            new_replacement_objects: BTreeSet::new(),
-            changed_replacement_objects: BTreeSet::new(),
-        }
+        ChangeSet::default()
     }
 
     #[mz_ore::test]
@@ -1885,7 +1478,7 @@ mod tests {
     fn test_validate_changed_replacement_objects_only() {
         let mut cs = make_empty_change_set();
         // Only changed objects, no new ones
-        cs.changed_replacement_objects.insert(ObjectId::new(
+        cs.stage_replacement_mvs.insert(ObjectId::new(
             "db".into(),
             "analytics".into(),
             "changed_mv".into(),
@@ -1910,7 +1503,7 @@ mod tests {
             "new_mv".into(),
         ));
         // Changed object in an existing schema
-        cs.changed_replacement_objects.insert(ObjectId::new(
+        cs.stage_replacement_mvs.insert(ObjectId::new(
             "db".into(),
             "existing_schema".into(),
             "changed_mv".into(),

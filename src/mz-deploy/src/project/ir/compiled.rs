@@ -429,9 +429,11 @@ pub struct DatabaseObject {
 }
 
 impl DatabaseObject {
-    pub fn clusters(&self) -> BTreeSet<String> {
-        let mut cluster_set = BTreeSet::new();
-
+    /// The cluster named by `IN CLUSTER` on the main CREATE statement.
+    ///
+    /// Only materialized views, sinks, and sources carry one. A parsed project
+    /// holds cluster names unresolved, so a resolved name reads as absent.
+    pub fn stmt_cluster(&self) -> Option<&Ident> {
         let in_cluster = match &self.stmt {
             Statement::CreateMaterializedView(mv) => mv.in_cluster.as_ref(),
             Statement::CreateSink(sink) => sink.in_cluster.as_ref(),
@@ -442,30 +444,26 @@ impl DatabaseObject {
             | Statement::CreateSecret(_)
             | Statement::CreateConnection(_) => None,
         };
-        if let Some(RawClusterName::Unresolved(cluster_name)) = in_cluster {
-            cluster_set.insert(cluster_name.to_string());
+        match in_cluster {
+            Some(RawClusterName::Unresolved(name)) => Some(name),
+            _ => None,
         }
-
-        for index in &self.indexes {
-            if let Some(RawClusterName::Unresolved(cluster_name)) = &index.in_cluster {
-                cluster_set.insert(cluster_name.to_string());
-            }
-        }
-        cluster_set
     }
 
-    /// Convert the statement to a `Query<Raw>` for type checking purposes.
-    pub fn to_query(&self) -> Option<Query<Raw>> {
-        match &self.stmt {
-            Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),
-            Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
-            Statement::CreateTable(_)
-            | Statement::CreateSecret(_)
-            | Statement::CreateConnection(_)
-            | Statement::CreateTableFromSource(_)
-            | Statement::CreateSink(_)
-            | Statement::CreateSource(_) => None,
-        }
+    /// Every cluster this object references, from its statement and its indexes.
+    pub fn clusters(&self) -> BTreeSet<String> {
+        self.stmt_cluster()
+            .into_iter()
+            .chain(
+                self.indexes
+                    .iter()
+                    .filter_map(|index| match &index.in_cluster {
+                        Some(RawClusterName::Unresolved(name)) => Some(name),
+                        _ => None,
+                    }),
+            )
+            .map(Ident::to_string)
+            .collect()
     }
 
     /// Rewrite cluster references using the given cluster name map.
