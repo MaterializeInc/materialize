@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Object-owned index retention at the catalog compaction boundary.
+//! Index admission and retained-plan protection at the catalog compaction boundary.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,13 +29,51 @@ use crate::memory::objects::{CatalogItem, DataSourceDesc, TableDataSource};
 
 struct IndexRetention {
     id: GlobalId,
-    inputs: BTreeSet<GlobalId>,
     shards: BTreeSet<ShardId>,
     policy: ReadPolicy,
     floor: Antichain<Timestamp>,
 }
 
 impl CatalogState {
+    /// Proposes index retention from observed input progress, including indexes
+    /// with no replicas. Partial observations are only proposals: the catalog
+    /// transaction checks complete durable progress and all read requirements.
+    pub fn index_retention_proposals(
+        &self,
+        frontiers: &[mz_storage_client::storage_collections::CollectionFrontiers],
+    ) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
+        let observed: BTreeMap<_, _> = frontiers
+            .iter()
+            .map(|frontier| (frontier.id, &frontier.write_frontier))
+            .collect();
+        affected_indexes(self, &observed.keys().copied().collect())
+            .into_iter()
+            .filter_map(|id| {
+                let old = self.collection_compaction_bounds().get(&id)?;
+                let entry = self.get_entry_by_global_id(&id);
+                let CatalogItem::Index(index) = entry.item() else {
+                    unreachable!("selected an index");
+                };
+                let inputs = self.logical_collection_inputs([index.on]);
+                if inputs.iter().any(|input| {
+                    matches!(
+                        self.get_entry_by_global_id(input).item(),
+                        CatalogItem::Log(_)
+                    )
+                }) {
+                    return None;
+                }
+                let upper: Antichain<_> = inputs
+                    .iter()
+                    .filter_map(|input| observed.get(input))
+                    .flat_map(|upper| upper.iter().copied())
+                    .collect();
+                let proposal = self.index_read_policy(id)?.frontier(upper.borrow());
+                PartialOrder::less_than(old, &proposal).then_some((id, proposal))
+            })
+            .collect()
+    }
+
     /// Returns the index's effective retention policy, including the metrics override.
     /// Object retention and replica execution windows use the same policy.
     pub fn index_read_policy(&self, id: GlobalId) -> Option<ReadPolicy> {
@@ -87,9 +125,92 @@ impl CatalogState {
     }
 }
 
-/// Clips advancing proposals against the final definitions and durable input
-/// progress. The transaction's compare-and-append must still match `base`.
-/// Incarnation requirements are additional constraints, validated separately.
+/// Establishes the first readable frontier when an index's plan is selected.
+/// All changes are staged in the same transaction as the selection. Resolving
+/// imports first also covers batches whose index IDs are not topologically ordered.
+pub(super) fn admit_index_bounds(
+    tx: &mut Transaction<'_>,
+    state: &CatalogState,
+    selected: &BTreeSet<GlobalId>,
+) -> Result<(), CatalogError> {
+    if !state.catalog_read_protection_enabled() {
+        return Ok(());
+    }
+
+    let mut pending = BTreeMap::new();
+    for id in selected {
+        let Some(entry) = state.try_get_entry_by_global_id(id) else {
+            continue;
+        };
+        let CatalogItem::Index(index) = entry.item() else {
+            continue;
+        };
+        if tx.proposed_compaction_bound(*id).is_some() {
+            continue;
+        }
+        let mut inputs = state.logical_collection_inputs([index.on]);
+        for (_, plan) in state.written_plans_for_owner(*id) {
+            inputs.extend(plan.imports.iter().copied());
+        }
+        inputs.retain(|input| match state.try_get_entry_by_global_id(input) {
+            Some(entry) => match entry.item() {
+                CatalogItem::Log(_) => false,
+                CatalogItem::Index(index) => {
+                    selected.contains(input)
+                        || tx.proposed_compaction_bound(*input).is_some()
+                        || !state
+                            .logical_collection_inputs([index.on])
+                            .iter()
+                            .any(|id| {
+                                matches!(
+                                    state.get_entry_by_global_id(id).item(),
+                                    CatalogItem::Log(_)
+                                )
+                            })
+                }
+                _ => true,
+            },
+            // A foreign selection may await repair after an import is retired.
+            // New selections are checked against the complete candidate first.
+            None => false,
+        });
+        pending.insert(*id, inputs);
+    }
+    while !pending.is_empty() {
+        let ready = pending.iter().find_map(|(id, inputs)| {
+            inputs
+                .iter()
+                .all(|input| tx.proposed_compaction_bound(*input).is_some())
+                .then_some(*id)
+        });
+        let Some(id) = ready else {
+            // An input lacks permission or the selections contain a cycle.
+            return Err(CatalogError::DDLTransactionRace);
+        };
+        let inputs = pending.remove(&id).expect("ready index exists");
+        // Constants and replica-local logs initialize at MIN. Every persisted
+        // or indexed input contributes its own admitted lower bound.
+        let mut floor = Antichain::from_elem(Timestamp::MIN);
+        for input in inputs {
+            floor.join_assign(
+                &tx.proposed_compaction_bound(input)
+                    .expect("checked input permission"),
+            );
+        }
+        if floor.is_empty() {
+            return Err(CatalogError::internal(
+                "index admission",
+                format!("index {id} has no readable input frontier"),
+            ));
+        }
+        tx.set_collection_compaction_bound(id, floor.as_option().copied())?;
+    }
+    Ok(())
+}
+
+/// Derives advancing index proposals from final definitions and durable input
+/// progress. `constrain_plan_inputs` couples these to their dependencies and
+/// client holds before the transaction can authorize compaction.
 pub(super) async fn constrain_index_retention(
     persist: &PersistClient,
     tx: &mut Transaction<'_>,
@@ -109,9 +230,8 @@ pub(super) async fn constrain_index_retention(
             };
             match base.collection_compaction_bounds().get(id) {
                 Some(old) => !PartialOrder::less_equal(&proposed, old),
-                // First index publication records installed readability, not an
-                // advance. Storage birth followed by advancement in this batch
-                // must still respect the original visibility boundary.
+                // Initial admission is not an advance. A subsequent proposal in
+                // the same batch must still respect the birth frontier.
                 None => tx
                     .initial_compaction_bound(*id)
                     .is_some_and(|birth| !PartialOrder::less_equal(&proposed, &birth)),
@@ -175,7 +295,6 @@ pub(super) async fn constrain_index_retention(
         }
         requirements.push(IndexRetention {
             id,
-            inputs,
             shards,
             policy,
             floor,
@@ -207,7 +326,6 @@ pub(super) async fn constrain_index_retention(
         .await?;
     for IndexRetention {
         id,
-        inputs,
         shards,
         policy,
         floor,
@@ -221,20 +339,156 @@ pub(super) async fn constrain_index_retention(
         // remains authoritative, without inventing a ticking progress source.
         let mut limit = policy.frontier(upper.borrow());
         limit.join_assign(&floor);
-        for target in inputs.iter().copied().chain([id]) {
-            if !advancing.contains(&target) {
-                continue;
+        let Some(current) = tx.proposed_compaction_bound(id) else {
+            // Definitions without a selected plan are not admitted collections.
+            continue;
+        };
+        let mut bound = limit;
+        if let Some(old) = base.collection_compaction_bounds().get(&id) {
+            if &current != old {
+                bound.meet_assign(&current);
             }
-            let Some(mut bound) = tx.proposed_compaction_bound(target) else {
+            // A stronger policy cannot restore already-discarded history.
+            bound.join_assign(old);
+        } else {
+            bound.join_assign(&current);
+        }
+        if bound != current {
+            tx.set_collection_compaction_bound(id, bound.into_option())?;
+        }
+    }
+    Ok(())
+}
+
+/// Couples proposed permission to the history needed by logical recovery and
+/// every selected build's actual imports. Dependencies are metadata, not another
+/// durable copy of an index's advancing frontier.
+pub(super) fn constrain_plan_inputs(
+    tx: &mut Transaction<'_>,
+    base: &CatalogState,
+    state: &CatalogState,
+    selected: &BTreeSet<GlobalId>,
+) -> Result<(), CatalogError> {
+    if !state.catalog_read_protection_enabled() {
+        return Ok(());
+    }
+    let changed: BTreeSet<_> = tx
+        .changed_compaction_bounds()
+        .chain(tx.changed_maintained_read_requirements())
+        .chain(selected.iter().copied())
+        .collect();
+    let mut owners = affected_indexes(state, &changed);
+    owners.extend(selected.iter().copied());
+    owners.extend(tx.changed_maintained_read_requirements());
+    for input in &changed {
+        owners.extend(state.written_plan_importers(*input).map(|(owner, _)| owner));
+    }
+    let mut bounds: BTreeMap<_, _> = tx
+        .changed_compaction_bounds()
+        .filter_map(|id| tx.proposed_compaction_bound(id).map(|bound| (id, bound)))
+        .collect();
+    let mut requirements = BTreeMap::new();
+    for owner in owners {
+        let Some(entry) = state.try_get_entry_by_global_id(&owner) else {
+            continue;
+        };
+        let mut inputs = match entry.item() {
+            CatalogItem::Index(index) => {
+                let Some(mut bound) = tx.proposed_compaction_bound(owner) else {
+                    continue;
+                };
+                bound.extend(state.client_read_frontier(owner));
+                bounds.insert(owner, bound);
+                state.logical_collection_inputs([index.on])
+            }
+            CatalogItem::MaterializedView(_) => {
+                let Some(requirement) = state.maintained_read_requirements().get(&owner) else {
+                    return Err(CatalogError::DDLTransactionRace);
+                };
+                if requirement.frontier.is_none() {
+                    continue;
+                }
+                // Logical storage inputs are governed by the maintained
+                // requirement validator. Do not clip away an admission failure
+                // when a new requirement asks for already-disallowed history.
+                BTreeSet::new()
+            }
+            _ => continue,
+        };
+        for (_, plan) in state.written_plans_for_owner(owner) {
+            inputs.extend(plan.imports.iter().copied().filter(|input| {
+                !matches!(entry.item(), CatalogItem::MaterializedView(_))
+                    || !state.maintained_read_requirements()[&owner]
+                        .inputs
+                        .contains(input)
+            }));
+        }
+        let mut governed = BTreeSet::new();
+        for input in inputs {
+            let Some(entry) = state.try_get_entry_by_global_id(&input) else {
+                // A foreign build repairs its invalidated selection independently.
+                // A retired import has no lifetime whose compaction can be governed.
                 continue;
             };
-            bound.extend(limit.iter().copied());
-            // Neither a stronger policy nor terminal input progress can restore
-            // discarded history. Existing permission remains monotone.
-            if let Some(old) = base.collection_compaction_bounds().get(&target) {
-                bound.join_assign(old);
+            if matches!(entry.item(), CatalogItem::Log(_)) {
+                continue;
             }
-            tx.set_collection_compaction_bound(target, bound.into_option())?;
+            if let CatalogItem::Index(index) = entry.item()
+                && tx.proposed_compaction_bound(input).is_none()
+                && state
+                    .logical_collection_inputs([index.on])
+                    .iter()
+                    .any(|id| {
+                        matches!(state.get_entry_by_global_id(id).item(), CatalogItem::Log(_))
+                    })
+            {
+                continue;
+            }
+            let bound = tx
+                .proposed_compaction_bound(input)
+                .ok_or(CatalogError::DDLTransactionRace)?;
+            bounds.entry(input).or_insert(bound);
+            governed.insert(input);
+        }
+        requirements.insert(owner, governed);
+    }
+    // Reducing an importer's proposal can constrain its imports in turn. The
+    // iteration only meets a finite set of proposed and required frontiers.
+    loop {
+        let mut changed = false;
+        for (owner, inputs) in &requirements {
+            let frontier = match state.get_entry_by_global_id(owner).item() {
+                CatalogItem::Index(_) => bounds[owner].clone(),
+                _ => state.maintained_read_requirements()[owner]
+                    .frontier
+                    .into_iter()
+                    .collect(),
+            };
+            for input in inputs {
+                let bound = bounds.get_mut(input).expect("governed input has a bound");
+                if !PartialOrder::less_equal(bound, &frontier) {
+                    bound.meet_assign(&frontier);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (id, bound) in bounds {
+        let floor = base
+            .collection_compaction_bounds()
+            .get(&id)
+            .cloned()
+            .or_else(|| tx.initial_compaction_bound(id));
+        if floor.is_some_and(|floor| !PartialOrder::less_equal(&floor, &bound)) {
+            // Selecting an import cannot recover history it was already allowed
+            // to discard. The planner must choose another access path.
+            return Err(CatalogError::DDLTransactionRace);
+        }
+        if tx.proposed_compaction_bound(id).as_ref() != Some(&bound) {
+            tx.set_collection_compaction_bound(id, bound.into_option())?;
         }
     }
     Ok(())

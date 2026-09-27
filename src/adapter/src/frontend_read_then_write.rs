@@ -1255,9 +1255,8 @@ impl PeekClient {
         };
         expr.try_visit_scalars_mut(&mut |s| style.prep_scalar_expr(s))?;
 
-        // Native CREATE INDEX commits before its trace is installed. Offer only
-        // observed indexes, as for frontend SELECTs, so a mutation can read
-        // storage instead of requiring an unavailable access path.
+        // Catalog definitions determine access paths, as for frontend SELECTs.
+        // Execution separately waits for the selected imports to become readable.
         let compute_instance = self
             .query_client
             .as_ref()

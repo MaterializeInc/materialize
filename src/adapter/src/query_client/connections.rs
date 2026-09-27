@@ -159,6 +159,33 @@ impl QueryReplicaConnections {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn insert_test_client(&self, key: ReplicaKey, client: ReplicaQueryClient) {
+        let replica = Replica {
+            endpoint: Endpoint::Unmanaged {
+                compute: vec![],
+                storage: vec![],
+            },
+            state: Arc::new(Mutex::new(ReplicaState {
+                settings: Settings {
+                    connect_timeout: Duration::from_secs(1),
+                    keepalive_timeout: Duration::from_secs(1),
+                    max_result_size: 1024,
+                },
+                client: Some(client),
+            })),
+            settings_changed: watch::channel(()).0,
+            _task: mz_ore::task::spawn(|| "test-query-replica", std::future::pending())
+                .abort_on_drop(),
+            _storage_task: None,
+        };
+        self.replicas
+            .lock()
+            .expect("query replicas mutex poisoned")
+            .insert(key, replica);
+        self.changed.send_replace(());
+    }
+
     /// Reconcile a current committed catalog snapshot without waiting for any
     /// replica. Call in catalog-application order, including system config changes.
     pub(crate) fn sync_catalog(self: &Arc<Self>, catalog: &Catalog) {

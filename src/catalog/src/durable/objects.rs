@@ -2144,6 +2144,7 @@ pub struct WrittenPlan {
     pub build_version: String,
     pub revision: Uuid,
     pub replica_owner: Option<ReplicaPlanOwner>,
+    pub imports: BTreeSet<GlobalId>,
 }
 
 /// Replica-local maintained work without a SQL catalog item. Presence of the
@@ -2164,6 +2165,8 @@ pub struct WrittenPlanKey {
 pub struct WrittenPlanValue {
     pub revision: Uuid,
     pub replica_owner: Option<ReplicaPlanOwner>,
+    /// Selected plan dependencies, readable without decoding build-specific plan bytes.
+    pub imports: BTreeSet<GlobalId>,
 }
 
 impl DurableType for WrittenPlan {
@@ -2179,6 +2182,7 @@ impl DurableType for WrittenPlan {
             WrittenPlanValue {
                 revision: self.revision,
                 replica_owner: self.replica_owner,
+                imports: self.imports,
             },
         )
     }
@@ -2189,6 +2193,7 @@ impl DurableType for WrittenPlan {
             build_version: key.build_version,
             revision: value.revision,
             replica_owner: value.replica_owner,
+            imports: value.imports,
         }
     }
 

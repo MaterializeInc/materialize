@@ -395,6 +395,7 @@ impl Catalog {
             collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
             written_plans: Default::default(),
+            written_plan_importers: Default::default(),
             client_incarnations: Default::default(),
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),

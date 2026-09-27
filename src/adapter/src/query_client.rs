@@ -197,11 +197,9 @@ impl QueryClient {
             .collect()
     }
 
-    /// Return indexes eligible for a maintained plan at `read_ts`. Any published
-    /// permission must allow the timestamp, and every selected ready replica must
-    /// report a readable trace. At least one selected replica must be ready.
-    ///
-    /// These cached observations neither wait for replicas nor grant protection.
+    /// Return indexes whose committed permission supports a maintained plan at
+    /// `read_ts`, independently of installation. Replica-local logging indexes
+    /// additionally require observed readability because their history is volatile.
     /// Callers must acquire read protection before relying on the selected paths.
     pub(crate) fn maintained_indexes_at(
         &self,
@@ -211,9 +209,6 @@ impl QueryClient {
         read_ts: Timestamp,
     ) -> BTreeSet<GlobalId> {
         let replicas = self.replica_clients(cluster, target);
-        if replicas.is_empty() {
-            return BTreeSet::new();
-        }
         catalog
             .get_entries()
             .filter_map(|(_, entry)| match entry.item() {
@@ -221,12 +216,25 @@ impl QueryClient {
                 _ => None,
             })
             .filter(|id| {
-                catalog
-                    .collection_compaction_bounds()
-                    .get(id)
-                    .is_none_or(|bound| bound.less_equal(&read_ts))
-                    // Maintained dataflows install on every selected replica,
-                    // unlike a peek that can use one readable sibling.
+                let bound = catalog.collection_compaction_bounds().get(id);
+                let entry = catalog.get_entry_by_global_id(id);
+                let CatalogItem::Index(index) = entry.item() else {
+                    unreachable!("filtered index");
+                };
+                let volatile = catalog
+                    .logical_collection_inputs([index.on])
+                    .iter()
+                    .any(|input| {
+                        matches!(
+                            catalog.get_entry_by_global_id(input).item(),
+                            CatalogItem::Log(_)
+                        )
+                    });
+                if !volatile {
+                    return bound.is_some_and(|bound| bound.less_equal(&read_ts));
+                }
+                bound.is_none_or(|bound| bound.less_equal(&read_ts))
+                    && !replicas.is_empty()
                     && replicas.iter().all(|replica| {
                         replica
                             .collection_frontiers(*id)
@@ -239,10 +247,28 @@ impl QueryClient {
             .collect()
     }
 
-    /// Ordinary indexes are offered once observed. Logging sources have no
-    /// storage access path, so their catalog-owned indexes must remain available
-    /// to planning while execution waits for query-protocol readiness.
+    /// Serving candidates are catalog declarations, independent of installation.
     pub(crate) fn instance_snapshot(
+        &self,
+        catalog: &Catalog,
+        cluster: ComputeInstanceId,
+    ) -> ComputeInstanceSnapshot {
+        let mut ids = BTreeSet::new();
+        if let Some(instance) = catalog.try_get_cluster(cluster) {
+            ids.extend(instance.log_indexes.values().copied());
+            ids.extend(instance.bound_objects.iter().filter_map(|item| {
+                match catalog.get_entry(item).item() {
+                    CatalogItem::Index(index) => Some(index.global_id()),
+                    _ => None,
+                }
+            }));
+        }
+        ComputeInstanceSnapshot::new_from_parts(cluster, ids)
+    }
+
+    /// Maintained-plan repair restricts ordinary indexes to observed traces.
+    /// Logging sources have no storage access path and retain their catalog indexes.
+    pub(crate) fn observed_instance_snapshot(
         &self,
         catalog: &Catalog,
         cluster: ComputeInstanceId,
@@ -591,7 +617,7 @@ impl QueryClient {
     /// Observes candidate frontiers. This method grants no protection.
     /// `timestamp` chooses a desired read time from the observed upper, or None
     /// to reuse an established window without a timestamp preference. Grants
-    /// later than that time require fresh readability and permission observations.
+    /// later than that time require fresh permission and storage frontier observations.
     /// The returned floor can exceed the desired time, so callers must validate
     /// timestamp constraints against the acquired holds before reading.
     #[tracing::instrument(level = "debug", skip_all, err(level = "debug"))]
@@ -601,32 +627,48 @@ impl QueryClient {
         bundle: &CollectionIdBundle,
         timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<PreparedRead, AdapterError> {
+        if !catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&self.protection.incarnation())
+        {
+            self.protection.mark_closed();
+            return Err(AdapterError::internal(
+                "query read protection",
+                "incarnation is closed",
+            ));
+        }
         let upper = self.write_frontier(catalog, bundle).await?;
         let read_ts = timestamp(&upper)?;
         let mut index_inputs = BTreeMap::new();
         let mut storage = bundle.storage_ids.clone();
-        for id in bundle.compute_ids.values().flatten() {
-            let entry = catalog.try_get_entry_by_global_id(id).ok_or_else(|| {
-                tracing::debug!(%id, "read preparation target absent from catalog");
-                unavailable(*id)
-            })?;
-            let CatalogItem::Index(index) = entry.item() else {
-                tracing::debug!(%id, "read preparation compute target is not an index");
-                return Err(unavailable(*id));
-            };
-            let inputs: BTreeSet<_> = catalog
-                .state()
-                .logical_collection_inputs([index.on])
-                .into_iter()
-                .filter(|input| {
-                    !matches!(
-                        catalog.get_entry_by_global_id(input).item(),
-                        CatalogItem::Log(_)
-                    )
-                })
-                .collect();
-            storage.extend(inputs.iter().copied());
-            index_inputs.insert(*id, inputs);
+        for (cluster, ids) in &bundle.compute_ids {
+            for id in ids {
+                let entry = catalog.try_get_entry_by_global_id(id).ok_or_else(|| {
+                    tracing::debug!(%id, "read preparation target absent from catalog");
+                    unavailable(*id)
+                })?;
+                let CatalogItem::Index(index) = entry.item() else {
+                    tracing::debug!(%id, "read preparation compute target is not an index");
+                    return Err(unavailable(*id));
+                };
+                if index.cluster_id != *cluster || catalog.try_get_cluster(*cluster).is_none() {
+                    return Err(unavailable(*id));
+                }
+                let inputs: BTreeSet<_> = catalog
+                    .state()
+                    .logical_collection_inputs([index.on])
+                    .into_iter()
+                    .filter(|input| {
+                        !matches!(
+                            catalog.get_entry_by_global_id(input).item(),
+                            CatalogItem::Log(_)
+                        )
+                    })
+                    .collect();
+                storage.extend(inputs.iter().copied());
+                index_inputs.insert(*id, inputs);
+            }
         }
         let mut frontiers = BTreeMap::new();
         for id in storage {
@@ -657,52 +699,30 @@ impl QueryClient {
             frontiers.insert(id, frontier);
         }
         for (cluster, ids) in &bundle.compute_ids {
-            let replicas = self.replica_clients(*cluster, None);
             for id in ids {
-                let mut since = self
-                    .protection
-                    .reusable_frontier(*id, read_ts)
-                    .unwrap_or_else(|| read_ts.unwrap_or(Timestamp::MIN));
-                let bound = catalog.state().collection_compaction_bounds().get(id);
-                let observed = replicas
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(replica_slot, replica)| {
-                        let observation = replica.collection_frontiers(*id);
-                        tracing::debug!(
-                            %cluster, %id, replica_slot, ?bound, ?observation,
-                            "read preparation compute observation"
-                        );
-                        observation
-                            .ok()??
-                            .read_frontier
-                            .as_ref()?
-                            .as_option()
-                            .copied()
-                    })
-                    .min();
-                if let Some(readable) = observed {
-                    since = since.max(readable);
-                } else if bound.is_none()
-                    && !catalog.try_get_cluster(*cluster).is_some_and(|instance| {
-                        instance.log_indexes.values().any(|index| index == id)
-                    })
-                {
-                    tracing::debug!(
-                        %cluster, %id, ?bound, replica_count = replicas.len(),
-                        "read preparation has neither compute readability nor permission"
-                    );
-                    return Err(unavailable(*id));
-                }
-                // Logging traces initialize at MIN and are held there until
-                // first permission publication. They have no Persist inputs to
-                // observe. Execution still waits for their actual trace frontier.
-                if let Some(bound) = bound {
-                    since = since.max(*bound.as_option().ok_or_else(|| {
-                        tracing::debug!(%cluster, %id, ?bound, "read preparation compute bound is empty");
-                        unavailable(*id)
-                    })?);
-                }
+                // Permission, not a replica's observed since, defines acquisition.
+                // Execution separately checks whether its chosen imports are readable.
+                let mut since =
+                    if let Some(granted) = self.protection.reusable_frontier(*id, read_ts) {
+                        granted
+                    } else {
+                        let floor = match catalog.state().collection_compaction_bounds().get(id) {
+                            Some(bound) => *bound.as_option().ok_or_else(|| unavailable(*id))?,
+                            // Logging traces initialize at MIN and are held there until
+                            // first permission publication. They have no Persist inputs
+                            // and promise no reconstruction across replica incarnations.
+                            None if catalog
+                                .get_cluster(*cluster)
+                                .log_indexes
+                                .values()
+                                .any(|index| index == id) =>
+                            {
+                                Timestamp::MIN
+                            }
+                            None => return Err(unavailable(*id)),
+                        };
+                        floor.max(read_ts.unwrap_or(Timestamp::MIN))
+                    };
                 for input in &index_inputs[id] {
                     since = since.max(frontiers[input]);
                 }
@@ -1115,17 +1135,174 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn historical_acquisition_publishes_before_returning_and_preserves_upper() {
-        acquisition_catalog_harness(None).await;
+        acquisition_catalog_harness(AcquisitionCase::Historical).await;
     }
 
     #[mz_ore::test(tokio::test)]
     async fn competing_permission_publication_reobserves_without_reselecting_timestamp() {
         for read_ts in [None, Some(Timestamp::from(50))] {
-            acquisition_catalog_harness(Some(read_ts)).await;
+            acquisition_catalog_harness(AcquisitionCase::PermissionRace(read_ts)).await;
         }
     }
 
-    async fn acquisition_catalog_harness(race: Option<Option<Timestamp>>) {
+    #[mz_ore::test(tokio::test)]
+    async fn declared_index_acquisition_precedes_installation_with_zero_replicas() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Box::pin(acquisition_catalog_harness(
+                AcquisitionCase::UninstalledIndex,
+            )),
+        )
+        .await
+        .expect("acquisition harness must make progress");
+    }
+
+    enum AcquisitionCase {
+        Historical,
+        PermissionRace(Option<Timestamp>),
+        UninstalledIndex,
+    }
+
+    async fn uninstalled_index_acquisition(
+        catalog: &mut Catalog,
+        client: &QueryClient,
+        commands: &mut tokio::sync::mpsc::UnboundedReceiver<Message>,
+        input: GlobalId,
+    ) {
+        use crate::optimize::dataflows::DataflowBuilder;
+        use mz_compute_client::protocol::response::{ComputeResponse, FrontiersResponse};
+
+        let index = GlobalId::User(100_001);
+        let entry = catalog.get_entry_by_global_id(&index);
+        let CatalogItem::Index(item) = entry.item() else {
+            panic!("index expected");
+        };
+        let cluster = item.cluster_id;
+        assert!(catalog.get_cluster(cluster).replicas().next().is_none());
+        let candidates = client.instance_snapshot(catalog, cluster);
+        assert!(candidates.contains_collection(&index));
+        assert!(
+            !client
+                .observed_instance_snapshot(catalog, cluster)
+                .contains_collection(&index)
+        );
+        let domain = DataflowBuilder::new(catalog.state(), candidates)
+            .sufficient_collections(BTreeSet::from([input]));
+        assert_eq!(domain.compute_ids[&cluster], BTreeSet::from([index]));
+        let bundle = CollectionIdBundle {
+            storage_ids: BTreeSet::new(),
+            compute_ids: BTreeMap::from([(cluster, BTreeSet::from([index]))]),
+        };
+        let snapshot = catalog.clone();
+        let selected = std::cell::Cell::new(0);
+        let mut read = Box::pin(
+            client.acquire_read_holds_and_upper(&snapshot, &bundle, |upper| {
+                selected.set(selected.get() + 1);
+                assert_eq!(upper, &Antichain::from_elem(Timestamp::MIN));
+                Ok(Some(Timestamp::from(5)))
+            }),
+        );
+        let command = tokio::select! {
+            result = &mut read => panic!("read bypassed publication: {result:?}"),
+            command = commands.recv() => command.expect("coordinator command channel remains open"),
+        };
+        let Message::Command(_, Command::AcquireClientReadProtection { tx, read_ts, .. }) = command
+        else {
+            panic!("expected direct protection acquisition without catalog refresh");
+        };
+        assert_eq!(read_ts, Some(Timestamp::from(5)));
+        let prepared = client
+            .prepare_read(catalog, &bundle, |_| Ok(read_ts))
+            .await
+            .expect("committed permission allows pre-installation preparation");
+        assert_eq!(prepared.frontiers[&index], Timestamp::from(20));
+        assert_eq!(prepared.frontiers[&input], Timestamp::from(20));
+        assert_eq!(prepared.index_inputs[&index], BTreeSet::from([input]));
+        assert_eq!(client.protection.granted_frontier(index), None);
+        let incarnation = client.protection.incarnation();
+        let requirements = catalog
+            .state()
+            .expand_client_read_requirements(incarnation, prepared.frontiers.clone())
+            .expect("logical input requirements expand");
+        let requirements = client.protection.prepare_publication(requirements);
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements,
+                }],
+            )
+            .await
+            .expect("protection publication commits");
+        client.protection.finish_publication(true);
+        let holds = client
+            .protection
+            .try_acquire(&bundle, &prepared.frontiers, &prepared.index_inputs)
+            .expect("incarnation remains open")
+            .expect("committed coverage must include index and leaves");
+        tx.send(Ok((holds, prepared.upper)))
+            .expect("acquisition receiver remains live");
+        let (holds, upper) = read.await.expect("protected acquisition needs no replicas");
+        assert_eq!(selected.get(), 1);
+        assert_eq!(upper, Antichain::from_elem(Timestamp::MIN));
+        assert_eq!(
+            holds.since(&index),
+            Antichain::from_elem(Timestamp::from(20))
+        );
+        assert!(!holds.since(&index).less_equal(&Timestamp::from(5)));
+
+        // A later physical observation cannot change permission or the logical
+        // time domain. Execution, unlike acquisition, must reject this trace at 20.
+        let (replica, peer) = compute::tests::connect().await;
+        client
+            .connections
+            .insert_test_client((cluster, ReplicaId::User(1)), replica.clone());
+        let mut changed = replica.frontier_changes();
+        peer.respond(ComputeResponse::Frontiers(
+            index,
+            FrontiersResponse {
+                read_frontier: Some(Antichain::from_elem(Timestamp::from(40))),
+                write_frontier: Some(Antichain::from_elem(Timestamp::from(80))),
+                hydrated: Some(true),
+                ..Default::default()
+            },
+        ));
+        changed
+            .changed()
+            .await
+            .expect("replica frontier observation arrives");
+        let prepared = client
+            .prepare_read(catalog, &bundle, |_| Ok(None))
+            .await
+            .expect("reusable protection remains valid");
+        assert_eq!(prepared.frontiers[&index], Timestamp::from(20));
+        let fresh = client
+            .prepare_read(catalog, &bundle, |_| Ok(Some(Timestamp::from(10))))
+            .await
+            .expect("fresh permission does not join compute observations");
+        assert_eq!(fresh.frontiers[&index], Timestamp::from(20));
+        assert!(matches!(
+            client
+                .readable_replicas(cluster, None, &BTreeSet::from([index]), Timestamp::from(20))
+                .await,
+            Err(AdapterError::CollectionUnreadable { id }) if id == index.to_string()
+        ));
+        let fresh_domain =
+            DataflowBuilder::new(catalog.state(), client.instance_snapshot(catalog, cluster))
+                .sufficient_collections(BTreeSet::from([input]));
+        assert_eq!(domain.compute_ids, fresh_domain.compute_ids);
+    }
+
+    async fn acquisition_catalog_harness(case: AcquisitionCase) {
+        let race = match case {
+            AcquisitionCase::PermissionRace(timestamp) => Some(timestamp),
+            _ => None,
+        };
+        let uninstalled_index = matches!(case, AcquisitionCase::UninstalledIndex);
         let persist = PersistClient::new_for_tests().await;
         let bootstrap = test_bootstrap_args();
         let organization = Uuid::new_v4();
@@ -1166,13 +1343,59 @@ mod tests {
                 BTreeMap::new(),
                 None,
             ).expect("can insert test MV");
+            if uninstalled_index {
+                let n = 100_001;
+                tx.insert_item(
+                    CatalogItemId::User(n),
+                    mz_pgrepr::oid::FIRST_USER_OID + u32::try_from(n - 100_000).expect("test OID offset fits"),
+                    GlobalId::User(n),
+                    schema.id,
+                    &format!("history_idx_{n}"),
+                    format!("CREATE INDEX history_idx_{n} IN CLUSTER quickstart ON [u100000 AS materialize.public.history] (a)"),
+                    MZ_SYSTEM_ROLE_ID,
+                    vec![],
+                    BTreeMap::new(),
+                    None,
+                ).expect("can insert index");
+                // Both the logical input and the selected import are the MV.
+                // Admit its history and the index's nonzero birth permission
+                // atomically, without relying on an installed trace.
+                tx.set_written_plan_with_owner(
+                    GlobalId::User(n),
+                    "acquisition-fixture",
+                    Some(Uuid::new_v4()),
+                    None,
+                    BTreeSet::from([id]),
+                )
+                .expect("can record index plan dependency");
+                tx.set_collection_compaction_bound(GlobalId::User(n), Some(Timestamp::from(20)))
+                    .expect("can establish justified index permission");
+            }
+
             // The native catalog harness does not provision storage. Install the
             // shard identity and its initial permission in the same transaction.
             tx.insert_collection_metadata(BTreeMap::from([(id, shard)]))
                 .expect("can install shard metadata");
-            tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
-                .expect("can set initial permission");
-            if race.is_some() {
+            tx.set_collection_compaction_bound(
+                id,
+                Some(if uninstalled_index {
+                    Timestamp::from(20)
+                } else {
+                    Timestamp::MIN
+                }),
+            )
+            .expect("can set initial permission");
+            if uninstalled_index {
+                let replicas: Vec<_> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+                for replica in replicas {
+                    tx.remove_cluster_replica(replica)
+                        .expect("can seed zero-replica cluster");
+                }
+            }
+            if race.is_some() || uninstalled_index {
                 tx.set_config("catalog_read_protection_enabled".into(), Some(1))
                     .expect("can enable joined protection writers");
             }
@@ -1260,6 +1483,18 @@ mod tests {
             storage_ids: BTreeSet::from([id]),
             compute_ids: BTreeMap::new(),
         };
+        if uninstalled_index {
+            Box::pin(uninstalled_index_acquisition(
+                &mut catalog,
+                &client,
+                &mut commands,
+                id,
+            ))
+            .await;
+            reader.expire().await;
+            writer.expire().await;
+            return;
+        }
         if let Some(read_ts) = race {
             let selected = std::cell::Cell::new(0);
             let prepared = client

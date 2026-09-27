@@ -658,7 +658,21 @@ impl Coordinator {
                 continue;
             }
             let (cluster, required) = match entry.item() {
-                CatalogItem::Index(index) => (index.cluster_id, None),
+                CatalogItem::Index(index) => {
+                    let bound = candidate.collection_compaction_bounds().get(&id);
+                    if bound.is_none() && self.catalog().try_get_entry_by_global_id(&id).is_some() {
+                        return Err(AdapterError::internal(
+                            "rewrite index plan",
+                            format!("index {id} has no admitted compaction bound"),
+                        ));
+                    }
+                    // A new index can lose an optimizer-only import before its
+                    // creation commits. Its replacement plan is admitted at birth.
+                    (
+                        index.cluster_id,
+                        bound.and_then(|bound| bound.as_option().copied()),
+                    )
+                }
                 CatalogItem::MaterializedView(mv) => (
                     mv.cluster_id,
                     candidate
@@ -669,12 +683,15 @@ impl Coordinator {
                 CatalogItem::MetricSink(sink) => (sink.cluster_id, None),
                 _ => continue,
             };
-            let mut indexes = if let (CatalogItem::MaterializedView(mv), Some(required)) =
-                (entry.item(), required)
-            {
-                client.maintained_indexes_at(&candidate, cluster, mv.target_replica, required)
+            let mut indexes = if let Some(required) = required {
+                let target = match entry.item() {
+                    CatalogItem::MaterializedView(mv) => mv.target_replica,
+                    _ => None,
+                };
+                client.maintained_indexes_at(&candidate, cluster, target, required)
             } else {
-                let observed = client.instance_snapshot(self.catalog(), cluster);
+                let use_catalog_candidates = matches!(entry.item(), CatalogItem::Index(_));
+                let observed = client.observed_instance_snapshot(self.catalog(), cluster);
                 candidate
                     .get_entries()
                     .filter_map(|(_, entry)| match entry.item() {
@@ -683,7 +700,7 @@ impl Coordinator {
                         }
                         _ => None,
                     })
-                    .filter(|id| observed.contains_collection(id))
+                    .filter(|id| use_catalog_candidates || observed.contains_collection(id))
                     .collect()
             };
             let mut config = OptimizerConfig::from(candidate.system_config())
@@ -726,6 +743,11 @@ impl Coordinator {
                         &replacement.physical_plan,
                         cluster,
                     );
+                    // Match the dependency metadata stored with the selection.
+                    imports.extend(&crate::optimize::dataflows::dataflow_import_id_bundle(
+                        &replacement.global_mir,
+                        cluster,
+                    ));
                     // Collections born in this transaction cannot be opened through
                     // the live catalog. Their birth permissions and the consumer's
                     // requirement commit together. Only existing inputs need a
@@ -750,8 +772,17 @@ impl Coordinator {
                         .is_some_and(|since| *since <= required)
                     {
                         let previous = indexes.len();
-                        indexes
-                            .retain(|id| !replacement.physical_plan.index_imports.contains_key(id));
+                        let target = match entry.item() {
+                            CatalogItem::MaterializedView(mv) => mv.target_replica,
+                            _ => None,
+                        };
+                        let eligible = client.maintained_indexes_at(
+                            self.catalog().state(),
+                            cluster,
+                            target,
+                            required,
+                        );
+                        indexes.retain(|id| eligible.contains(id));
                         if indexes.len() == previous {
                             return Err(AdapterError::DDLTransactionRace);
                         }

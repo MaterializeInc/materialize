@@ -1435,7 +1435,7 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             time.sleep(0.5)
         assert inspect(index_input)["since"][0] > 0
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
-        unpublished_start = time.monotonic()
+        advancement_paused_at = time.monotonic()
         td("""
             > CREATE INDEX protected_index ON protected_index_input (a)
               WITH (RETAIN HISTORY = FOR '1s');
@@ -1475,7 +1475,7 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                     counts[strategy[1]] += float(line.rsplit(" ", 1)[1])
             return counts
 
-        def indexed_read_before_publication(phase: str) -> None:
+        def indexed_read_before_advancement(phase: str) -> None:
             td(f"""
                 > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;
                 true
@@ -1496,18 +1496,22 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 before,
                 after,
             )
-            assert index_permission() is None
+            assert index_permission() == initial_permission
 
-        assert index_permission() is None
-        indexed_read_before_publication("initial")
+        initial_permission = index_permission()
+        assert initial_permission is not None
+        initial_since = initial_permission["elements"]
+        assert len(initial_since) == 1
+        assert initial_since[0] >= physical_since[0] > 0
+        indexed_read_before_advancement("initial")
         c.kill("materialized")
         c.up("materialized")
         assert gid("protected_index") == index
-        indexed_read_before_publication("restarted")
-        assert time.monotonic() - unpublished_start < 300
+        indexed_read_before_advancement("restarted")
+        assert time.monotonic() - advancement_paused_at < 300
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
         td(f"""
-            > SELECT (v->>'frontier')::numeric > 0
+            > SELECT (v->>'frontier')::numeric > {initial_since[0]}
               FROM ({index_bound_sql}) r(v);
             true
             > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;

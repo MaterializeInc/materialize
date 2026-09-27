@@ -151,9 +151,7 @@ async fn written_index_survives_writer_and_query_disconnect() {
         .unwrap()
         .created_client_incarnations[0];
 
-    let factory = start_runtime(config, clients, MetricsRegistry::new()).await;
-
-    let replica = wait_window(&mut observer, reader, source, index, 20_000).await;
+    // Acquire the historical grant before native reconstruction installs the index.
     publish(
         &mut observer,
         reader,
@@ -161,6 +159,10 @@ async fn written_index_survives_writer_and_query_disconnect() {
     )
     .await
     .unwrap();
+
+    let factory = start_runtime(config, clients, MetricsRegistry::new()).await;
+
+    let replica = wait_window(&mut observer, reader, source, index, 20_000).await;
     assert_eq!(
         observer.state().client_read_requirements()[&(reader, source)],
         Timestamp::new(15_000)
@@ -423,8 +425,8 @@ impl Fixture {
             ),
         )
         .await;
-        let index = create(
-            &mut writer,
+        let (index, create_index) = prepare_create(
+            &writer,
             "retaining_index",
             "CREATE INDEX retaining_index IN CLUSTER quickstart \
              ON materialize.public.input (counter) WITH (RETAIN HISTORY FOR '10 seconds')"
@@ -528,16 +530,20 @@ impl Fixture {
             )])
             .await
             .unwrap();
+        // Admission requires the index and its written plan selection together.
         transact(
             &mut writer,
-            vec![Op::SetWrittenPlan {
-                id: index,
-                build_version: build.to_string(),
-                expected_revision: None,
-                revision: Some(revision),
-                imports: BTreeSet::from([source]),
-                replica_owner: None,
-            }],
+            vec![
+                create_index,
+                Op::SetWrittenPlan {
+                    id: index,
+                    build_version: build.to_string(),
+                    expected_revision: None,
+                    revision: Some(revision),
+                    imports: BTreeSet::from([source]),
+                    replica_owner: None,
+                },
+            ],
         )
         .await;
         Self {
@@ -605,6 +611,12 @@ pub(super) fn disable_inline_parts(clients: &PersistClientCache) {
 }
 
 async fn create(catalog: &mut Catalog, item_name: &str, sql: String) -> GlobalId {
+    let (global_id, op) = prepare_create(catalog, item_name, sql).await;
+    transact(catalog, vec![op]).await;
+    global_id
+}
+
+async fn prepare_create(catalog: &Catalog, item_name: &str, sql: String) -> (GlobalId, Op) {
     let (id, global_id) = catalog.allocate_user_id_for_test().await.unwrap();
     let item = test_support::parse_item(
         &mut catalog.state().clone(),
@@ -619,8 +631,7 @@ async fn create(catalog: &mut Catalog, item_name: &str, sql: String) -> GlobalId
         item,
         owner_id: MZ_SYSTEM_ROLE_ID,
     };
-    transact(catalog, vec![op]).await;
-    global_id
+    (global_id, op)
 }
 
 async fn wait_window(

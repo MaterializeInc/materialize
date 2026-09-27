@@ -536,34 +536,21 @@ impl ReplicaEnactment {
         }
         for id in &indexes {
             let entry = catalog.get_entry_by_global_id(id);
-            let CatalogItem::Index(index) = entry.item() else {
+            let CatalogItem::Index(_) = entry.item() else {
                 bail!("index export {id} has no index definition");
             };
-            let mut floor = catalog
+            // Admission protects the selected actual and logical inputs at this
+            // current bound. Advancing it to an input since would skip history
+            // that catalog readers are still entitled to request.
+            let floor = catalog
                 .state()
                 .collection_compaction_bounds()
                 .get(id)
-                .cloned()
-                .unwrap_or_else(|| Antichain::from_elem(Timestamp::MIN));
-            for input in catalog.state().logical_collection_inputs([index.on]) {
-                if matches!(
-                    catalog.get_entry_by_global_id(&input).item(),
-                    CatalogItem::Log(_)
-                ) {
-                    continue;
-                }
-                floor.join_assign(
-                    catalog
-                        .state()
-                        .collection_compaction_bounds()
-                        .get(&input)
-                        .with_context(|| format!("logical input {input} has no permission"))?,
-                );
-            }
-            requested.insert(
-                *id,
-                floor.into_option().context("index history is exhausted")?,
-            );
+                .with_context(|| format!("index {id} has no compaction bound"))?
+                .as_option()
+                .copied()
+                .with_context(|| format!("index {id} history is exhausted"))?;
+            requested.insert(*id, floor);
         }
         let grants = self
             .acquire(
@@ -1070,8 +1057,17 @@ impl ReplicaEnactment {
                 {
                     policy.frontier(upper.borrow())
                 } else {
-                    // Logical inputs can be absent from the physical plan. First
-                    // permission respects their protected reconstruction floor too.
+                    ensure!(
+                        catalog
+                            .try_get_cluster(self.cluster)
+                            .is_some_and(|cluster| cluster
+                                .log_indexes
+                                .values()
+                                .any(|log| log == id)),
+                        "index {id} has no compaction bound"
+                    );
+                    // Replica-local logging traces have no persisted admission
+                    // bound. Their first permission starts at protected history.
                     collection
                         .window
                         .as_ref()
@@ -1097,6 +1093,11 @@ impl ReplicaEnactment {
                     implied_capability: proposed,
                     read_capabilities: since.clone(),
                 });
+            }
+            for (id, proposal) in catalog.state().index_retention_proposals(&frontiers) {
+                // Input progress also covers indexes without replicas. Where both
+                // paths propose a bound, retain the history required by either.
+                compute_proposals.entry(id).or_default().extend(proposal);
             }
             let candidates = publication_candidates(
                 catalog.state().maintained_read_requirements(),
