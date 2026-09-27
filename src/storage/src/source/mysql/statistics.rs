@@ -9,10 +9,12 @@
 
 //! Renders the statistics collection of the [`MySqlSourceConnection`] ingestion dataflow.
 
+use std::convert::Infallible;
+use std::rc::Rc;
+
 use futures::StreamExt;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
@@ -20,9 +22,7 @@ use mz_mysql_util::query_sys_var;
 use mz_ore::future::InTask;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
-use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
-};
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::source::types::Probe;
 use crate::source::{RawSourceCreationConfig, probe};
@@ -37,21 +37,25 @@ pub(crate) fn render<'scope>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
-    replication_errors: StreamVec<'scope, GtidPartition, ReplicationError>,
+    // Closes once the snapshot and replication operators finished, which ends this operator.
+    upstream_done: StreamVec<'scope, GtidPartition, Infallible>,
 ) -> (
-    StreamVec<'scope, GtidPartition, ReplicationError>,
     StreamVec<'scope, GtidPartition, Probe<GtidPartition>>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlStatistics({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let mut error_handle = builder.new_disconnected_input(replication_errors, Pipeline);
+    let mut upstream_done = builder.new_disconnected_input(upstream_done, Pipeline);
 
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // TODO: Add additional metrics
-    let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
+    let health = config.health.clone();
+    let report_transient = move |err: TransientError| {
+        super::report_error(&health, ReplicationError::Transient(Rc::new(err)))
+    };
+    let button = builder.build_fallible_with(report_transient, move |caps| {
         Box::pin(async move {
             let worker_id = config.worker_id;
             let [probe_cap]: &mut [_; 1] = caps.try_into().unwrap();
@@ -118,37 +122,22 @@ pub(crate) fn render<'scope>(
                     }
                 }
             };
-            let error_loop = async {
-                while let Some(event) = error_handle.next().await {
-                    if let AsyncEvent::Data(ts, err_data) = event {
-                        for err in err_data {
-                            if let ReplicationError::Definite(def_err) = err {
-                                tracing::info!(
-                                    "ts: {:?} Definite replication error detected in statistics operator: {def_err}, exiting", ts
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-                tracing::info!("Replication error stream closed, exiting statistics loop");
+            let upstream_loop = async {
+                while upstream_done.next().await.is_some() {}
+                tracing::info!("Snapshot and replication finished, exiting statistics loop");
                 Ok(())
             };
             let res = tokio::select! {
                 res = probe_loop => res,
                 res = commit_loop => Ok(res),
-                res = error_loop => res,
+                res = upstream_loop => res,
             };
             tracing::info!("Statistics loop exited, shutting down");
             res
         })
     });
 
-    (
-        transient_errors.map(ReplicationError::from),
-        probe_stream,
-        button.press_on_drop(),
-    )
+    (probe_stream, button.press_on_drop())
 }
 
 /// Aggregate a mysql frontier into single number representing the
