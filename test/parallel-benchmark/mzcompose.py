@@ -378,6 +378,86 @@ def report(
     return stats, failures
 
 
+# EXPERIMENT: accounting of introspection cost. Each snapshot records process CPU
+# inside the materialized container and time spent in dataflows on the session's
+# cluster, and `print_cost` prints the difference over a scenario's run.
+COST_ELAPSED_SQL = """
+SELECT
+  CASE
+    WHEN d.name = 'Dataflow: logging' THEN 'logging'
+    WHEN d.name LIKE 'Dataflow: introspection-subscribe%' THEN 'introspection_subscribes'
+    WHEN d.name LIKE 'Source dataflow%' THEN 'sources'
+    ELSE 'user'
+  END,
+  sum(e.elapsed_ns)::float8 / 1e9
+FROM mz_introspection.mz_scheduling_elapsed e
+JOIN mz_introspection.mz_dataflow_addresses a USING (id)
+JOIN mz_introspection.mz_dataflows d ON d.id = a.address[1]
+WHERE list_length(a.address) = 1
+GROUP BY 1
+"""
+
+COST_METRICS_SQL = """
+SELECT metric_name, sum(value)
+FROM mz_introspection.mz_cluster_prometheus_metrics
+WHERE metric_name IN (
+  'mz_compute_logging_step_duration_seconds_sum',
+  'mz_compute_logging_step_duration_seconds_count'
+)
+GROUP BY 1
+"""
+
+COST_CPU_CMD = (
+    'awk \'$2 == "(clusterd)" { c += $14 + $15 } '
+    '$2 == "(environmentd)" { e += $14 + $15 } '
+    "END { print c + 0, e + 0 }' /proc/[0-9]*/stat 2>/dev/null; getconf CLK_TCK"
+)
+
+
+def cost_snapshot(c: Composition, conn_info: PgConnInfo) -> dict[str, float]:
+    snapshot: dict[str, float] = {"time": time.time()}
+    try:
+        out = c.exec(
+            "materialized", "bash", "-c", COST_CPU_CMD, capture=True, silent=True
+        ).stdout.split()
+        clk_tck = float(out[2])
+        snapshot["cpu_clusterd"] = float(out[0]) / clk_tck
+        snapshot["cpu_environmentd"] = float(out[1]) / clk_tck
+    except Exception as e:
+        print(f"cost snapshot: reading CPU failed: {e}")
+    conn = conn_info.connect()
+    # Each query gets its own transaction, one transaction cannot span both sets of relations.
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            for sql, prefix in [
+                (COST_ELAPSED_SQL, "elapsed_"),
+                (COST_METRICS_SQL, "metric_"),
+            ]:
+                try:
+                    cur.execute(sql.encode())
+                    for key, value in cur.fetchall():
+                        snapshot[prefix + key] = float(value)
+                except Exception as e:
+                    print(f"cost snapshot: query failed: {e}")
+    finally:
+        conn.close()
+    return snapshot
+
+
+def print_cost(
+    scenario_name: str, suffix: str, before: dict[str, float], after: dict[str, float]
+) -> None:
+    window = after["time"] - before["time"]
+    parts = [f"window_s={window:.1f}"]
+    for key in sorted(after):
+        if key == "time":
+            continue
+        delta = after[key] - before.get(key, 0.0)
+        parts.append(f"{key}={delta:.3f}")
+    print(f"COST scenario={scenario_name} run={suffix} " + " ".join(parts))
+
+
 def run_once(
     c: Composition,
     scenarios: list[type[Scenario]],
@@ -545,10 +625,20 @@ def run_once(
                 # harness time, and a scenario with a qps guarantee has less
                 # slack than that costs.
                 start_time = time.time()
+                cost_before = (
+                    None if target else cost_snapshot(c, conn_infos["materialized"])
+                )
                 if not args.benchmarking_env:
                     # Don't let the garbage collector interfere with our measurements
                     gc.disable()
                 scenario.run(c, state)
+                if cost_before is not None:
+                    print_cost(
+                        scenario_name,
+                        suffix,
+                        cost_before,
+                        cost_snapshot(c, conn_infos["materialized"]),
+                    )
             finally:
                 # teardown() must run even if scenario.run() raised, otherwise
                 # its worker threads (up to thread_pool_size, non-daemon) never
