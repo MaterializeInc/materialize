@@ -12,6 +12,7 @@
 use std::time::{Duration, Instant};
 
 use mz_ore::metric;
+use mz_ore::metrics::phase::{Mode, Phase, PhaseRegistry};
 use mz_ore::metrics::raw::{CounterVec, IntCounterVec};
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -23,6 +24,7 @@ use crate::retry::RetryStream;
 /// Intentionally not Clone because we expect this to be passed around in an
 /// Arc.
 pub struct Metrics {
+    pub(crate) qps: QpsPhases,
     _vecs: MetricsVecs,
 
     /// Metrics for
@@ -53,11 +55,32 @@ impl Metrics {
         let vecs = MetricsVecs::new(registry);
 
         Metrics {
+            qps: QpsPhases::new(registry, Mode::from_env()),
             oracle: vecs.oracle_metrics(),
             batching: vecs.batching_metrics(),
             retries: vecs.retries_metrics(),
             postgres_client: PostgresClientMetrics::new(registry, "mz_ts_oracle"),
             _vecs: vecs,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct QpsPhases {
+    pub queue: Phase,
+    pub backing_read: Phase,
+    pub response_resume: Phase,
+    pub read_total: Phase,
+}
+
+impl QpsPhases {
+    pub(crate) fn new(registry: &MetricsRegistry, mode: Mode) -> Self {
+        let phases = PhaseRegistry::new(registry, "mz_ts_oracle", mode);
+        Self {
+            queue: phases.phase("batch_queue"),
+            backing_read: phases.phase("batch_backing_read"),
+            response_resume: phases.phase("response_resume"),
+            read_total: phases.phase("read_total"),
         }
     }
 }
