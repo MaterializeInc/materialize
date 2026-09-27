@@ -32,6 +32,32 @@ use postgres::types::Type;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
+/// A standing query created right after an index on its input reads the
+/// index while it hydrates, and must still observe the writes that preceded
+/// its creation.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_standing_query_sees_prior_writes_through_new_index() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_standing_queries"]);
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    for stmt in [
+        "CREATE TABLE orders (id int, customer_id int)",
+        "INSERT INTO orders SELECT g, g % 100 FROM generate_series(1, 100000) AS g",
+        "CREATE INDEX ON orders (customer_id)",
+        "CREATE STANDING QUERY by_customer (cid int) \
+         AS SELECT id FROM orders WHERE customer_id = cid",
+    ] {
+        client.batch_execute(stmt).unwrap();
+    }
+
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer (42)", &[])
+        .unwrap();
+    assert_eq!(rows.len(), 1000);
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_bind_params() {

@@ -233,11 +233,19 @@ impl Coordinator {
                     // frontier, the first write goes at a timestamp where
                     // the inputs have already advanced past, so the subscribe
                     // can resolve immediately.
+                    //
+                    // NOTE: An index input that is still hydrating reports its
+                    // as_of as its write frontier, and that as_of can precede
+                    // writes already acknowledged to clients. Parameters
+                    // written there would read the inputs before those writes,
+                    // so the target is at least the oracle's read timestamp.
                     use crate::coord::timestamp_selection::TimestampProvider;
+                    let read_ts = coord.get_local_read_ts().await;
                     let initial_upper_target = coord
                         .least_valid_write(&input_bundle)
                         .into_option()
-                        .unwrap_or_else(mz_repr::Timestamp::minimum);
+                        .unwrap_or_else(mz_repr::Timestamp::minimum)
+                        .max(read_ts);
 
                     tracing::info!(
                         "standing query {global_id}: initial_upper_target={initial_upper_target}, as_of={:?}",

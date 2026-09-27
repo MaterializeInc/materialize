@@ -271,9 +271,12 @@ async fn batcher_task(
                     BatcherCmd::Write(req) => req.request_id
                 }).collect();
 
-                // Retract the previous write's param rows at the same
-                // timestamp, so each param row exists from its write to the
-                // next one.
+                // Retract the previous write's param rows at this write's
+                // timestamp. Every write, here or in `advance_upper`, starts at
+                // the current upper, which the previous write left at its
+                // timestamp + 1, so each param row exists for exactly one
+                // timestamp. The handler relies on this: a request's results
+                // are the positive updates at its write timestamp.
                 writes.extend(
                     pending_retractions
                         .drain(..)

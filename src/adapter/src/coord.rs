@@ -2994,13 +2994,17 @@ impl Coordinator {
                     input_bundle.storage_ids.remove(&sq.global_id());
                     input_bundle.storage_ids.remove(&sq.param_collection_id);
 
-                    // Compute initial upper target from the as_of.
+                    // Compute initial upper target from the as_of, and no
+                    // earlier than the oracle's read timestamp, for the reason
+                    // given in `sequence_create_standing_query`.
+                    let read_ts = self.get_local_read_ts().await;
                     let initial_upper_target = df_desc
                         .as_of
                         .as_ref()
                         .and_then(|a| a.as_option().copied())
                         .map(|ts| mz_repr::TimestampManipulation::step_forward(&ts))
-                        .unwrap_or_else(Timestamp::minimum);
+                        .unwrap_or_else(Timestamp::minimum)
+                        .max(read_ts);
 
                     self.ship_dataflow(df_desc, sq.cluster_id, None).await;
                     self.allow_writes(sq.cluster_id, sq.global_id());
