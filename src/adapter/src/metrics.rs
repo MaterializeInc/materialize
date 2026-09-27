@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::metric;
+use mz_ore::metrics::phase::{Mode, Phase, PhaseRegistry};
 use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge};
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
@@ -21,6 +22,7 @@ pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
+    pub qps: std::sync::Arc<QpsPhases>,
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
@@ -74,6 +76,7 @@ pub struct Metrics {
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
+            qps: std::sync::Arc::new(QpsPhases::new(registry)),
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
@@ -342,6 +345,7 @@ impl Metrics {
 
     pub(crate) fn session_metrics(&self) -> SessionMetrics {
         SessionMetrics {
+            qps_response_resume: self.qps.coordinator_response_resume.clone(),
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
             query_total: self.query_total.clone(),
@@ -358,9 +362,85 @@ impl Metrics {
     }
 }
 
+// Diagnostic-only, pre-bound labels. The simple_* population is simple-query
+// messages, not all SELECTs. Nested frontend phases must not be added to it.
+macro_rules! qps_phases {
+    ($($phase:ident),+ $(,)?) => {
+        #[derive(Debug, Clone, Default)]
+        pub struct QpsPhases {
+            $(pub $phase: Phase,)+
+        }
+        impl QpsPhases {
+            fn new(registry: &MetricsRegistry) -> Self {
+                let phases = PhaseRegistry::new(registry, "mz_adapter", Mode::from_env());
+                Self { $($phase: phases.phase(stringify!($phase)),)+ }
+            }
+        }
+    };
+}
+
+qps_phases!(
+    simple_total,
+    simple_parse,
+    simple_transaction_setup,
+    simple_declare,
+    simple_row_description,
+    simple_execute,
+    simple_notices,
+    simple_response,
+    simple_commit,
+    simple_ready,
+    declare_catalog,
+    declare_describe,
+    frontend_total,
+    frontend_catalog,
+    frontend_resolve_plan,
+    frontend_validation,
+    frontend_oracle_lookup,
+    frontend_oracle_read,
+    frontend_timestamp,
+    frontend_timestamp_setup,
+    frontend_statistics,
+    optimizer_dispatch,
+    optimizer_work,
+    optimizer_resume,
+    optimizer_await,
+    frontend_compute_client,
+    frontend_register,
+    frontend_peek_issue,
+    coordinator_roundtrip,
+    coordinator_response_resume,
+    coordinator_register_resume,
+    coordinator_queue_commit,
+    coordinator_queue_register,
+    coordinator_queue_catalog,
+    coordinator_queue_other,
+    coordinator_service,
+    rows_wait,
+    rows_encode_send,
+    rows_flush,
+);
+
+impl QpsPhases {
+    pub(crate) fn command_queue(
+        &self,
+        command: &crate::command::Command,
+    ) -> mz_ore::metrics::phase::PhaseGuard {
+        use crate::command::Command;
+        match command {
+            Command::Commit { .. } => &self.coordinator_queue_commit,
+            Command::RegisterFrontendPeek { .. } => &self.coordinator_queue_register,
+            Command::CatalogSnapshot { .. } => &self.coordinator_queue_catalog,
+            _ => &self.coordinator_queue_other,
+        }
+        .start()
+    }
+}
+
 /// Metrics to be accessed from a [`crate::session::Session`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
+    pub(crate) qps_response_resume: Phase,
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
