@@ -69,9 +69,7 @@ use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::peek;
-use crate::session::{
-    EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
-};
+use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
 
 // DO NOT make this visible in any way, i.e. do not add any version of
@@ -608,10 +606,7 @@ impl Coordinator {
                     {
                         ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                     } else {
-                        let state_revision = StateRevision {
-                            catalog_revision: self.catalog().transient_revision(),
-                            session_state_revision: ctx.session().state_revision(),
-                        };
+                        let state_revision = ctx.session().state_revision(self.catalog());
                         ctx.session_mut().set_prepared_statement(
                             plan.name,
                             Some(plan.stmt),

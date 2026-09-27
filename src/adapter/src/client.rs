@@ -74,7 +74,7 @@ use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
+    EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
     TransactionStatus,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -758,10 +758,7 @@ impl SessionClient {
 
         let desc = Coordinator::describe(&catalog, self.session(), stmt.clone(), param_types)?;
         let now = self.now();
-        let state_revision = StateRevision {
-            catalog_revision: catalog.transient_revision(),
-            session_state_revision: self.session().state_revision(),
-        };
+        let state_revision = self.session().state_revision(&catalog);
         self.session()
             .set_prepared_statement(name, stmt, sql, desc, state_revision, now);
         Ok(())
@@ -783,10 +780,7 @@ impl SessionClient {
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
         let logging = self.session().mint_logging(sql, Some(&stmt), now);
-        let state_revision = StateRevision {
-            catalog_revision: catalog.transient_revision(),
-            session_state_revision: self.session().state_revision(),
-        };
+        let state_revision = self.session().state_revision(&catalog);
         self.session().set_portal(
             name,
             desc,

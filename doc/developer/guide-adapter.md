@@ -277,6 +277,21 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
+### Session state read by describe must bump the state revision
+
+Prepared statements and portals keep their description until
+`StateRevision` changes, see `Coordinator::verify_statement_revision`. The
+revision combines the catalog revision, a session counter for SQL-nameable
+prepared statements and portals, role metadata, and DDL transactions, and
+`SessionVars::revision`. Portal creation and plain transaction ends leave it
+unchanged, so a prepared statement executes repeatedly without being described
+again. When describe starts to read new session state, bump one of these
+counters wherever that state changes. Otherwise a statement keeps a stale
+description, and executing it returns rows that do not match that
+description. Depending on the path this fails with an internal error such as
+"row descriptor has 2 columns but row has 1 columns", panics in pgwire, or
+silently sends a mismatched `RowDescription`.
+
 ### Group commits and generation handover
 
 At runtime, one group committer per `environmentd` serializes txns-shard operations:

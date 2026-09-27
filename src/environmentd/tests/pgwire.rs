@@ -582,6 +582,54 @@ async fn test_discard_all_resets_over_extended_protocol() {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_prepared_statement_redescribe() {
+    let server = test_util::TestHarness::default().start().await;
+    let redescribes = || {
+        test_util::get_counter_value(
+            &server.metrics_registry,
+            "mz_prepared_statement_redescribes_total",
+            &[],
+        )
+    };
+
+    let client = server.connect().await.unwrap();
+    for sql in [
+        "CREATE SCHEMA s1",
+        "CREATE SCHEMA s2",
+        "CREATE TABLE s1.t (a INT)",
+        "INSERT INTO s1.t VALUES (1), (2), (3)",
+        "CREATE TABLE s2.t (a INT)",
+        "INSERT INTO s2.t VALUES (10), (20), (30)",
+        "SET search_path = s1",
+    ] {
+        client.batch_execute(sql).await.unwrap();
+    }
+    let stmt = client
+        .prepare("SELECT a FROM t WHERE a = $1")
+        .await
+        .unwrap();
+
+    // Each execution binds a portal and ends a transaction, neither of which can change
+    // the statement's description.
+    let before = redescribes();
+    for a in [1, 2, 3, 1, 2, 3] {
+        let rows = client.query(&stmt, &[&a]).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<_, i32>(0), a);
+    }
+    assert_eq!(redescribes(), before, "repeated executions re-described");
+
+    // Changing a session variable re-describes, and execution resolves the new schema.
+    client.batch_execute("SET search_path = s2").await.unwrap();
+    let before = redescribes();
+    let rows = client.query(&stmt, &[&20]).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i32>(0), 20);
+    assert!(redescribes() > before, "SET did not trigger a re-describe");
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_conn_user() {
