@@ -35,13 +35,11 @@ use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
-use timely::dataflow::operators::vec::Map;
-use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr};
+use timely::dataflow::operators::{ConnectLoop, Feedback, OkErr};
 use timely::dataflow::scope::Scope;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
-use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::{UpsertKey, UpsertSourceTime, UpsertValue};
@@ -210,7 +208,7 @@ where
     };
 
     // render envelopes
-    let (envelope_ok, envelope_health) = match &envelope {
+    let envelope_ok = match &envelope {
         SourceEnvelope::Upsert(upsert_envelope) => {
             let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
@@ -223,7 +221,7 @@ where
                 .expect("resuming an already finished ingestion")
                 .clone();
             let outer_mz_scope = scope.clone();
-            let (upsert, health_update) = scope.scoped(
+            let upsert = scope.scoped(
                 &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
                     let (
@@ -333,43 +331,43 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    let (upsert, health_update, snapshot_progress, upsert_token) =
-                        if dyncfgs::ENABLE_UPSERT_V2
-                            .get(storage_state.storage_configuration.config_set())
-                        {
-                            // Resolved here, at operator construction, so the
-                            // dataflow keeps one stash flavor for its whole
-                            // life even if the flag flips underneath it.
-                            let stash_flavor =
-                                crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
-                                    storage_state.storage_configuration.config_set(),
-                                );
-                            crate::upsert::upsert_v2(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                backpressure_metrics,
-                                stash_flavor,
-                            )
-                        } else {
-                            crate::upsert::upsert(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                &storage_state.instance_context,
-                                &storage_state.storage_configuration,
-                                &storage_state.dataflow_parameters,
-                                backpressure_metrics,
-                            )
-                        };
+                    let (upsert, snapshot_progress, upsert_token) = if dyncfgs::ENABLE_UPSERT_V2
+                        .get(storage_state.storage_configuration.config_set())
+                    {
+                        // Resolved here, at operator construction, so the
+                        // dataflow keeps one stash flavor for its whole
+                        // life even if the flag flips underneath it.
+                        let stash_flavor =
+                            crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
+                                storage_state.storage_configuration.config_set(),
+                            );
+                        crate::upsert::upsert_v2(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous_ok,
+                            previous_err,
+                            previous_token,
+                            export_config,
+                            backpressure_metrics,
+                            stash_flavor,
+                        )
+                    } else {
+                        crate::upsert::upsert(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous_ok,
+                            previous_err,
+                            previous_token,
+                            export_config,
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                            base_source_config.health.clone(),
+                        )
+                    };
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register
@@ -400,23 +398,14 @@ where
                         snapshot_progress.connect_loop(feedback_handle);
                     }
 
-                    (
-                        upsert.leave(outer_mz_scope),
-                        health_update
-                            .map(|(id, update)| HealthStatusMessage {
-                                id,
-                                namespace: StatusNamespace::Upsert,
-                                update,
-                            })
-                            .leave(outer_mz_scope),
-                    )
+                    upsert.leave(outer_mz_scope)
                 },
             );
 
             let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
             error_collections.push(upsert_err.as_collection());
 
-            (upsert_ok.as_collection(), Some(health_update))
+            upsert_ok.as_collection()
         }
         SourceEnvelope::None(none_envelope) => {
             let results = append_metadata_to_value(decoded_stream);
@@ -426,18 +415,14 @@ where
             let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
             error_collections.push(errors.as_collection());
-            (stream.as_collection(), None)
+            stream.as_collection()
         }
         SourceEnvelope::CdcV2 => {
             let (oks, token) = render_decode_cdcv2(&decoded_stream);
             needed_tokens.push(token);
-            (oks, None)
+            oks
         }
     };
-
-    if let Some(health) = envelope_health {
-        base_source_config.health.report_stream(health);
-    }
 
     // Return the collections and any needed tokens.
     (envelope_ok, needed_tokens)

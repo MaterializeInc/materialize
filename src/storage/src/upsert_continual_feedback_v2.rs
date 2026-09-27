@@ -129,7 +129,6 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::statistics::SourceStatistics;
 use crate::upsert::UpsertKey;
@@ -421,7 +420,6 @@ pub fn upsert_inner<'scope, T, FromTime>(
     source_config: crate::source::SourceExportCreationConfig,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
@@ -558,7 +556,6 @@ fn build_upsert_operator<'scope, A, T, FromTime>(
     source_config: crate::source::SourceExportCreationConfig,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
@@ -587,8 +584,6 @@ where
         .new_output::<FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>>();
     let (_snapshot_handle, snapshot_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let (_health_output, health_stream) = builder
-        .new_output::<CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>>();
 
     let mut input = builder.new_input_for(
         input.inner,
@@ -606,7 +601,7 @@ where
         // feedback shard stays open until shutdown.
         let _persist_token = persist_token;
 
-        let [output_cap, snapshot_cap, _health_cap]: [_; 3] = caps.try_into().unwrap();
+        let [output_cap, snapshot_cap]: [_; 2] = caps.try_into().unwrap();
         drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
@@ -849,7 +844,6 @@ where
                 Ok(ok) => Ok(ok),
                 Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(*err))),
             }),
-        health_stream,
         snapshot_stream,
         shutdown_button.press_on_drop(),
     )
@@ -1533,7 +1527,7 @@ mod test {
                                     source_statistics,
                                 };
 
-                                let (output, _, _, button) = upsert_inner(
+                                let (output, _, button) = upsert_inner(
                                     flavor,
                                     input.as_collection(),
                                     vec![0],
@@ -2024,7 +2018,7 @@ mod test {
                             source_statistics,
                         };
 
-                        let (output, _, _, button) = upsert_inner(
+                        let (output, _, button) = upsert_inner(
                             flavor,
                             input.as_collection(),
                             vec![0],
