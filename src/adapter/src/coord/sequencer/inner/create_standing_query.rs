@@ -19,7 +19,7 @@ use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::GlobalId;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnName, SqlRelationType, SqlScalarType};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::plan::{ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind};
@@ -61,13 +61,16 @@ impl Coordinator {
         } = plan;
 
         // Allocate IDs for the standing query and the internal parameter collection.
+        // The durable catalog item records the parameter collection's id, so nothing may rely
+        // on how the two ids relate. The parameter collection takes the lower id, which makes
+        // code that assumes it follows the standing query's id fail.
         let id_ts = self.get_catalog_write_ts().await;
         let ids = self.catalog().allocate_user_ids(2, id_ts).await?;
-        let (item_id, global_id) = ids[0];
-        let (_param_item_id, param_collection_id) = ids[1];
+        let (_param_item_id, param_collection_id) = ids[0];
+        let (item_id, global_id) = ids[1];
 
         // Build the parameter collection's RelationDesc and SqlRelationType.
-        let param_desc = Self::build_param_collection_desc(&params);
+        let param_desc = StandingQuery::build_param_collection_desc(&params);
         let param_typ = param_desc.typ().clone();
 
         // Rewrite the user's query HIR to join with the parameter collection.
@@ -394,30 +397,6 @@ impl Coordinator {
         (projected, new_column_names)
     }
 
-    /// Build the RelationDesc for a standing query's parameter collection.
-    ///
-    /// Schema: `(request_id UInt64, param_1 T1, param_2 T2, ...)`
-    pub(crate) fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
-        let mut desc = RelationDesc::builder();
-        desc = desc.with_column(
-            ColumnName::from("request_id"),
-            SqlColumnType {
-                scalar_type: SqlScalarType::UInt64,
-                nullable: false,
-            },
-        );
-        for (param_name, param_type) in params {
-            desc = desc.with_column(
-                ColumnName::from(param_name.as_str()),
-                SqlColumnType {
-                    scalar_type: param_type.clone(),
-                    nullable: true,
-                },
-            );
-        }
-        desc.finish()
-    }
-
     pub(crate) fn optimize_create_standing_query(
         &self,
         raw_expr: &HirRelationExpr,
@@ -505,7 +484,7 @@ impl Coordinator {
         let (_param_item_id, param_collection_id) = self.allocate_transient_id();
 
         // Build the parameter collection desc and type.
-        let param_desc = Self::build_param_collection_desc(&params);
+        let param_desc = StandingQuery::build_param_collection_desc(&params);
         let param_typ = param_desc.typ().clone();
 
         // Rewrite the user's query HIR to join with the parameter collection.

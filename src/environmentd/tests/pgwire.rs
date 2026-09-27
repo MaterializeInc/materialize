@@ -129,6 +129,57 @@ fn test_standing_query_sees_prior_writes_through_new_index() {
     }
 }
 
+/// A standing query recovers its parameter collection from the durable
+/// catalog on restart. The table created after it takes the id following the
+/// standing query's, so recovery that derived the parameter collection's id
+/// from the standing query's would pick the table's collection instead.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_standing_query_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+
+    let ids = |rows: Vec<postgres::Row>| {
+        let mut ids: Vec<i32> = rows.iter().map(|row| row.get(0)).collect();
+        ids.sort();
+        ids
+    };
+
+    {
+        let server = harness.clone().start_blocking();
+        server.enable_feature_flags(&["enable_standing_queries"]);
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for stmt in [
+            "CREATE TABLE orders (id int, customer_id int)",
+            "INSERT INTO orders VALUES (1, 10), (2, 10), (3, 20)",
+            "CREATE STANDING QUERY by_customer (cid int) \
+             AS SELECT id FROM orders WHERE customer_id = cid",
+            "CREATE TABLE after_standing_query (a text, b text, c text)",
+        ] {
+            client.batch_execute(stmt).unwrap();
+        }
+        let rows = client
+            .query("EXECUTE STANDING QUERY by_customer (10)", &[])
+            .unwrap();
+        assert_eq!(ids(rows), vec![1, 2]);
+    }
+
+    let server = harness.start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer (10)", &[])
+        .unwrap();
+    assert_eq!(ids(rows), vec![1, 2]);
+
+    client
+        .batch_execute("INSERT INTO orders VALUES (4, 20)")
+        .unwrap();
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer (20)", &[])
+        .unwrap();
+    assert_eq!(ids(rows), vec![3, 4]);
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_bind_params() {

@@ -669,6 +669,11 @@ impl Catalog {
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
             .flat_map(|entry| entry.global_ids())
+            // A standing query is no storage collection, but its parameter collection is.
+            .chain(
+                self.entries()
+                    .filter_map(|entry| entry.item().standing_query_param_id()),
+            )
             .collect();
 
         // Clone the state so that any errors that occur do not leak any
@@ -882,6 +887,7 @@ fn add_new_remove_old_builtin_items_migration(
                     *c.owner_id,
                     acl_items,
                     versions,
+                    None,
                     None,
                 )?;
                 true

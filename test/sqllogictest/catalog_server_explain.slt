@@ -5946,6 +5946,11 @@ mz_internal.mz_object_global_ids:
               →Read mz_internal.mz_catalog_raw
     →Fused with Child Map/Filter/Project
       Project: #3, #4
+      Filter: ((#1 ->> "standing_query_param_id")) IS NOT NULL AND ("Item" = #2)
+      Map: parse_catalog_id(((#0{data} -> "key") -> "gid")), parse_catalog_id((#1 -> "standing_query_param_id"))
+        →Read mz_internal.mz_catalog_raw
+    →Fused with Child Map/Filter/Project
+      Project: #3, #4
       Filter: ("<RUNTIME-ALTERABLE>" != (#1 ->> "fingerprint")) AND ("GidMapping" = #2)
       Map: ("s" || (#1 ->> "catalog_id")), ("s" || (#1 ->> "global_id"))
         →Read mz_internal.mz_catalog_raw

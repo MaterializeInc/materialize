@@ -854,6 +854,11 @@ pub trait CatalogItem {
     /// If the catalog item is not a standing query, it returns an error.
     fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], CatalogError>;
 
+    /// Returns the description of the rows an execution of the standing query returns.
+    ///
+    /// If the catalog item is not a standing query, it returns an error.
+    fn standing_query_desc(&self) -> Result<&RelationDesc, CatalogError>;
+
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
 

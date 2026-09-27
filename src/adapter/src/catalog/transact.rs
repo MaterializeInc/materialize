@@ -1760,6 +1760,7 @@ impl Catalog {
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
                     let (create_sql, global_id, versions) = item.to_serialized();
+                    let standing_query_param_id = item.standing_query_param_id();
                     tx.insert_user_item(
                         id,
                         global_id,
@@ -1771,6 +1772,7 @@ impl Catalog {
                         &temporary_oids,
                         versions,
                         Some(owner_session),
+                        standing_query_param_id,
                     )?;
 
                     info!(
@@ -1806,6 +1808,7 @@ impl Catalog {
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
                     let (create_sql, global_id, versions) = item.to_serialized();
+                    let standing_query_param_id = item.standing_query_param_id();
                     tx.insert_user_item(
                         id,
                         global_id,
@@ -1817,6 +1820,7 @@ impl Catalog {
                         &temporary_oids,
                         versions,
                         None,
+                        standing_query_param_id,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -2027,13 +2031,12 @@ impl Catalog {
                     let entry = state.get_entry(&item_id);
 
                     if entry.item().is_storage_collection() {
-                        // For standing queries, the storage collection is the param collection,
-                        // not the standing query's own global_id (which is a subscribe sink).
-                        if let CatalogItem::StandingQuery(sq) = entry.item() {
-                            storage_collections_to_drop.insert(sq.param_collection_id);
-                        } else {
-                            storage_collections_to_drop.extend(entry.global_ids());
-                        }
+                        storage_collections_to_drop.extend(entry.global_ids());
+                    }
+                    // For standing queries, the storage collection is the param collection,
+                    // not the standing query's own global_id (which is a subscribe sink).
+                    if let CatalogItem::StandingQuery(sq) = entry.item() {
+                        storage_collections_to_drop.insert(sq.param_collection_id);
                     }
 
                     if state.source_references.contains_key(&item_id) {
@@ -3320,6 +3323,7 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        standing_query_param_id,
     } = state.durable_item(new_entry)?;
 
     tx.remove_item(id)?;
@@ -3334,6 +3338,7 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        standing_query_param_id,
     )?;
 
     Ok(())

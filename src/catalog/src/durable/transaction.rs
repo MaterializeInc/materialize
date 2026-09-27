@@ -752,6 +752,7 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        standing_query_param_id: Option<GlobalId>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
@@ -765,6 +766,7 @@ impl<'a> Transaction<'a> {
             privileges,
             versions,
             ephemeral_owner_session,
+            standing_query_param_id,
         )?;
         Ok(oid)
     }
@@ -781,6 +783,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        standing_query_param_id: Option<GlobalId>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { id },
@@ -794,6 +797,7 @@ impl<'a> Transaction<'a> {
                 global_id,
                 extra_versions,
                 ephemeral_owner_session,
+                standing_query_param_id,
             },
             self.op_id,
         ) {
@@ -827,6 +831,7 @@ impl<'a> Transaction<'a> {
             item_ids.insert(key.id);
             global_ids.insert(value.global_id);
             global_ids.extend(value.extra_versions.values().copied());
+            global_ids.extend(value.standing_query_param_id);
             keys.push(key.clone());
         }
         self.items.delete_by_keys(keys, self.op_id);

@@ -252,6 +252,9 @@ pub struct ItemValue {
         proptest(strategy = "proptest::option::of(any_uuid())")
     )]
     pub ephemeral_owner_session: Option<Uuid>,
+    /// The [`GlobalId`] of a standing query's parameter collection. `None` for
+    /// every other item type.
+    pub standing_query_param_id: Option<GlobalId>,
 }
 
 #[derive(

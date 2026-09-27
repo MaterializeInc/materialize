@@ -914,6 +914,7 @@ impl CatalogState {
                         &index.create_sql(),
                         &versions,
                         None,
+                        None,
                         index.is_retained_metrics_object,
                         custom_logical_compaction_window,
                         local_expression_cache,
@@ -1061,6 +1062,7 @@ impl CatalogState {
                         &mv.create_sql(),
                         &versions,
                         None,
+                        None,
                         mv.is_retained_metrics_object,
                         custom_logical_compaction_window,
                         local_expression_cache,
@@ -1111,6 +1113,7 @@ impl CatalogState {
                         global_id,
                         connection.sql,
                         &versions,
+                        None,
                         None,
                         false,
                         None,
@@ -1193,6 +1196,7 @@ impl CatalogState {
                     privileges,
                     extra_versions,
                     ephemeral_owner_session,
+                    standing_query_param_id,
                 } = item;
 
                 // Temporary items live in the temporary schema of the owning
@@ -1242,6 +1246,7 @@ impl CatalogState {
                                     global_id,
                                     &create_sql,
                                     &extra_versions,
+                                    standing_query_param_id,
                                     local_expression_cache,
                                     Some(retraction.item),
                                 )
@@ -1286,6 +1291,7 @@ impl CatalogState {
                                 global_id,
                                 &create_sql,
                                 &extra_versions,
+                                standing_query_param_id,
                                 local_expression_cache,
                                 None,
                             )
@@ -1781,6 +1787,7 @@ impl CatalogState {
                                     &create_sql,
                                     &versions,
                                     None,
+                                    None,
                                     false,
                                     None,
                                     cached_expr,
@@ -1979,7 +1986,13 @@ impl CatalogState {
                 ),
             }
         }
-        for gid in entry.item.global_ids() {
+        // The parameter collection of a standing query is not one of its `global_ids`, but the
+        // standing query owns it, so lookups by its id must find the standing query.
+        for gid in entry
+            .item
+            .global_ids()
+            .chain(entry.item.standing_query_param_id())
+        {
             self.entry_by_global_id.insert(gid, entry.id());
         }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
@@ -2049,7 +2062,10 @@ impl CatalogState {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
         }
-        for gid in metadata.global_ids() {
+        for gid in metadata
+            .global_ids()
+            .chain(metadata.item().standing_query_param_id())
+        {
             self.entry_by_global_id.remove(&gid);
         }
 

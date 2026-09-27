@@ -3236,10 +3236,7 @@ pub fn describe_execute_standing_query(
     // Planning the parameter expressions records the types of any bound
     // parameters (`$1`) they reference.
     let (item, _exprs) = plan_standing_query_param_exprs(scx, stmt)?;
-    let desc = item
-        .relation_desc()
-        .expect("standing query must have a desc")
-        .into_owned();
+    let desc = item.standing_query_desc()?.clone();
     Ok(StatementDesc::new(Some(desc)))
 }
 

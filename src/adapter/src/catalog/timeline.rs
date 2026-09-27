@@ -91,12 +91,10 @@ impl Catalog {
                                 .or_default()
                                 .insert(index.global_id());
                         }
-                        CatalogItem::StandingQuery(sq) => {
-                            id_bundle.storage_ids.insert(sq.global_id());
-                        }
                         CatalogItem::View(_)
                         | CatalogItem::Sink(_)
                         | CatalogItem::MetricSink(_)
+                        | CatalogItem::StandingQuery(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)

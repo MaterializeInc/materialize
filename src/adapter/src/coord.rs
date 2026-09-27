@@ -3015,7 +3015,7 @@ impl Coordinator {
                         .storage
                         .collection_metadata(sq.param_collection_id)
                         .expect("param collection must exist");
-                    let param_desc = Self::build_param_collection_desc(&sq.params);
+                    let param_desc = sq.param_collection_desc();
                     let param_write_handle = self
                         .persist_client
                         .open_writer(
@@ -3616,7 +3616,7 @@ impl Coordinator {
                     // is NOT managed by the collection manager's append-only write
                     // task. We hold our own WriteHandle and do compare_and_append
                     // directly.
-                    let param_desc = Self::build_param_collection_desc(&sq.params);
+                    let param_desc = sq.param_collection_desc();
                     collections.push((
                         sq.param_collection_id,
                         CollectionDescription {
@@ -4199,7 +4199,7 @@ impl Coordinator {
                         }
                         Some(_) | None => {
                             // Rebuild param type and rewrite HIR for re-optimization.
-                            let param_desc = Self::build_param_collection_desc(&sq.params);
+                            let param_desc = sq.param_collection_desc();
                             let param_typ = param_desc.typ().clone();
                             let column_names: Vec<_> = sq.desc.iter_names().cloned().collect();
                             let (rewritten_expr, rewritten_column_names) =

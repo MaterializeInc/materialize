@@ -764,6 +764,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.standing_query_params()
     }
 
+    fn standing_query_desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
+        self.entry.standing_query_desc()
+    }
+
     fn create_sql(&self) -> &str {
         self.entry.create_sql()
     }
@@ -1713,7 +1717,8 @@ pub struct StandingQuery {
     pub desc: RelationDesc,
     /// Parameter names and their scalar types.
     pub params: Vec<(String, SqlScalarType)>,
-    /// The [`GlobalId`] of the internal parameter storage collection.
+    /// The [`GlobalId`] of the internal parameter storage collection. It belongs to this item,
+    /// but is not one of [`CatalogItem::global_ids`], which names the compute sink only.
     pub param_collection_id: GlobalId,
     /// Other catalog items that this standing query references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
@@ -1736,6 +1741,35 @@ impl StandingQuery {
     /// The single [`GlobalId`] used to reference this standing query.
     pub fn global_id(&self) -> GlobalId {
         self.global_id
+    }
+
+    /// The [`RelationDesc`] of this standing query's parameter collection.
+    pub fn param_collection_desc(&self) -> RelationDesc {
+        Self::build_param_collection_desc(&self.params)
+    }
+
+    /// Builds the [`RelationDesc`] of a parameter collection for `params`.
+    ///
+    /// Schema: `(request_id UInt64, param_1 T1, param_2 T2, ...)`
+    pub fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
+        let mut desc = RelationDesc::builder();
+        desc = desc.with_column(
+            ColumnName::from("request_id"),
+            SqlColumnType {
+                scalar_type: SqlScalarType::UInt64,
+                nullable: false,
+            },
+        );
+        for (param_name, param_type) in params {
+            desc = desc.with_column(
+                ColumnName::from(param_name.as_str()),
+                SqlColumnType {
+                    scalar_type: param_type.clone(),
+                    nullable: true,
+                },
+            );
+        }
+        desc.finish()
     }
 }
 
@@ -1956,8 +1990,9 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::StandingQuery(_) => true,
+            | CatalogItem::Sink(_) => true,
+            // A standing query's own id names a compute sink. Its parameter collection is a
+            // storage collection that the adapter creates and drops explicitly.
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
@@ -1965,7 +2000,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => false,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => false,
         }
     }
 
@@ -1986,14 +2022,16 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
-            CatalogItem::StandingQuery(sq) => Some(Cow::Borrowed(&sq.desc)),
+            // A standing query produces rows only per execution, so it cannot be read as a
+            // relation.
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::Type(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2902,6 +2940,15 @@ impl CatalogItem {
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
             CatalogItem::StandingQuery(sq) => (sq.create_sql, sq.global_id, BTreeMap::new()),
+        }
+    }
+
+    /// Returns the [`GlobalId`] of a standing query's parameter collection, or `None` for every
+    /// other item type. Serialized next to [`CatalogItem::to_serialized`]'s ids.
+    pub fn standing_query_param_id(&self) -> Option<GlobalId> {
+        match self {
+            CatalogItem::StandingQuery(sq) => Some(sq.param_collection_id),
+            _ => None,
         }
     }
 
@@ -4269,6 +4316,17 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
         match self.item() {
             CatalogItem::StandingQuery(sq) => Ok(&sq.params),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: self.name().item.clone(),
+                actual_type: self.item_type(),
+                expected_type: CatalogItemType::StandingQuery,
+            }),
+        }
+    }
+
+    fn standing_query_desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
+        match self.item() {
+            CatalogItem::StandingQuery(sq) => Ok(&sq.desc),
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: self.name().item.clone(),
                 actual_type: self.item_type(),

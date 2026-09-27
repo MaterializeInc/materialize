@@ -2951,6 +2951,7 @@ mod tests {
                     gid,
                     &create_sql,
                     &BTreeMap::new(),
+                    None,
                     &mut LocalExpressionCache::Closed,
                     None,
                 )

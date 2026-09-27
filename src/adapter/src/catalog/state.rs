@@ -1012,6 +1012,7 @@ impl CatalogState {
                     })
             })
             .transpose()?;
+        let standing_query_param_id = entry.item.standing_query_param_id();
         let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
         Ok(mz_catalog::durable::Item {
             id: entry.id,
@@ -1024,6 +1025,7 @@ impl CatalogState {
             privileges: entry.privileges.into_all_values().collect(),
             extra_versions,
             ephemeral_owner_session,
+            standing_query_param_id,
         })
     }
 
@@ -1108,6 +1110,9 @@ impl CatalogState {
         let entry = self.try_get_entry_by_global_id(id)?;
         let desc = match entry.item() {
             CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
+            CatalogItem::StandingQuery(sq) if *id == sq.param_collection_id => {
+                Cow::Owned(sq.param_collection_desc())
+            }
             // TODO(alter_table): Support schema evolution on sources.
             other => other.relation_desc(RelationVersionSelector::Latest)?,
         };
@@ -1265,6 +1270,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        standing_query_param_id: Option<GlobalId>,
         local_expression_cache: &mut LocalExpressionCache,
         previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
@@ -1272,6 +1278,7 @@ impl CatalogState {
             global_id,
             create_sql,
             extra_versions,
+            standing_query_param_id,
             None,
             false,
             None,
@@ -1287,6 +1294,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        standing_query_param_id: Option<GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -1298,6 +1306,7 @@ impl CatalogState {
             global_id,
             create_sql,
             extra_versions,
+            standing_query_param_id,
             pcx,
             is_retained_metrics_object,
             custom_logical_compaction_window,
@@ -1336,6 +1345,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        standing_query_param_id: Option<GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -1769,11 +1779,13 @@ impl CatalogState {
                     },
                 ..
             }) => {
-                // TODO: persist param_collection_id properly in the SQL.
-                // For now, derive it as global_id + 1 (they are allocated together).
-                let param_collection_id = match global_id {
-                    GlobalId::User(n) => GlobalId::User(n + 1),
-                    _ => unreachable!("standing query must have User global_id"),
+                let Some(param_collection_id) = standing_query_param_id else {
+                    return Err((
+                        AdapterError::Internal(format!(
+                            "standing query {global_id} has no parameter collection id"
+                        )),
+                        cached_expr,
+                    ));
                 };
                 CatalogItem::StandingQuery(CatalogStandingQuery {
                     create_sql,

@@ -31,6 +31,44 @@ INSERT INTO orders VALUES (1, 10, 100), (2, 10, 200), (3, 20, 300), (4, 20, 400)
 statement ok
 CREATE STANDING QUERY orders_by_customer (cid INT) AS SELECT id, customer_id, amount FROM orders WHERE customer_id = cid
 
+# --- A standing query is not a relation ---
+
+statement error standing query materialize.public.orders_by_customer cannot be depended upon
+SELECT * FROM orders_by_customer
+
+statement error standing query materialize.public.orders_by_customer cannot be depended upon
+CREATE VIEW orders_by_customer_view AS SELECT * FROM orders_by_customer
+
+# --- Global IDs ---
+#
+# A standing query owns two global IDs: the compute sink and the parameter
+# collection. Only the parameter collection has a storage shard.
+
+simple conn=mz_system,user=mz_system
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids g
+JOIN (
+  SELECT mz_internal.parse_catalog_id(data->'key'->'gid') AS id
+  FROM mz_internal.mz_catalog_raw
+  WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 'orders_by_customer'
+) i ON g.id = i.id;
+----
+2
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids g
+JOIN (
+  SELECT mz_internal.parse_catalog_id(data->'key'->'gid') AS id
+  FROM mz_internal.mz_catalog_raw
+  WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 'orders_by_customer'
+) i ON g.id = i.id
+JOIN mz_internal.mz_storage_shards s ON s.object_id = g.global_id;
+----
+1
+COMPLETE 1
+
 # --- EXECUTE: single param, multiple results ---
 
 query III rowsort

@@ -4187,11 +4187,21 @@ WITH
         WHERE data->>'kind' = 'Item'
     ),
     -- Create a one to many mapping between an object and its global IDs. Tables and
-    -- materialized views are the only objects with multiple global IDs.
+    -- materialized views have a global ID per version. A standing query has a second
+    -- global ID for its parameter collection.
     item_versions AS (
         SELECT i.id, mz_internal.parse_catalog_id(v.version->'global_id') AS global_id
         FROM items i
         CROSS JOIN LATERAL jsonb_array_elements(i.extra_versions) AS v(version)
+    ),
+    standing_query_params AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_id(data->'value'->'standing_query_param_id') AS global_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            data->'value'->>'standing_query_param_id' IS NOT NULL
     ),
     builtin_mappings AS (
         SELECT
@@ -4213,6 +4223,8 @@ WITH
 SELECT id, global_id FROM items
 UNION ALL
 SELECT id, global_id FROM item_versions
+UNION ALL
+SELECT id, global_id FROM standing_query_params
 UNION ALL
 SELECT id, global_id FROM builtin_mappings
 UNION ALL
