@@ -61,7 +61,7 @@ pub(crate) fn render_sink<'scope>(
         SnapshotMode::Exclude
     };
 
-    let error_handler = storage_state.error_handler("storage_sink", sink_id);
+    let error_handler = health.error_handler("storage_sink");
 
     let name = format!("{sink_id}-sinks");
 

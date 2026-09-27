@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
+use mz_persist_client::operators::shard_source::ErrorHandler;
 use mz_repr::GlobalId;
 use mz_storage_client::client::{Status, StatusUpdate};
 use serde::{Deserialize, Serialize};
@@ -439,6 +440,19 @@ impl HealthReporter {
             object: self.object,
             message,
         });
+    }
+
+    /// Returns an error handler that reports errors as halting health messages about the primary
+    /// object, which suspends and restarts the dataflow instance.
+    pub fn error_handler(&self, context: &'static str) -> ErrorHandler {
+        let reporter = self.clone();
+        ErrorHandler::signal(move |e| {
+            reporter.report(HealthStatusMessage {
+                id: None,
+                namespace: StatusNamespace::Internal,
+                update: HealthStatusUpdate::halting(format!("{context}: {e:#}"), None),
+            })
+        })
     }
 
     /// Reports every message in `stream`, for producers that emit health messages as a stream.
