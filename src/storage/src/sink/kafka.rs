@@ -80,7 +80,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
 use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
@@ -138,10 +140,8 @@ use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::vec::{Map, ToStream};
-use timely::dataflow::operators::{CapabilitySet, Concatenate};
+use timely::dataflow::operators::CapabilitySet;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
@@ -168,12 +168,8 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
-    ) -> (
-        StreamVec<'scope, Timestamp, HealthStatusMessage>,
-        Vec<PressOnDropButton>,
-    ) {
-        let scope = batches.scope();
-
+        health: &HealthReporter,
+    ) -> Vec<PressOnDropButton> {
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
             let shard_meta = sink.to_storage_metadata.clone();
@@ -196,7 +192,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             .sink_write_frontiers
             .insert(sink_id, Rc::clone(&write_frontier));
 
-        let (encoded, encode_status, encode_token) = encode_collection(
+        let (encoded, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
             batches,
             sink.envelope,
@@ -205,6 +201,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             sink_id,
             sink.from,
             key_is_synthetic,
+            health.clone(),
         );
 
         let metrics = storage_state.metrics.get_kafka_sink_metrics(sink_id);
@@ -214,7 +211,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             .expect("statistics initialized")
             .clone();
 
-        let (sink_status, sink_token) = sink_collection(
+        let sink_token = sink_collection(
             format!("kafka-{sink_id}-sink"),
             encoded,
             sink_id,
@@ -225,18 +222,16 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             statistics,
             write_handle,
             write_frontier,
+            health.clone(),
         );
 
-        let running_status = Some(HealthStatusMessage {
+        health.report(HealthStatusMessage {
             id: None,
             update: HealthStatusUpdate::Running,
             namespace: StatusNamespace::Kafka,
-        })
-        .to_stream(scope);
+        });
 
-        let status = scope.concatenate([running_status, encode_status, sink_status]);
-
-        (status, vec![encode_token, sink_token])
+        vec![encode_token, sink_token]
     }
 }
 
@@ -683,10 +678,8 @@ fn sink_collection<'scope>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (
-    StreamVec<'scope, Timestamp, HealthStatusMessage>,
-    PressOnDropButton,
-) {
+    health: HealthReporter,
+) -> PressOnDropButton {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
@@ -698,9 +691,35 @@ fn sink_collection<'scope>(
 
     let mut input = builder.new_disconnected_input(input.inner, Exchange::new(move |_| hashed_id));
 
+    let report_error = move |error: ContextCreationError| {
+        let hint = match error {
+            ContextCreationError::KafkaError(KafkaError::Transaction(ref e)) => {
+                if e.is_retriable() && e.code() == RDKafkaErrorCode::OperationTimedOut {
+                    let hint = "If you're running a single Kafka broker, ensure that the configs \
+                        transaction.state.log.replication.factor, transaction.state.log.min.isr, \
+                        and offsets.topic.replication.factor are set to 1 on the broker";
+                    Some(hint.to_owned())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        health.report(HealthStatusMessage {
+            id: None,
+            update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), hint),
+            namespace: if matches!(error, ContextCreationError::Ssh(_)) {
+                StatusNamespace::Ssh
+            } else {
+                StatusNamespace::Kafka
+            },
+        });
+    };
+
     let as_of = sink.as_of.clone();
     let sink_version = sink.version;
-    let (button, errors) = builder.build_fallible(move |_caps| {
+    let button = builder.build_fallible_with(report_error, move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
                 write_frontier.borrow_mut().clear();
@@ -874,33 +893,7 @@ fn sink_collection<'scope>(
         })
     });
 
-    let statuses = errors.map(|error: Rc<ContextCreationError>| {
-        let hint = match *error {
-            ContextCreationError::KafkaError(KafkaError::Transaction(ref e)) => {
-                if e.is_retriable() && e.code() == RDKafkaErrorCode::OperationTimedOut {
-                    let hint = "If you're running a single Kafka broker, ensure that the configs \
-                        transaction.state.log.replication.factor, transaction.state.log.min.isr, \
-                        and offsets.topic.replication.factor are set to 1 on the broker";
-                    Some(hint.to_owned())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-
-        HealthStatusMessage {
-            id: None,
-            update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), hint),
-            namespace: if matches!(*error, ContextCreationError::Ssh(_)) {
-                StatusNamespace::Ssh
-            } else {
-                StatusNamespace::Kafka
-            },
-        }
-    });
-
-    (statuses, button.press_on_drop())
+    button.press_on_drop()
 }
 
 /// Determines the latest progress record from the specified topic for the given
@@ -1498,9 +1491,9 @@ fn encode_collection<'scope>(
     sink_id: GlobalId,
     from_id: GlobalId,
     key_is_synthetic: bool,
+    health: HealthReporter,
 ) -> (
     VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
-    StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, batches.scope());
@@ -1508,7 +1501,14 @@ fn encode_collection<'scope>(
     let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = builder.new_input_for(batches, Pipeline, &output);
 
-    let (button, errors) = builder.build_fallible(move |caps| {
+    let report_error = move |error: anyhow::Error| {
+        health.report(HealthStatusMessage {
+            id: None,
+            update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
+            namespace: StatusNamespace::Kafka,
+        })
+    };
+    let button = builder.build_fallible_with(report_error, move |caps| {
         Box::pin(async move {
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
             let key_desc = connection
@@ -1688,13 +1688,7 @@ fn encode_collection<'scope>(
         })
     });
 
-    let statuses = errors.map(|error| HealthStatusMessage {
-        id: None,
-        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
-        namespace: StatusNamespace::Kafka,
-    });
-
-    (stream.as_collection(), statuses, button.press_on_drop())
+    (stream.as_collection(), button.press_on_drop())
 }
 
 fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {

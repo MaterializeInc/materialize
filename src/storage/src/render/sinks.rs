@@ -27,7 +27,7 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
 
-use crate::healthcheck::{HealthReporter, HealthStatusMessage};
+use crate::healthcheck::HealthReporter;
 use crate::storage_state::StorageState;
 
 /// The concrete trace type produced internally when arranging a sink's input.
@@ -91,16 +91,16 @@ pub(crate) fn render_sink<'scope>(
         let key_is_synthetic = sink_render.get_key_indices().is_none()
             && sink_render.get_relation_key_indices().is_none();
 
-        let (sink_health, sink_tokens) = sink_render.render_sink(
+        let sink_tokens = sink_render.render_sink(
             storage_state,
             sink,
             sink_id,
             batches,
             key_is_synthetic,
             err_collection.as_collection(),
+            health,
         );
         tokens.extend(sink_tokens);
-        health.report_stream(sink_health);
         tokens
     })
 }
@@ -234,7 +234,7 @@ pub(crate) trait SinkRender<'scope> {
     /// envelope-specific diff-pair construction. When `key_is_synthetic` is
     /// true the arrangement's key is a per-row hash used only for worker
     /// distribution — the sink should treat the key as absent when producing
-    /// output.
+    /// output. The sink reports its health through `health`.
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
@@ -243,10 +243,8 @@ pub(crate) trait SinkRender<'scope> {
         batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
-    ) -> (
-        StreamVec<'scope, Timestamp, HealthStatusMessage>,
-        Vec<PressOnDropButton>,
-    );
+        health: &HealthReporter,
+    ) -> Vec<PressOnDropButton>;
 }
 
 fn get_sink_render_for<'scope>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<'scope>> {
