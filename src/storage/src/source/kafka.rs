@@ -192,7 +192,7 @@ impl SourceRender for KafkaSourceConnection {
     ) {
         let (metadata, probes, metadata_token) =
             render_metadata_fetcher(scope, self.clone(), config.clone());
-        let (data, health, reader_token) = render_reader(
+        let (data, reader_token) = render_reader(
             scope,
             self,
             config.clone(),
@@ -213,7 +213,6 @@ impl SourceRender for KafkaSourceConnection {
         for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
             data_collections.insert(*id, data_stream.as_collection());
         }
-        config.health.report_stream(health);
 
         (data_collections, probes, vec![metadata_token, reader_token])
     }
@@ -232,14 +231,12 @@ fn render_reader<'scope>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<'scope, KafkaTimestamp, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<'scope, KafkaTimestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let name = format!("KafkaReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
     let (data_output, stream) = builder.new_output::<FueledBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut metadata_input = builder.new_disconnected_input(metadata_stream.broadcast(), Pipeline);
 
@@ -293,9 +290,10 @@ fn render_reader<'scope>(
     }
 
     let busy_signal = Arc::clone(&config.busy_signal);
+    let health = config.health.clone();
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut data_cap, health_cap] = caps.try_into().unwrap();
+            let [mut data_cap] = caps.try_into().unwrap();
 
             let client_id = connection.client_id(
                 config.config.config_set(),
@@ -374,8 +372,7 @@ fn render_reader<'scope>(
                         ),
                         None,
                     );
-                    health_output.give(
-                        &health_cap,
+                    health.report(
                         HealthStatusMessage {
                             id: None,
                             namespace: if matches!(e, ContextCreationError::Ssh(_)) {
@@ -387,8 +384,7 @@ fn render_reader<'scope>(
                         },
                     );
                     for (output, update) in outputs.iter().repeat_clone(update) {
-                        health_output.give(
-                            &health_cap,
+                        health.report(
                             HealthStatusMessage {
                                 id: Some(output.id),
                                 namespace: if matches!(e, ContextCreationError::Ssh(_)) {
@@ -487,8 +483,7 @@ fn render_reader<'scope>(
                         format!("Failed to fetch watermarks for topic {topic}: {e}"),
                         None,
                     );
-                    health_output.give(
-                        &health_cap,
+                    health.report(
                         HealthStatusMessage {
                             id: None,
                             namespace: StatusNamespace::Kafka,
@@ -496,8 +491,7 @@ fn render_reader<'scope>(
                         },
                     );
                     for (output, update) in outputs.iter().repeat_clone(update) {
-                        health_output.give(
-                            &health_cap,
+                        health.report(
                             HealthStatusMessage {
                                 id: Some(output.id),
                                 namespace: StatusNamespace::Kafka,
@@ -509,8 +503,7 @@ fn render_reader<'scope>(
                         SshTunnelStatus::Running => HealthStatusUpdate::running(),
                         SshTunnelStatus::Errored(e) => HealthStatusUpdate::stalled(e, None),
                     };
-                    health_output.give(
-                        &health_cap,
+                    health.report(
                         HealthStatusMessage {
                             id: None,
                             namespace: StatusNamespace::Ssh,
@@ -518,8 +511,7 @@ fn render_reader<'scope>(
                         },
                     );
                     for (output, ssh_update) in outputs.iter().repeat_clone(ssh_update) {
-                        health_output.give(
-                            &health_cap,
+                        health.report(
                             HealthStatusMessage {
                                 id: Some(output.id),
                                 namespace: StatusNamespace::Ssh,
@@ -580,8 +572,7 @@ fn render_reader<'scope>(
                                     err_str.clone(),
                                     None,
                                 );
-                                health_output.give(
-                                    &health_cap,
+                                health.report(
                                     HealthStatusMessage {
                                         id: None,
                                         namespace: StatusNamespace::Kafka,
@@ -793,8 +784,7 @@ fn render_reader<'scope>(
                         // dataflow handles this fine.
                         for output in &outputs {
                             for namespace in [StatusNamespace::Kafka, StatusNamespace::Ssh] {
-                                health_output.give(
-                                    &health_cap,
+                                health.report(
                                     HealthStatusMessage {
                                         id: Some(output.id),
                                         namespace,
@@ -804,8 +794,7 @@ fn render_reader<'scope>(
                             }
                         }
                         for namespace in [StatusNamespace::Kafka, StatusNamespace::Ssh] {
-                            health_output.give(
-                                &health_cap,
+                            health.report(
                                 HealthStatusMessage {
                                     id: None,
                                     namespace,
@@ -822,8 +811,7 @@ fn render_reader<'scope>(
                     }
                     Some(MetadataUpdate::TransientError(status)) => {
                         if let Some(update) = status.kafka {
-                            health_output.give(
-                                &health_cap,
+                            health.report(
                                 HealthStatusMessage {
                                     id: None,
                                     namespace: StatusNamespace::Kafka,
@@ -831,8 +819,7 @@ fn render_reader<'scope>(
                                 },
                             );
                             for (output, update) in outputs.iter().repeat_clone(update) {
-                                health_output.give(
-                                    &health_cap,
+                                health.report(
                                     HealthStatusMessage {
                                         id: Some(output.id),
                                         namespace: StatusNamespace::Kafka,
@@ -842,8 +829,7 @@ fn render_reader<'scope>(
                             }
                         }
                         if let Some(update) = status.ssh {
-                            health_output.give(
-                                &health_cap,
+                            health.report(
                                 HealthStatusMessage {
                                     id: None,
                                     namespace: StatusNamespace::Ssh,
@@ -851,8 +837,7 @@ fn render_reader<'scope>(
                                 },
                             );
                             for (output, update) in outputs.iter().repeat_clone(update) {
-                                health_output.give(
-                                    &health_cap,
+                                health.report(
                                     HealthStatusMessage {
                                         id: Some(output.id),
                                         namespace: StatusNamespace::Ssh,
@@ -863,8 +848,7 @@ fn render_reader<'scope>(
                         }
                     }
                     Some(MetadataUpdate::DefiniteError(error)) => {
-                        health_output.give(
-                            &health_cap,
+                        health.report(
                             HealthStatusMessage {
                                 id: None,
                                 namespace: StatusNamespace::Kafka,
@@ -906,8 +890,7 @@ fn render_reader<'scope>(
                                 reader.source_name, reader.topic_name, e
                             );
                             let status = HealthStatusUpdate::stalled(error, None);
-                            health_output.give(
-                                &health_cap,
+                            health.report(
                                 HealthStatusMessage {
                                     id: None,
                                     namespace: StatusNamespace::Kafka,
@@ -915,8 +898,7 @@ fn render_reader<'scope>(
                                 },
                             );
                             for (output, status) in outputs.iter().repeat_clone(status) {
-                                health_output.give(
-                                    &health_cap,
+                                health.report(
                                     HealthStatusMessage {
                                         id: Some(output.id),
                                         namespace: StatusNamespace::Kafka,
@@ -1026,16 +1008,14 @@ fn render_reader<'scope>(
                                         ),
                                         None,
                                     );
-                                    health_output.give(
-                                        &health_cap,
+                                    health.report(
                                         HealthStatusMessage {
                                             id: None,
                                             namespace: StatusNamespace::Kafka,
                                             update: status.clone(),
                                         },
                                     );
-                                    health_output.give(
-                                        &health_cap,
+                                    health.report(
                                         HealthStatusMessage {
                                             id: Some(output.id),
                                             namespace: StatusNamespace::Kafka,
@@ -1115,11 +1095,7 @@ fn render_reader<'scope>(
         })
     });
 
-    (
-        stream.as_collection(),
-        health_stream,
-        button.press_on_drop(),
-    )
+    (stream.as_collection(), button.press_on_drop())
 }
 
 impl KafkaResumeUpperProcessor {
