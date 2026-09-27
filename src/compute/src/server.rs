@@ -560,8 +560,7 @@ impl ClusterSpec for Config {
         // Create the storage guest state.
         let storage = guest_setup.map(|(cfg, storage_client_rx, internal_cmd_tx)| {
             let storage_state = StorageState::new_guest(
-                timely_worker.index(),
-                timely_worker.peers(),
+                timely_worker,
                 internal_cmd_tx,
                 // The host dispatches internal commands from the unified command channel, so
                 // the guest reads no receiver of its own.

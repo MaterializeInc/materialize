@@ -1649,7 +1649,7 @@ where
                     let entries = last_n_entries_per_key.entry(key).or_default();
                     for _ in 0..diff {
                         // We CAN have multiple statuses (most likely Starting and Running) at the exact same
-                        // millisecond, depending on how the `health_operator` is scheduled.
+                        // millisecond, depending on how the storage health dataflow is scheduled.
                         //
                         // Note that these will be arbitrarily ordered, so a Starting event might
                         // survive and a Running one won't. The next restart will remove the other,

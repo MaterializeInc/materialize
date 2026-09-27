@@ -41,6 +41,7 @@ pub mod fuzz_exports {
     pub use crate::upsert_continual_feedback_v2::{datum_seq_to_upsert_value, upsert_value_to_row};
 }
 
+pub(crate) mod event_log;
 pub(crate) mod healthcheck;
 
 pub use server::serve;

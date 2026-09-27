@@ -67,7 +67,7 @@ use mz_timely_util::containers::stack::FueledBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
@@ -112,7 +112,6 @@ impl SourceRender for MySqlSourceConnection {
             GlobalId,
             StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>,
         >,
-        StreamVec<'scope, GtidPartition, HealthStatusMessage>,
         StreamVec<'scope, GtidPartition, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
@@ -203,16 +202,13 @@ impl SourceRender for MySqlSourceConnection {
         }
 
         let export_ids = config.source_exports.keys().copied();
-        let health_init = export_ids
-            .map(Some)
-            .chain(std::iter::once(None))
-            .map(|id| HealthStatusMessage {
+        for id in export_ids.map(Some).chain(std::iter::once(None)) {
+            config.health.report(HealthStatusMessage {
                 id,
                 namespace: Self::STATUS_NAMESPACE,
                 update: HealthStatusUpdate::Running,
-            })
-            .collect::<Vec<_>>()
-            .to_stream(scope);
+            });
+        }
 
         let health_errs = snapshot_err
             .concat(repl_err)
@@ -237,11 +233,10 @@ impl SourceRender for MySqlSourceConnection {
                     update,
                 }
             });
-        let health = health_init.concat(health_errs);
+        config.health.report_stream(health_errs);
 
         (
             data_collections,
-            health,
             probe_stream,
             vec![snapshot_token, repl_token, stats_token],
         )

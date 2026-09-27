@@ -153,7 +153,7 @@ pub struct RunSinkCommand {
     pub description: StorageSinkDesc<CollectionMetadata>,
 }
 
-/// A "kind" enum for statuses tracked by the health operator
+/// A "kind" enum for statuses tracked by the storage health dataflow
 #[derive(
     Copy,
     Clone,
@@ -214,7 +214,7 @@ impl Status {
             // Don't re-mark that object as paused.
             (Status::Paused, Status::Paused) => false,
             // De-duplication of other statuses is currently managed by the
-            // `health_operator`.
+            // storage health dataflow.
             _ => true,
         }
     }

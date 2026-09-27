@@ -26,7 +26,7 @@
 //! clusters that host storage objects alongside compute objects. Both command kinds are sequenced
 //! through a single lane, so all workers observe one consistent interleaving and therefore
 //! construct all dataflows, compute and storage alike, in the same order. Unlike compute commands,
-//! storage-internal commands may be injected from any worker (e.g. by health operators triggering
+//! storage-internal commands may be injected from any worker (e.g. by the health dataflow triggering
 //! a suspend-and-restart), so the channel uses a two-hop structure copied from storage's command
 //! sequencer: producers tag commands with a per-producer index, worker 0 fixes one definitive
 //! order and assigns a global index, and receivers restore that order.

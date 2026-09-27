@@ -45,7 +45,6 @@ use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp}
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::capture::PusherCapture;
-use mz_timely_util::operator::ConcatenateFlatten;
 use mz_timely_util::reclock::reclock;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
@@ -55,7 +54,7 @@ use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, InspectCore, Leave};
+use timely::dataflow::operators::{CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -64,7 +63,7 @@ use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
+use crate::healthcheck::{HealthReporter, HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
 use crate::source::reclock::ReclockOperator;
@@ -119,6 +118,8 @@ pub struct RawSourceCreationConfig {
     // A semaphore that should be acquired by async operators in order to signal that upstream
     // operators should slow down.
     pub busy_signal: Arc<Semaphore>,
+    /// Reports the health of this worker's instance of the ingestion.
+    pub health: HealthReporter,
 }
 
 /// Reduced version of [`RawSourceCreationConfig`] that is used when rendering
@@ -180,7 +181,6 @@ pub fn create_raw_source<'scope, 'root, C>(
             Diff,
         >,
     >,
-    StreamVec<'root, (), HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
@@ -219,8 +219,8 @@ where
     let mut reclocked_exports = BTreeMap::new();
 
     let reclocked_exports2 = &mut reclocked_exports;
-    let (health, source_tokens) = root_scope.scoped("SourceTimeDomain", move |scope| {
-        let (exports, health_stream, source_tokens) = source_render_operator(
+    let source_tokens = root_scope.scoped("SourceTimeDomain", move |scope| {
+        let (exports, source_tokens) = source_render_operator(
             scope,
             config,
             source_connection,
@@ -250,12 +250,12 @@ where
             reclocked_exports2.insert(id, reclocked);
         }
 
-        (health_stream.leave(root_scope), source_tokens)
+        source_tokens
     });
 
     tokens.extend(source_tokens);
 
-    (reclocked_exports, health, tokens)
+    (reclocked_exports, tokens)
 }
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
@@ -269,7 +269,6 @@ fn source_render_operator<'scope, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<'scope, C::Time, Result<SourceMessage, DataflowError>>>,
-    StreamVec<'scope, C::Time, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
@@ -283,7 +282,7 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (exports, health, probe_stream, tokens) =
+    let (exports, probe_stream, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
 
     let mut export_collections = BTreeMap::new();
@@ -301,16 +300,9 @@ where
         .resume_upper
         .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-    let mut health_streams = vec![];
-
     for (id, export) in exports {
         let name = format!("SourceGenericStats({})", id);
         let mut builder = OperatorBuilderRc::new(name, scope.clone());
-
-        let (health_output, derived_health) = builder.new_output();
-        let mut health_output =
-            OutputBuilder::<_, CapacityContainerBuilder<_>>::from(health_output);
-        health_streams.push(derived_health);
 
         let (output, new_export) = builder.new_output();
         let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
@@ -324,19 +316,15 @@ where
             .get(&id)
             .expect("statistics initialized")
             .clone();
+        let health = config.health.clone();
 
-        builder.build(move |mut caps| {
-            let mut health_cap = Some(caps.remove(0));
-
+        builder.build(move |_caps| {
             move |frontiers| {
                 let mut last_status = None;
-                let mut health_output = health_output.activate();
 
                 if frontiers[0].is_empty() {
-                    health_cap = None;
                     return;
                 }
-                let health_cap = health_cap.as_mut().unwrap();
 
                 input.for_each(|cap, data| {
                     for (message, _, _) in data.iter() {
@@ -369,7 +357,7 @@ where
                                 };
                                 if last_status.as_ref() != Some(&status) {
                                     last_status = Some(status.clone());
-                                    health_output.session(&health_cap).give(status);
+                                    health.report(status);
                                 }
                             }
                         }
@@ -400,11 +388,7 @@ where
         }
     });
 
-    (
-        export_collections,
-        health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
-        tokens,
-    )
+    (export_collections, tokens)
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -444,6 +428,7 @@ where
         config: _,
         remap_collection_id,
         busy_signal: _,
+        health: _,
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();

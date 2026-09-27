@@ -113,6 +113,7 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::healthcheck::HealthToken;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandReceiver, InternalCommandSender,
     InternalStorageCommand,
@@ -169,8 +170,7 @@ impl<'w> Worker<'w> {
             internal_control::setup_command_sequencer(timely_worker);
 
         let storage_state = StorageState::new_guest(
-            timely_worker.index(),
-            timely_worker.peers(),
+            timely_worker,
             internal_cmd_tx,
             Some(internal_cmd_rx),
             metrics,
@@ -204,10 +204,10 @@ impl StorageState {
     /// them to the sequencer dataflow, a foreign host wires the sender to its own sequencing
     /// channel and passes no receiver, since it dispatches internal commands itself.
     /// Must be called on the hosting worker's thread, because the async worker unparks the
-    /// creating thread.
+    /// creating thread. Renders the storage health dataflow, so it must be called at the same
+    /// point in the dataflow rendering order on every worker.
     pub fn new_guest(
-        timely_worker_index: usize,
-        timely_worker_peers: usize,
+        timely_worker: &mut TimelyWorker,
         internal_cmd_tx: InternalCommandSender,
         internal_cmd_rx: Option<InternalCommandReceiver>,
         metrics: StorageMetrics,
@@ -253,6 +253,18 @@ impl StorageState {
             Arc::clone(&persist_clients),
         );
         let cluster_memory_limit = instance_context.cluster_memory_limit;
+        let timely_worker_index = timely_worker.index();
+        let timely_worker_peers = timely_worker.peers();
+
+        let shared_status_updates: Rc<RefCell<Vec<StatusUpdate>>> = Default::default();
+        let health_dataflow = crate::healthcheck::render_health_dataflow(
+            timely_worker,
+            now.clone(),
+            crate::healthcheck::DefaultWriter {
+                command_tx: internal_cmd_tx.clone(),
+                updates: Rc::clone(&shared_status_updates),
+            },
+        );
 
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
@@ -275,7 +287,8 @@ impl StorageState {
                 timely_worker_index,
                 timely_worker_peers,
             ),
-            shared_status_updates: Default::default(),
+            shared_status_updates,
+            health_dataflow,
             latest_status_updates: Default::default(),
             initial_status_reported: Default::default(),
             internal_cmd_tx,
@@ -306,9 +319,12 @@ pub struct StorageState {
     /// and we should aim for that but are not there yet.
     pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
-    /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
-    /// to prevent usage of custom shutdown tokens that are tricky to get right.
-    pub source_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
+    /// NB: The type of the shutdown tokens must not be changed to something other than
+    /// `PressOnDropButton` to prevent usage of custom shutdown tokens that are tricky to get right.
+    ///
+    /// The health token drops first, so the instance stops reporting health before its
+    /// operators shut down.
+    pub source_tokens: BTreeMap<GlobalId, (HealthToken, Vec<PressOnDropButton>)>,
     /// Metrics for storage objects.
     pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
@@ -334,9 +350,11 @@ pub struct StorageState {
     pub txns_ctx: TxnsContext,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
-    /// to prevent usage of custom shutdown tokens that are tricky to get right.
-    pub sink_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
+    /// NB: The type of the shutdown tokens must not be changed to something other than
+    /// `PressOnDropButton` to prevent usage of custom shutdown tokens that are tricky to get right.
+    ///
+    /// The health token drops first, as for `source_tokens`.
+    pub sink_tokens: BTreeMap<GlobalId, (HealthToken, Vec<PressOnDropButton>)>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -346,12 +364,14 @@ pub struct StorageState {
     /// Statistics for sources and sinks.
     pub aggregated_statistics: AggregatedStatistics,
 
-    /// A place shared with running dataflows, so that health operators, can
-    /// report status updates back to us.
+    /// A place shared with the health dataflow, so that it can report status updates back
+    /// to us.
     ///
-    /// **NOTE**: Operators that append to this collection should take care to only add new
+    /// **NOTE**: Appenders to this collection should take care to only add new
     /// status updates if the status of the ingestion/export in question has _changed_.
     pub shared_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
+    /// Keeps the dataflow aggregating health reports running.
+    pub health_dataflow: crate::event_log::EventLogDataflow,
 
     /// The latest status update for each object.
     pub latest_status_updates: BTreeMap<GlobalId, StatusUpdate>,
