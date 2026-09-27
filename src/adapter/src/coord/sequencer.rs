@@ -50,7 +50,7 @@ use crate::coord::{Coordinator, Message, TargetCluster, catalog_serving};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{
-    EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::util::ClientTransmitter;
 
@@ -518,10 +518,7 @@ impl Coordinator {
                     {
                         ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                     } else {
-                        let state_revision = StateRevision {
-                            catalog_revision: self.catalog().transient_revision(),
-                            session_state_revision: ctx.session().state_revision(),
-                        };
+                        let state_revision = ctx.session().state_revision(self.catalog());
                         ctx.session_mut().retain_description(
                             plan.stmt.clone(),
                             plan.desc.param_types.iter().cloned().map(Some).collect(),

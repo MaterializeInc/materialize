@@ -60,6 +60,7 @@ pub struct Metrics {
     pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounter,
     pub statement_logging_actual_bytes: IntCounter,
+    pub prepared_statement_redescribes: IntCounter,
     pub message_batch: Histogram,
     pub message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
@@ -212,6 +213,11 @@ impl Metrics {
                 name: "mz_statement_logging_actual_bytes",
                 help: "The total amount of SQL text that was logged by statement logging.",
             )),
+            prepared_statement_redescribes: registry.register(metric!(
+                name: "mz_prepared_statement_redescribes_total",
+                help: "The total number of times a prepared statement or portal was described again \
+                    to check that its description is still valid.",
+            )),
             message_batch: registry.register(metric!(
                 name: "mz_coordinator_message_batch_size",
                 help: "Message batch size handled by the coordinator.",
@@ -356,6 +362,7 @@ impl Metrics {
             statement_logging_records: self.statement_logging_records.clone(),
             statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
             statement_logging_actual_bytes: self.statement_logging_actual_bytes.clone(),
+            prepared_statement_redescribes: self.prepared_statement_redescribes.clone(),
         }
     }
 }
@@ -373,6 +380,7 @@ pub struct SessionMetrics {
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
     statement_logging_actual_bytes: IntCounter,
+    prepared_statement_redescribes: IntCounter,
 }
 
 impl SessionMetrics {
@@ -418,6 +426,10 @@ impl SessionMetrics {
 
     pub(crate) fn statement_logging_actual_bytes(&self) -> &IntCounter {
         &self.statement_logging_actual_bytes
+    }
+
+    pub(crate) fn prepared_statement_redescribes(&self) -> &IntCounter {
+        &self.prepared_statement_redescribes
     }
 }
 
