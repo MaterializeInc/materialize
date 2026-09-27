@@ -146,7 +146,7 @@ impl StandingQueryExecuteClient {
         }
 
         // Wait for results from the subscribe handler.
-        // Param rows are self-retracting (written as +1 at ts, -1 at ts+1),
+        // The batcher retracts every param row it wrote with its next write,
         // so no explicit cleanup is needed on cancellation.
         result_rx
             .await
@@ -203,11 +203,19 @@ async fn batcher_task(
         "batcher started",
     );
 
-    const MIN_COLLECT: Duration = Duration::from_millis(1);
-    const MAX_COLLECT: Duration = Duration::from_millis(50);
-    let mut last_append_duration = MIN_COLLECT;
+    // Each batch consumes one timestamp. Timestamps are milliseconds, and the
+    // inputs' write frontier, which bounds how far ahead of the inputs the
+    // param shard can be written without results waiting for the next tick,
+    // advances with wall-clock time. Starting at most one batch per
+    // millisecond keeps the param shard from outrunning the frontier and
+    // using up the gap `advance_standing_query_uppers` leaves. Requests that
+    // arrive meanwhile join the next batch.
+    const BATCH_INTERVAL: Duration = Duration::from_millis(1);
+    let mut next_batch = Instant::now();
     let mut cmds: Vec<BatcherCmd> = Vec::new();
     let mut writes = Vec::new();
+    // Param rows of the last write, retracted by the next write.
+    let mut pending_retractions: Vec<Row> = Vec::new();
 
     loop {
         // Apply the latest upper target before doing anything else.
@@ -217,7 +225,14 @@ async fn batcher_task(
         // listening, not just new notifications.
         {
             let target = *advance_upper_rx.borrow_and_update();
-            advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
+            advance_upper(
+                sink_id,
+                &mut write_handle,
+                &mut current_upper,
+                &mut pending_retractions,
+                target,
+            )
+            .await;
         }
 
         // Wait for at least one command or an upper-advance notification.
@@ -229,7 +244,14 @@ async fn batcher_task(
                     break;
                 }
                 let target = *advance_upper_rx.borrow_and_update();
-                advance_upper(sink_id, &mut write_handle, &mut current_upper, target).await;
+                advance_upper(
+                    sink_id,
+                    &mut write_handle,
+                    &mut current_upper,
+                    &mut pending_retractions,
+                    target,
+                )
+                .await;
             }
 
             count = batcher_rx.recv_many(&mut cmds, usize::MAX) => {
@@ -237,45 +259,36 @@ async fn batcher_task(
                     break;
                 }
 
-                // Adaptively collect more: wait up to 2x the last append
-                // duration for additional requests. Under light load, this
-                // window is tiny (~1ms). Under heavy load, appends take
-                // longer so we collect bigger batches automatically.
-                let collect_budget = (2 * last_append_duration).clamp(MIN_COLLECT, MAX_COLLECT);
-                let collect_deadline = Instant::now() + collect_budget;
-                loop {
-                    match batcher_rx.try_recv() {
-                        Ok(cmd) => cmds.push(cmd),
-                        Err(_) => break,
-                    }
-                    let remaining = collect_deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        break;
-                    }
+                tokio::time::sleep_until(next_batch.into()).await;
+                while let Ok(cmd) = batcher_rx.try_recv() {
+                    cmds.push(cmd);
                 }
 
                 let lower = current_upper;
-                let retract_ts = TimestampManipulation::step_forward(&lower);
-                let upper = TimestampManipulation::step_forward(&retract_ts);
+                let upper = TimestampManipulation::step_forward(&lower);
 
                 let request_ids: Vec<_> = cmds.iter().map(|cmd| match cmd {
                     BatcherCmd::Write(req) => req.request_id
                 }).collect();
 
-                writes.extend(cmds
-                    .drain(..)
-                    .flat_map(|cmd| match cmd {
-                        BatcherCmd::Write(req) => {
-                            let data = (SourceData(Ok(req.param_row.clone())), ());
-                            // Insert at ts, retract at ts+1.
-                            [(data.clone(), lower, 1), (data, retract_ts, -1)]
-                        },
-                    }));
+                // Retract the previous write's param rows at the same
+                // timestamp, so each param row exists from its write to the
+                // next one.
+                writes.extend(
+                    pending_retractions
+                        .drain(..)
+                        .map(|row| ((SourceData(Ok(row)), ()), lower, -1)),
+                );
+                pending_retractions.extend(cmds.drain(..).map(|cmd| match cmd {
+                    BatcherCmd::Write(req) => req.param_row,
+                }));
+                writes.extend(
+                    pending_retractions
+                        .iter()
+                        .map(|row| ((SourceData(Ok(row.clone())), ()), lower, 1)),
+                );
 
-                if writes.is_empty() {
-                    continue;
-                }
-
+                next_batch = Instant::now() + BATCH_INTERVAL;
                 let append_start = Instant::now();
                 let res = batch_append(
                     sink_id,
@@ -287,13 +300,12 @@ async fn batcher_task(
                 .await;
                 match res {
                     Ok(()) => {
-                        last_append_duration = append_start.elapsed();
                         debug!(
                             %sink_id,
                             %lower,
                             %upper,
                             count = request_ids.len(),
-                            ?last_append_duration,
+                            append_duration = ?append_start.elapsed(),
                             "batched param writes",
                         );
                         let _ = flush_tx.send(StandingQueryFlush {
@@ -314,11 +326,8 @@ async fn batcher_task(
     }
 }
 
-/// Append a batch of self-retracting param writes in a single
-/// `compare_and_append`. Each param row is written as `+1` at `ts` and
-/// `-1` at `ts+1`, so it exists for exactly one timestamp. This means
-/// retractions happen automatically and no separate cleanup is needed
-/// on cancellation or disconnect. Returns the upper timestamp on error.
+/// Append a batch of param writes and retractions in a single
+/// `compare_and_append`. Returns the upper timestamp on error.
 async fn batch_append(
     sink_id: GlobalId,
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
@@ -344,11 +353,16 @@ async fn batch_append(
     }
 }
 
-/// Advance the param shard's upper to at least `target`, without writing data.
+/// Advance the param shard's upper to at least `target`, retracting the
+/// `pending_retractions` at the current upper.
+///
+/// Leaves `pending_retractions` in place if the upper is already at or past
+/// `target`, or on an upper mismatch.
 async fn advance_upper(
     sink_id: GlobalId,
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     current_upper: &mut Timestamp,
+    pending_retractions: &mut Vec<Row>,
     target: Timestamp,
 ) {
     let upper = *current_upper;
@@ -358,9 +372,15 @@ async fn advance_upper(
 
     debug!(%sink_id, %upper, %target, "advance upper");
 
+    // Without this, an idle standing query would keep its last param rows,
+    // and their results, live until the next execution.
+    let retractions: Vec<_> = pending_retractions
+        .iter()
+        .map(|row| ((SourceData(Ok(row.clone())), ()), upper, -1))
+        .collect();
     let res = write_handle
         .compare_and_append(
-            Vec::<((SourceData, ()), Timestamp, i64)>::new(),
+            retractions,
             Antichain::from_elem(upper),
             Antichain::from_elem(target),
         )
@@ -370,6 +390,7 @@ async fn advance_upper(
     match res {
         Ok(()) => {
             *current_upper = target;
+            pending_retractions.clear();
         }
         Err(mismatch) => {
             warn!(

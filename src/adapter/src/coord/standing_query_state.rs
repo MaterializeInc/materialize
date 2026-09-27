@@ -76,8 +76,9 @@ impl Coordinator {
             // the subscribe can resolve immediately (it needs all inputs
             // past the write timestamp, and the table is already 1s ahead).
             //
-            // The 1s gap gives ~500 batches of headroom (2 timestamps per
-            // batch, ~1000 timestamps per second). Without this gap, the
+            // The batcher consumes one timestamp per batch and starts at most
+            // one batch per millisecond, so it cannot outrun the input
+            // frontier and the gap is never used up. Without this gap, the
             // batcher would write at the table's exact upper, forcing the
             // subscribe to wait for the next AdvanceTimelines tick (~1s).
             //
