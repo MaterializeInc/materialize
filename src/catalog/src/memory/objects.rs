@@ -1750,7 +1750,10 @@ impl StandingQuery {
 
     /// Builds the [`RelationDesc`] of a parameter collection for `params`.
     ///
-    /// Schema: `(request_id UInt64, param_1 T1, param_2 T2, ...)`
+    /// Schema: `(request_id UInt64, param_1 T1, ..., param_K TK, write_ts MzTimestamp)`.
+    ///
+    /// Column `N` holds `$N`. A row is live in the standing query's dataflow only at `write_ts`,
+    /// whatever the shard holds at other times.
     pub fn build_param_collection_desc(params: &[(String, SqlScalarType)]) -> RelationDesc {
         let mut desc = RelationDesc::builder();
         desc = desc.with_column(
@@ -1769,6 +1772,13 @@ impl StandingQuery {
                 },
             );
         }
+        desc = desc.with_column(
+            ColumnName::from("write_ts"),
+            SqlColumnType {
+                scalar_type: SqlScalarType::MzTimestamp,
+                nullable: false,
+            },
+        );
         desc.finish()
     }
 }

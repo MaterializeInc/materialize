@@ -12,12 +12,12 @@
 //! Each standing query runs an independent handler task that:
 //! 1. Receives subscribe batches forwarded by the coordinator.
 //! 2. Receives flush notifications from clients (write_ts → request_ids).
-//! 3. Buffers result rows per request_id.
+//! 3. Buffers result rows per timestamp and request_id.
 //! 4. When the subscribe frontier advances past a write timestamp T,
 //!    delivers results via oneshot channels in the shared client.
 //!
-//! Param rows are self-retracting (written as +1 at ts, -1 at ts+1),
-//! so no explicit retraction is needed.
+//! A param row carries its write timestamp, and the dataflow's temporal filter
+//! confines it to that timestamp, so no explicit retraction is needed.
 //!
 //! This task runs entirely off the coordinator loop.
 
@@ -57,7 +57,8 @@ async fn standing_query_handler_task(
     info!(%sink_id, "handler task started");
 
     let mut in_flight: BTreeMap<Timestamp, Vec<u64>> = BTreeMap::new();
-    let mut result_buffer: BTreeMap<u64, RequestResult> = BTreeMap::new();
+    // Results by the time they are at and their request id.
+    let mut result_buffer: BTreeMap<(Timestamp, u64), RequestResult> = BTreeMap::new();
 
     loop {
         tokio::select! {
@@ -111,7 +112,7 @@ fn process_batch(
     client: &StandingQueryExecuteClient,
     batch: SubscribeBatch,
     in_flight: &mut BTreeMap<Timestamp, Vec<u64>>,
-    result_buffer: &mut BTreeMap<u64, RequestResult>,
+    result_buffer: &mut BTreeMap<(Timestamp, u64), RequestResult>,
 ) {
     let SubscribeBatch {
         lower: _,
@@ -123,11 +124,14 @@ fn process_batch(
     // request whose timestamp it completes fails with it.
     let mut poison = None;
 
-    // Buffer positive diffs per request_id.
+    // Buffer positive diffs per timestamp and request_id. A request's results are those at its
+    // write timestamp. Param rows an earlier process wrote can be live at other timestamps at or
+    // after the dataflow's as-of, and request ids restart with each process, so their results
+    // must not reach a request with the same id.
     match updates {
         Ok(rows) => {
             let mut row_buf = SharedRow::get();
-            for (row, _ts, diff) in rows.iter().flat_map(|updates| updates.iter()) {
+            for (row, ts, diff) in rows.iter().flat_map(|updates| updates.iter()) {
                 if !diff.is_positive() {
                     continue;
                 }
@@ -157,7 +161,7 @@ fn process_batch(
                 };
 
                 let entry = result_buffer
-                    .entry(request_id)
+                    .entry((*ts, request_id))
                     .or_insert_with(|| Ok(Vec::new()));
                 match (error, entry) {
                     (Some(error), entry @ Ok(_)) => {
@@ -194,7 +198,7 @@ fn process_batch(
     for ts in completed_timestamps {
         if let Some(request_ids) = in_flight.remove(&ts) {
             for request_id in request_ids {
-                let buffered = result_buffer.remove(&request_id);
+                let buffered = result_buffer.remove(&(ts, request_id));
                 let results = match &poison {
                     Some(err) => Err(err.clone()),
                     None => buffered.unwrap_or_else(|| Ok(Vec::new())),
@@ -206,4 +210,10 @@ fn process_batch(
             }
         }
     }
+
+    // What remains at a time before `upper` belongs to no request of this process, unless the
+    // flush for that time is still in the channel. The batcher sends the flush for `ts` before
+    // it advances the param shard past `ts + 1`, and this task drains flushes before each
+    // batch, so results at `ts` with `ts + 1 < upper` are stale.
+    result_buffer.retain(|(ts, _), _| upper.less_equal(&ts.step_forward()));
 }

@@ -13,7 +13,7 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, StandingQuery};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::instrument;
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::GlobalId;
@@ -203,7 +203,7 @@ impl Coordinator {
                         .persist_client
                         .open_writer(
                             param_metadata.data_shard,
-                            std::sync::Arc::new(param_desc),
+                            std::sync::Arc::new(param_desc.clone()),
                             std::sync::Arc::new(mz_persist_types::codec_impls::UnitSchema),
                             mz_persist_client::Diagnostics {
                                 shard_name: param_collection_id.to_string(),
@@ -262,6 +262,8 @@ impl Coordinator {
                     let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
                         item_id,
                         global_id,
+                        coord.persist_client.clone(),
+                        param_desc,
                         param_write_handle,
                         flush_tx,
                         advance_upper_rx,
@@ -303,7 +305,9 @@ impl Coordinator {
     /// ```text
     ///   Project { request_id, user_col_1, ..., user_col_N }
     ///     Join {
-    ///       left: Get(params),        -- [request_id, param_1, ..., param_K]
+    ///       left: Filter {            -- write_ts <= mz_now() <= write_ts
+    ///         Get(params),            -- [request_id, param_1, ..., param_K, write_ts]
+    ///       },
     ///       right: <user_query>,      -- with $N replaced by correlated refs to left
     ///       on: TRUE,
     ///       kind: Inner,
@@ -319,6 +323,7 @@ impl Coordinator {
     /// In the params collection:
     ///   column 0 is `request_id`
     ///   column N is `param_N` (corresponding to `$N`)
+    ///   the last column is `write_ts`
     ///
     /// In the join result:
     ///   columns `0..param_arity` are from the params collection
@@ -331,13 +336,26 @@ impl Coordinator {
         _params: &[(String, SqlScalarType)],
     ) -> (HirRelationExpr, Vec<ColumnName>) {
         let user_arity = raw_expr.arity();
-        let param_arity = param_typ.column_types.len(); // request_id + param_1..param_K
+        let param_arity = param_typ.column_types.len(); // request_id + param_1..param_K + write_ts
 
         // Construct the param collection Get (left side of join).
+        //
+        // Each param row is live only at its `write_ts`. The batcher retracts rows lazily, and
+        // rows of a crashed process may never be retracted, so the shard's contents alone do not
+        // bound a row's lifetime. The temporal filter does, and the handler relies on it: a
+        // request's results are the positive updates at its write timestamp. A row whose window
+        // ends before the dataflow's as-of reaches the join as a `+1` and a `-1` at the as-of,
+        // which the lookup join's source consolidation cancels.
+        let write_ts = HirScalarExpr::column(param_arity - 1);
+        let mz_now = || HirScalarExpr::call_unmaterializable(UnmaterializableFunc::MzNow);
         let param_get = HirRelationExpr::Get {
             id: mz_expr::Id::Global(param_collection_id),
             typ: param_typ.clone(),
-        };
+        }
+        .filter(vec![
+            mz_now().call_binary(write_ts.clone(), mz_expr::func::Gte),
+            mz_now().call_binary(write_ts, mz_expr::func::Lte),
+        ]);
 
         // Clone the user's query and replace Parameter(N) with correlated
         // column references to the params collection (left side of join).

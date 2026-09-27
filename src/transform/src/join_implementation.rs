@@ -16,13 +16,13 @@
 //! determining the orders of collections, lifting predicates if useful arrangements exist,
 //! and identifying opportunities to use indexes to replace filters.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper,
+    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -75,13 +75,16 @@ impl crate::Transform for JoinImplementation {
         let lookup_source = ctx
             .lookup_join
             .filter(|lookup_join| ctx.global_id == Some(lookup_join.object))
-            .map(|lookup_join| lookup_join.source);
+            .map(|lookup_join| LookupSource {
+                id: lookup_join.source,
+                aliases: BTreeSet::new(),
+            });
         let result = self.action_recursive(
             relation,
             &mut IndexMap::new(ctx.indexes),
             ctx.stats,
             ctx.features,
-            lookup_source,
+            lookup_source.as_ref(),
         );
         mz_repr::explain::trace_plan(&*relation);
         result
@@ -96,13 +99,13 @@ impl JoinImplementation {
     ///
     /// A join at the position of `relation` that reads `lookup_source` is planned as a delta join,
     /// see [`crate::LookupJoinSource`].
-    pub fn action_recursive(
+    fn action_recursive(
         &self,
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
         stats: &dyn StatisticsOracle,
         features: &OptimizerFeatures,
-        lookup_source: Option<GlobalId>,
+        lookup_source: Option<&LookupSource>,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
@@ -121,7 +124,14 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes, stats, features, lookup_source)?;
+                // Decorrelation can read the source twice, and the two reads can be bound once.
+                let mut body_source = lookup_source.cloned();
+                if let Some(source) = &mut body_source {
+                    if source.is_read_by(value) {
+                        source.aliases.insert(*id);
+                    }
+                }
+                self.action_recursive(body, indexes, stats, features, body_source.as_ref())?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
@@ -144,14 +154,14 @@ impl JoinImplementation {
     ///
     /// A join that reads `lookup_source` is planned as a delta join, see
     /// [`crate::LookupJoinSource`].
-    pub fn action(
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
         stats: &dyn StatisticsOracle,
         features: &OptimizerFeatures,
-        lookup_source: Option<GlobalId>,
+        lookup_source: Option<&LookupSource>,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -382,7 +392,7 @@ impl JoinImplementation {
             // The lookup join is formed at LIR from the delta path of the source input, so the
             // join must be a delta join whatever its arity and the arrangements that takes.
             if let Some(source) = lookup_source {
-                if num_inputs >= 2 && inputs.iter().any(|input| reads_global(input, source)) {
+                if num_inputs >= 2 && inputs.iter().any(|input| source.is_read_by(input)) {
                     // Without a delta plan, the join is planned as usual and stays a join.
                     if let Ok((delta_query_plan, _)) = delta_queries::plan(
                         relation,
@@ -566,14 +576,33 @@ impl JoinImplementation {
     }
 }
 
-/// Whether `expr` reads the global collection `id`, possibly through maps, filters, projections,
-/// and an `ArrangeBy`.
-fn reads_global(expr: &MirRelationExpr, id: GlobalId) -> bool {
-    let (_, mut expr) = MapFilterProject::extract_non_errors_from_expr(expr);
-    if let MirRelationExpr::ArrangeBy { input, .. } = expr {
-        (_, expr) = MapFilterProject::extract_non_errors_from_expr(input);
+/// The collection that drives a lookup join, see [`crate::LookupJoinSource`].
+#[derive(Clone, Debug)]
+struct LookupSource {
+    /// The collection.
+    id: GlobalId,
+    /// The local bindings in scope that read `id`.
+    aliases: BTreeSet<LocalId>,
+}
+
+impl LookupSource {
+    /// Whether `expr` reads the collection, possibly through maps, filters, projections, an
+    /// `ArrangeBy`, and one of `aliases`.
+    fn is_read_by(&self, expr: &MirRelationExpr) -> bool {
+        let (_, mut expr) = MapFilterProject::extract_non_errors_from_expr(expr);
+        if let MirRelationExpr::ArrangeBy { input, .. } = expr {
+            (_, expr) = MapFilterProject::extract_non_errors_from_expr(input);
+        }
+        match expr {
+            MirRelationExpr::Get {
+                id: Id::Global(id), ..
+            } => *id == self.id,
+            MirRelationExpr::Get {
+                id: Id::Local(id), ..
+            } => self.aliases.contains(id),
+            _ => false,
+        }
     }
-    matches!(expr, MirRelationExpr::Get { id: Id::Global(get_id), .. } if *get_id == id)
 }
 
 mod index_map {

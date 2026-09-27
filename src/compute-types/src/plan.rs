@@ -871,9 +871,18 @@ impl LirRelationExpr {
                 _ => false,
             };
             let mut expr = &mut build_desc.plan;
+            // Let bindings that read `source`. The join reads `source` through one when another
+            // consumer shares the read, for example when decorrelation reads a filtered `source`
+            // twice and the two reads were bound once.
+            let mut aliases = BTreeSet::new();
             while passes_through(&expr.node) {
                 expr = match &mut expr.node {
-                    LirRelationNode::Let { body, .. } => body,
+                    LirRelationNode::Let { id, value, body } => {
+                        if reads_global(value, source, &aliases) {
+                            aliases.insert(*id);
+                        }
+                        body
+                    }
                     LirRelationNode::Mfp { input, .. } => input,
                     _ => unreachable!(),
                 };
@@ -894,7 +903,7 @@ impl LirRelationExpr {
                     }
                     _ => false,
                 };
-                forms_source_key && reads_global(input, source)
+                forms_source_key && reads_global(input, source, &aliases)
             }) else {
                 continue;
             };
@@ -935,8 +944,9 @@ impl LirRelationExpr {
     }
 }
 
-/// Whether `expr` reads the global collection `id`, possibly through `ArrangeBy` and `Mfp`.
-fn reads_global(mut expr: &LirRelationExpr, id: GlobalId) -> bool {
+/// Whether `expr` reads the global collection `id`, possibly through `ArrangeBy` and `Mfp`, and
+/// possibly through a local binding in `aliases`, each of which must be bound to such a read.
+fn reads_global(mut expr: &LirRelationExpr, id: GlobalId, aliases: &BTreeSet<LocalId>) -> bool {
     loop {
         match &expr.node {
             LirRelationNode::ArrangeBy { input, .. } | LirRelationNode::Mfp { input, .. } => {
@@ -946,6 +956,10 @@ fn reads_global(mut expr: &LirRelationExpr, id: GlobalId) -> bool {
                 id: Id::Global(get_id),
                 ..
             } => return *get_id == id,
+            LirRelationNode::Get {
+                id: Id::Local(local_id),
+                ..
+            } => return aliases.contains(local_id),
             _ => return false,
         }
     }

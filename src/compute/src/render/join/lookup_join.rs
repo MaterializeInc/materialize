@@ -101,8 +101,9 @@ fn build_lookup_join<'scope, T: RenderTimestamp>(
     // Deciding whether an update is positive requires the source's updates at each time to
     // be consolidated. A persist snapshot need not be: a row inserted and retracted before
     // the as-of can appear as a `+1` and a `-1` in different parts, and dropping the `-1`
-    // alone would resurrect the row. The consolidation holds each update back only until
-    // the source frontier passes its time.
+    // alone would resurrect the row. Nor need a temporal filter's output be: it presents a
+    // row whose validity ends before the as-of as a `+1` and a `-1` at the as-of. The
+    // consolidation holds each update back only until the source frontier passes its time.
     let source = columnar_consolidate(source, "LookupJoinSourceConsolidation");
     // A non-positive update produces no output. Without an arrangement of the source,
     // changes to the lookup relations produce none either.

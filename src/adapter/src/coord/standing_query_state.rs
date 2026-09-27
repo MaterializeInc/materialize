@@ -83,8 +83,8 @@ impl Coordinator {
             // the subscribe can resolve immediately (it needs all inputs
             // past the write timestamp, and the table is already 1s ahead).
             //
-            // The batcher consumes two timestamps per batch and starts at most
-            // one batch per two milliseconds, so it cannot outrun the input
+            // The batcher consumes one timestamp per batch and starts at most
+            // one batch per millisecond, so it cannot outrun the input
             // frontier and the gap is never used up. Without this gap, the
             // batcher would write at the table's exact upper, forcing the
             // subscribe to wait for the next AdvanceTimelines tick (~1s).

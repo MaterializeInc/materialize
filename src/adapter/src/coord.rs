@@ -3020,7 +3020,7 @@ impl Coordinator {
                         .persist_client
                         .open_writer(
                             param_metadata.data_shard,
-                            std::sync::Arc::new(param_desc),
+                            std::sync::Arc::new(param_desc.clone()),
                             std::sync::Arc::new(mz_persist_types::codec_impls::UnitSchema),
                             mz_persist_client::Diagnostics {
                                 shard_name: sq.param_collection_id.to_string(),
@@ -3043,6 +3043,8 @@ impl Coordinator {
                     let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
                         entry.id(),
                         sq.global_id(),
+                        self.persist_client.clone(),
+                        param_desc,
                         param_write_handle,
                         flush_tx,
                         advance_upper_rx,

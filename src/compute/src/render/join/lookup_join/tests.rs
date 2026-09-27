@@ -40,7 +40,8 @@ fn row(datums: &[Datum]) -> Row {
 /// Joins a source `(k)` with a lookup relation `(k, v)` on `k`, producing `(k, v)`.
 ///
 /// The source retracts its first update at time 2 and, at time 3, holds a `+1` and a `-1` of the
-/// same row that arrive on different inputs, the way parts of a persist snapshot can.
+/// same row that arrive on different inputs, the way parts of a persist snapshot can, or the way a
+/// temporal filter presents a row whose validity ends before the dataflow's as-of.
 #[mz_ore::test]
 fn lookup_join_responds_to_positive_source_updates_only() {
     let key = vec![LirScalarExpr::column(0)];
