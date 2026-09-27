@@ -46,6 +46,14 @@ def setup(c: Composition) -> None:
         port=6877,
         user="mz_system",
     )
+    # Strictly serializable executions of a standing query wait for the param
+    # shard to reach the oracle's read timestamp, about a second. Measure both
+    # standing queries and their index SELECT baselines as serializable.
+    c.sql(
+        "ALTER ROLE materialize SET transaction_isolation = 'serializable'",
+        port=6877,
+        user="mz_system",
+    )
     c.sql(
         f"""
         DROP STANDING QUERY IF EXISTS orders_by_customer;
