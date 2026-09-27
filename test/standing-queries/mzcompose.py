@@ -10,8 +10,10 @@
 """
 Performance tests for standing queries.
 
-Measures EXECUTE STANDING QUERY latency and throughput under varying
-concurrency levels using dbbench.
+Measures EXECUTE STANDING QUERY against the equivalent index SELECT. The
+open-loop workflows offer fixed request rates with pgbench and report the
+latency distribution. The throughput workflows run a closed loop with dbbench
+at fixed concurrency.
 """
 
 import re
@@ -23,6 +25,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
 
 SERVICES = [
     Materialized(propagate_crashes=True),
@@ -30,6 +33,8 @@ SERVICES = [
         "dbbench",
         {"mzbuild": "dbbench"},
     ),
+    # Only its pgbench is used, as the open-loop load generator.
+    Postgres(),
 ]
 
 NUM_ROWS = 100_000
@@ -297,51 +302,123 @@ def workflow_throughput_single_row(
     c.rm_volumes("mzdata")
 
 
-def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Verify standing queries meet a target QPS with acceptable latency.
+# Latency quantiles the open-loop workflows report, besides the maximum.
+QUANTILES = [0.5, 0.9, 0.99, 0.999, 0.9999]
 
-    Uses dbbench's `rate` mode to send requests at a fixed rate and checks
-    that mean latency stays below a threshold. This validates that the system
-    can sustain the target throughput without queuing.
+# Seconds at the start of each open-loop run whose transactions are dropped as
+# warmup, and the run's total duration.
+WARMUP_SECONDS = 5
+OPEN_LOOP_SECONDS = 60
+
+# Connections pgbench spreads the offered load over. Requests that find every
+# connection busy wait for one, and that wait counts towards their latency,
+# so the pool bounds concurrency without hiding queueing.
+OPEN_LOOP_CONNECTIONS = 512
+
+
+def run_pgbench_open_loop(c: Composition, *, name: str, script: str, rate: int) -> dict:
+    """Offer `rate` transactions per second of `script` and return the
+    achieved rate and the latency distribution in milliseconds.
+
+    Latency is measured from each transaction's scheduled start, so time a
+    request waits because earlier ones are slow counts, which a closed loop
+    hides.
     """
-    c.up("materialized")
+    print(f"--- pgbench: {name}")
+    quantile_args = " ".join(str(q) for q in QUANTILES)
+    # The per-transaction log's columns are `client_id transaction_no time
+    # script_no time_epoch time_us schedule_lag`, with `time` measured from
+    # the actual start, so the latency from the scheduled start is
+    # `time + schedule_lag`, in microseconds.
+    shell = f"""
+set -eu
+dir="$(mktemp -d)"
+cd "$dir"
+cat > script.sql
+pgbench -h materialized -p 6875 -U materialize -n -M prepared \\
+    -c {OPEN_LOOP_CONNECTIONS} -j 8 -R {rate} -T {OPEN_LOOP_SECONDS} \\
+    --log --log-prefix=txn -f script.sql materialize > summary.txt 2>&1 || {{
+    cat summary.txt
+    exit 1
+}}
+grep -E '^(tps|number of failed transactions|latency average)' summary.txt
+start="$(cat txn.* | awk 'NR == 1 || $5 < min {{ min = $5 }} END {{ print min }}')"
+cat txn.* \\
+    | awk -v start="$start" -v warmup={WARMUP_SECONDS} '$5 >= start + warmup {{ print $3 + $7 }}' \\
+    | sort -n \\
+    | awk -v qs="{quantile_args}" '
+        {{ v[NR] = $1 }}
+        END {{
+            n = split(qs, q, " ")
+            printf "samples %d\\n", NR
+            for (i = 1; i <= n; i++) {{
+                idx = int(q[i] * NR)
+                if (idx < 1) idx = 1
+                printf "q%s %.3f\\n", q[i], v[idx] / 1000
+            }}
+            printf "max %.3f\\n", v[NR] / 1000
+        }}'
+"""
+    result = c.exec(
+        "postgres",
+        "bash",
+        "-c",
+        shell,
+        capture=True,
+        stdin=script,
+        check=False,
+    )
+    output = result.stdout or ""
+    print(output)
+    if result.returncode != 0:
+        raise RuntimeError(f"pgbench failed for {name}")
+
+    parsed: dict = {"quantiles": {}}
+    for line in output.splitlines():
+        if line.startswith("tps = "):
+            parsed["achieved"] = float(line.split()[2])
+        elif line.startswith("number of failed transactions"):
+            parsed["failed"] = int(line.split(":")[1].split()[0])
+        elif line.startswith("samples "):
+            parsed["samples"] = int(line.split()[1])
+        elif line.startswith("q"):
+            q, ms = line[1:].split()
+            parsed["quantiles"][float(q)] = float(ms)
+        elif line.startswith("max "):
+            parsed["max"] = float(line.split()[1])
+    return parsed
+
+
+def open_loop(
+    c: Composition, *, label: str, rates: list[int], variants: list[tuple[str, str]]
+) -> None:
+    """Run each `(name, script)` variant at every offered rate and print a
+    latency table per variant."""
+    c.up("materialized", "postgres")
     setup(c)
 
-    # Target QPS levels with latency budgets (ms).
-    targets = [
-        {"rate": 256, "max_latency_ms": 500},
-        {"rate": 512, "max_latency_ms": 500},
-        {"rate": 1024, "max_latency_ms": 1000},
-        {"rate": 2048, "max_latency_ms": 1000},
-        {"rate": 4096, "max_latency_ms": 2000},
-    ]
+    for name, script in variants:
+        rows = []
+        for rate in rates:
+            recreate_standing_queries(c)
+            stats = run_pgbench_open_loop(
+                c, name=f"{label}_{name}_{rate}", script=script, rate=rate
+            )
+            if stats.get("failed", 0) > 0:
+                raise RuntimeError(
+                    f"{name} at {rate}/s: {stats['failed']} transactions failed"
+                )
+            rows.append((rate, stats))
 
-    for target in targets:
-        rate = target["rate"]
-        max_lat = target["max_latency_ms"]
-
-        recreate_standing_queries(c)
-        stats = run_dbbench(
-            c,
-            name=f"target_qps_{rate}",
-            query="EXECUTE STANDING QUERY orders_by_customer ({key})",
-            duration="120s",
-            rate=float(rate),
-        )
-
-        latency_str = stats.get("latency_mean")
-        if latency_str is None:
-            raise RuntimeError(f"rate={rate}: dbbench did not report latency")
-
-        latency_ms = parse_duration_ms(latency_str)
-        qps = stats.get("qps", 0)
-        print(
-            f"  rate={rate}: achieved {qps:.1f} QPS, latency={latency_str} ({latency_ms:.1f}ms)"
-        )
-
-        if latency_ms > max_lat:
-            raise RuntimeError(
-                f"rate={rate}: latency {latency_ms:.1f}ms exceeds budget {max_lat}ms"
+        header = " ".join(f"p{q * 100:g}".rjust(9) for q in QUANTILES)
+        print(f"  {label} {name}: offered achieved {header}       max (ms)")
+        for rate, stats in rows:
+            quantiles = " ".join(
+                f"{stats['quantiles'].get(q, float('nan')):9.2f}" for q in QUANTILES
+            )
+            print(
+                f"  {label} {name}: {rate:7d} {stats.get('achieved', 0):8.0f} "
+                f"{quantiles} {stats.get('max', float('nan')):9.2f}"
             )
 
     c.kill("materialized")
@@ -349,50 +426,44 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.rm_volumes("mzdata")
 
 
-def workflow_target_qps_single_row(
+def workflow_open_loop(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Latency distribution of 1000-row lookups at fixed offered rates."""
+    key = f"\\set key random(1, {len(KEYS)})\n"
+    open_loop(
+        c,
+        label="open_loop",
+        rates=[250, 500, 1000, 2000, 4000],
+        variants=[
+            (
+                "standing_query",
+                key + "EXECUTE STANDING QUERY orders_by_customer (:key);\n",
+            ),
+            (
+                "index_select",
+                key
+                + "SELECT id, customer_id, amount FROM orders WHERE customer_id = :key;\n",
+            ),
+        ],
+    )
+
+
+def workflow_open_loop_single_row(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    """Like target-qps but each execute returns exactly 1 row (filter on unique id)."""
-    c.up("materialized")
-    setup(c)
-
-    # Target QPS levels with latency budgets (ms).
-    targets = [
-        {"rate": 256, "max_latency_ms": 500},
-        {"rate": 512, "max_latency_ms": 500},
-        {"rate": 1024, "max_latency_ms": 1000},
-        {"rate": 2048, "max_latency_ms": 1000},
-        {"rate": 4096, "max_latency_ms": 2000},
-    ]
-
-    for target in targets:
-        rate = target["rate"]
-        max_lat = target["max_latency_ms"]
-
-        recreate_standing_queries(c)
-        stats = run_dbbench(
-            c,
-            name=f"target_qps_single_row_{rate}",
-            query="EXECUTE STANDING QUERY order_by_id ({key})",
-            duration="120s",
-            rate=float(rate),
-        )
-
-        latency_str = stats.get("latency_mean")
-        if latency_str is None:
-            raise RuntimeError(f"rate={rate}: dbbench did not report latency")
-
-        latency_ms = parse_duration_ms(latency_str)
-        qps = stats.get("qps", 0)
-        print(
-            f"  rate={rate}: achieved {qps:.1f} QPS, latency={latency_str} ({latency_ms:.1f}ms)"
-        )
-
-        if latency_ms > max_lat:
-            raise RuntimeError(
-                f"rate={rate}: latency {latency_ms:.1f}ms exceeds budget {max_lat}ms"
-            )
-
-    c.kill("materialized")
-    c.rm("materialized")
-    c.rm_volumes("mzdata")
+    """Latency distribution of single-row lookups at fixed offered rates."""
+    key = f"\\set key random(1, {NUM_ROWS})\n"
+    open_loop(
+        c,
+        label="open_loop_single_row",
+        rates=[1000, 2000, 4000, 8000, 16000, 24000, 32000],
+        variants=[
+            (
+                "standing_query",
+                key + "EXECUTE STANDING QUERY order_by_id (:key);\n",
+            ),
+            (
+                "index_select",
+                key + "SELECT id, customer_id, amount FROM orders WHERE id = :key;\n",
+            ),
+        ],
+    )
