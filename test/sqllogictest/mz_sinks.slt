@@ -11,7 +11,7 @@
 # and mz_catalog.mz_iceberg_sinks. All three are materialized views over
 # mz_internal.mz_catalog_raw and get every sink detail out of the
 # persisted create_sql, in the CreateSink arm of parse_catalog_create_sql
-# (src/expr/src/scalar/func/impls/jsonb.rs).
+# (src/catalog-decode/src/create_sql.rs).
 #
 # Note we can't create a sink here at all: purification always talks to
 # the broker or the iceberg catalog, and there is no VALIDATE = false to

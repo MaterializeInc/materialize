@@ -12,7 +12,7 @@
 # src/catalog/src/builtin/mz_catalog.rs) with two union branches, user views and
 # builtin views, and it derives every column from the durable catalog JSON
 # through parse_catalog_id, parse_catalog_privileges, redact_sql and
-# parse_catalog_create_sql (src/expr/src/scalar/func/impls/jsonb.rs).
+# parse_catalog_create_sql (src/catalog-decode/src/create_sql.rs).
 #
 # Before that it was a BuiltinTable populated by pack_view_update in the
 # adapter, so the values pinned here are a compatibility surface. The

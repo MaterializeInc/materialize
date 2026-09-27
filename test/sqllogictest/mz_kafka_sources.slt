@@ -11,7 +11,7 @@
 # BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw:
 # see MZ_KAFKA_SOURCES in src/catalog/src/builtin/mz_catalog.rs and the
 # parse_kafka_source_details helper in
-# src/expr/src/scalar/func/impls/jsonb.rs. These tests pin down the
+# src/catalog-decode/src/create_sql.rs. These tests pin down the
 # column shape, nullability, and cross-catalog invariants that must be
 # preserved as the SQL evolves.
 #

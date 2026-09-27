@@ -6825,6 +6825,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-catalog-decode"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "mz-ore",
+ "mz-repr",
+ "mz-sql-parser",
+ "prost",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "mz-catalog-protos"
 version = "0.0.0"
 dependencies = [
@@ -7503,6 +7516,7 @@ dependencies = [
  "md-5 0.10.6",
  "murmur2",
  "mz-build-tools",
+ "mz-catalog-decode",
  "mz-expr",
  "mz-expr-derive",
  "mz-expr-derive-impl",

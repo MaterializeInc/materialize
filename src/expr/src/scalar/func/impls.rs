@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 mod array;
-mod audit_log_details;
 mod boolean;
 mod byte;
 mod case_literal;
+mod catalog;
 mod char;
 mod date;
 mod datum;
@@ -43,10 +43,10 @@ mod uuid;
 mod varchar;
 
 pub use crate::scalar::func::impls::array::*;
-pub use crate::scalar::func::impls::audit_log_details::*;
 pub use crate::scalar::func::impls::boolean::*;
 pub use crate::scalar::func::impls::byte::*;
 pub use crate::scalar::func::impls::case_literal::*;
+pub use crate::scalar::func::impls::catalog::*;
 pub use crate::scalar::func::impls::char::*;
 pub use crate::scalar::func::impls::date::*;
 pub use crate::scalar::func::impls::datum::*;
