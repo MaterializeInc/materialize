@@ -88,11 +88,26 @@ def recreate_standing_queries(c: Composition) -> None:
     c.sql("SELECT 1", port=6875)
 
 
+# Distinct parameter values the load cycles through. The standing query's join
+# partitions requests by their parameter, so a single value would send every
+# request to one worker. Each value selects 1000 rows of `orders_by_customer`
+# and one row of `order_by_id`.
+KEYS = list(range(1, 17))
+
+# One line of dbbench's final per-job summary, for example
+# `job_3: 30720 transactions (255.985 TPS), latency 11.45ms±217.34µs; ...`.
+SUMMARY_RE = re.compile(
+    r"(\w+): (\d+) transactions \(([0-9.]+) TPS\), "
+    r"latency ([0-9.]+(?:µs|ms|s|ns))±([0-9.]+(?:µs|ms|s|ns))"
+)
+
+
 def run_dbbench(
     c: Composition,
     *,
     name: str,
     query: str,
+    keys: list[int] = KEYS,
     duration: str = "120s",
     concurrency: int | None = None,
     rate: float | None = None,
@@ -100,19 +115,28 @@ def run_dbbench(
 ) -> dict:
     """Run dbbench and return parsed results.
 
-    Returns a dict with keys: qps, tps, latency_mean, latency_ci.
+    `query` is a template with a `{key}` placeholder. Each key gets its own
+    dbbench job, and the jobs split `concurrency` and `rate` between them.
+    Returns a dict with keys: qps, tps, latency_mean, summed or averaged
+    over the jobs weighted by their transactions.
     """
+    num_jobs = min(len(keys), concurrency) if concurrency is not None else len(keys)
     lines: list[str] = [f"duration={duration}", ""]
-
-    lines.append("[loadtest]")
-    # Escape newlines for INI format.
-    lines.append(f"query={query.replace(chr(10), ' ').strip()}")
-    if concurrency is not None:
-        lines.append(f"concurrency={concurrency}")
-    if rate is not None:
-        lines.append(f"rate={rate}")
-    if batch_size is not None:
-        lines.append(f"batch-size={batch_size}")
+    for i, key in enumerate(keys[:num_jobs]):
+        lines.append(f"[job_{i}]")
+        # Escape newlines for INI format.
+        job_query = query.format(key=key).replace(chr(10), " ").strip()
+        lines.append(f"query={job_query}")
+        if concurrency is not None:
+            job_concurrency = concurrency // num_jobs + (
+                1 if i < concurrency % num_jobs else 0
+            )
+            lines.append(f"concurrency={job_concurrency}")
+        if rate is not None:
+            lines.append(f"rate={rate / num_jobs}")
+        if batch_size is not None:
+            lines.append(f"batch-size={batch_size}")
+        lines.append("")
 
     ini_text = "\n".join(lines) + "\n"
 
@@ -149,26 +173,23 @@ def run_dbbench(
     combined = f"{result.stderr or ''}\n{result.stdout or ''}".strip()
     print(combined)
 
+    # dbbench can print a job's summary more than once, so keep one per job.
+    jobs = {}
+    for job, transactions, tps, latency, _ci in SUMMARY_RE.findall(combined):
+        jobs[job] = (int(transactions), float(tps), parse_duration_ms(latency))
+
     parsed = {}
-
-    # Parse QPS
-    qps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*QPS", combined)
-    if qps_matches:
-        parsed["qps"] = float(qps_matches[0])
-
-    # Parse TPS
-    tps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*TPS", combined)
-    if tps_matches:
-        parsed["tps"] = float(tps_matches[0])
-
-    # Parse latency: "latency 796.907µs±63.671µs"
-    lat_matches = re.findall(
-        r"latency\s+([0-9.]+(?:µs|ms|s|ns))±([0-9.]+(?:µs|ms|s|ns))",
-        combined,
-    )
-    if lat_matches:
-        parsed["latency_mean"] = lat_matches[0][0]
-        parsed["latency_ci"] = lat_matches[0][1]
+    if jobs:
+        total = sum(transactions for transactions, _, _ in jobs.values())
+        tps = sum(tps for _, tps, _ in jobs.values())
+        # Each transaction runs one query.
+        parsed["tps"] = tps
+        parsed["qps"] = tps
+        if total > 0:
+            mean_ms = (
+                sum(transactions * ms for transactions, _, ms in jobs.values()) / total
+            )
+            parsed["latency_mean"] = f"{mean_ms:.3f}ms"
 
     return parsed
 
@@ -208,7 +229,7 @@ def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
         stats = run_dbbench(
             c,
             name=f"standing_query_c{conc}",
-            query="EXECUTE STANDING QUERY orders_by_customer (42)",
+            query="EXECUTE STANDING QUERY orders_by_customer ({key})",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
@@ -219,7 +240,7 @@ def workflow_throughput(c: Composition, parser: WorkflowArgumentParser) -> None:
         stats = run_dbbench(
             c,
             name=f"index_select_c{conc}",
-            query="SELECT id, customer_id, amount FROM orders WHERE customer_id = 42",
+            query="SELECT id, customer_id, amount FROM orders WHERE customer_id = {key}",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
@@ -245,7 +266,7 @@ def workflow_throughput_single_row(
         stats = run_dbbench(
             c,
             name=f"standing_query_single_row_c{conc}",
-            query="EXECUTE STANDING QUERY order_by_id (42)",
+            query="EXECUTE STANDING QUERY order_by_id ({key})",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
@@ -256,7 +277,7 @@ def workflow_throughput_single_row(
         stats = run_dbbench(
             c,
             name=f"index_select_single_row_c{conc}",
-            query="SELECT id, customer_id, amount FROM orders WHERE id = 42",
+            query="SELECT id, customer_id, amount FROM orders WHERE id = {key}",
             concurrency=conc,
         )
         qps = stats.get("qps", 0)
@@ -295,7 +316,7 @@ def workflow_target_qps(c: Composition, parser: WorkflowArgumentParser) -> None:
         stats = run_dbbench(
             c,
             name=f"target_qps_{rate}",
-            query="EXECUTE STANDING QUERY orders_by_customer (42)",
+            query="EXECUTE STANDING QUERY orders_by_customer ({key})",
             duration="120s",
             rate=float(rate),
         )
@@ -344,7 +365,7 @@ def workflow_target_qps_single_row(
         stats = run_dbbench(
             c,
             name=f"target_qps_single_row_{rate}",
-            query="EXECUTE STANDING QUERY order_by_id (42)",
+            query="EXECUTE STANDING QUERY order_by_id ({key})",
             duration="120s",
             rate=float(rate),
         )
