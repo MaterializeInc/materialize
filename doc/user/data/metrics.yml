@@ -29,6 +29,41 @@ metrics:
   help: times a connection was recycled due to ttl
   source: src/postgres-client/src/metrics.rs
   visibility: internal
+- name: '*_qps_phase_active'
+  help: Started diagnostic phase operations not yet returned or dropped.
+  labels:
+  - phase
+  source: src/ore/src/metrics/phase.rs
+  visibility: internal
+- name: '*_qps_phase_mode'
+  help: 'Diagnostic mode: 0 off, 1 wall, 2 poll.'
+  source: src/ore/src/metrics/phase.rs
+  visibility: internal
+- name: '*_qps_phase_seconds_bucket'
+  help: Diagnostic phase wall or poll-wall seconds. Nested phases overlap. Returned includes errors, dropped includes cancellation. Not CPU time.
+  labels:
+  - kind
+  - le
+  - outcome
+  - phase
+  source: src/ore/src/metrics/phase.rs
+  visibility: internal
+- name: '*_qps_phase_seconds_count'
+  help: Diagnostic phase wall or poll-wall seconds. Nested phases overlap. Returned includes errors, dropped includes cancellation. Not CPU time.
+  labels:
+  - kind
+  - outcome
+  - phase
+  source: src/ore/src/metrics/phase.rs
+  visibility: internal
+- name: '*_qps_phase_seconds_sum'
+  help: Diagnostic phase wall or poll-wall seconds. Nested phases overlap. Returned includes errors, dropped includes cancellation. Not CPU time.
+  labels:
+  - kind
+  - outcome
+  - phase
+  source: src/ore/src/metrics/phase.rs
+  visibility: internal
 - name: '*_request_duration_seconds_bucket'
   help: How long it takes for a request to complete in seconds.
   labels:
@@ -1154,6 +1189,10 @@ metrics:
   labels:
   - immediately_handled
   - type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_linearize_read_fast_path_total
+  help: The number of ordinary strict serializable reads already linearized at transaction end
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_mcp_requests_total
