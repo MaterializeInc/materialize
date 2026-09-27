@@ -325,6 +325,13 @@ impl LoggingContext<'_> {
             move |time, data: &mut Option<CB::Container>| {
                 if let Some(data) = data.take() {
                     logger.publish_batch(data);
+                    // Count every batch towards the replay's activation threshold, so the logging
+                    // dataflow drains events in bounded chunks. Without this, the replay only
+                    // wakes once per logging interval and processes the whole interval's events
+                    // in one uninterruptible call, stalling every other dataflow on the worker.
+                    // The activator is worker-local and never unparks the thread: a threshold
+                    // crossed while flushing before a park takes effect on the next wakeup.
+                    activator.activate();
                 } else if logger.report_progress(*time) {
                     activator.activate();
                 }
@@ -378,12 +385,16 @@ impl LoggingContext<'_> {
                     }
                     while let Some(container) = builder.extract() {
                         logger.publish_batch(std::mem::take(container));
+                        // See `simple_logger`.
+                        activator.activate();
                     }
                 }
             } else {
                 // Handle a flush
                 while let Some(container) = builder.finish() {
                     logger.publish_batch(std::mem::take(container));
+                    // See `simple_logger`.
+                    activator.activate();
                 }
 
                 if logger.report_progress(*batch_time) {
