@@ -634,6 +634,9 @@ pub struct Item {
     /// `Some(uuid)` marks a temporary item owned by, and only visible to, the
     /// session with that UUID. `None` is a normal durable item.
     pub ephemeral_owner_session: Option<Uuid>,
+    /// The [`GlobalId`] of a standing query's parameter collection. `None` for
+    /// every other item type.
+    pub standing_query_param_id: Option<GlobalId>,
 }
 
 impl Item {
@@ -659,6 +662,7 @@ impl DurableType for Item {
                 privileges: self.privileges,
                 extra_versions: self.extra_versions,
                 ephemeral_owner_session: self.ephemeral_owner_session,
+                standing_query_param_id: self.standing_query_param_id,
             },
         )
     }
@@ -675,6 +679,7 @@ impl DurableType for Item {
             privileges: value.privileges,
             extra_versions: value.extra_versions,
             ephemeral_owner_session: value.ephemeral_owner_session,
+            standing_query_param_id: value.standing_query_param_id,
         }
     }
 
@@ -1530,6 +1535,7 @@ pub struct ItemValue {
     pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
     #[cfg_attr(test, proptest(strategy = "proptest::option::of(any_uuid())"))]
     pub(crate) ephemeral_owner_session: Option<Uuid>,
+    pub(crate) standing_query_param_id: Option<GlobalId>,
 }
 
 impl ItemValue {
@@ -1563,6 +1569,10 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
         Some("METRIC") => {
             assert_eq!(tokens.next(), Some("SINK"));
             CatalogItemType::MetricSink
+        }
+        Some("STANDING") => {
+            assert_eq!(tokens.next(), Some("QUERY"));
+            CatalogItemType::StandingQuery
         }
         Some("INDEX") => CatalogItemType::Index,
         Some("TYPE") => CatalogItemType::Type,

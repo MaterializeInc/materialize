@@ -1,0 +1,219 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Standing query handler task.
+//!
+//! Each standing query runs an independent handler task that:
+//! 1. Receives subscribe batches forwarded by the coordinator.
+//! 2. Receives flush notifications from clients (write_ts → request_ids).
+//! 3. Buffers result rows per timestamp and request_id.
+//! 4. When the subscribe frontier advances past a write timestamp T,
+//!    delivers results via oneshot channels in the shared client.
+//!
+//! A param row carries its write timestamp, and the dataflow's temporal filter
+//! confines it to that timestamp, so no explicit retraction is needed.
+//!
+//! This task runs entirely off the coordinator loop.
+
+use std::collections::BTreeMap;
+
+use mz_compute_client::protocol::response::SubscribeBatch;
+use mz_expr::EvalError;
+use mz_repr::{Datum, GlobalId, SharedRow, Timestamp};
+use tokio::sync::mpsc;
+use tracing::{debug, info, warn};
+
+use crate::standing_query_client::{RequestResult, StandingQueryExecuteClient, StandingQueryFlush};
+
+/// Spawn a handler task for a standing query.
+///
+/// The caller creates the channels and the client beforehand, then passes
+/// the receive halves to the handler and the send halves to the coordinator
+/// and client respectively.
+pub(crate) fn spawn_standing_query_handler(
+    sink_id: GlobalId,
+    client: StandingQueryExecuteClient,
+    subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
+    flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
+) {
+    mz_ore::task::spawn(
+        || format!("standing-query-handler-{sink_id}"),
+        standing_query_handler_task(sink_id, client, subscribe_rx, flush_rx),
+    );
+}
+
+async fn standing_query_handler_task(
+    sink_id: GlobalId,
+    client: StandingQueryExecuteClient,
+    mut subscribe_rx: mpsc::UnboundedReceiver<SubscribeBatch>,
+    mut flush_rx: mpsc::UnboundedReceiver<StandingQueryFlush>,
+) {
+    info!(%sink_id, "handler task started");
+
+    let mut in_flight: BTreeMap<Timestamp, Vec<u64>> = BTreeMap::new();
+    // Results by the time they are at and their request id.
+    let mut result_buffer: BTreeMap<(Timestamp, u64), RequestResult> = BTreeMap::new();
+
+    loop {
+        tokio::select! {
+            batch = subscribe_rx.recv() => {
+                let Some(batch) = batch else {
+                    // Coordinator dropped the sender — standing query is being dropped.
+                    break;
+                };
+                // Before processing the batch, drain all available flush notifications.
+                drain_flushes(&mut flush_rx, &mut in_flight);
+
+                process_batch(
+                    sink_id,
+                    &client,
+                    batch,
+                    &mut in_flight,
+                    &mut result_buffer,
+                );
+            }
+            flush = flush_rx.recv() => {
+                let Some(flush) = flush else {
+                    // All clients dropped — but we keep running until subscribe_rx closes.
+                    continue;
+                };
+                apply_flush(flush, &mut in_flight);
+            }
+        }
+    }
+
+    info!(%sink_id, "handler task shutting down");
+}
+
+fn drain_flushes(
+    flush_rx: &mut mpsc::UnboundedReceiver<StandingQueryFlush>,
+    in_flight: &mut BTreeMap<Timestamp, Vec<u64>>,
+) {
+    while let Ok(flush) = flush_rx.try_recv() {
+        apply_flush(flush, in_flight);
+    }
+}
+
+fn apply_flush(flush: StandingQueryFlush, in_flight: &mut BTreeMap<Timestamp, Vec<u64>>) {
+    in_flight
+        .entry(flush.write_ts)
+        .or_default()
+        .extend(flush.request_ids);
+}
+
+fn process_batch(
+    sink_id: GlobalId,
+    client: &StandingQueryExecuteClient,
+    batch: SubscribeBatch,
+    in_flight: &mut BTreeMap<Timestamp, Vec<u64>>,
+    result_buffer: &mut BTreeMap<(Timestamp, u64), RequestResult>,
+) {
+    let SubscribeBatch {
+        lower: _,
+        upper,
+        updates,
+    } = batch;
+
+    // A poisoned subscribe keeps sending the same error with an advancing upper, so every
+    // request whose timestamp it completes fails with it.
+    let mut poison = None;
+
+    // Buffer positive diffs per timestamp and request_id. A request's results are those at its
+    // write timestamp. Param rows an earlier process wrote can be live at other timestamps at or
+    // after the dataflow's as-of, and request ids restart with each process, so their results
+    // must not reach a request with the same id.
+    match updates {
+        Ok(rows) => {
+            let mut row_buf = SharedRow::get();
+            for (row, ts, diff) in rows.iter().flat_map(|updates| updates.iter()) {
+                if !diff.is_positive() {
+                    continue;
+                }
+
+                let mut datums = row.iter();
+                let request_id = match datums.next() {
+                    Some(Datum::UInt64(id)) => id,
+                    other => {
+                        warn!(%sink_id, got = ?other, "expected UInt64 request_id");
+                        continue;
+                    }
+                };
+
+                // A row whose evaluation errored fails its own request only. It carries the
+                // error as a row-level error or as error datums, which the subscribe delivers
+                // because the sink has `inline_errors` set.
+                let mut error = row.row_error().map(EvalError::from_datum_error);
+                let result_row = {
+                    let mut packer = row_buf.packer();
+                    for datum in datums {
+                        if let Datum::Error(e) = datum {
+                            error.get_or_insert_with(|| EvalError::from_datum_error(e));
+                        }
+                        packer.push(datum);
+                    }
+                    row_buf.clone()
+                };
+
+                let entry = result_buffer
+                    .entry((*ts, request_id))
+                    .or_insert_with(|| Ok(Vec::new()));
+                match (error, entry) {
+                    (Some(error), entry @ Ok(_)) => {
+                        debug!(%sink_id, %request_id, %error, "request failed");
+                        *entry = Err(error.to_string());
+                    }
+                    (None, Ok(rows)) => {
+                        debug!(%sink_id, %request_id, "buffering result");
+                        // The subscribe consolidates identical rows into one
+                        // update, so the diff is the row's multiplicity.
+                        let count = usize::try_from(diff.into_inner()).expect("diff is positive");
+                        rows.extend(std::iter::repeat_n(result_row, count));
+                    }
+                    // The request already failed, and its first error stands.
+                    (_, Err(_)) => {}
+                }
+            }
+        }
+        Err(err) => {
+            // A collection-scoped error has no row, so it cannot be attributed to a request. The
+            // subscribe stays poisoned, which fails every request.
+            warn!(%sink_id, %err, "subscribe error");
+            poison = Some(err);
+        }
+    }
+
+    // Deliver completed requests whose timestamps the frontier has advanced past.
+    let completed_timestamps: Vec<Timestamp> = in_flight
+        .keys()
+        .copied()
+        .take_while(|ts| !upper.less_equal(ts))
+        .collect();
+
+    for ts in completed_timestamps {
+        if let Some(request_ids) = in_flight.remove(&ts) {
+            for request_id in request_ids {
+                let buffered = result_buffer.remove(&(ts, request_id));
+                let results = match &poison {
+                    Some(err) => Err(err.clone()),
+                    None => buffered.unwrap_or_else(|| Ok(Vec::new())),
+                };
+                if let Some(tx) = client.take_result_sender(&request_id) {
+                    debug!(%sink_id, %request_id, ok = results.is_ok(), "delivering results");
+                    let _ = tx.send(results);
+                }
+            }
+        }
+    }
+
+    // What remains at a time before `upper` belongs to no request of this process, unless the
+    // flush for that time is still in the channel. The batcher sends the flush for `ts` before
+    // it advances the param shard past `ts + 1`, and this task drains flushes before each
+    // batch, so results at `ts` with `ts + 1 < upper` are stale.
+    result_buffer.retain(|(ts, _), _| upper.less_equal(&ts.step_forward()));
+}

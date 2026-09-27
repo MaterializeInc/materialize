@@ -1,0 +1,322 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Row-scoped errors: an error in a predicate keeps its row and taints it. A
+# tainted row flows through maps, filters, joins, and arrangements, and peeks,
+# materialized views, reduce, and table functions elevate it to a
+# collection-scoped error.
+#
+# A cluster records `enable_compute_cell_errors` when it is created.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_cell_errors TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cell_scoped SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster = cell_scoped
+
+statement ok
+CREATE TABLE data (k int, x int)
+
+statement ok
+INSERT INTO data VALUES (1, 1), (2, 0), (3, 3)
+
+statement ok
+CREATE TABLE other (k int)
+
+statement ok
+INSERT INTO other VALUES (1), (3)
+
+# A tainted row that reaches a peek fails it.
+query error division by zero
+SELECT k FROM data WHERE 10 / x > 0
+
+# A tainted row that a later join does not match disappears with its error.
+# The predicate reads only `data`, so it runs before the join.
+query I rowsort
+SELECT d.k FROM (SELECT k FROM data WHERE 10 / x > 0) d JOIN other o ON d.k = o.k
+----
+1
+3
+
+# A matched tainted row keeps its error.
+statement ok
+INSERT INTO other VALUES (2)
+
+query error division by zero
+SELECT d.k FROM (SELECT k FROM data WHERE 10 / x > 0) d JOIN other o ON d.k = o.k
+
+statement ok
+DELETE FROM other WHERE k = 2
+
+# An index holds tainted rows. A peek that filters them out succeeds.
+statement ok
+CREATE VIEW positive AS SELECT k, x FROM data WHERE 10 / x > 0
+
+statement ok
+CREATE INDEX positive_idx ON positive (k)
+
+query II rowsort
+SELECT k, x FROM positive WHERE k <> 2
+----
+1  1
+3  3
+
+query error division by zero
+SELECT k, x FROM positive
+
+# A join against the index carries the taint only for matched rows.
+query I rowsort
+SELECT p.k FROM positive p JOIN other o ON p.k = o.k
+----
+1
+3
+
+# An index built by reading another index keeps the taint.
+statement ok
+CREATE VIEW positive_copy AS SELECT k, x FROM positive
+
+statement ok
+CREATE INDEX positive_copy_idx ON positive_copy (k, x)
+
+query error division by zero
+SELECT k, x FROM positive_copy
+
+statement ok
+DROP VIEW positive_copy
+
+# Reduce elevates a tainted input row.
+query error division by zero
+SELECT count(*) FROM positive
+
+# A materialized view is a boundary.
+statement ok
+CREATE MATERIALIZED VIEW positive_mv AS SELECT k FROM positive
+
+query error division by zero
+SELECT k FROM positive_mv WHERE k = 1
+
+# Retracting the row the predicate errors on removes the taint.
+statement ok
+DELETE FROM data WHERE x = 0
+
+query II rowsort
+SELECT k, x FROM positive
+----
+1  1
+3  3
+
+query I
+SELECT count(*) FROM positive
+----
+2
+
+query I rowsort
+SELECT k FROM positive_mv
+----
+1
+3
+
+# Standing queries: one dataflow evaluates a predicate per parameter row. A
+# subscribe with `INLINE ERRORS` delivers the rows of every query, and marks
+# the rows an error affects instead of failing.
+statement ok
+CREATE VIEW params (qid, divisor) AS VALUES (1, 1), (2, 0), (3, 2)
+
+statement ok
+CREATE VIEW numbers (n) AS VALUES (4), (6)
+
+statement ok
+CREATE VIEW standing AS SELECT qid, n FROM params, numbers WHERE n / divisor > 1
+
+query error division by zero
+SUBSCRIBE standing
+
+# Standard mode lists one value per line, since an error message holds spaces.
+mode standard
+
+query IIIIT rowsort
+SUBSCRIBE standing WITH (INLINE ERRORS)
+----
+18446744073709551615
+1
+1
+4
+NULL
+18446744073709551615
+1
+1
+6
+NULL
+18446744073709551615
+1
+2
+4
+division by zero
+18446744073709551615
+1
+2
+6
+division by zero
+18446744073709551615
+1
+3
+4
+NULL
+18446744073709551615
+1
+3
+6
+NULL
+
+# An error datum reads as `NULL`, and `mz_error` names it.
+query IIIIT rowsort
+SUBSCRIBE (SELECT qid, n / divisor AS q FROM params, numbers WHERE n = 4) WITH (INLINE ERRORS)
+----
+18446744073709551615
+1
+1
+4
+NULL
+18446744073709551615
+1
+2
+NULL
+division by zero
+18446744073709551615
+1
+3
+2
+NULL
+
+mode cockroach
+
+# Progress rows fill the `mz_error` column too. Timestamps of table updates
+# vary, so the queries below replace them.
+mode standard
+
+replace ^\d{13}$  <ts>
+
+query IIIIIT rowsort
+SUBSCRIBE standing WITH (PROGRESS, INLINE ERRORS)
+----
+18446744073709551615
+0
+1
+1
+4
+NULL
+18446744073709551615
+0
+1
+1
+6
+NULL
+18446744073709551615
+0
+1
+2
+4
+division by zero
+18446744073709551615
+0
+1
+2
+6
+division by zero
+18446744073709551615
+0
+1
+3
+4
+NULL
+18446744073709551615
+0
+1
+3
+6
+NULL
+18446744073709551615
+1
+NULL
+NULL
+NULL
+NULL
+
+# A tainted row retracts like any update. A second session removes the
+# parameter row the predicate errors on, and the subscribe sees the retraction
+# instead of failing.
+statement ok
+CREATE TABLE sq_params (qid int, divisor int)
+
+statement ok
+INSERT INTO sq_params VALUES (1, 1), (2, 0)
+
+statement ok
+CREATE TABLE sq_numbers (n int)
+
+statement ok
+INSERT INTO sq_numbers VALUES (4)
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT qid, n FROM sq_params, sq_numbers WHERE n / divisor > 1) WITH (INLINE ERRORS)
+
+query IIIIT rowsort
+FETCH ALL c WITH (TIMEOUT = '5s')
+----
+<ts>
+1
+1
+4
+NULL
+<ts>
+1
+2
+4
+division by zero
+
+simple conn=writer,user=materialize
+DELETE FROM sq_params WHERE qid = 2
+----
+COMPLETE 1
+
+query IIIIT rowsort
+FETCH ALL c WITH (TIMEOUT = '5s')
+----
+<ts>
+-1
+2
+4
+division by zero
+
+statement ok
+ROLLBACK
+
+mode cockroach
+
+statement ok
+RESET cluster
+
+# Only a cluster with cell-scoped errors produces rows that carry errors.
+query error INLINE ERRORS requires a cluster created with cell-scoped errors
+SUBSCRIBE standing WITH (INLINE ERRORS)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_cell_errors;
+----
+COMPLETE 0

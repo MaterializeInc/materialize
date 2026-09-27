@@ -589,6 +589,18 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: standing-queries
+    topics: [postgres]
+    label: Standing queries
+    depends_on: build-aarch64
+    timeout_in_minutes: 180
+    inputs: [test/standing-queries]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: standing-queries
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
   - group: Debezium
     key: debezium-tests
     steps:

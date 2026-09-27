@@ -70,6 +70,7 @@ impl DataflowBuilder<'_> {
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::MetricSink(_)
+                    | CatalogItem::StandingQuery(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)

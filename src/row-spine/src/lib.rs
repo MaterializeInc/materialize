@@ -1777,6 +1777,12 @@ mod dictionary {
                 return;
             }
 
+            // The codec encodes datums, and a row-level error is not one.
+            assert!(
+                item.row_error().is_none(),
+                "internal error: dictionary compression cannot encode a row-level error"
+            );
+
             // Check if we've gathered enough stats to install a safe codec.
             if self.codec.is_none() && self.stats.is_some() && self.inner.len() >= STATS_THRESHOLD {
                 let stats = self.stats.take().unwrap();
@@ -1832,6 +1838,18 @@ mod dictionary {
         #[inline]
         pub fn from_row(row: &'a Row) -> Self {
             Self::borrow_as(row)
+        }
+
+        /// The row-level error the sequence carries, see [`RowRef::row_error`].
+        ///
+        /// Only unencoded sequences carry one: a container refuses to encode a row-level error.
+        #[inline(always)]
+        pub fn row_error(&self) -> Option<mz_repr::DatumError<'a>> {
+            if self.iter.index.is_none() {
+                mz_repr::split_row_error(self.iter.data).0
+            } else {
+                None
+            }
         }
 
         #[inline]
@@ -1970,7 +1988,7 @@ mod dictionary {
             // back to the per-column iterator. This keeps the codec check out of
             // the per-datum loop — the source of the feature-off scan overhead.
             if self.iter.index.is_none() {
-                let mut data = self.iter.data;
+                let mut data = mz_repr::split_row_error(self.iter.data).1;
                 match max {
                     Some(max) => {
                         let mut n = 0;
@@ -1991,6 +2009,11 @@ mod dictionary {
                     None => target.extend(*self),
                 }
             }
+        }
+
+        #[inline]
+        fn row_error(&self) -> Option<mz_repr::DatumError<'_>> {
+            DatumSeq::row_error(self)
         }
     }
 }
@@ -2142,6 +2165,10 @@ mod row_codec {
             type Item = &'a [u8];
             #[inline(always)]
             fn next(&mut self) -> Option<Self::Item> {
+                // An unencoded row may start with a row-level error header, which is not a datum.
+                if self.column == 0 && self.index.is_none() {
+                    self.data = mz_repr::split_row_error(self.data).1;
+                }
                 if self.data.is_empty() {
                     None
                 } else if let Some(bytes) = self

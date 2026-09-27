@@ -36,7 +36,7 @@ use mz_repr::explain::{
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
-use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
+use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan, LookupJoinPlan};
 use crate::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
@@ -305,6 +305,27 @@ impl LirRelationExpr {
                             )?;
                             write!(f, "]")?;
                         }
+                        writeln!(f, "{annotations}")?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
+                    }
+                    JoinPlan::Lookup(plan) => {
+                        let label = if plan.has_cross_stage() {
+                            "→Lookup Cross Join"
+                        } else {
+                            "→Lookup Join"
+                        };
+                        write!(f, "{}{label} ", ctx.indent)?;
+                        fmt_join_chain(
+                            f,
+                            ctx.humanizer,
+                            &mode,
+                            inputs,
+                            plan.source_relation,
+                            None,
+                            plan.stage_plans
+                                .iter()
+                                .map(|s| (s.lookup_relation, &s.lookup_key)),
+                        )?;
                         writeln!(f, "{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
@@ -799,6 +820,10 @@ impl LirRelationExpr {
                     }
                     JoinPlan::Delta(plan) => {
                         writeln!(f, "{}Join::Delta{}", ctx.indent, annotations)?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
+                    }
+                    JoinPlan::Lookup(plan) => {
+                        writeln!(f, "{}Join::Lookup{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -1533,6 +1558,74 @@ impl DeltaPathPlan {
             )?,
         };
         Ok(())
+    }
+}
+
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LookupJoinPlan {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
+    ) -> fmt::Result {
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+
+impl LookupJoinPlan {
+    /// True iff at least one stage is a cross product (empty lookup key).
+    fn has_cross_stage(&self) -> bool {
+        self.stage_plans.iter().any(|s| s.lookup_key.is_empty())
+    }
+
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    fn fmt_default_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
+    ) -> fmt::Result {
+        for stage in self.stage_plans.iter() {
+            if stage.closure.maps_or_filters() {
+                writeln!(f, "{}after %{}:", ctx.indent, stage.lookup_relation)?;
+                ctx.indented(|ctx| stage.closure.fmt_default_text(f, ctx))?;
+            }
+        }
+        if let Some(final_closure) = &self.final_closure {
+            if final_closure.maps_or_filters() {
+                writeln!(f, "{}Final closure:", ctx.indent)?;
+                ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn fmt_verbose_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
+    ) -> fmt::Result {
+        if let Some(closure) = self.final_closure.as_ref() {
+            if !closure.is_identity() {
+                writeln!(f, "{}final_closure", ctx.indent)?;
+                ctx.indented(|ctx| closure.fmt_text(f, ctx))?;
+            }
+        }
+        for (i, plan) in self.stage_plans.iter().enumerate().rev() {
+            writeln!(f, "{}lookup_stage[{}]", ctx.indent, i)?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
+        }
+        if !self.initial_closure.is_identity() {
+            writeln!(f, "{}initial_closure", ctx.indent)?;
+            ctx.indented(|ctx| self.initial_closure.fmt_text(f, ctx))?;
+        }
+        writeln!(
+            f,
+            "{}source={{ relation={}, raw }}",
+            ctx.indent, self.source_relation
+        )
     }
 }
 

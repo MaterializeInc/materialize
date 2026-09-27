@@ -529,7 +529,7 @@
     "panic": {"display":"mz_panic","sqlfunc_decl":"#[sqlfunc(sqlname = \"mz_panic\")] fn panic<'a>(a: &'a str) -> String","body_fingerprint":"95469a722cc261a6"},
     "parse_catalog_acl_mode": {"display":"parse_catalog_acl_mode","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_acl_mode<'a>(a: JsonbRef<'a>) -> Result<String, EvalError>","body_fingerprint":"9f9ba9300791097b"},
     "parse_catalog_audit_log_details": {"display":"parse_catalog_audit_log_details","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalError>","body_fingerprint":"4d767508de48e9e0"},
-    "parse_catalog_create_sql": {"display":"parse_catalog_create_sql","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"525420f3abbc957f"},
+    "parse_catalog_create_sql": {"display":"parse_catalog_create_sql","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"247fa9f2c7f557f8"},
     "parse_catalog_id": {"display":"parse_catalog_id","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_id<'a>(a: JsonbRef<'a>) -> Result<String, EvalError>","body_fingerprint":"cf39474c1e9e1bb9"},
     "parse_catalog_item_references": {"display":"parse_catalog_item_references","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_item_references<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"3296877cab7a9c6b"},
     "parse_catalog_privileges": {"display":"parse_catalog_privileges","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclItem>, EvalError>","body_fingerprint":"203b2915643066b2"},

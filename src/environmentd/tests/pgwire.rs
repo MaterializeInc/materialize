@@ -34,6 +34,154 @@ use tokio::sync::mpsc;
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
+fn test_standing_query_bind_params() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_standing_queries"]);
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    for stmt in [
+        "CREATE TABLE orders (id int, customer_id int)",
+        "INSERT INTO orders VALUES (1, 10), (2, 10), (3, 20), (3, 20)",
+        "CREATE STANDING QUERY by_customer (cid int) \
+         AS SELECT id FROM orders WHERE customer_id = cid",
+    ] {
+        client.batch_execute(stmt).unwrap();
+    }
+
+    let ids = |rows: Vec<postgres::Row>| {
+        let mut ids: Vec<i32> = rows.iter().map(|row| row.get(0)).collect();
+        ids.sort();
+        ids
+    };
+
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer ($1)", &[&10_i32])
+        .unwrap();
+    assert_eq!(ids(rows), vec![1, 2]);
+
+    // A parameter in an expression, selecting a duplicated row.
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer ($1 + 10)", &[&10_i32])
+        .unwrap();
+    assert_eq!(ids(rows), vec![3, 3]);
+
+    // A parameter bound with a type the declared type is assignable from.
+    let rows = client
+        .query_typed(
+            "EXECUTE STANDING QUERY by_customer ($1)",
+            &[(&20_i16, Type::INT2)],
+        )
+        .unwrap();
+    assert_eq!(ids(rows), vec![3, 3]);
+
+    let err = client
+        .query(
+            "EXECUTE STANDING QUERY by_customer ($1, $2)",
+            &[&10_i32, &20_i32],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string_with_causes()
+            .contains("expected 1 parameters, got 2"),
+        "unexpected error: {err}"
+    );
+}
+
+/// A standing query created right after an index on its input reads the
+/// index while it hydrates, and must still observe the writes that preceded
+/// its creation.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_standing_query_sees_prior_writes_through_new_index() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_standing_queries"]);
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    for stmt in [
+        "CREATE TABLE orders (id int, customer_id int)",
+        "INSERT INTO orders SELECT g, g % 100 FROM generate_series(1, 100000) AS g",
+        "CREATE INDEX ON orders (customer_id)",
+        "CREATE STANDING QUERY by_customer (cid int) \
+         AS SELECT id FROM orders WHERE customer_id = cid",
+    ] {
+        client.batch_execute(stmt).unwrap();
+    }
+
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer (42)", &[])
+        .unwrap();
+    assert_eq!(rows.len(), 1000);
+
+    // Under strict serializability, which is the default, each execution
+    // observes the write acknowledged just before it.
+    for round in 1..=3 {
+        let first_id = 100_000 * round + 1;
+        client
+            .batch_execute(&format!(
+                "INSERT INTO orders SELECT g, 1000 FROM generate_series({first_id}, {}) AS g",
+                first_id + 9
+            ))
+            .unwrap();
+        let rows = client
+            .query("EXECUTE STANDING QUERY by_customer (1000)", &[])
+            .unwrap();
+        assert_eq!(rows.len(), 10 * round, "round {round}");
+    }
+}
+
+/// A standing query recovers its parameter collection from the durable
+/// catalog on restart. The table created after it takes the id following the
+/// standing query's, so recovery that derived the parameter collection's id
+/// from the standing query's would pick the table's collection instead.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_standing_query_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+
+    let ids = |rows: Vec<postgres::Row>| {
+        let mut ids: Vec<i32> = rows.iter().map(|row| row.get(0)).collect();
+        ids.sort();
+        ids
+    };
+
+    {
+        let server = harness.clone().start_blocking();
+        server.enable_feature_flags(&["enable_standing_queries"]);
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for stmt in [
+            "CREATE TABLE orders (id int, customer_id int)",
+            "INSERT INTO orders VALUES (1, 10), (2, 10), (3, 20)",
+            "CREATE STANDING QUERY by_customer (cid int) \
+             AS SELECT id FROM orders WHERE customer_id = cid",
+            "CREATE TABLE after_standing_query (a text, b text, c text)",
+        ] {
+            client.batch_execute(stmt).unwrap();
+        }
+        let rows = client
+            .query("EXECUTE STANDING QUERY by_customer (10)", &[])
+            .unwrap();
+        assert_eq!(ids(rows), vec![1, 2]);
+    }
+
+    let server = harness.start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer (10)", &[])
+        .unwrap();
+    assert_eq!(ids(rows), vec![1, 2]);
+
+    client
+        .batch_execute("INSERT INTO orders VALUES (4, 20)")
+        .unwrap();
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer (20)", &[])
+        .unwrap();
+    assert_eq!(ids(rows), vec![3, 4]);
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_bind_params() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()

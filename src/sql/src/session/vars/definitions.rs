@@ -2261,6 +2261,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_standing_queries,
+        desc: "CREATE STANDING QUERY",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2404,6 +2410,8 @@ impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
+            // Fixed per cluster at creation, applied through the cluster's feature overrides.
+            enable_cell_errors: false,
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
@@ -2458,6 +2466,7 @@ mod tests {
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
             enable_eager_delta_joins,
+            enable_cell_errors,
             enable_letrec_fixpoint_analysis,
             enable_new_outer_join_lowering,
             enable_reduce_mfp_fusion,
@@ -2491,6 +2500,7 @@ mod tests {
 
         set_var!(enable_eq_classes_withholding_errors);
         set_var!(enable_eager_delta_joins);
+        let _ = enable_cell_errors; // bound from the cluster, not a var
         set_var!(enable_letrec_fixpoint_analysis);
         set_var!(enable_new_outer_join_lowering);
         set_var!(enable_reduce_mfp_fusion);

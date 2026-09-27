@@ -376,6 +376,7 @@ impl DataflowBuilder {
             from_desc: value_desc,
             connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
                 output: vec![],
+                inline_errors: false,
             }),
             with_snapshot: true,
             up_to,

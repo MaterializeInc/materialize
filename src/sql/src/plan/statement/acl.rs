@@ -666,7 +666,10 @@ pub fn plan_alter_default_privileges(
 ) -> Result<Plan, PlanError> {
     let object_type: ObjectType = (*grant_or_revoke.object_type()).into();
     match object_type {
-        ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
+        ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source
+        | ObjectType::StandingQuery => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
         ),
         ObjectType::Sink

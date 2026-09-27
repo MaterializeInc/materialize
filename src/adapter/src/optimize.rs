@@ -58,6 +58,7 @@ pub mod index;
 pub mod materialized_view;
 pub mod metric_sink;
 pub mod peek;
+pub mod standing_query;
 pub mod subscribe;
 pub mod view;
 

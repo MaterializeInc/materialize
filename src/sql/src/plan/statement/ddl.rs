@@ -24,7 +24,7 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
-use mz_expr::{CollectionPlan, UnmaterializableFunc};
+use mz_expr::{CollectionPlan, Eval, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -40,10 +40,11 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector,
+    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector, Row,
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
     preserves_order, strconv,
 };
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
@@ -64,26 +65,26 @@ use mz_sql_parser::ast::{
     CreateMetricSinkStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
-    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    CreateSourceOptionName, CreateSourceStatement, CreateStandingQueryStatement,
+    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement,
+    CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName,
+    CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement,
+    ExecuteStandingQueryStatement, Expr, Format, FormatSpecifier, GlueAvroOption,
+    GlueAvroOptionName, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    OnHydrationOptionValue, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName, Statement,
+    TableConstraint, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -161,10 +162,11 @@ use crate::plan::{
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan, CreateNetworkPolicyPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, HirRelationExpr, Index, MaterializedView, MetricSink, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption,
-    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    CreateStandingQueryPlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, ExecuteStandingQueryPlan, HirRelationExpr, HirScalarExpr,
+    Index, MaterializedView, MetricSink, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, OnHydration, Params, Plan, PlanClusterOption, PlanNotice,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, StandingQuery, Table,
     TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
@@ -172,7 +174,7 @@ use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
     ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
     ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
-    VarInput,
+    ENABLE_STANDING_QUERIES, VarInput,
 };
 use crate::{names, parse};
 
@@ -3220,6 +3222,232 @@ generate_extracted_config!(
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
+pub fn describe_create_standing_query(
+    _: &StatementContext,
+    _: CreateStandingQueryStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_execute_standing_query(
+    scx: &StatementContext,
+    stmt: ExecuteStandingQueryStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    // Planning the parameter expressions records the types of any bound
+    // parameters (`$1`) they reference.
+    let (item, _exprs) = plan_standing_query_param_exprs(scx, stmt)?;
+    let desc = item.standing_query_desc()?.clone();
+    Ok(StatementDesc::new(Some(desc)))
+}
+
+/// Resolves the standing query `stmt` executes and plans its parameter
+/// expressions, typed as the standing query declares them.
+fn plan_standing_query_param_exprs<'a>(
+    scx: &'a StatementContext,
+    stmt: ExecuteStandingQueryStatement<Aug>,
+) -> Result<
+    (
+        Box<dyn crate::catalog::CatalogCollectionItem + 'a>,
+        Vec<(HirScalarExpr, SqlScalarType)>,
+    ),
+    PlanError,
+> {
+    let item = resolve_standing_query(scx, &stmt.name)?;
+    let declared_params = item.standing_query_params()?.to_vec();
+
+    if stmt.params.len() != declared_params.len() {
+        sql_bail!(
+            "EXECUTE STANDING QUERY expected {} parameters, got {}",
+            declared_params.len(),
+            stmt.params.len()
+        );
+    }
+
+    // Follow the same pattern as plan_params() for EXECUTE (prepared stmts),
+    // except that the arguments may be bound parameters of the extended protocol.
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let ecx = query::ExprContext {
+        name: "EXECUTE STANDING QUERY",
+        allow_parameters: true,
+        ..query::execute_expr_context(&qcx)
+    };
+    let mut exprs = Vec::with_capacity(declared_params.len());
+    for (mut expr, (_param_name, param_type)) in stmt.params.into_iter().zip_eq(declared_params) {
+        transform_ast::transform(scx, &mut expr)?;
+        // An assignment cast, like EXECUTE's, so that clients may bind a
+        // parameter with a different but assignable type, such as `int2`.
+        let hir =
+            query::plan_expr(&ecx, &expr)?.cast_to(&ecx, CastContext::Assignment, &param_type)?;
+        exprs.push((hir, param_type));
+    }
+    Ok((item, exprs))
+}
+
+pub fn plan_create_standing_query(
+    scx: &StatementContext,
+    mut stmt: CreateStandingQueryStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_STANDING_QUERIES)?;
+
+    // Resolve cluster.
+    let cluster_id = match &stmt.in_cluster {
+        None => scx.catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let partial_name = normalize::unresolved_item_name(stmt.name.clone())?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    // Resolve parameter types.
+    let params: Vec<(String, SqlScalarType)> = stmt
+        .params
+        .iter()
+        .map(|p| {
+            let scalar_type = scalar_type_from_sql(scx, &p.data_type)?;
+            Ok((normalize::ident(p.name.clone()), scalar_type))
+        })
+        .collect::<Result<_, PlanError>>()?;
+
+    // Rewrite named param references in the query AST to positional $N parameters.
+    // E.g. `WHERE customer_id = cid` → `WHERE customer_id = $1`
+    let param_names: BTreeMap<String, usize> = params
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i + 1))
+        .collect();
+    rewrite_standing_query_params(&mut stmt.query, &param_names);
+
+    // Generate create_sql after param rewriting so the persisted SQL uses $N.
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateStandingQuery(stmt.clone()))?;
+
+    // Plan the query body.
+    let query::PlannedRootQuery {
+        expr,
+        desc,
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+        &finishing,
+        expr.arity()
+    ));
+
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.quoted());
+    }
+
+    // Check for name conflicts.
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if !stmt.if_not_exists {
+        if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+            return Err(PlanError::ItemAlreadyExists {
+                name: full_name.to_string(),
+                item_type: item.item_type(),
+            });
+        }
+    }
+
+    let dependencies: BTreeSet<_> = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
+
+    Ok(Plan::CreateStandingQuery(CreateStandingQueryPlan {
+        name,
+        standing_query: StandingQuery {
+            create_sql,
+            expr,
+            dependencies: DependencyIds(dependencies),
+            column_names,
+            desc,
+            params,
+            cluster_id,
+        },
+        if_not_exists: stmt.if_not_exists,
+    }))
+}
+
+/// Rewrite named parameter references in a standing query's AST to positional
+/// `$N` parameters. Walks the query and replaces any `Expr::Identifier([name])`
+/// where `name` matches a declared parameter with `Expr::Parameter(N)`.
+fn rewrite_standing_query_params(
+    query: &mut ast::Query<Aug>,
+    param_names: &BTreeMap<String, usize>,
+) {
+    struct ParamRewriter<'a> {
+        param_names: &'a BTreeMap<String, usize>,
+    }
+
+    impl<'a> VisitMut<'_, Aug> for ParamRewriter<'a> {
+        fn visit_expr_mut(&mut self, expr: &mut Expr<Aug>) {
+            // First recurse into child expressions.
+            visit_mut::visit_expr_mut(self, expr);
+            // Then check if this is a single-element identifier matching a param name.
+            if let Expr::Identifier(idents) = expr {
+                if idents.len() == 1 {
+                    let name = idents[0].as_str().to_lowercase();
+                    if let Some(&idx) = self.param_names.get(&name) {
+                        *expr = Expr::Parameter(idx);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut rewriter = ParamRewriter { param_names };
+    rewriter.visit_query_mut(query);
+}
+
+pub fn plan_execute_standing_query(
+    scx: &StatementContext,
+    stmt: ExecuteStandingQueryStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_STANDING_QUERIES)?;
+
+    let (item, exprs) = plan_standing_query_param_exprs(scx, stmt)?;
+    let temp_storage = &mz_repr::RowArena::new();
+    let mut evaluated_params = Vec::with_capacity(exprs.len());
+    for (mut hir, param_type) in exprs {
+        hir.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
+        let mir = hir.lower_uncorrelated(scx.catalog.system_vars())?;
+        let evaled = mir.eval(&[], temp_storage)?;
+        let mut row = Row::default();
+        row.packer().push(evaled);
+        evaluated_params.push((row, param_type));
+    }
+
+    Ok(Plan::ExecuteStandingQuery(ExecuteStandingQueryPlan {
+        id: item.id(),
+        params: evaluated_params,
+    }))
+}
+
+/// Resolve a standing query from a `ResolvedItemName`, returning the catalog item.
+fn resolve_standing_query<'a>(
+    scx: &'a StatementContext,
+    name: &ResolvedItemName,
+) -> Result<Box<dyn crate::catalog::CatalogCollectionItem + 'a>, PlanError> {
+    let item = scx.get_item_by_resolved_name(name)?;
+    if item.item_type() != CatalogItemType::StandingQuery {
+        sql_bail!(
+            "{} is a {}, not a standing query",
+            name.full_name_str(),
+            item.item_type()
+        );
+    }
+    Ok(item)
+}
+
 pub fn describe_create_sink(
     _: &StatementContext,
     _: CreateSinkStatement<Aug>,
@@ -3325,7 +3553,8 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | Type | Func | Secret | Connection
+            | StandingQuery => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4453,7 +4682,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | Type | Func | Secret | Connection | StandingQuery => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -5244,6 +5473,12 @@ pub fn plan_create_cluster_inner(
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
             enable_union_cancellation_after_relation_cse,
+            // Recorded once here and kept for the cluster's lifetime: replicas and the optimizer
+            // both read it from the cluster, so a later flag change cannot split them.
+            enable_cell_errors: Some(
+                mz_compute_types::dyncfgs::ENABLE_COMPUTE_CELL_ERRORS
+                    .get(scx.catalog.system_vars().dyncfgs()),
+            ),
             ..Default::default()
         };
 
@@ -5382,6 +5617,7 @@ pub fn unplan_create_cluster(
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
                 enable_fixed_correlated_cte_lowering: _,
+                enable_cell_errors: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -6235,6 +6471,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::Source
         | ObjectType::Sink
         | ObjectType::MetricSink
+        | ObjectType::StandingQuery
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
@@ -6254,7 +6491,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::MetricSink
             | CatalogItemType::Type
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => true,
+            | CatalogItemType::Connection
+            | CatalogItemType::StandingQuery => true,
             CatalogItemType::Index => false,
         },
     }
@@ -7032,7 +7270,11 @@ pub fn plan_alter_item_set_cluster(
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
         ObjectType::MaterializedView => {}
-        ObjectType::Index | ObjectType::Sink | ObjectType::MetricSink | ObjectType::Source => {
+        ObjectType::Index
+        | ObjectType::Sink
+        | ObjectType::MetricSink
+        | ObjectType::StandingQuery
+        | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
         ObjectType::Table
@@ -7481,6 +7723,7 @@ pub fn plan_alter_object_swap(
             | ObjectType::Source
             | ObjectType::Sink
             | ObjectType::MetricSink
+            | ObjectType::StandingQuery
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -8574,6 +8817,7 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Source
         | ObjectType::Sink
         | ObjectType::MetricSink
+        | ObjectType::StandingQuery
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster

@@ -32,14 +32,14 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    StandingQuery as CatalogStandingQuery, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -75,8 +75,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateStandingQueryPlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -585,7 +585,8 @@ impl CatalogState {
                 CatalogItem::Log(_) => out.push(id),
                 item @ (CatalogItem::View(_)
                 | CatalogItem::MaterializedView(_)
-                | CatalogItem::Connection(_)) => {
+                | CatalogItem::Connection(_)
+                | CatalogItem::StandingQuery(_)) => {
                     // TODO Unclear if this table wants to include all uses or only references.
                     for item_id in item.references().items() {
                         if seen.insert(*item_id) {
@@ -1011,6 +1012,7 @@ impl CatalogState {
                     })
             })
             .transpose()?;
+        let standing_query_param_id = entry.item.standing_query_param_id();
         let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
         Ok(mz_catalog::durable::Item {
             id: entry.id,
@@ -1023,6 +1025,7 @@ impl CatalogState {
             privileges: entry.privileges.into_all_values().collect(),
             extra_versions,
             ephemeral_owner_session,
+            standing_query_param_id,
         })
     }
 
@@ -1107,6 +1110,9 @@ impl CatalogState {
         let entry = self.try_get_entry_by_global_id(id)?;
         let desc = match entry.item() {
             CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
+            CatalogItem::StandingQuery(sq) if *id == sq.param_collection_id => {
+                Cow::Owned(sq.param_collection_desc())
+            }
             // TODO(alter_table): Support schema evolution on sources.
             other => other.relation_desc(RelationVersionSelector::Latest)?,
         };
@@ -1264,6 +1270,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        standing_query_param_id: Option<GlobalId>,
         local_expression_cache: &mut LocalExpressionCache,
         previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
@@ -1271,6 +1278,7 @@ impl CatalogState {
             global_id,
             create_sql,
             extra_versions,
+            standing_query_param_id,
             None,
             false,
             None,
@@ -1286,6 +1294,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        standing_query_param_id: Option<GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -1297,6 +1306,7 @@ impl CatalogState {
             global_id,
             create_sql,
             extra_versions,
+            standing_query_param_id,
             pcx,
             is_retained_metrics_object,
             custom_logical_compaction_window,
@@ -1335,6 +1345,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+        standing_query_param_id: Option<GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -1546,7 +1557,8 @@ impl CatalogState {
                     (cached_expr, _) => {
                         let optimizer_features = optimizer_config.features.clone();
                         // Build an optimizer for this VIEW.
-                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None)
+                            .for_view_definition();
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                         let raw_expr = view.expr;
@@ -1754,6 +1766,48 @@ impl CatalogState {
                 details,
                 resolved_ids,
             }),
+            Plan::CreateStandingQuery(CreateStandingQueryPlan {
+                standing_query:
+                    mz_sql::plan::StandingQuery {
+                        create_sql,
+                        expr,
+                        dependencies,
+                        column_names: _,
+                        desc,
+                        params,
+                        cluster_id,
+                    },
+                ..
+            }) => {
+                let Some(param_collection_id) = standing_query_param_id else {
+                    return Err((
+                        AdapterError::Internal(format!(
+                            "standing query {global_id} has no parameter collection id"
+                        )),
+                        cached_expr,
+                    ));
+                };
+                CatalogItem::StandingQuery(CatalogStandingQuery {
+                    create_sql,
+                    global_id,
+                    raw_expr: expr.into(),
+                    // Placeholder — will be overwritten by cached expressions on boot.
+                    optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
+                        rows: Ok(vec![]),
+                        typ: mz_repr::ReprRelationType::empty(),
+                    })
+                    .into(),
+                    desc,
+                    params,
+                    param_collection_id,
+                    resolved_ids,
+                    dependencies,
+                    cluster_id,
+                    optimized_plan: None,
+                    physical_plan: None,
+                    dataflow_metainfo: None,
+                })
+            }
             _ => {
                 return Err((
                     Error::new(ErrorKind::Corruption {
@@ -2087,7 +2141,8 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => schema.items[builtin.name()],
+            | CatalogItemType::Connection
+            | CatalogItemType::StandingQuery => schema.items[builtin.name()],
         }
     }
 
@@ -2915,7 +2970,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => Some(*id),
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::StandingQuery(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2945,7 +3001,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => {
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::StandingQuery(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

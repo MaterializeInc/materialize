@@ -165,6 +165,7 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
+        Statement::CreateStandingQuery(stmt) => ddl::describe_create_standing_query(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -224,6 +225,7 @@ pub fn describe(
         Statement::Declare(stmt) => scl::describe_declare(&scx, stmt, param_types_in)?,
         Statement::Discard(stmt) => scl::describe_discard(&scx, stmt)?,
         Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
+        Statement::ExecuteStandingQuery(stmt) => ddl::describe_execute_standing_query(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
         Statement::Prepare(stmt) => scl::describe_prepare(&scx, stmt)?,
         Statement::ResetVariable(stmt) => scl::describe_reset_variable(&scx, stmt)?,
@@ -370,6 +372,7 @@ pub fn plan(
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
+        Statement::CreateStandingQuery(stmt) => ddl::plan_create_standing_query(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -441,6 +444,9 @@ pub fn plan(
         Statement::Declare(stmt) => scl::plan_declare(scx, stmt, params),
         Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
         Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
+        Statement::ExecuteStandingQuery(stmt) => {
+            ddl::plan_execute_standing_query(scx, stmt, params)
+        }
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
         Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
         Statement::ResetVariable(stmt) => scl::plan_reset_variable(scx, stmt),
@@ -1083,6 +1089,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateCluster(_) => DDL,
             Statement::CreateClusterReplica(_) => DDL,
             Statement::CreateConnection(_) => DDL,
+            Statement::CreateStandingQuery(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
             Statement::CreateRole(_) => DDL,
@@ -1145,6 +1152,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Declare(_) => SCL,
             Statement::Discard(_) => SCL,
             Statement::Execute(_) => SCL,
+            Statement::ExecuteStandingQuery(_) => DML,
             Statement::Fetch(_) => SCL,
             Statement::Prepare(_) => SCL,
             Statement::ResetVariable(_) => SCL,

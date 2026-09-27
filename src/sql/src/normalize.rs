@@ -23,10 +23,11 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateStandingQueryStatement, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
+    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
+    TableFactor, TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value,
+    ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -485,6 +486,24 @@ pub fn create_statement(
             // considered part of the statement's AST/canonical representation.
             with_options
                 .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
+        }
+
+        Statement::CreateStandingQuery(CreateStandingQueryStatement {
+            name,
+            params: _,
+            in_cluster: _,
+            query,
+            if_not_exists,
+        }) => {
+            *name = allocate_name(name)?;
+            {
+                let mut normalizer = QueryNormalizer::new();
+                normalizer.visit_query_mut(query);
+                if let Some(err) = normalizer.err {
+                    return Err(err);
+                }
+            }
+            *if_not_exists = false;
         }
 
         _ => bail_internal!("unexpected statement type for normalization"),

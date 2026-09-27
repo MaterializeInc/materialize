@@ -132,6 +132,23 @@ pub struct TransformCtx<'a> {
     pub metrics: Option<&'a mut OptimizerMetrics>,
     /// The last hash of the query, if known.
     pub last_hash: BTreeMap<GlobalId, u64>,
+    /// The join to plan for a lookup join, if any. See [`LookupJoinSource`].
+    pub lookup_join: Option<LookupJoinSource>,
+}
+
+/// Names the join that `JoinImplementation` plans as a delta join for conversion to a lookup
+/// join at LIR.
+///
+/// The join is the one producing the output of object `object`, below nothing but `Let` bodies
+/// and non-temporal maps, filters, and projections, that has an input reading collection `source`.
+/// Whoever sets this asserts that the consumer of `object` reads the results of each positive
+/// update of `source` at that update's time and ignores all other updates.
+#[derive(Clone, Copy, Debug)]
+pub struct LookupJoinSource {
+    /// The object whose output the join produces.
+    pub object: GlobalId,
+    /// The collection whose updates drive the join.
+    pub source: GlobalId,
 }
 
 const FOLD_CONSTANTS_LIMIT: usize = 10000;
@@ -159,6 +176,7 @@ impl<'a> TransformCtx<'a> {
             df_meta,
             metrics,
             last_hash: Default::default(),
+            lookup_join: None,
         }
     }
 
@@ -183,11 +201,18 @@ impl<'a> TransformCtx<'a> {
             typechecking_ctx: typecheck_ctx,
             metrics,
             last_hash: Default::default(),
+            lookup_join: None,
         }
     }
 
     fn typechecking_context(&self) -> SharedTypecheckingContext {
         Arc::clone(self.typechecking_ctx)
+    }
+
+    /// Asks `JoinImplementation` to plan the join named by `lookup_join` as a delta join.
+    pub fn with_lookup_join(mut self, lookup_join: LookupJoinSource) -> Self {
+        self.lookup_join = Some(lookup_join);
+        self
     }
 
     /// Lets self know the id of the object that is being optimized.

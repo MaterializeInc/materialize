@@ -28,7 +28,7 @@ use columnar::Columnar;
 use columnation::{Columnation, Region};
 use mz_expr::EvalError;
 use mz_proto::{ProtoType, RustType};
-use mz_repr::Row;
+use mz_repr::{Datum, Row, RowRef};
 use mz_storage_types::errors::{DataflowError, ProtoDataflowError};
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,22 @@ use std::fmt;
 )]
 #[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
 pub struct DataflowErrorSer(Vec<u8>);
+
+/// Asserts, when soft assertions are enabled, that no row holds an error datum.
+///
+/// Error datums must be elevated before rows leave the replica, so a failure here names the
+/// boundary that let one through.
+pub(crate) fn soft_assert_no_error_datums<'a>(
+    rows: impl IntoIterator<Item = &'a RowRef>,
+    boundary: &str,
+) {
+    mz_ore::soft_assert_no_log!(
+        !rows.into_iter().any(|row| {
+            row.row_error().is_some() || row.iter().any(|datum| matches!(datum, Datum::Error(_)))
+        }),
+        "error datum left the replica through {boundary}"
+    );
+}
 
 impl DataflowErrorSer {
     /// Decode the serialized bytes back into a [`DataflowError`].

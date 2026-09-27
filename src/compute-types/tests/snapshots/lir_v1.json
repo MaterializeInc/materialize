@@ -2415,6 +2415,11 @@
         "NEWTYPE": {
           "TYPENAME": "LinearJoinPlan"
         }
+      },
+      "Lookup": {
+        "NEWTYPE": {
+          "TYPENAME": "LookupJoinPlan"
+        }
       }
     }
   },
@@ -2867,6 +2872,24 @@
   "Log10": "UNITSTRUCT",
   "Log10Numeric": "UNITSTRUCT",
   "LogBaseNumeric": "UNITSTRUCT",
+  "LookupJoinPlan": {
+    "STRUCT": {
+      "final_closure": {
+        "OPTION": {
+          "TYPENAME": "JoinClosure"
+        }
+      },
+      "initial_closure": {
+        "TYPENAME": "JoinClosure"
+      },
+      "source_relation": "U64",
+      "stage_plans": {
+        "SEQ": {
+          "TYPENAME": "DeltaStagePlan"
+        }
+      }
+    }
+  },
   "Lower": "UNITSTRUCT",
   "Lt": "UNITSTRUCT",
   "Lte": "UNITSTRUCT",

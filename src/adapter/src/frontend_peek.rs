@@ -1054,6 +1054,12 @@ impl PeekClient {
                 )
             }
             QueryPlan::Subscribe(plan) => {
+                // Only a cluster with cell-scoped errors produces rows that carry errors.
+                if plan.inline_errors && !catalog.get_cluster(cluster.id()).config.cell_errors() {
+                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        "INLINE ERRORS requires a cluster created with cell-scoped errors"
+                    )));
+                }
                 let plan = plan.clone();
                 let catalog: Arc<Catalog> = Arc::clone(&catalog);
                 let debug_name = format!("subscribe-{}", index_id);
@@ -1067,7 +1073,8 @@ impl PeekClient {
                     debug_name,
                     optimizer_config,
                     self.optimizer_metrics.clone(),
-                );
+                )
+                .with_inline_errors(plan.inline_errors);
                 mz_ore::task::spawn_blocking(
                     || "optimize subscribe",
                     move || {

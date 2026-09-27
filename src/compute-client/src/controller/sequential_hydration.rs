@@ -125,7 +125,15 @@ impl SequentialHydration {
             // We enforce sequential hydration only for non-transient dataflows, assuming that
             // transient dataflows are created for interactive user queries and should always be
             // scheduled as soon as possible.
-            ComputeCommand::CreateDataflow(dataflow) if !dataflow.is_transient() => {
+            //
+            // Subscribe and copy-to exports never produce `Frontiers` responses, so we would
+            // never observe their hydration and they would hold their hydration slot forever.
+            // Standing queries are non-transient subscribes.
+            ComputeCommand::CreateDataflow(dataflow)
+                if !dataflow.is_transient()
+                    && dataflow.subscribe_ids().next().is_none()
+                    && dataflow.copy_to_ids().next().is_none() =>
+            {
                 let export_ids: Vec<_> = dataflow.export_ids().collect();
                 let id = export_ids.expect_element(|| "multi-export dataflows are not supported");
                 let as_of = dataflow.as_of.clone().unwrap();
@@ -293,9 +301,12 @@ mod tests {
     use mz_cluster_client::metrics::ControllerMetrics;
     use mz_compute_types::ComputeInstanceId;
     use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+    use mz_compute_types::sinks::{
+        ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
+    };
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_repr::ReprRelationType;
+    use mz_repr::{RelationDesc, ReprRelationType};
 
     use crate::metrics::ComputeControllerMetrics;
     use crate::protocol::command::ComputeParameters;
@@ -325,6 +336,50 @@ mod tests {
             ),
         );
         ComputeCommand::CreateDataflow(Box::new(desc))
+    }
+
+    /// A `CreateDataflow` command for a non-transient dataflow exporting a subscribe `id`.
+    fn create_subscribe_dataflow(id: GlobalId) -> ComputeCommand {
+        let mut desc = DataflowDescription::new("test".into());
+        desc.as_of = Some(Antichain::from_elem(Timestamp::MIN));
+        desc.sink_exports.insert(
+            id,
+            ComputeSinkDesc {
+                from: id,
+                from_desc: RelationDesc::empty(),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                    output: Vec::new(),
+                    inline_errors: false,
+                }),
+                with_snapshot: true,
+                up_to: Antichain::new(),
+                non_null_assertions: Vec::new(),
+                refresh_schedule: None,
+            },
+        );
+        ComputeCommand::CreateDataflow(Box::new(desc))
+    }
+
+    #[mz_ore::test]
+    fn subscribes_do_not_occupy_hydration_capacity() {
+        let dyncfg = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&HYDRATION_CONCURRENCY, 1);
+        updates.apply(&dyncfg);
+
+        let mut hydration = SequentialHydration::new(metrics());
+
+        let subscribe = GlobalId::User(1);
+        let index = GlobalId::User(2);
+        let commands = hydration.absorb_command(create_subscribe_dataflow(subscribe), &dyncfg);
+        assert_eq!(commands, vec![create_subscribe_dataflow(subscribe)]);
+        let commands = hydration.absorb_command(create_dataflow(index), &dyncfg);
+        assert_eq!(commands, vec![create_dataflow(index)]);
+
+        let commands = hydration.absorb_command(ComputeCommand::Schedule(subscribe), &dyncfg);
+        assert_eq!(commands, vec![ComputeCommand::Schedule(subscribe)]);
+        let commands = hydration.absorb_command(ComputeCommand::Schedule(index), &dyncfg);
+        assert_eq!(commands, vec![ComputeCommand::Schedule(index)]);
     }
 
     /// The interceptor enforces the hydration concurrency of the configuration it is handed, which

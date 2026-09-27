@@ -94,6 +94,7 @@ impl Catalog {
                         CatalogItem::View(_)
                         | CatalogItem::Sink(_)
                         | CatalogItem::MetricSink(_)
+                        | CatalogItem::StandingQuery(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
@@ -217,6 +218,16 @@ impl Catalog {
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
                         let item_ids = optimized_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.resolve_item_id(&gid));
+                        ids.extend(item_ids);
+                    }
+                    CatalogItem::StandingQuery(sq) => {
+                        // See comment in MaterializedView
+                        timelines.insert(TimelineContext::TimestampDependent);
+                        let item_ids = sq
+                            .raw_expr
                             .depends_on()
                             .into_iter()
                             .map(|gid| self.resolve_item_id(&gid));

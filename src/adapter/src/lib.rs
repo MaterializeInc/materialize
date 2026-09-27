@@ -56,11 +56,13 @@ pub mod flags;
 pub mod metrics;
 pub mod peek_client;
 pub mod session;
+pub mod standing_query_client;
 pub mod statement_logging;
 pub mod telemetry;
 pub mod webhook;
 
 pub use crate::peek_client::PeekClient;
+pub use crate::standing_query_client::StandingQueryExecuteClient;
 
 pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{

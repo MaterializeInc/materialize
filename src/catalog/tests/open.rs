@@ -516,6 +516,7 @@ fn insert_view(
         vec![],
         BTreeMap::new(),
         ephemeral_owner_session,
+        None,
     )
     .unwrap();
 }

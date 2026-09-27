@@ -16,17 +16,18 @@
 //! determining the orders of collections, lifting predicates if useful arrangements exist,
 //! and identifying opportunities to use indexes to replace filters.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper,
+    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
 
 use crate::analysis::{Cardinality, DerivedBuilder};
@@ -71,11 +72,19 @@ impl crate::Transform for JoinImplementation {
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
+        let lookup_source = ctx
+            .lookup_join
+            .filter(|lookup_join| ctx.global_id == Some(lookup_join.object))
+            .map(|lookup_join| LookupSource {
+                id: lookup_join.source,
+                aliases: BTreeSet::new(),
+            });
         let result = self.action_recursive(
             relation,
             &mut IndexMap::new(ctx.indexes),
             ctx.stats,
             ctx.features,
+            lookup_source.as_ref(),
         );
         mz_repr::explain::trace_plan(&*relation);
         result
@@ -87,16 +96,20 @@ impl JoinImplementation {
     ///
     /// This method accumulates state about let-bound arrangements, so that
     /// join operators can more accurately assess their available arrangements.
-    pub fn action_recursive(
+    ///
+    /// A join at the position of `relation` that reads `lookup_source` is planned as a delta join,
+    /// see [`crate::LookupJoinSource`].
+    fn action_recursive(
         &self,
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
         stats: &dyn StatisticsOracle,
         features: &OptimizerFeatures,
+        lookup_source: Option<&LookupSource>,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
-                self.action_recursive(value, indexes, stats, features)?;
+                self.action_recursive(value, indexes, stats, features, None)?;
                 match &**value {
                     MirRelationExpr::ArrangeBy { keys, .. } => {
                         for key in keys {
@@ -111,29 +124,44 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes, stats, features)?;
+                // Decorrelation can read the source twice, and the two reads can be bound once.
+                let mut body_source = lookup_source.cloned();
+                if let Some(source) = &mut body_source {
+                    if source.is_read_by(value) {
+                        source.aliases.insert(*id);
+                    }
+                }
+                self.action_recursive(body, indexes, stats, features, body_source.as_ref())?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
                 let (mfp, mfp_input) =
                     MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
                 mfp_input.try_visit_mut_children(|e| {
-                    self.action_recursive(e, indexes, stats, features)
+                    self.action_recursive(e, indexes, stats, features, None)
                 })?;
-                self.action(mfp_input, mfp, indexes, stats, features)?;
+                // A temporal filter above the join could move results away from the time of
+                // the source update that caused them.
+                let temporal = mfp.predicates.iter().any(|(_, p)| p.contains_temporal());
+                let lookup_source = lookup_source.filter(|_| !temporal);
+                self.action(mfp_input, mfp, indexes, stats, features, lookup_source)?;
                 Ok(())
             }
         })
     }
 
     /// Determines the join implementation for join operators.
-    pub fn action(
+    ///
+    /// A join that reads `lookup_source` is planned as a delta join, see
+    /// [`crate::LookupJoinSource`].
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
         stats: &dyn StatisticsOracle,
         features: &OptimizerFeatures,
+        lookup_source: Option<&LookupSource>,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -360,6 +388,28 @@ impl JoinImplementation {
 
             let old_implementation = implementation.clone();
             let num_inputs = inputs.len();
+
+            // The lookup join is formed at LIR from the delta path of the source input, so the
+            // join must be a delta join whatever its arity and the arrangements that takes.
+            if let Some(source) = lookup_source {
+                if num_inputs >= 2 && inputs.iter().any(|input| source.is_read_by(input)) {
+                    // Without a delta plan, the join is planned as usual and stays a join.
+                    if let Ok((delta_query_plan, _)) = delta_queries::plan(
+                        relation,
+                        &input_mapper,
+                        &available_arrangements,
+                        &unique_keys,
+                        &cardinalities,
+                        &filters,
+                        features,
+                    ) {
+                        tracing::debug!(plan = ?delta_query_plan, "picking delta query plan (lookup join)");
+                        *relation = delta_query_plan;
+                        return Ok(());
+                    }
+                }
+            }
+
             // We've already planned a differential join... should we replace it with a delta join?
             //
             // This code path is only active when `eager_delta_joins` is false.
@@ -370,7 +420,7 @@ impl JoinImplementation {
                 );
 
                 // Binary joins can't be delta joins---give up.
-                if inputs.len() <= 2 {
+                if num_inputs <= 2 {
                     return Ok(());
                 }
 
@@ -523,6 +573,35 @@ impl JoinImplementation {
             }
         }
         Ok(())
+    }
+}
+
+/// The collection that drives a lookup join, see [`crate::LookupJoinSource`].
+#[derive(Clone, Debug)]
+struct LookupSource {
+    /// The collection.
+    id: GlobalId,
+    /// The local bindings in scope that read `id`.
+    aliases: BTreeSet<LocalId>,
+}
+
+impl LookupSource {
+    /// Whether `expr` reads the collection, possibly through maps, filters, projections, an
+    /// `ArrangeBy`, and one of `aliases`.
+    fn is_read_by(&self, expr: &MirRelationExpr) -> bool {
+        let (_, mut expr) = MapFilterProject::extract_non_errors_from_expr(expr);
+        if let MirRelationExpr::ArrangeBy { input, .. } = expr {
+            (_, expr) = MapFilterProject::extract_non_errors_from_expr(input);
+        }
+        match expr {
+            MirRelationExpr::Get {
+                id: Id::Global(id), ..
+            } => *id == self.id,
+            MirRelationExpr::Get {
+                id: Id::Local(id), ..
+            } => self.aliases.contains(id),
+            _ => false,
+        }
     }
 }
 

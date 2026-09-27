@@ -735,6 +735,14 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 info.insert("on_id", json!(on_id));
                 "index"
             }
+            CreateStandingQuery(stmt) => {
+                let Some(in_cluster) = stmt.in_cluster else {
+                    return Err("missing IN CLUSTER".into());
+                };
+                let cluster_id = get_cluster_id(in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+                "standing-query"
+            }
             CreateType(_) => "type",
             // NOTE: every statement that creates a catalog item needs an arm above. These
             // catalog views run this over every item row before their type filter drops the
@@ -742,6 +750,7 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
             // `mz_indexes`, and every sibling view at once. The match is exhaustive to make
             // that a compile error here, not a runtime failure.
             Select(_)
+            | ExecuteStandingQuery(_)
             | Insert(_)
             | Copy(_)
             | Update(_)

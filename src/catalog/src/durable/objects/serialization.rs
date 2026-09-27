@@ -564,6 +564,7 @@ impl RustType<proto::ItemValue> for ItemValue {
                 })
                 .collect(),
             ephemeral_owner_session: self.ephemeral_owner_session,
+            standing_query_param_id: self.standing_query_param_id.into_proto(),
         }
     }
 
@@ -590,6 +591,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             global_id: proto.global_id.into_rust()?,
             extra_versions,
             ephemeral_owner_session: proto.ephemeral_owner_session,
+            standing_query_param_id: proto.standing_query_param_id.into_rust()?,
         })
     }
 }

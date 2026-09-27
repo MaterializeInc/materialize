@@ -75,6 +75,10 @@ impl<S> ComputeSinkConnection<S> {
 pub struct SubscribeSinkConnection {
     /// An ordering for the data in the subscribe.
     pub output: Vec<ColumnOrder>,
+    /// Whether rows with error datums or row-level errors reach the subscribe instead of being
+    /// elevated to collection-scoped errors.
+    #[serde(default)]
+    pub inline_errors: bool,
 }
 
 /// Connection for a sink that publishes rows into the in-process Prometheus metrics registry.

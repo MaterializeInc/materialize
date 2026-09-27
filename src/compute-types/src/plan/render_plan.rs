@@ -22,7 +22,7 @@ use mz_repr::explain::{CompactScalars, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan, LookupJoinPlan};
 use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan, ReducePlan};
 use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
@@ -921,6 +921,20 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
                             write!(f, " » %{}", dsp.lookup_relation)?;
                         }
                         write!(f, "]")?;
+                    }
+
+                    Ok(())
+                }
+                JoinPlan::Lookup(LookupJoinPlan {
+                    source_relation,
+                    stage_plans,
+                    ..
+                }) => {
+                    write!(f, "Lookup Join ")?;
+
+                    write!(f, "%{}", source_relation)?;
+                    for dsp in stage_plans {
+                        write!(f, " » %{}", dsp.lookup_relation)?;
                     }
 
                     Ok(())

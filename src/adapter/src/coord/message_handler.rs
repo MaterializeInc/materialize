@@ -131,6 +131,9 @@ impl Coordinator {
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                // In writable mode the periodic tick drives group commit instead of
+                // `AdvanceTimelines`, so standing query uppers follow the tables from here.
+                self.advance_standing_query_uppers().await;
                 for result in internal_results {
                     result.send(crate::coord::appends::WriteResult::Success {
                         timestamp: write_ts,
@@ -144,6 +147,7 @@ impl Coordinator {
                 let read_ts = self.get_local_read_ts().await;
                 self.downgrade_local_read_holds(read_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                self.advance_standing_query_uppers().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
@@ -756,6 +760,9 @@ impl Coordinator {
                 } else if self.introspection_subscribes.contains_key(&sink_id) {
                     self.handle_introspection_subscribe_batch(sink_id, response)
                         .await;
+                } else if let Some(asq) = self.active_standing_queries.get(&sink_id) {
+                    // Forward to the handler task — no processing on the coordinator.
+                    let _ = asq.subscribe_tx.send(response);
                 } else {
                     // Cancellation may cause us to receive responses for subscribes no longer
                     // tracked, so we quietly ignore them.

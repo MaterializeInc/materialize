@@ -35,9 +35,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod delta_join;
 pub mod linear_join;
+pub mod lookup_join;
 
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
+pub use lookup_join::LookupJoinPlan;
 
 use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
@@ -48,6 +50,8 @@ pub enum JoinPlan {
     Linear(LinearJoinPlan),
     /// A join implemented by a delta join.
     Delta(DeltaJoinPlan),
+    /// A join implemented by a lookup join, which responds only to positive updates of one input.
+    Lookup(LookupJoinPlan),
 }
 
 /// A manual closure implementation of filtering and logic application.
@@ -66,23 +70,57 @@ pub struct JoinClosure {
 
 impl JoinClosure {
     /// Applies per-row filtering and logic.
+    ///
+    /// `scope` chooses where errors land, see [`mz_expr::ErrorScope`]. Equivalences are
+    /// predicates: in [`mz_expr::ErrorScope::Cell`] an erroring equivalence taints the pair, and
+    /// otherwise it fails it.
     #[inline(always)]
     pub fn apply<'a, 'row>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
         row: &'row mut Row,
+        scope: mz_expr::ErrorScope,
     ) -> Result<Option<&'row Row>, mz_expr::EvalError> {
+        // Like the predicates of an MFP, equivalences combine like `AND`: an unequal pair of
+        // values drops the pair whatever other equivalences evaluate to, and otherwise the
+        // greatest error taints it.
+        let mut error: Option<mz_expr::EvalError> = None;
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
-            let val = exprs[0].eval(&datums[..], temp_storage)?;
-            for expr in exprs[1..].iter() {
-                if expr.eval(datums, temp_storage)? != val {
-                    return Ok(None);
+            let mut val = None;
+            for expr in exprs.iter() {
+                match expr.eval(&datums[..], temp_storage) {
+                    Ok(datum) => match val {
+                        None => val = Some(datum),
+                        Some(v) if v != datum => return Ok(None),
+                        Some(_) => {}
+                    },
+                    Err(e) if scope == mz_expr::ErrorScope::Cell => {
+                        error = Some(match error.take() {
+                            Some(prev) => std::cmp::max(prev, e),
+                            None => e,
+                        });
+                    }
+                    Err(e) => return Err(e),
                 }
             }
         }
-        self.before.evaluate_into(datums, temp_storage, row)
+        if let Some(error) = error {
+            // The pair may already carry a row-level error after its columns, see
+            // `SafeMfpPlan::evaluate_inner_scoped`. Keep the greater of the two.
+            let input_arity = self.before.input_arity;
+            let error = match datums.get(input_arity) {
+                Some(Datum::Error(prev)) if datums.len() == input_arity + 1 => {
+                    std::cmp::max(mz_expr::EvalError::from_datum_error(*prev), error)
+                }
+                _ => error,
+            };
+            datums.truncate(input_arity);
+            datums.push(error.to_datum(temp_storage));
+        }
+        self.before
+            .evaluate_into_scoped(datums, temp_storage, row, scope)
     }
 
     /// Construct an instance of the closure from available columns.
@@ -375,3 +413,6 @@ impl JoinBuildState {
         )
     }
 }
+
+#[cfg(test)]
+mod tests;

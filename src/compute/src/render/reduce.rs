@@ -90,6 +90,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
             let mut datums = DatumVec::new();
+            // Keys and aggregate inputs have no semantics for error datums. Elevating them here
+            // also keeps reduce output free of error datums, which the `could_error` gates on
+            // `mfp_after` below rely on.
+            let scope = self.boundary_scope();
 
             // Determine the columns we'll need from the row.
             let mut demand = Vec::new();
@@ -124,12 +128,20 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         for skip in skips.iter() {
                             datums_local.push(row_iter.nth(*skip).unwrap());
                         }
+                        // The decoder places a row-level error after the demanded columns, which
+                        // end at the last demanded one. Reduce does not propagate row-level errors
+                        // yet, so it elevates them.
+                        if let Err(error) = EvalError::elevate(row_iter.next()) {
+                            err_session.give((error.into(), time, diff));
+                            return 1;
+                        }
 
                         // Evaluate the key expressions.
-                        let key = key_plan.evaluate_into(
+                        let key = key_plan.evaluate_into_scoped(
                             &mut datums_local,
                             &temp_storage,
                             &mut row_builder,
+                            scope,
                         );
                         let key = match key {
                             Err(e) => {
@@ -143,10 +155,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // Evaluate the value expressions.
                         // The prior evaluation may have left additional columns we should delete.
                         datums_local.truncate(skips.len());
-                        let val = val_plan.evaluate_into(
+                        let val = val_plan.evaluate_into_scoped(
                             &mut datums_local,
                             &temp_storage,
                             &mut row_builder,
+                            scope,
                         );
                         let val = match val {
                             Err(e) => {

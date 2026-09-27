@@ -369,6 +369,22 @@ impl CatalogItem for LocalItem {
         })
     }
 
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], CatalogError> {
+        Err(CatalogError::UnexpectedType {
+            name: self.name.item.clone(),
+            actual_type: self.item_type,
+            expected_type: CatalogItemType::StandingQuery,
+        })
+    }
+
+    fn standing_query_desc(&self) -> Result<&RelationDesc, CatalogError> {
+        Err(CatalogError::UnexpectedType {
+            name: self.name.item.clone(),
+            actual_type: self.item_type,
+            expected_type: CatalogItemType::StandingQuery,
+        })
+    }
+
     fn item_type(&self) -> CatalogItemType {
         self.item_type
     }

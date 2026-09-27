@@ -165,6 +165,11 @@ pub enum Command {
         tx: oneshot::Sender<Result<AppendWebhookResponse, AppendWebhookError>>,
     },
 
+    GetStandingQueryClient {
+        item_id: mz_repr::CatalogItemId,
+        tx: oneshot::Sender<Option<crate::standing_query_client::StandingQueryExecuteClient>>,
+    },
+
     GetSystemVars {
         tx: oneshot::Sender<SystemVars>,
     },
@@ -484,6 +489,7 @@ impl Command {
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
+            | Command::GetStandingQueryClient { .. }
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
@@ -529,6 +535,7 @@ impl Command {
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
+            | Command::GetStandingQueryClient { .. }
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
@@ -725,6 +732,8 @@ pub enum ExecuteResponse {
     CreatedViews,
     /// The requested materialized view was created.
     CreatedMaterializedView,
+    /// The requested standing query was created.
+    CreatedStandingQuery,
     /// The requested type was created.
     CreatedType,
     /// The requested network policy was created.
@@ -897,6 +906,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
+            ExecuteResponseKind::CreatedStandingQuery => Ok(ExecuteResponse::CreatedStandingQuery),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -959,6 +969,7 @@ impl ExecuteResponse {
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
+            CreatedStandingQuery { .. } => Some("CREATE STANDING QUERY".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
@@ -1050,6 +1061,7 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
+            CreateStandingQuery => &[CreatedStandingQuery],
             CreateIndex => &[CreatedIndex],
             CreateMetricSink => &[CreatedMetricSink],
             CreateType => &[CreatedType],
@@ -1067,6 +1079,7 @@ impl ExecuteResponse {
                 SendingRowsStreaming,
                 SendingRowsImmediate,
             ],
+            ExecuteStandingQuery => &[SendingRowsStreaming, SendingRowsImmediate],
             Execute | ReadThenWrite => &[
                 Deleted,
                 Inserted,

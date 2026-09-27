@@ -68,11 +68,11 @@ pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
     DatumDictTypedIter, DatumList, DatumListTypedIter, DatumMap, FromDatum, ProtoNumeric, ProtoRow,
     Row, RowArena, RowArenaBuf, RowPacker, RowRef, SharedRow, StableRow, datum_list_size,
-    datum_size, datums_size, read_datum, row_size,
+    datum_size, datums_size, read_datum, row_size, split_row_error,
 };
 pub use crate::scalar::{
-    ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, Int2Vector,
-    OptionalArg, OutputDatumType, ProtoScalarType, ReprScalarBaseType, ReprScalarType,
+    ArrayRustType, AsColumnType, Datum, DatumError, DatumKind, ExcludeNull, InputDatumType,
+    Int2Vector, OptionalArg, OutputDatumType, ProtoScalarType, ReprScalarBaseType, ReprScalarType,
     SqlContainerType, SqlScalarBaseType, SqlScalarType, Variadic,
 };
 #[cfg(any(test, feature = "proptest"))]

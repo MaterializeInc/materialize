@@ -649,6 +649,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_coalesce_case_transform: Default::default(),
                 enable_will_distinct_propagation: Default::default(),
                 enable_fixed_correlated_cte_lowering: v.enable_fixed_correlated_cte_lowering,
+                enable_cell_errors: Default::default(),
             },
         })
     }
@@ -766,6 +767,40 @@ fn plan_explainee(
             };
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
+        }
+        Explainee::CreateStandingQuery(mut stmt, broken) => {
+            if !stmt.if_not_exists {
+                // If we don't force this parameter to true planning will
+                // fail for names that already exist in the catalog.
+                stmt.if_not_exists = true;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE STANDING QUERY that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateStandingQuery(plan) = ddl::plan_create_standing_query(scx, *stmt)?
+            else {
+                sql_bail!("expected CreateStandingQueryPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateStandingQuery {
+                broken,
+                plan,
+            })
+        }
+        Explainee::ExecuteStandingQuery(stmt, broken) => {
+            let Plan::ExecuteStandingQuery(plan) =
+                ddl::plan_execute_standing_query(scx, *stmt, params)?
+            else {
+                sql_bail!("expected ExecuteStandingQueryPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::ExecuteStandingQuery {
+                broken,
+                plan,
+            })
         }
         Explainee::Subscribe(stmt, broken) => {
             let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
@@ -1537,7 +1572,12 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
+generate_extracted_config!(
+    SubscribeOption,
+    (Snapshot, bool),
+    (Progress, bool),
+    (InlineErrors, bool)
+);
 
 pub fn describe_subscribe(
     scx: &StatementContext,
@@ -1561,8 +1601,21 @@ pub fn describe_subscribe(
             desc
         }
     };
-    let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
+    let SubscribeOptionExtracted {
+        progress,
+        inline_errors,
+        ..
+    } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
+    let inline_errors = inline_errors.unwrap_or(false);
+    if inline_errors
+        && matches!(
+            stmt.output,
+            SubscribeOutput::EnvelopeUpsert { .. } | SubscribeOutput::EnvelopeDebezium { .. }
+        )
+    {
+        sql_bail!("INLINE ERRORS is not supported with ENVELOPE UPSERT or ENVELOPE DEBEZIUM");
+    }
     let mut desc = RelationDesc::builder().with_column(
         "mz_timestamp",
         SqlScalarType::Numeric {
@@ -1579,10 +1632,14 @@ pub fn describe_subscribe(
         SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
             desc = desc.with_column("mz_diff", SqlScalarType::Int64.nullable(true));
             for (name, mut ty) in relation_desc.into_iter() {
-                if progress {
+                // With inline errors, a column whose value errored reads as `NULL`.
+                if progress || inline_errors {
                     ty.nullable = true;
                 }
                 desc = desc.with_column(name, ty);
+            }
+            if inline_errors {
+                desc = desc.with_column("mz_error", SqlScalarType::String.nullable(true));
             }
         }
         SubscribeOutput::EnvelopeUpsert { key_columns }
@@ -1809,8 +1866,20 @@ pub fn plan_subscribe(
     };
 
     let SubscribeOptionExtracted {
-        progress, snapshot, ..
+        progress,
+        snapshot,
+        inline_errors,
+        ..
     } = options.try_into()?;
+    let inline_errors = inline_errors.unwrap_or(false);
+    if inline_errors
+        && !matches!(
+            output,
+            plan::SubscribeOutput::Diffs | plan::SubscribeOutput::WithinTimestampOrderBy { .. }
+        )
+    {
+        sql_bail!("INLINE ERRORS is not supported with ENVELOPE UPSERT or ENVELOPE DEBEZIUM");
+    }
     Ok(Plan::Subscribe(SubscribePlan {
         from,
         when,
@@ -1818,6 +1887,7 @@ pub fn plan_subscribe(
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),
+        inline_errors,
         output,
     }))
 }
