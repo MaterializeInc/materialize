@@ -10,7 +10,7 @@
 //! This module provides functions that
 //! build decoding pipelines from raw source streams.
 //!
-//! The primary exports are [`render_decode_delimited`], and
+//! The primary entry points are `render_decode_delimited` and
 //! [`render_decode_cdcv2`]. See their docs for more details about their differences.
 
 use std::cell::RefCell;
@@ -36,17 +36,17 @@ use mz_timely_util::builder_async::{
 };
 use regex::Regex;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::operators::vec::Map;
 use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
 use crate::decode::avro::AvroDecoderState;
 use crate::decode::protobuf::ProtobufDecoderState;
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::metrics::decode::DecodeMetricDefs;
 use crate::source::types::{DecodeResult, SourceOutput};
 
@@ -491,17 +491,15 @@ async fn decode_delimited(
 /// often lets us, for example, detect when Avro decoding has gone off the rails
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
-pub fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
+pub(crate) fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
     input: VecCollection<'scope, T, SourceOutput<FromTime>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
     metrics: DecodeMetricDefs,
     storage_configuration: StorageConfiguration,
-) -> (
-    VecCollection<'scope, T, DecodeResult<FromTime>, Diff>,
-    StreamVec<'scope, T, HealthStatusMessage>,
-) {
+    health: HealthReporter,
+) -> VecCollection<'scope, T, DecodeResult<FromTime>, Diff> {
     let op_name = format!(
         "{}{}DecodeDelimited",
         key_encoding
@@ -517,7 +515,20 @@ pub fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
     let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut input = builder.new_input_for(input.inner, Exchange::new(dist), &output_handle);
 
-    let (_, transient_errors) = builder.build_fallible(move |caps| {
+    let report_error = move |err: CsrConnectError| {
+        let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
+        health.report(HealthStatusMessage {
+            id: None,
+            namespace: if matches!(&err, CsrConnectError::Ssh(_)) {
+                StatusNamespace::Ssh
+            } else {
+                StatusNamespace::Decode
+            },
+            update: halt_status,
+        })
+    };
+    // The button is dropped. The operator shuts down with the dataflow instead.
+    let _ = builder.build_fallible_with(report_error, move |caps| {
         Box::pin(async move {
             let [cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
@@ -606,18 +617,5 @@ pub fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
         })
     });
 
-    let health = transient_errors.map(|err: Rc<CsrConnectError>| {
-        let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
-        HealthStatusMessage {
-            id: None,
-            namespace: if matches!(&*err, CsrConnectError::Ssh(_)) {
-                StatusNamespace::Ssh
-            } else {
-                StatusNamespace::Decode
-            },
-            update: halt_status,
-        }
-    });
-
-    (output.as_collection(), health)
+    output.as_collection()
 }

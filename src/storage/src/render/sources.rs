@@ -184,34 +184,29 @@ where
         timestamp_interval: _,
     } = description.desc;
 
-    let (decoded_stream, decode_health) = match encoding {
-        None => (
-            ok_source.map(|r| DecodeResult {
-                // This is safe because the current set of sources produce
-                // either:
-                // 1. Non-nullable keys
-                // 2. No keys at all.
-                //
-                // Please see the comment on `key_envelope_no_encoding` in
-                // `mz_sql::plan::statement::ddl` for more details.
-                key: Some(Ok(r.key)),
-                value: Some(Ok(r.value)),
-                metadata: r.metadata,
-                from_time: r.from_time,
-            }),
-            None,
+    let decoded_stream = match encoding {
+        None => ok_source.map(|r| DecodeResult {
+            // This is safe because the current set of sources produce
+            // either:
+            // 1. Non-nullable keys
+            // 2. No keys at all.
+            //
+            // Please see the comment on `key_envelope_no_encoding` in
+            // `mz_sql::plan::statement::ddl` for more details.
+            key: Some(Ok(r.key)),
+            value: Some(Ok(r.value)),
+            metadata: r.metadata,
+            from_time: r.from_time,
+        }),
+        Some(encoding) => render_decode_delimited(
+            ok_source,
+            encoding.key,
+            encoding.value,
+            dataflow_debug_name.clone(),
+            storage_state.metrics.decode_defs.clone(),
+            storage_state.storage_configuration.clone(),
+            base_source_config.health.clone(),
         ),
-        Some(encoding) => {
-            let (decoded_stream, decode_health) = render_decode_delimited(
-                ok_source,
-                encoding.key,
-                encoding.value,
-                dataflow_debug_name.clone(),
-                storage_state.metrics.decode_defs.clone(),
-                storage_state.storage_configuration.clone(),
-            );
-            (decoded_stream, Some(decode_health))
-        }
     };
 
     // render envelopes
@@ -440,7 +435,7 @@ where
         }
     };
 
-    for health in decode_health.into_iter().chain(envelope_health) {
+    if let Some(health) = envelope_health {
         base_source_config.health.report_stream(health);
     }
 
