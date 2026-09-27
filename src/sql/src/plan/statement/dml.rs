@@ -791,7 +791,8 @@ fn plan_explainee(
             })
         }
         Explainee::ExecuteStandingQuery(stmt, broken) => {
-            let Plan::ExecuteStandingQuery(plan) = ddl::plan_execute_standing_query(scx, *stmt)?
+            let Plan::ExecuteStandingQuery(plan) =
+                ddl::plan_execute_standing_query(scx, *stmt, params)?
             else {
                 sql_bail!("expected ExecuteStandingQueryPlan plan");
             };

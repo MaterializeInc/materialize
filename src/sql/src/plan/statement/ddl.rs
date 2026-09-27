@@ -163,12 +163,12 @@ use crate::plan::{
     CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan, CreateNetworkPolicyPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateStandingQueryPlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, ExecuteStandingQueryPlan, HirRelationExpr, Index,
-    MaterializedView, MetricSink, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
-    QueryContext, ReplicaConfig, Secret, Sink, Source, StandingQuery, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    DropObjectsPlan, DropOwnedPlan, ExecuteStandingQueryPlan, HirRelationExpr, HirScalarExpr,
+    Index, MaterializedView, MetricSink, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, OnHydration, Params, Plan, PlanClusterOption, PlanNotice,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, StandingQuery, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
@@ -3233,19 +3233,57 @@ pub fn describe_execute_standing_query(
     scx: &StatementContext,
     stmt: ExecuteStandingQueryStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let item = scx.get_item_by_resolved_name(&stmt.name)?;
-    if item.item_type() != CatalogItemType::StandingQuery {
-        sql_bail!(
-            "{} is a {}, not a standing query",
-            stmt.name.full_name_str(),
-            item.item_type()
-        );
-    }
+    // Planning the parameter expressions records the types of any bound
+    // parameters (`$1`) they reference.
+    let (item, _exprs) = plan_standing_query_param_exprs(scx, stmt)?;
     let desc = item
         .relation_desc()
         .expect("standing query must have a desc")
         .into_owned();
     Ok(StatementDesc::new(Some(desc)))
+}
+
+/// Resolves the standing query `stmt` executes and plans its parameter
+/// expressions, typed as the standing query declares them.
+fn plan_standing_query_param_exprs<'a>(
+    scx: &'a StatementContext,
+    stmt: ExecuteStandingQueryStatement<Aug>,
+) -> Result<
+    (
+        Box<dyn crate::catalog::CatalogCollectionItem + 'a>,
+        Vec<(HirScalarExpr, SqlScalarType)>,
+    ),
+    PlanError,
+> {
+    let item = resolve_standing_query(scx, &stmt.name)?;
+    let declared_params = item.standing_query_params()?.to_vec();
+
+    if stmt.params.len() != declared_params.len() {
+        sql_bail!(
+            "EXECUTE STANDING QUERY expected {} parameters, got {}",
+            declared_params.len(),
+            stmt.params.len()
+        );
+    }
+
+    // Follow the same pattern as plan_params() for EXECUTE (prepared stmts),
+    // except that the arguments may be bound parameters of the extended protocol.
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let ecx = query::ExprContext {
+        name: "EXECUTE STANDING QUERY",
+        allow_parameters: true,
+        ..query::execute_expr_context(&qcx)
+    };
+    let mut exprs = Vec::with_capacity(declared_params.len());
+    for (mut expr, (_param_name, param_type)) in stmt.params.into_iter().zip_eq(declared_params) {
+        transform_ast::transform(scx, &mut expr)?;
+        // An assignment cast, like EXECUTE's, so that clients may bind a
+        // parameter with a different but assignable type, such as `int2`.
+        let hir =
+            query::plan_expr(&ecx, &expr)?.cast_to(&ecx, CastContext::Assignment, &param_type)?;
+        exprs.push((hir, param_type));
+    }
+    Ok((item, exprs))
 }
 
 pub fn plan_create_standing_query(
@@ -3375,42 +3413,24 @@ fn rewrite_standing_query_params(
 pub fn plan_execute_standing_query(
     scx: &StatementContext,
     stmt: ExecuteStandingQueryStatement<Aug>,
+    params: &Params,
 ) -> Result<Plan, PlanError> {
     scx.require_feature_flag(&ENABLE_STANDING_QUERIES)?;
 
-    let item = resolve_standing_query(scx, &stmt.name)?;
-    let item_id = item.id();
-    let declared_params = item.standing_query_params()?;
-
-    if stmt.params.len() != declared_params.len() {
-        sql_bail!(
-            "EXECUTE STANDING QUERY expected {} parameters, got {}",
-            declared_params.len(),
-            stmt.params.len()
-        );
-    }
-
-    // Evaluate each parameter expression and coerce to the declared type.
-    // Follow the same pattern as plan_params() for EXECUTE (prepared stmts).
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-    let ecx = query::execute_expr_context(&qcx);
+    let (item, exprs) = plan_standing_query_param_exprs(scx, stmt)?;
     let temp_storage = &mz_repr::RowArena::new();
-
-    let mut evaluated_params = Vec::with_capacity(declared_params.len());
-    for (mut expr, (_param_name, param_type)) in
-        stmt.params.into_iter().zip_eq(declared_params.iter())
-    {
-        transform_ast::transform(scx, &mut expr)?;
-        let hir = query::plan_expr(&ecx, &expr)?.type_as(&ecx, param_type)?;
+    let mut evaluated_params = Vec::with_capacity(exprs.len());
+    for (mut hir, param_type) in exprs {
+        hir.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
         let mir = hir.lower_uncorrelated(scx.catalog.system_vars())?;
         let evaled = mir.eval(&[], temp_storage)?;
         let mut row = Row::default();
         row.packer().push(evaled);
-        evaluated_params.push((row, param_type.clone()));
+        evaluated_params.push((row, param_type));
     }
 
     Ok(Plan::ExecuteStandingQuery(ExecuteStandingQueryPlan {
-        id: item_id,
+        id: item.id(),
         params: evaluated_params,
     }))
 }

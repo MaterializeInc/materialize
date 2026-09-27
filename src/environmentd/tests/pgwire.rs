@@ -32,6 +32,61 @@ use postgres::types::Type;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_standing_query_bind_params() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_standing_queries"]);
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    for stmt in [
+        "CREATE TABLE orders (id int, customer_id int)",
+        "INSERT INTO orders VALUES (1, 10), (2, 10), (3, 20)",
+        "CREATE STANDING QUERY by_customer (cid int) \
+         AS SELECT id FROM orders WHERE customer_id = cid",
+    ] {
+        client.batch_execute(stmt).unwrap();
+    }
+
+    let ids = |rows: Vec<postgres::Row>| {
+        let mut ids: Vec<i32> = rows.iter().map(|row| row.get(0)).collect();
+        ids.sort();
+        ids
+    };
+
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer ($1)", &[&10_i32])
+        .unwrap();
+    assert_eq!(ids(rows), vec![1, 2]);
+
+    // A parameter in an expression.
+    let rows = client
+        .query("EXECUTE STANDING QUERY by_customer ($1 + 10)", &[&10_i32])
+        .unwrap();
+    assert_eq!(ids(rows), vec![3]);
+
+    // A parameter bound with a type the declared type is assignable from.
+    let rows = client
+        .query_typed(
+            "EXECUTE STANDING QUERY by_customer ($1)",
+            &[(&20_i16, Type::INT2)],
+        )
+        .unwrap();
+    assert_eq!(ids(rows), vec![3]);
+
+    let err = client
+        .query(
+            "EXECUTE STANDING QUERY by_customer ($1, $2)",
+            &[&10_i32, &20_i32],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string_with_causes()
+            .contains("expected 1 parameters, got 2"),
+        "unexpected error: {err}"
+    );
+}
+
 /// A standing query created right after an index on its input reads the
 /// index while it hydrates, and must still observe the writes that preceded
 /// its creation.

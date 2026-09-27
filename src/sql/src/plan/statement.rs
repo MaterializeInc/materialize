@@ -444,7 +444,9 @@ pub fn plan(
         Statement::Declare(stmt) => scl::plan_declare(scx, stmt, params),
         Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
         Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
-        Statement::ExecuteStandingQuery(stmt) => ddl::plan_execute_standing_query(scx, stmt),
+        Statement::ExecuteStandingQuery(stmt) => {
+            ddl::plan_execute_standing_query(scx, stmt, params)
+        }
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
         Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
         Statement::ResetVariable(stmt) => scl::plan_reset_variable(scx, stmt),
