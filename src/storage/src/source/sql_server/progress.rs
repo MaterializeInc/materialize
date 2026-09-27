@@ -25,6 +25,7 @@
 //! [`SqlServerSourceConnection`]: mz_storage_types::sources::SqlServerSourceConnection
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use futures::StreamExt;
 use mz_ore::future::InTask;
@@ -39,7 +40,6 @@ use mz_storage_types::sources::sql_server::{
 };
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
@@ -58,17 +58,17 @@ pub(crate) fn render<'scope>(
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
     extras: SqlServerSourceExtras,
-) -> (
-    StreamVec<'scope, Lsn, ReplicationError>,
-    StreamVec<'scope, Lsn, Probe<Lsn>>,
-    PressOnDropButton,
-) {
+) -> (StreamVec<'scope, Lsn, Probe<Lsn>>, PressOnDropButton) {
     let op_name = format!("SqlServerProgress({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
+    let health = config.health.clone();
+    let report_transient = move |err: TransientError| {
+        super::report_error(&health, ReplicationError::Transient(Rc::new(err)))
+    };
+    let button = builder.build_fallible_with(report_transient, move |caps| {
         Box::pin(async move {
             let [probe_cap]: &mut [_; 1] = caps.try_into().unwrap();
 
@@ -240,7 +240,5 @@ pub(crate) fn render<'scope>(
         })
     });
 
-    let error_stream = transient_errors.map(ReplicationError::Transient);
-
-    (error_stream, probe_stream, button.press_on_drop())
+    (probe_stream, button.press_on_drop())
 }
