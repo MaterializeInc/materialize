@@ -1104,16 +1104,21 @@ where
     ) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
+        let phases = Arc::clone(&self.adapter_client.inner().metrics().qps);
         const EMPTY_PORTAL: &str = "";
-        if let Err(e) = self
-            .adapter_client
-            .declare(EMPTY_PORTAL.to_string(), stmt, sql)
+        if let Err(e) = phases
+            .simple_declare
+            .time(
+                self.adapter_client
+                    .declare(EMPTY_PORTAL.to_string(), stmt, sql),
+            )
             .await
         {
             return self
                 .send_error_and_get_state(e.into_response(Severity::Error))
                 .await;
         }
+        let description_timer = phases.simple_row_description.start();
         let portal = self
             .adapter_client
             .session()
@@ -1143,31 +1148,46 @@ where
             }
         }
 
-        let result = match self
-            .adapter_client
-            .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed(), None)
-            .await
-        {
-            Ok((response, execute_started)) => {
-                self.send_pending_notices().await?;
-                self.send_execute_response(
-                    response,
-                    stmt_desc.relation_desc,
-                    EMPTY_PORTAL.to_string(),
-                    ExecuteCount::All,
-                    portal_exec_message,
-                    None,
-                    ExecuteTimeout::None,
-                    execute_started,
-                )
-                .await
-            }
-            Err(e) => {
-                self.send_pending_notices().await?;
-                self.send_error_and_get_state(e.into_response(Severity::Error))
-                    .await
-            }
-        };
+        description_timer.finish();
+        let executed = phases
+            .simple_execute
+            .time(self.adapter_client.execute(
+                EMPTY_PORTAL.to_string(),
+                self.conn.wait_closed(),
+                None,
+            ))
+            .await;
+        // Keep this fallible await outside the response-timing async block:
+        // an I/O error here must still return before portal cleanup, as in the
+        // uninstrumented path.
+        phases
+            .simple_notices
+            .time(self.send_pending_notices())
+            .await?;
+        let result = phases
+            .simple_response
+            .time(async {
+                match executed {
+                    Ok((response, execute_started)) => {
+                        self.send_execute_response(
+                            response,
+                            stmt_desc.relation_desc,
+                            EMPTY_PORTAL.to_string(),
+                            ExecuteCount::All,
+                            portal_exec_message,
+                            None,
+                            ExecuteTimeout::None,
+                            execute_started,
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        self.send_error_and_get_state(e.into_response(Severity::Error))
+                            .await
+                    }
+                }
+            })
+            .await;
 
         // Destroy the portal.
         self.adapter_client.session().remove_portal(EMPTY_PORTAL);
@@ -1314,8 +1334,27 @@ where
     /// For implicit transaction handling, see "Multiple Statements in a Simple Query" in the above.
     #[instrument(level = "debug")]
     async fn query(&mut self, sql: String, received: EpochMillis) -> Result<State, io::Error> {
+        let phase = self
+            .adapter_client
+            .inner()
+            .metrics()
+            .qps
+            .simple_total
+            .clone();
+        phase.time(self.query_inner(sql, received)).await
+    }
+
+    async fn query_inner(
+        &mut self,
+        sql: String,
+        received: EpochMillis,
+    ) -> Result<State, io::Error> {
+        let phases = Arc::clone(&self.adapter_client.inner().metrics().qps);
         // Parse first before doing any transaction checking.
-        let stmts = match self.parse_sql(&sql) {
+        let parse_timer = phases.simple_parse.start();
+        let parsed = self.parse_sql(&sql);
+        parse_timer.finish();
+        let stmts = match parsed {
             Ok(stmts) => stmts,
             Err(err) => {
                 self.send_error_and_get_state(err).await?;
@@ -1340,7 +1379,10 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.ensure_transaction(num_stmts, "query").await?;
+            phases
+                .simple_transaction_setup
+                .time(self.ensure_transaction(num_stmts, "query"))
+                .await?;
 
             match self
                 .one_query(stmt, sql.to_string(), LifecycleTimestamps { received })
@@ -1355,7 +1397,7 @@ where
         // Implicit transactions are closed at the end of a Query message.
         {
             if self.adapter_client.session().transaction().is_implicit() {
-                self.commit_transaction().await?;
+                phases.simple_commit.time(self.commit_transaction()).await?;
             }
         }
 
@@ -1363,7 +1405,7 @@ where
             self.send(BackendMessage::EmptyQueryResponse).await?;
         }
 
-        self.ready().await
+        phases.simple_ready.time(self.ready()).await
     }
 
     #[instrument(level = "debug")]
@@ -2482,6 +2524,7 @@ where
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
+        let phases = Arc::clone(&self.adapter_client.inner().metrics().qps);
         let result_format_portal_name: &str = if let Some(ref name) = fetch_portal_name {
             name
         } else {
@@ -2576,7 +2619,7 @@ where
                 tokio::select! {
                     biased;
                     err = self.conn.wait_closed() => return Err(err),
-                    batch = rows.remaining.recv() => match batch {
+                    batch = phases.rows_wait.time(rows.remaining.recv()) => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => {
@@ -2637,7 +2680,10 @@ where
                         })
                         .map(|(_row_len, row)| row)
                         .take(want_rows);
-                    self.send_all(messages).await?;
+                    phases
+                        .rows_encode_send
+                        .time(self.send_all(messages))
+                        .await?;
 
                     total_sent_rows += sent_rows;
                     total_sent_bytes += sent_bytes;
@@ -2652,7 +2698,7 @@ where
                         break;
                     }
 
-                    self.conn.flush().await?;
+                    phases.rows_flush.time(self.conn.flush()).await?;
                 }
                 FetchResult::Notice(notice) => {
                     self.send(notice.into_response()).await?;
