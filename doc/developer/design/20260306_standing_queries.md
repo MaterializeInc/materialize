@@ -170,12 +170,13 @@ Each standing query has three components:
 #### Param shard upper and isolation
 
 The param shard upper determines the timestamp at which param writes land.
-The lag between input frontiers and param shard upper controls isolation:
+On each group commit tick, the coordinator advances it to min(input frontiers) - 1s, so every write lands at a time all inputs have completed.
+Each batch consumes one timestamp and the batcher writes at most one batch per millisecond, so the 1s gap is the headroom that lets batches proceed between ticks without waiting for the inputs.
 
-* **Serializable** (current): use min(input frontiers) - 1s. All inputs have reached this timestamp.
-* **Strict serializable** (future): use max(input frontiers). Results reflect the latest state of every input.
+* **Serializable**: a request is written at the current param shard upper.
+* **Strict serializable**: a request carries the oracle read timestamp taken after it arrives, and the batcher parks it until the param shard upper reaches that timestamp.
 
-The 1s lag provides a serializable isolation window while allowing compaction to proceed.
+Serializable results therefore reflect inputs up to about one tick older than a serializable peek, which reads at min(input frontiers) - 1.
 
 #### Batch lifecycle
 
@@ -544,4 +545,4 @@ Suggested implementation phases:
 * **Subscribe accumulation**: Under sustained load, the subscribe's arrangements grow because compaction doesn't keep pace with param writes. Retracting each param row with the next write bounds the logical working set, but the physical arrangement retains data until the `since` frontier advances. This causes `max_result_size` errors after extended runs.
 * **Persist write latency floor**: The minimum persist write latency (~10-30ms) dominates the end-to-end budget. Peak throughput of ~900 QPS at 256 connections is far from the 100k aspirational target. Achieving higher throughput would require sub-millisecond persist writes or a non-persistent parameter path.
 * **Persisting param_collection_id** (**blocker**): Each standing query has an internal parameter collection with its own `GlobalId`, currently derived as `standing_query_global_id + 1` during catalog recovery. This is unsafe — the +1 assumption is an implicit contract not enforced by the ID allocator, and orphaned shard GC could collect a param collection that isn't explicitly listed in the catalog. The param_collection_id must be persisted alongside the standing query. Options considered: (a) encode in `create_sql` via `WITH` options — no existing precedent for encoding a GlobalId this way; (b) use `extra_versions` — semantically wrong, that's for schema evolution; (c) new durable catalog collection mapping standing query → param collection. Needs team input on the right catalog persistence pattern.
-* **Isolation level**: Currently serializable (min input frontier). Strict serializable would use max input frontier. Should this be configurable?
+* **Serializable freshness**: Should the param shard upper follow serializable timestamp selection, min(input frontiers) - 1, rather than lag it by 1s? Table frontiers advance once per group commit tick, and each batch needs its own timestamp, so tracking the peek timestamp leaves no timestamps for the batches between ticks. Options: size the headroom from the observed batch rate at each tick, track input frontiers continuously (helps only inputs that advance between ticks), or advance table frontiers more often. The staleness this costs has not been measured.
