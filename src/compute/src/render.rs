@@ -1455,6 +1455,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
                         self.render_delta_join(inputs, delta_plan)
                     }
+                    mz_compute_types::plan::join::JoinPlan::Lookup(lookup_plan) => {
+                        self.render_lookup_join(inputs, lookup_plan)
+                    }
                 }
             }
             Reduce {

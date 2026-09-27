@@ -151,95 +151,21 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     );
                     region_errs.push(err_stream);
 
-                    // Promote `time` to a datum element.
-                    //
-                    // The `half_join` operator manipulates as "data" a pair `(data, time)`,
-                    // while tracking the initial time `init_time` separately and without
-                    // modification. The initial value for both times is the initial time.
-                    let mut update_stream = update_stream
-                        .inner
-                        .map(|(v, t, d)| ((v, t.clone()), t, d))
-                        .as_collection();
-
-                    // Repeatedly update `update_stream` to reflect joins with more and more
-                    // other relations, in the specified order.
-                    for stage_plan in stage_plans {
-                        let DeltaStagePlan {
-                            lookup_relation,
-                            stream_key,
-                            stream_thinning,
-                            lookup_key,
-                            closure,
-                        } = stage_plan;
-
-                        // We require different logic based on the relative order of the two inputs.
-                        // If the `source` relation precedes the `lookup` relation, we present all
-                        // updates with less or equal `time`, and otherwise we present only updates
-                        // with strictly less `time`.
-                        //
-                        // We require demuxing over the two flavors of arrangement and over the
-                        // relative order of the inputs. Both are handled inside `build_halfjoin`.
-                        let (oks, errs) = build_halfjoin(
-                            update_stream,
-                            stream_key,
-                            stream_thinning,
-                            &bundles[lookup_relation],
-                            lookup_key,
-                            source_relation < lookup_relation,
-                            closure,
-                            Rc::clone(&self.config_set),
-                            self.error_scope(),
-                        );
-                        update_stream = oks;
-                        region_errs.push(errs);
-                    }
-
-                    // Delay updates as appropriate.
-                    //
-                    // The `half_join` operator maintains a time that we now discard (the `_`),
-                    // and replace with the `time` that is maintained with the data. The former
-                    // exists to pin a consistent total order on updates throughout the process,
-                    // while allowing `time` to vary upwards as a result of actions on time.
-                    let mut update_stream = update_stream
-                        .inner
-                        .map(|((row, time), _, diff)| (row, time, diff))
-                        .as_collection();
-
-                    // We have completed the join building, but may have work remaining.
-                    // For example, we may have expressions not pushed down (e.g. literals)
-                    // and projections that could not be applied (e.g. column repetition).
-                    if let Some(final_closure) = final_closure {
-                        let name = "DeltaJoinFinalization";
-                        let scope = self.error_scope();
-                        type CB<C> = ConsolidatingContainerBuilder<C>;
-                        let (updates, errors) = update_stream
-                            .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
-                                // Reuseable allocation for unpacking.
-                                let mut datums = DatumVec::new();
-                                move |row| {
-                                    let mut row_builder = SharedRow::get();
-                                    let temp_storage = RowArena::new();
-                                    let mut datums_local = datums.borrow_with(&row);
-                                    if let Some(error) = row.row_error() {
-                                        datums_local.push(Datum::Error(error));
-                                    }
-                                    // TODO(mcsherry): re-use `row` allocation.
-                                    final_closure
-                                        .apply(
-                                            &mut datums_local,
-                                            &temp_storage,
-                                            &mut row_builder,
-                                            scope,
-                                        )
-                                        .map(|row| row.cloned())
-                                        .map_err(DataflowErrorSer::from)
-                                        .transpose()
-                                }
-                            });
-
-                        update_stream = updates;
-                        region_errs.push(errors);
-                    }
+                    let update_stream = build_path_stages(
+                        update_stream,
+                        &bundles,
+                        stage_plans,
+                        // We require different logic based on the relative order of the two
+                        // inputs. If the `source` relation precedes the `lookup` relation, we
+                        // present all updates with less or equal `time`, and otherwise we present
+                        // only updates with strictly less `time`.
+                        |lookup_relation| source_relation < lookup_relation,
+                        final_closure,
+                        "DeltaJoinFinalization",
+                        &self.config_set,
+                        self.error_scope(),
+                        &mut region_errs,
+                    );
 
                     inner_errs.push(
                         differential_dataflow::collection::concatenate(region, region_errs)
@@ -266,10 +192,112 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     }
 }
 
+/// Joins `update_stream` with the lookup relations of `stage_plans` in order, then applies
+/// `final_closure`.
+///
+/// `source_precedes_lookup` is called with each stage's lookup relation and selects the stage's
+/// tie-breaking comparison, see [`build_halfjoin`]. The errors the stages and the final closure
+/// produce are pushed to `errs_out`. The errors `bundles` carry are the caller's to propagate.
+pub(super) fn build_path_stages<'scope, T, F>(
+    update_stream: VecCollection<'scope, T, Row, Diff>,
+    bundles: &[CollectionBundle<'scope, T>],
+    stage_plans: Vec<DeltaStagePlan>,
+    source_precedes_lookup: F,
+    final_closure: Option<JoinClosure>,
+    finalization_name: &str,
+    config_set: &Rc<ConfigSet>,
+    scope: ErrorScope,
+    errs_out: &mut Vec<VecCollection<'scope, T, DataflowErrorSer, Diff>>,
+) -> VecCollection<'scope, T, Row, Diff>
+where
+    T: RenderTimestamp,
+    F: Fn(usize) -> bool,
+{
+    // Promote `time` to a datum element.
+    //
+    // The `half_join` operator manipulates as "data" a pair `(data, time)`,
+    // while tracking the initial time `init_time` separately and without
+    // modification. The initial value for both times is the initial time.
+    let mut update_stream = update_stream
+        .inner
+        .map(|(v, t, d)| ((v, t.clone()), t, d))
+        .as_collection();
+
+    // Repeatedly update `update_stream` to reflect joins with more and more
+    // other relations, in the specified order.
+    for stage_plan in stage_plans {
+        let DeltaStagePlan {
+            lookup_relation,
+            stream_key,
+            stream_thinning,
+            lookup_key,
+            closure,
+        } = stage_plan;
+
+        // We require demuxing over the two flavors of arrangement and over the
+        // relative order of the inputs. Both are handled inside `build_halfjoin`.
+        let (oks, errs) = build_halfjoin(
+            update_stream,
+            stream_key,
+            stream_thinning,
+            &bundles[lookup_relation],
+            lookup_key,
+            source_precedes_lookup(lookup_relation),
+            closure,
+            Rc::clone(config_set),
+            scope,
+        );
+        update_stream = oks;
+        errs_out.push(errs);
+    }
+
+    // Delay updates as appropriate.
+    //
+    // The `half_join` operator maintains a time that we now discard (the `_`),
+    // and replace with the `time` that is maintained with the data. The former
+    // exists to pin a consistent total order on updates throughout the process,
+    // while allowing `time` to vary upwards as a result of actions on time.
+    let mut update_stream = update_stream
+        .inner
+        .map(|((row, time), _, diff)| (row, time, diff))
+        .as_collection();
+
+    // We have completed the join building, but may have work remaining.
+    // For example, we may have expressions not pushed down (e.g. literals)
+    // and projections that could not be applied (e.g. column repetition).
+    if let Some(final_closure) = final_closure {
+        type CB<C> = ConsolidatingContainerBuilder<C>;
+        let (updates, errors) =
+            update_stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(finalization_name, {
+                // Reuseable allocation for unpacking.
+                let mut datums = DatumVec::new();
+                move |row| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums.borrow_with(&row);
+                    if let Some(error) = row.row_error() {
+                        datums_local.push(Datum::Error(error));
+                    }
+                    // TODO(mcsherry): re-use `row` allocation.
+                    final_closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
+                        .map(|row| row.cloned())
+                        .map_err(DataflowErrorSer::from)
+                        .transpose()
+                }
+            });
+
+        update_stream = updates;
+        errs_out.push(errors);
+    }
+
+    update_stream
+}
+
 /// Records what a single delta path reads from each input: each stage's `lookup_key` and, for the
 /// seed relation, either its `source_key` arrangement or, when `source_key` is `None`, its raw
 /// collection (flagged in `raw`).
-fn record_path_arrangements(
+pub(super) fn record_path_arrangements(
     arrangements: &mut [BTreeSet<Vec<LirScalarExpr>>],
     raw: &mut [bool],
     source_relation: usize,
@@ -289,7 +317,7 @@ fn record_path_arrangements(
 
 /// Retains only the collections of `bundle` a delta path reads: the arrangements keyed by `keys`,
 /// and the raw collection if `raw`. Every other collection is dropped.
-fn prune_bundle<'scope, T: RenderTimestamp>(
+pub(super) fn prune_bundle<'scope, T: RenderTimestamp>(
     bundle: &CollectionBundle<'scope, T>,
     raw: bool,
     keys: &BTreeSet<Vec<LirScalarExpr>>,
@@ -321,7 +349,7 @@ fn prune_bundle<'scope, T: RenderTimestamp>(
 /// the raw one plus that key's key-formation errors, so an input the join reads under two lookup
 /// keys still contributes its errors twice. Reachable whenever a delta path set needs an
 /// error-carrying input arranged by more than one key.
-fn bundle_errs<'scope, T: RenderTimestamp>(
+pub(super) fn bundle_errs<'scope, T: RenderTimestamp>(
     bundle: &CollectionBundle<'scope, T>,
 ) -> Vec<VecCollection<'scope, T, DataflowErrorSer, Diff>> {
     let mut collected = Vec::with_capacity(bundle.arranged.len() + 1);
@@ -350,7 +378,7 @@ fn bundle_errs<'scope, T: RenderTimestamp>(
 /// The returned error collection holds only the errors this stage produces. The errors `bundle`
 /// already carries are the caller's to propagate, once, rather than once per delta path that looks
 /// the input up. See [`bundle_errs`].
-fn build_halfjoin<'scope, T>(
+pub(super) fn build_halfjoin<'scope, T>(
     updates: VecCollection<'scope, T, (Row, T), Diff>,
     prev_key: Vec<LirScalarExpr>,
     prev_thinning: Vec<usize>,
@@ -953,44 +981,67 @@ where
     // from a raw collection that carries no per-update times to filter on.
     assert_eq!(source_relation, 0);
 
+    build_update_stream_raw(
+        edge,
+        "UpdateStreamCollection",
+        |_diff| true,
+        initial_closure,
+        scope,
+    )
+}
+
+/// Applies `initial_closure` to the updates of the raw collection `edge` whose diff satisfies
+/// `keep`, dropping all others.
+pub(super) fn build_update_stream_raw<'scope, T, K>(
+    edge: ColCollection<'scope, T>,
+    name: &str,
+    keep: K,
+    initial_closure: JoinClosure,
+    scope: ErrorScope,
+) -> (
+    VecCollection<'scope, T, Row, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+    K: Fn(Diff) -> bool + 'static,
+{
     type CB<C> = ConsolidatingContainerBuilder<C>;
     // The closure reads datums and builds a fresh row, so the input row is only
     // ever borrowed. Reading it from the column directly keeps this path from
     // materializing an owned `Row` per record.
-    let (oks, errs) = flat_map_datums::<_, CB<Vec<(Row, T, Diff)>>, _>(
-        edge,
-        "UpdateStreamCollection",
-        usize::MAX,
-        {
-            let mut datum_vec = DatumVec::new();
-            move |row_datums, time, diff, ok_session, err_session| {
-                let mut row_builder = SharedRow::get();
-                let temp_storage = RowArena::new();
-                // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums,
-                // and the arena. Copying the datums into a local vec lets that
-                // lifetime shrink to this call. The copy moves datum references, not
-                // row data.
-                let mut datums = datum_vec.borrow();
-                datums.extend(row_datums.iter());
-                // `cloned` detaches the result from `temp_storage` and the shared row
-                // builder, both of which drop at the end of this call.
-                match initial_closure
-                    .apply(&mut datums, &temp_storage, &mut row_builder, scope)
-                    .map(|row| row.cloned())
-                    .transpose()
-                {
-                    Some(Ok(row)) => {
-                        ok_session.give((row, time, diff));
-                        1
-                    }
-                    None => 0,
-                    Some(Err(e)) => {
-                        err_session.give((DataflowErrorSer::from(e), time, diff));
-                        1
-                    }
+    let (oks, errs) = flat_map_datums::<_, CB<Vec<(Row, T, Diff)>>, _>(edge, name, usize::MAX, {
+        let mut datum_vec = DatumVec::new();
+        move |row_datums, time, diff, ok_session, err_session| {
+            if !keep(diff) {
+                return 0;
+            }
+            let mut row_builder = SharedRow::get();
+            let temp_storage = RowArena::new();
+            // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums,
+            // and the arena. Copying the datums into a local vec lets that
+            // lifetime shrink to this call. The copy moves datum references, not
+            // row data.
+            let mut datums = datum_vec.borrow();
+            datums.extend(row_datums.iter());
+            // `cloned` detaches the result from `temp_storage` and the shared row
+            // builder, both of which drop at the end of this call.
+            match initial_closure
+                .apply(&mut datums, &temp_storage, &mut row_builder, scope)
+                .map(|row| row.cloned())
+                .transpose()
+            {
+                Some(Ok(row)) => {
+                    ok_session.give((row, time, diff));
+                    1
+                }
+                None => 0,
+                Some(Err(e)) => {
+                    err_session.give((DataflowErrorSer::from(e), time, diff));
+                    1
                 }
             }
-        },
-    );
+        }
+    });
     (oks.as_collection(), errs.as_collection())
 }

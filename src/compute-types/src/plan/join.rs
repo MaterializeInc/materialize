@@ -35,9 +35,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod delta_join;
 pub mod linear_join;
+pub mod lookup_join;
 
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
+pub use lookup_join::LookupJoinPlan;
 
 use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
@@ -48,6 +50,8 @@ pub enum JoinPlan {
     Linear(LinearJoinPlan),
     /// A join implemented by a delta join.
     Delta(DeltaJoinPlan),
+    /// A join implemented by a lookup join, which responds only to positive updates of one input.
+    Lookup(LookupJoinPlan),
 }
 
 /// A manual closure implementation of filtering and logic application.

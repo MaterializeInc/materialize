@@ -23,10 +23,10 @@ use mz_repr::explain::trace_plan;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, SqlRelationType};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
-use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
+use mz_transform::{LookupJoinSource, TransformCtx};
 use timely::progress::Antichain;
 
 use crate::coord::infer_sql_type_for_catalog;
@@ -90,6 +90,20 @@ impl Optimizer {
             metrics,
             duration: Default::default(),
             extra_source_imports,
+        }
+    }
+
+    /// The parameter collection, which drives the join that answers requests, if there is exactly
+    /// one extra source import.
+    ///
+    /// The standing query handler reads the results of each positive parameter update at that
+    /// update's time and ignores all other updates. That is what makes a lookup join driven by the
+    /// parameter collection correct.
+    fn lookup_source(&self) -> Option<GlobalId> {
+        let mut ids = self.extra_source_imports.keys();
+        match (ids.next(), ids.next()) {
+            (Some(id), None) => Some(*id),
+            _ => None,
         }
     }
 }
@@ -252,6 +266,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         )?;
 
         // Construct TransformCtx for global optimization.
+        let lookup_source = self.lookup_source();
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
@@ -260,6 +275,12 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &mut df_meta,
             Some(&mut self.metrics),
         );
+        if let Some(source) = lookup_source {
+            transform_ctx = transform_ctx.with_lookup_join(LookupJoinSource {
+                object: self.view_id,
+                source,
+            });
+        }
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
@@ -294,11 +315,20 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = LirRelationExpr::finalize_dataflow(
-            df_desc,
-            &self.config.features,
-            Some(self.metrics.lowering()),
-        )?;
+        // - Planning the join with the parameter collection as a lookup join
+        let df_desc = match self.lookup_source() {
+            Some(source) => LirRelationExpr::finalize_dataflow_with_lookup_join(
+                df_desc,
+                &self.config.features,
+                Some(self.metrics.lowering()),
+                source,
+            )?,
+            None => LirRelationExpr::finalize_dataflow(
+                df_desc,
+                &self.config.features,
+                Some(self.metrics.lowering()),
+            )?,
+        };
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);
