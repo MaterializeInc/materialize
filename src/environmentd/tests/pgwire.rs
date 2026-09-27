@@ -41,7 +41,7 @@ fn test_standing_query_bind_params() {
 
     for stmt in [
         "CREATE TABLE orders (id int, customer_id int)",
-        "INSERT INTO orders VALUES (1, 10), (2, 10), (3, 20)",
+        "INSERT INTO orders VALUES (1, 10), (2, 10), (3, 20), (3, 20)",
         "CREATE STANDING QUERY by_customer (cid int) \
          AS SELECT id FROM orders WHERE customer_id = cid",
     ] {
@@ -59,11 +59,11 @@ fn test_standing_query_bind_params() {
         .unwrap();
     assert_eq!(ids(rows), vec![1, 2]);
 
-    // A parameter in an expression.
+    // A parameter in an expression, selecting a duplicated row.
     let rows = client
         .query("EXECUTE STANDING QUERY by_customer ($1 + 10)", &[&10_i32])
         .unwrap();
-    assert_eq!(ids(rows), vec![3]);
+    assert_eq!(ids(rows), vec![3, 3]);
 
     // A parameter bound with a type the declared type is assignable from.
     let rows = client
@@ -72,7 +72,7 @@ fn test_standing_query_bind_params() {
             &[(&20_i16, Type::INT2)],
         )
         .unwrap();
-    assert_eq!(ids(rows), vec![3]);
+    assert_eq!(ids(rows), vec![3, 3]);
 
     let err = client
         .query(
@@ -111,6 +111,7 @@ fn test_standing_query_sees_prior_writes_through_new_index() {
         .query("EXECUTE STANDING QUERY by_customer (42)", &[])
         .unwrap();
     assert_eq!(rows.len(), 1000);
+
 }
 
 #[mz_ore::test]

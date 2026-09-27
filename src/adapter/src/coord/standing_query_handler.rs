@@ -166,7 +166,10 @@ fn process_batch(
                     }
                     (None, Ok(rows)) => {
                         debug!(%sink_id, %request_id, "buffering result");
-                        rows.push(result_row);
+                        // The subscribe consolidates identical rows into one
+                        // update, so the diff is the row's multiplicity.
+                        let count = usize::try_from(diff.into_inner()).expect("diff is positive");
+                        rows.extend(std::iter::repeat_n(result_row, count));
                     }
                     // The request already failed, and its first error stands.
                     (_, Err(_)) => {}
