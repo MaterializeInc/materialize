@@ -60,6 +60,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
 
 mod delete_on_drop;
+pub mod phase;
 
 pub use delete_on_drop::*;
 pub use prometheus::Opts as PrometheusOpts;
