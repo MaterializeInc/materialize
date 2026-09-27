@@ -73,7 +73,7 @@ pub(crate) fn render<'scope>(
     let health = config.health.clone();
     let report_transient =
         move |err| super::report_error(&health, ReplicationError::Transient(Rc::new(err)));
-    let button = builder.build_fallible_with(report_transient, move |caps| {
+    let button = builder.build_fallible(report_transient, move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let [data_cap_set]: &mut [_; 1] = caps.try_into().unwrap();

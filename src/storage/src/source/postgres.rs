@@ -44,9 +44,9 @@
 //! itself. This could be authentication failures, connection failures, etc. The only operators
 //! that can emit such errors are the `TableReader` and the `ReplicationReader` operators, which
 //! are the ones that talk to the external world. Both of these operators are built with the
-//! `AsyncOperatorBuilder::build_fallible_with` method which allows transient errors to be
-//! propagated upwards with the standard `?` operator without risking downgrading the capability
-//! and producing bogus frontiers.
+//! `AsyncOperatorBuilder::build_fallible` method which allows transient errors to be propagated
+//! upwards with the standard `?` operator without risking downgrading the capability and producing
+//! bogus frontiers.
 //!
 //! Both operators report their errors to the source status, which also restarts the dataflow.
 //!

@@ -23,10 +23,6 @@ use mz_persist_client::operators::shard_source::ErrorHandler;
 use mz_repr::GlobalId;
 use mz_storage_client::client::{Status, StatusUpdate};
 use serde::{Deserialize, Serialize};
-use timely::dataflow::StreamVec;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Operator;
-use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use tracing::{error, info};
 
@@ -453,21 +449,6 @@ impl HealthReporter {
                 update: HealthStatusUpdate::halting(format!("{context}: {e:#}"), None),
             })
         })
-    }
-
-    /// Reports every message in `stream`, for producers that emit health messages as a stream.
-    pub fn report_stream<'scope, T: Timestamp>(
-        &self,
-        stream: StreamVec<'scope, T, HealthStatusMessage>,
-    ) {
-        let reporter = self.clone();
-        stream.sink(Pipeline, "HealthReport", move |(input, _frontier)| {
-            input.for_each(|_time, data| {
-                for message in data.drain(..) {
-                    reporter.report(message);
-                }
-            });
-        });
     }
 }
 

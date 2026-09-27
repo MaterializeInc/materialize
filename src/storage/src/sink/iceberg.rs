@@ -1248,7 +1248,7 @@ fn mint_batch_descriptions<'scope>(
         .expect("the planner should have enforced this")
         .clone();
 
-    let button = builder.build_fallible_with(report_errors(health), move |caps| {
+    let button = builder.build_fallible(report_errors(health), move |caps| {
         Box::pin(async move {
             let [table_ready_capset, capset]: &mut [_; 2] = caps.try_into().unwrap();
 
@@ -1659,7 +1659,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     let mut input = builder.new_disconnected_input(input, Pipeline);
 
     let button = builder
-        .build_fallible_with(report_errors(health), move |caps| {
+        .build_fallible(report_errors(health), move |caps| {
             Box::pin(async move {
                 let [capset]: &mut [_; 1] = caps.try_into().unwrap();
                 let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
@@ -2739,7 +2739,7 @@ fn commit_to_iceberg<'scope>(
         builder.new_disconnected_input(batch_desc_input, Exchange::new(move |_| hashed_id));
     let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
 
-    let button = builder.build_fallible_with(report_errors(health), move |_caps| {
+    let button = builder.build_fallible(report_errors(health), move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
                 write_frontier.borrow_mut().clear();

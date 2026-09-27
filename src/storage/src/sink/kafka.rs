@@ -719,7 +719,7 @@ fn sink_collection<'scope>(
 
     let as_of = sink.as_of.clone();
     let sink_version = sink.version;
-    let button = builder.build_fallible_with(report_error, move |_caps| {
+    let button = builder.build_fallible(report_error, move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
                 write_frontier.borrow_mut().clear();
@@ -1508,7 +1508,7 @@ fn encode_collection<'scope>(
             namespace: StatusNamespace::Kafka,
         })
     };
-    let button = builder.build_fallible_with(report_error, move |caps| {
+    let button = builder.build_fallible(report_error, move |caps| {
         Box::pin(async move {
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
             let key_desc = connection

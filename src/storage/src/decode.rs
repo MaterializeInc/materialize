@@ -528,7 +528,7 @@ pub(crate) fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>
         })
     };
     // The button is dropped. The operator shuts down with the dataflow instead.
-    let _ = builder.build_fallible_with(report_error, move |caps| {
+    let _ = builder.build_fallible(report_error, move |caps| {
         Box::pin(async move {
             let [cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
