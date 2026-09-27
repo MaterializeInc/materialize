@@ -2931,7 +2931,9 @@ impl Coordinator {
                     result: Ok(resp),
                     session,
                     otel_ctx,
+                    qps_resume,
                 }) => {
+                    qps_resume.finish();
                     otel_ctx.attach_as_parent();
                     (resp, session)
                 }
@@ -2939,7 +2941,9 @@ impl Coordinator {
                     result: Err(e),
                     session,
                     otel_ctx,
+                    qps_resume,
                 }) => {
+                    qps_resume.finish();
                     let ctx = ExecuteContext::from_parts_with_response_barriers(
                         tx,
                         internal_cmd_tx.clone(),

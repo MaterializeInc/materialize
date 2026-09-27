@@ -65,7 +65,8 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn handle_message(&mut self, msg: Message) -> () {
         match msg {
-            Message::Command(otel_ctx, cmd) => {
+            Message::Command(otel_ctx, cmd, queued) => {
+                queued.finish();
                 // TODO: We need a Span that is not none for the otel_ctx to attach the parent
                 // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
                 // can downgrade this to a debug_span.

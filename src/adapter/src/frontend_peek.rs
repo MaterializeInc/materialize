@@ -94,7 +94,11 @@ impl PeekClient {
             }
         }
 
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        let phases = Arc::clone(&self.coordinator_client().metrics().qps);
+        let catalog = phases
+            .frontend_catalog
+            .time(self.catalog_snapshot("try_frontend_peek"))
+            .await;
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement
@@ -199,7 +203,9 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_frontend_peek_inner(session, catalog, stmt, params, logging)
+        phases
+            .frontend_total
+            .time(self.try_frontend_peek_inner(session, catalog, stmt, params, logging))
             .await
     }
 
@@ -219,6 +225,7 @@ impl PeekClient {
         params: Params,
         logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let phases = Arc::clone(&self.coordinator_client().metrics().qps);
         let stmt = match stmt {
             Some(stmt) => stmt,
             None => {
@@ -229,6 +236,7 @@ impl PeekClient {
 
         // # From handle_execute_inner
 
+        let plan_timer = phases.frontend_resolve_plan.start();
         let conn_catalog = catalog.for_session(session);
         // (`resolved_ids` should be derivable from `stmt`. If `stmt` is later transformed to
         // remove/add IDs, then `resolved_ids` should be updated to also remove/add those IDs.)
@@ -237,6 +245,8 @@ impl PeekClient {
         let pcx = session.pcx();
         let (plan, sql_impl_ids) =
             mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+        plan_timer.finish();
+        let validation_timer = phases.frontend_validation.start();
 
         /// What do we do with the result of the select?
         enum QueryPlan<'a> {
@@ -540,17 +550,22 @@ impl PeekClient {
         let timeline = Coordinator::get_timeline(&timeline_context);
         let needs_linearized_read_ts =
             Coordinator::needs_linearized_read_ts(&isolation_level, when);
+        validation_timer.finish();
 
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                let oracle = self.ensure_oracle(timeline).await?;
-                let oracle_read_ts = oracle.read_ts().await;
+                let oracle = phases
+                    .frontend_oracle_lookup
+                    .time(self.ensure_oracle(timeline))
+                    .await?;
+                let oracle_read_ts = phases.frontend_oracle_read.time(oracle.read_ts()).await;
                 Some(oracle_read_ts)
             }
             Some(_) | None => None,
         };
 
         // # From peek_real_time_recency
+        let timestamp_timer = phases.frontend_timestamp_setup.start();
 
         let vars = session.vars();
         let real_time_recency_ts: Option<Timestamp> = if vars.real_time_recency()
@@ -668,8 +683,9 @@ impl PeekClient {
                     // Simply use the inputs of the current query.
                     &input_id_bundle
                 };
-                let (determination, read_holds) = self
-                    .frontend_determine_timestamp(
+                let (determination, read_holds) = phases
+                    .frontend_timestamp
+                    .time(self.frontend_determine_timestamp(
                         session,
                         determine_bundle,
                         when,
@@ -677,7 +693,7 @@ impl PeekClient {
                         &timeline_context,
                         oracle_read_ts,
                         real_time_recency_ts,
-                    )
+                    ))
                     .await?;
 
                 // If this query pins the timestamp of a multi-statement transaction, store
@@ -785,17 +801,20 @@ impl PeekClient {
         }
 
         // # From peek_optimize
+        timestamp_timer.finish();
 
-        let stats = statistics_oracle(
-            session,
-            &source_ids,
-            &determination.timestamp_context.antichain(),
-            true,
-            catalog.system_config(),
-            &*self.storage_collections,
-        )
-        .await
-        .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
+        let stats = phases
+            .frontend_statistics
+            .time(statistics_oracle(
+                session,
+                &source_ids,
+                &determination.timestamp_context.antichain(),
+                true,
+                catalog.system_config(),
+                &*self.storage_collections,
+            ))
+            .await
+            .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
 
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -830,7 +849,10 @@ impl PeekClient {
 
         let source_ids_for_closure = source_ids.clone();
 
-        let optimization_future: JoinHandle<Result<_, AdapterError>> = match query_plan {
+        let optimization_future: JoinHandle<(
+            Result<_, AdapterError>,
+            mz_ore::metrics::phase::PhaseGuard,
+        )> = match query_plan {
             QueryPlan::CopyTo(select_plan, mut copy_to_ctx) => {
                 let raw_expr = select_plan.source.clone();
 
@@ -861,7 +883,7 @@ impl PeekClient {
 
                 mz_ore::task::spawn_blocking(
                     || "optimize copy-to",
-                    move || {
+                    time_optimizer(&phases, move || {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
@@ -882,7 +904,7 @@ impl PeekClient {
                                 source_ids: source_ids_for_closure,
                             })
                         })
-                    },
+                    }),
                 )
             }
             QueryPlan::Select(select_plan) => {
@@ -902,7 +924,7 @@ impl PeekClient {
 
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",
-                    move || {
+                    time_optimizer(&phases, move || {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
@@ -1050,7 +1072,7 @@ impl PeekClient {
                                 }
                             }
                         })
-                    },
+                    }),
                 )
             }
             QueryPlan::Subscribe(plan) => {
@@ -1070,7 +1092,7 @@ impl PeekClient {
                 );
                 mz_ore::task::spawn_blocking(
                     || "optimize subscribe",
-                    move || {
+                    time_optimizer(&phases, move || {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
@@ -1100,37 +1122,48 @@ impl PeekClient {
                                 optimization_finished_at,
                             })
                         })
-                    },
+                    }),
                 )
             }
         };
 
+        let optimization_future = async {
+            let (result, resume) = optimization_future.await;
+            resume.finish();
+            result
+        };
         let mut optimization_timeout = *session.vars().statement_timeout();
         // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
         if optimization_timeout == Duration::ZERO {
             optimization_timeout = Duration::MAX;
         }
-        let optimization_result =
-            // Note: spawn_blocking tasks cannot be cancelled, so on timeout we stop waiting but the
-            // optimization task continues running in the background until completion. See
-            // https://github.com/MaterializeInc/database-issues/issues/8644 for properly cancelling
-            // optimizer runs.
-            match tokio::time::timeout(optimization_timeout, optimization_future).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(AdapterError::Optimizer(err))) => {
-                    return Err(AdapterError::Internal(format!(
-                        "internal error in optimizer: {}",
-                        err
-                    )));
-                }
-                Ok(Err(err)) => {
-                    return Err(err);
-                }
-                Err(_elapsed) => {
-                    warn!("optimize peek timed out after {:?}", optimization_timeout);
-                    return Err(AdapterError::StatementTimeout);
-                }
-            };
+        // Note: spawn_blocking tasks cannot be cancelled, so on timeout we stop waiting but the
+        // optimization task continues running in the background until completion. See
+        // https://github.com/MaterializeInc/database-issues/issues/8644 for properly cancelling
+        // optimizer runs.
+        let waited = phases
+            .optimizer_await
+            .time(tokio::time::timeout(
+                optimization_timeout,
+                optimization_future,
+            ))
+            .await;
+        let optimization_result = match waited {
+            Ok(Ok(result)) => result,
+            Ok(Err(AdapterError::Optimizer(err))) => {
+                return Err(AdapterError::Internal(format!(
+                    "internal error in optimizer: {}",
+                    err
+                )));
+            }
+            Ok(Err(err)) => {
+                return Err(err);
+            }
+            Err(_elapsed) => {
+                warn!("optimize peek timed out after {:?}", optimization_timeout);
+                return Err(AdapterError::StatementTimeout);
+            }
+        };
 
         // Log optimization finished
         if let Some(logging_id) = logging.id() {
@@ -1711,6 +1744,27 @@ impl PeekClient {
                 in_immediate_multi_stmt_txn,
             );
         }
+    }
+}
+
+// Keep the queue/work/resume boundaries explicit. A timeout drops the awaiting
+// future, not the blocking work. Its unconsumed resume guard is then dropped.
+fn time_optimizer<F, T>(
+    phases: &crate::metrics::QpsPhases,
+    work: F,
+) -> impl FnOnce() -> (T, mz_ore::metrics::phase::PhaseGuard) + use<F, T>
+where
+    F: FnOnce() -> T,
+{
+    let queued = phases.optimizer_dispatch.start();
+    let execution = phases.optimizer_work.clone();
+    let resume = phases.optimizer_resume.clone();
+    move || {
+        queued.finish();
+        let timer = execution.start();
+        let result = work();
+        timer.finish();
+        (result, resume.start())
     }
 }
 

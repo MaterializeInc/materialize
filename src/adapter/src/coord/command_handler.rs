@@ -213,6 +213,7 @@ impl Coordinator {
                         params,
                     );
                     let _ = tx.send(Response {
+                        qps_resume: session.metrics().qps_response_resume.start(),
                         result,
                         session,
                         otel_ctx,
@@ -2252,13 +2253,14 @@ impl Coordinator {
         depends_on: BTreeSet<GlobalId>,
         is_fast_path: bool,
         watch_set: Option<WatchSetCreation>,
-        tx: oneshot::Sender<Result<(), AdapterError>>,
+        tx: oneshot::Sender<(Result<(), AdapterError>, mz_ore::metrics::phase::PhaseGuard)>,
     ) {
         let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                let _ = tx.send((
+                    Err(AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)),
+                    self.metrics.qps.coordinator_register_resume.start(),
                 ));
                 return;
             }
@@ -2285,7 +2287,7 @@ impl Coordinator {
             .or_default()
             .insert(uuid, cluster_id);
 
-        let _ = tx.send(Ok(()));
+        let _ = tx.send((Ok(()), self.metrics.qps.coordinator_register_resume.start()));
     }
 
     /// Handles [`Command::UnregisterFrontendPeek`]; see its documentation for

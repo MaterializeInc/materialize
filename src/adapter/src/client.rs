@@ -120,7 +120,11 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     build_info: &'static BuildInfo,
-    inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+    inner_cmd_tx: mpsc::UnboundedSender<(
+        OpenTelemetryContext,
+        Command,
+        mz_ore::metrics::phase::PhaseGuard,
+    )>,
     id_alloc: IdAllocator<IdAllocatorInnerBitSet>,
     now: NowFn,
     metrics: Metrics,
@@ -131,7 +135,11 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         build_info: &'static BuildInfo,
-        cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+        cmd_tx: mpsc::UnboundedSender<(
+            OpenTelemetryContext,
+            Command,
+            mz_ore::metrics::phase::PhaseGuard,
+        )>,
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
@@ -631,9 +639,9 @@ Issue a SQL query to get started. Need help?
 
     #[instrument(level = "debug")]
     pub(crate) fn try_send(&self, cmd: Command) -> bool {
-        self.inner_cmd_tx
-            .send((OpenTelemetryContext::obtain(), cmd))
-            .is_ok()
+        let otel_ctx = OpenTelemetryContext::obtain();
+        let queued = self.metrics.qps.command_queue(&cmd);
+        self.inner_cmd_tx.send((otel_ctx, cmd, queued)).is_ok()
     }
 
     #[instrument(level = "debug")]
@@ -776,10 +784,16 @@ impl SessionClient {
         stmt: Statement<Raw>,
         sql: String,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot("declare").await;
+        let phases = Arc::clone(&self.inner().metrics().qps);
+        let catalog = phases
+            .declare_catalog
+            .time(self.catalog_snapshot("declare"))
+            .await;
         let param_types = vec![];
-        let desc =
-            Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
+        let describe = phases.declare_describe.start();
+        let desc = Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types);
+        describe.finish();
+        let desc = desc?;
         let params = vec![];
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
@@ -1391,6 +1405,7 @@ impl SessionClient {
                     drop(guarded_rx);
 
                     let res = res.expect("sender dropped");
+                    res.qps_resume.finish();
                     let status = res.result.is_ok().then_some("success").unwrap_or("error");
                     if let Err(err) = res.result.as_ref() {
                         if name_hint.should_trace_errors() {
