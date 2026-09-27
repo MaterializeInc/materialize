@@ -540,6 +540,12 @@ class BulkPrivilegeGrant(Scenario):
                                 conn_info=conn_infos["materialized"],
                                 strict_serializable=False,
                             ),
+                            # A `SELECT 1` queues behind the grant transaction in
+                            # flight, so its latency distribution tracks the grant
+                            # duration and where the query lands relative to it.
+                            # Comparing percentiles against a baseline measures
+                            # that noise. The guarantee below guards the stall.
+                            report_regressions=False,
                         )
                         for _ in range(10)
                     ],
