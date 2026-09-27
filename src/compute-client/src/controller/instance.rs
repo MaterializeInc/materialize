@@ -1762,7 +1762,7 @@ impl Instance {
         map_filter_project: mz_expr::SafeMfpPlan,
         mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
-        peek_response_tx: oneshot::Sender<PeekResponse>,
+        peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -2012,7 +2012,9 @@ impl Instance {
         };
 
         // The recipient might not be interested in the peek response anymore, which is fine.
-        let _ = peek.peek_response_tx.send(response);
+        let _ = peek
+            .peek_response_tx
+            .send((response, self.metrics.qps.result_resume.start()));
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
@@ -3074,7 +3076,7 @@ struct PendingPeek {
     /// The read hold installed to serve this peek.
     read_hold: ReadHold,
     /// The channel to send peek results.
-    peek_response_tx: oneshot::Sender<PeekResponse>,
+    peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
     /// An optional limit of the peek's result size.
     limit: Option<usize>,
     /// The offset into the peek's result.
