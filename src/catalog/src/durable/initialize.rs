@@ -788,7 +788,8 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
             replication_factor: args.default_cluster_replication_factor,
             availability_zones: vec![],
             logging: ReplicaLogging {
-                log_logging: false,
+                // EXPERIMENT: introspection debugging on by default.
+                log_logging: true,
                 interval: Some(Duration::from_secs(1)),
             },
             arrangement_compression: false,
@@ -813,7 +814,8 @@ fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, Catalog
             pending: false,
         },
         logging: ReplicaLogging {
-            log_logging: false,
+            // EXPERIMENT: introspection debugging on by default.
+            log_logging: true,
             interval: Some(Duration::from_secs(1)),
         },
         arrangement_compression: false,

@@ -5193,9 +5193,12 @@ pub fn plan_create_cluster_inner(
                 .add_notice(PlanNotice::ReplicaDiskOptionDeprecated);
         }
 
+        // EXPERIMENT: introspection debugging defaults to on whenever introspection is on.
+        let introspection_debugging = introspection_debugging
+            .unwrap_or_else(|| !matches!(introspection_interval, Some(OptionalDuration(None))));
         let compute = plan_compute_replica_config(
             introspection_interval,
-            introspection_debugging.unwrap_or(false),
+            introspection_debugging,
             experimental_arrangement_compression.unwrap_or(false),
         )?;
 
@@ -5463,7 +5466,7 @@ generate_extracted_config!(
     (Disk, bool),
     (ExperimentalArrangementCompression, bool, Default(false)),
     (Internal, bool, Default(false)),
-    (IntrospectionDebugging, bool, Default(false)),
+    (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Size, String),
     (StorageAddresses, Vec<String>),
@@ -5489,6 +5492,9 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
+    // EXPERIMENT: introspection debugging defaults to on whenever introspection is on.
+    let introspection_debugging = introspection_debugging
+        .unwrap_or_else(|| !matches!(introspection_interval, Some(OptionalDuration(None))));
     let compute = plan_compute_replica_config(
         introspection_interval,
         introspection_debugging,
