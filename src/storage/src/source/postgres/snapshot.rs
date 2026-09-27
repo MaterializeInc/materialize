@@ -183,9 +183,8 @@ use mz_timely_util::builder_async::{
 };
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tokio_postgres::error::SqlState;
@@ -341,7 +340,6 @@ pub(crate) fn render<'scope>(
     StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
     StreamVec<'scope, MzOffset, RewindRequest>,
     StreamVec<'scope, MzOffset, Infallible>,
-    StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);
@@ -358,8 +356,6 @@ pub(crate) fn render<'scope>(
     // functions/modules)
     let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
@@ -399,7 +395,10 @@ pub(crate) fn render<'scope>(
         }
     }
 
-    let (button, transient_errors) = builder.build_fallible(move |caps| {
+    let health = config.health.clone();
+    let report_transient =
+        move |err| super::report_error(&health, ReplicationError::Transient(Rc::new(err)));
+    let button = builder.build_fallible_with(report_transient, move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let id = config.id;
@@ -409,8 +408,7 @@ pub(crate) fn render<'scope>(
                 rewind_cap_set,
                 slot_ready_cap_set,
                 snapshot_cap_set,
-                definite_error_cap_set,
-            ]: &mut [_; 5] = caps.try_into().unwrap();
+            ]: &mut [_; 4] = caps.try_into().unwrap();
 
             let connection_config = connection
                 .connection
@@ -551,8 +549,8 @@ pub(crate) fn render<'scope>(
                                     }
                                 }
 
-                                definite_error_handle.give(
-                                    &definite_error_cap_set[0],
+                                super::report_error(
+                                    &config.health,
                                     ReplicationError::Definite(Rc::new(err)),
                                 );
                                 return Ok(());
@@ -647,8 +645,8 @@ pub(crate) fn render<'scope>(
                     }
                 }
                 if is_snapshot_leader {
-                    definite_error_handle.give(
-                        &definite_error_cap_set[0],
+                    super::report_error(
+                        &config.health,
                         ReplicationError::Definite(Rc::new(err)),
                     );
                 }
@@ -835,13 +833,10 @@ pub(crate) fn render<'scope>(
         })
         .as_collection();
 
-    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
-
     (
         snapshot_updates,
         rewinds,
         slot_ready,
-        errors,
         button.press_on_drop(),
     )
 }

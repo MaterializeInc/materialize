@@ -101,9 +101,7 @@ use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, watch};
@@ -153,7 +151,6 @@ pub(crate) fn render<'scope>(
 ) -> (
     StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
     StreamVec<'scope, MzOffset, Probe<MzOffset>>,
-    StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
@@ -161,8 +158,6 @@ pub(crate) fn render<'scope>(
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (data_output, data_stream) = builder.new_output();
-    let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input =
@@ -175,13 +170,15 @@ pub(crate) fn render<'scope>(
     metrics.tables.set(u64::cast_from(output_uppers.len()));
 
     let reader_table_info = table_info.clone();
-    let (button, transient_errors) = builder.build_fallible(move |caps| {
+    let health = config.health.clone();
+    let report_transient =
+        move |err| super::report_error(&health, ReplicationError::Transient(Rc::new(err)));
+    let button = builder.build_fallible_with(report_transient, move |caps| {
         let mut table_info = reader_table_info;
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, definite_error_cap_set, probe_cap]: &mut [_; 3] =
-                caps.try_into().unwrap();
+            let [data_cap_set, probe_cap]: &mut [_; 2] = caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -369,8 +366,8 @@ pub(crate) fn render<'scope>(
                                         .await;
                                 }
                             }
-                            definite_error_handle.give(
-                                &definite_error_cap_set[0],
+                            super::report_error(
+                                &config.health,
                                 ReplicationError::Definite(Rc::new(err)),
                             );
                             return Ok(());
@@ -419,10 +416,7 @@ pub(crate) fn render<'scope>(
                         }
                     }
 
-                    definite_error_handle.give(
-                        &definite_error_cap_set[0],
-                        ReplicationError::Definite(Rc::new(err)),
-                    );
+                    super::report_error(&config.health, ReplicationError::Definite(Rc::new(err)));
                     return Ok(());
                 }
             };
@@ -525,8 +519,8 @@ pub(crate) fn render<'scope>(
                                                 .await;
                                         }
                                     }
-                                    definite_error_handle.give(
-                                        &definite_error_cap_set[0],
+                                    super::report_error(
+                                        &config.health,
                                         ReplicationError::Definite(Rc::new(err)),
                                     );
                                     return Ok(());
@@ -558,8 +552,8 @@ pub(crate) fn render<'scope>(
                                                 .await;
                                         }
                                     }
-                                    definite_error_handle.give(
-                                        &definite_error_cap_set[0],
+                                    super::report_error(
+                                        &config.health,
                                         ReplicationError::Definite(Rc::new(err)),
                                     );
                                     return Ok(());
@@ -646,14 +640,7 @@ pub(crate) fn render<'scope>(
         })
         .as_collection();
 
-    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
-
-    (
-        replication_updates,
-        probe_stream,
-        errors,
-        button.press_on_drop(),
-    )
+    (replication_updates, probe_stream, button.press_on_drop())
 }
 
 /// Produces the logical replication stream while taking care of regularly sending standby
