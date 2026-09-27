@@ -18,11 +18,13 @@
 //! Poll durations are wall time inside `Future::poll`, NOT thread CPU time.
 //! Parent and nested phase measurements overlap. Never add their quantiles.
 
-use std::future::{Future, poll_fn};
-use std::pin::pin;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use pin_project::pin_project;
 use prometheus::{Histogram, HistogramVec, IntGauge, IntGaugeVec};
 
 use crate::metrics::MetricsRegistry;
@@ -147,26 +149,59 @@ impl Phase {
     }
 
     /// Time a future from first poll to return or drop, without replacing its waker.
-    pub async fn time<F: Future>(&self, future: F) -> F::Output {
-        if self.0.is_none() {
-            return future.await;
+    pub fn time<F: Future>(&self, future: F) -> Timed<'_, F> {
+        Timed {
+            future,
+            phase: self,
+            guard: None,
+            completed: false,
         }
-        let mut guard = self.start();
-        let running = guard.inner.as_mut().expect("enabled");
-        let mut future = pin!(future);
-        let result = if running.metrics.poll {
-            running.poll = Some(Duration::ZERO);
-            poll_fn(|cx| {
-                let start = Instant::now();
-                let result = future.as_mut().poll(cx);
-                *running.poll.as_mut().expect("poll mode") += start.elapsed();
-                result
+    }
+}
+
+/// A diagnostic wrapper with exactly one inline copy of its future.
+///
+/// An async function that moves the future into different await branches can
+/// retain multiple copies in its layout. Nested phase wrappers then multiply
+/// storage and overflow runtime stacks, including when metrics are disabled.
+#[derive(Debug)]
+#[must_use = "futures do nothing unless polled or awaited"]
+#[pin_project]
+pub struct Timed<'a, F> {
+    #[pin]
+    future: F,
+    phase: &'a Phase,
+    guard: Option<PhaseGuard>,
+    completed: bool,
+}
+
+impl<F: Future> Future for Timed<'_, F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        assert!(!*this.completed, "timed future polled after completion");
+        let guard = this.guard.get_or_insert_with(|| this.phase.start());
+        let poll_start = guard.inner.as_mut().and_then(|running| {
+            running.metrics.poll.then(|| {
+                running.poll.get_or_insert(Duration::ZERO);
+                Instant::now()
             })
-            .await
-        } else {
-            future.await
-        };
-        guard.finish();
+        });
+        let result = this.future.poll(cx);
+        if let Some(start) = poll_start {
+            *guard
+                .inner
+                .as_mut()
+                .expect("enabled")
+                .poll
+                .as_mut()
+                .expect("poll mode") += start.elapsed();
+        }
+        if result.is_ready() {
+            *this.completed = true;
+            this.guard.take().expect("started").finish();
+        }
         result
     }
 }
@@ -224,6 +259,8 @@ impl Drop for PhaseGuard {
 
 #[cfg(test)]
 mod tests {
+    use std::future::poll_fn;
+    use std::pin::pin;
     use std::task::{Context, Poll, Waker};
 
     use super::*;
@@ -344,5 +381,38 @@ mod tests {
         assert_eq!(metrics.poll_returned.get_sample_count(), 1);
         assert_eq!(metrics.active.get(), 0);
         assert!(metrics.returned.get_sample_sum() >= metrics.poll_returned.get_sample_sum());
+    }
+
+    #[crate::test]
+    fn nested_timing_has_bounded_future_size() {
+        struct LargeFuture([u8; 8192]);
+        impl Future for LargeFuture {
+            type Output = u8;
+
+            fn poll(self: std::pin::Pin<&mut Self>, _: &mut Context<'_>) -> Poll<u8> {
+                Poll::Ready(self.0[0])
+            }
+        }
+
+        for mode in [Mode::Off, Mode::Wall, Mode::Poll] {
+            let phase = phase(mode);
+            let future = phase.time(phase.time(phase.time(phase.time(LargeFuture([7; 8192])))));
+            let size = std::mem::size_of_val(&future);
+            assert!(
+                size <= std::mem::size_of::<LargeFuture>() + 1024,
+                "nested phase wrappers duplicated future storage in {mode:?}: {size} bytes"
+            );
+            let mut future = pin!(future);
+            assert_eq!(
+                future
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Ready(7)
+            );
+            if let Some(metrics) = &phase.0 {
+                assert_eq!(metrics.returned.get_sample_count(), 4);
+                assert_eq!(metrics.active.get(), 0);
+            }
+        }
     }
 }
