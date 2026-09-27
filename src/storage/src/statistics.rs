@@ -23,10 +23,11 @@
 //! - Entirely independent across workers.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::Instant;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
     DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricTag,
@@ -39,6 +40,61 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::frontier::Antichain;
+use timely::worker::Worker as TimelyWorker;
+
+use crate::event_log::{
+    EventLogDataflow, EventLogger, aggregating_worker, event_logger, render_event_log,
+};
+
+/// The name under which the statistics logger is registered with the timely worker.
+const STATISTICS_LOGGER_NAME: &str = "materialize/storage/statistics";
+
+/// A worker's local statistics about one object, with the worker's local epoch of the object.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum StatisticsEvent {
+    /// Statistics about a source export.
+    Source(usize, SourceStatisticsRecord),
+    /// Statistics about a sink.
+    Sink(usize, SinkStatisticsRecord),
+    /// `worker` deinitialized `id`, and logs no further statistics about it.
+    Deinitialized {
+        /// The deinitialized object.
+        id: GlobalId,
+        /// The worker that deinitialized it.
+        worker: usize,
+    },
+}
+
+impl StatisticsEvent {
+    fn id(&self) -> GlobalId {
+        match self {
+            StatisticsEvent::Source(_, record) => record.id,
+            StatisticsEvent::Sink(_, record) => record.id,
+            StatisticsEvent::Deinitialized { id, .. } => *id,
+        }
+    }
+}
+
+/// Renders the dataflow that moves statistics logged through the returned logger to the
+/// workers that aggregate them, where they are appended to `received`.
+///
+/// Must be called once per worker, at the same point in the dataflow rendering order on every
+/// worker.
+pub(crate) fn render_statistics_dataflow(
+    worker: &mut TimelyWorker,
+    received: Rc<RefCell<Vec<StatisticsEvent>>>,
+) -> (EventLogDataflow, EventLogger<StatisticsEvent>) {
+    let worker_count = worker.peers();
+    let dataflow = render_event_log(
+        worker,
+        "Dataflow: storage statistics",
+        STATISTICS_LOGGER_NAME,
+        move |event: &StatisticsEvent| u64::cast_from(aggregating_worker(event.id(), worker_count)),
+        move |mut events, _activator| received.borrow_mut().append(&mut events),
+    );
+    let logger = event_logger(worker, STATISTICS_LOGGER_NAME).expect("just registered");
+    (dataflow, logger)
+}
 
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
@@ -890,7 +946,7 @@ impl SinkStatistics {
 }
 
 /// A structure that keeps track of _local_ statistics, as well as aggregating
-/// statistics into a single worker (currently worker 0).
+/// each object's statistics on a single worker.
 ///
 /// This is because we ONLY want to emit statistics for _gauge-style-statistics_ when
 /// ALL workers have caught up to the _currently running instance of a source/sink_ and have
@@ -902,12 +958,15 @@ impl SinkStatistics {
 /// - Initialize sources/sinks with `initialize_source` or `initialize_sink`. This advances the
 /// local epoch.
 /// - Advance the _global epoch_ with `advance_global_epoch`. This should always be called strictly
-/// before reinitializing objects.
-/// - Emit a snapshot of local data with `emit_local`, which can be broadcasted to other workers.
+/// before reinitializing objects. Statistics travel separately from the commands that
+/// reinitialize objects, so a worker's gauges can lag one statistics interval behind a restart.
+/// - Emit a snapshot of local data with `emit_local`, which is routed to the aggregating workers
+/// of the objects.
 /// - Ingest data from other workers with `ingest`.
 /// - Emit a `snapshot` of _global data_ (i.e. skipping objects that don't have all workers caught
 /// up) with `snapshot`.
 ///
+/// Each object is aggregated on the worker its id selects.
 /// All functions can and should be called from ALL workers.
 ///
 /// Note that we hand-roll a statistics epoch here, but in the future, when the storage
@@ -922,6 +981,19 @@ pub struct AggregatedStatistics {
     global_source_statistics:
         BTreeMap<GlobalId, (usize, GlobalId, Vec<Option<SourceStatisticsUpdate>>)>,
     global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
+
+    /// Data of other workers about objects this worker has not initialized yet.
+    ///
+    /// Statistics travel to the aggregating worker out of band with the internal commands, so
+    /// data of other workers can arrive before this worker initialized the object. It waits here
+    /// until then.
+    pending_source_statistics: BTreeMap<GlobalId, Vec<(usize, SourceStatisticsRecord)>>,
+    pending_sink_statistics: BTreeMap<GlobalId, Vec<(usize, SinkStatisticsRecord)>>,
+    /// The workers that deinitialized an object this worker aggregates, until all have.
+    ///
+    /// Data about these objects is discarded rather than held as pending. An object leaves the
+    /// map once every worker deinitialized it, since no worker reports about it afterwards.
+    deinitialized: BTreeMap<GlobalId, BTreeSet<usize>>,
 }
 
 impl AggregatedStatistics {
@@ -934,7 +1006,15 @@ impl AggregatedStatistics {
             local_sink_statistics: Default::default(),
             global_source_statistics: Default::default(),
             global_sink_statistics: Default::default(),
+            pending_source_statistics: Default::default(),
+            pending_sink_statistics: Default::default(),
+            deinitialized: Default::default(),
         }
+    }
+
+    /// Whether this worker aggregates the statistics of `id`.
+    fn aggregates(&self, id: GlobalId) -> bool {
+        aggregating_worker(id, self.worker_count) == self.worker_id
     }
 
     /// Get a collection of `SourceStatistics` for the ingestion `ingestion_id`.
@@ -963,17 +1043,43 @@ impl AggregatedStatistics {
 
     /// Deinitialize an object. Other methods other than `initialize_source` and `initialize_sink`
     /// will never overwrite this.
-    pub fn deinitialize(&mut self, id: GlobalId) {
+    ///
+    /// Returns the event to log for the aggregating worker, which passes it to
+    /// `ingest_deinitialized`. Objects are never initialized again once deinitialized.
+    #[must_use]
+    pub fn deinitialize(&mut self, id: GlobalId) -> StatisticsEvent {
         self.local_source_statistics.remove(&id);
         self.local_sink_statistics.remove(&id);
         self.global_source_statistics.remove(&id);
         self.global_sink_statistics.remove(&id);
+        self.pending_source_statistics.remove(&id);
+        self.pending_sink_statistics.remove(&id);
+        if self.aggregates(id) {
+            self.deinitialized.entry(id).or_default();
+        }
+        StatisticsEvent::Deinitialized {
+            id,
+            worker: self.worker_id,
+        }
+    }
+
+    /// Records that workers deinitialized objects, as `(id, worker)` pairs.
+    ///
+    /// Must be called after ingesting the data received before or with these events.
+    pub fn ingest_deinitialized(&mut self, deinitialized: Vec<(GlobalId, usize)>) {
+        for (id, worker) in deinitialized {
+            let workers = self.deinitialized.entry(id).or_default();
+            workers.insert(worker);
+            if workers.len() == self.worker_count {
+                self.deinitialized.remove(&id);
+            }
+        }
     }
 
     /// Advance the _global epoch_ for statistics.
     ///
     /// Gauge values from previous epochs will be ignored. Counter values from previous epochs will
-    /// still be applied as usual.
+    /// still be applied as usual. Has no effect on workers that do not aggregate `id`.
     pub fn advance_global_epoch(&mut self, id: GlobalId) {
         if let Some((epoch, _ingestion_id, stats)) = self.global_source_statistics.get_mut(&id) {
             *epoch += 1;
@@ -1011,10 +1117,13 @@ impl AggregatedStatistics {
             })
             .or_insert_with(|| (0, ingestion_id, stats()));
 
-        if self.worker_id == 0 {
+        if self.aggregates(id) {
             self.global_source_statistics
                 .entry(id)
                 .or_insert_with(|| (0, ingestion_id, vec![None; self.worker_count]));
+            if let Some(pending) = self.pending_source_statistics.remove(&id) {
+                self.ingest(pending, Vec::new());
+            }
         }
     }
 
@@ -1027,24 +1136,26 @@ impl AggregatedStatistics {
                 stats.reset_gauges();
             })
             .or_insert_with(|| (0, stats()));
-        if self.worker_id == 0 {
+        if self.aggregates(id) {
             self.global_sink_statistics
                 .entry(id)
                 .or_insert_with(|| (0, vec![None; self.worker_count]));
+            if let Some(pending) = self.pending_sink_statistics.remove(&id) {
+                self.ingest(Vec::new(), pending);
+            }
         }
     }
 
     /// Ingest data from other workers.
+    ///
+    /// Ignores data about objects that this worker does not aggregate or that any worker
+    /// deinitialized, and holds data about objects this worker has not initialized yet until it
+    /// does.
     pub fn ingest(
         &mut self,
         source_statistics: Vec<(usize, SourceStatisticsRecord)>,
         sink_statistics: Vec<(usize, SinkStatisticsRecord)>,
     ) {
-        // Currently, only worker 0 ingest data from other workers.
-        if self.worker_id != 0 {
-            return;
-        }
-
         for (epoch, stat) in source_statistics {
             if let Some((global_epoch, _, stats)) = self.global_source_statistics.get_mut(&stat.id)
             {
@@ -1061,6 +1172,11 @@ impl AggregatedStatistics {
                     (Some(occupied), true) => occupied.incorporate(update),
                     (Some(occupied), false) => occupied.incorporate_counters(update),
                 }
+            } else if self.aggregates(stat.id) && !self.deinitialized.contains_key(&stat.id) {
+                self.pending_source_statistics
+                    .entry(stat.id)
+                    .or_default()
+                    .push((epoch, stat));
             }
         }
 
@@ -1079,55 +1195,62 @@ impl AggregatedStatistics {
                     (Some(occupied), true) => occupied.incorporate(update),
                     (Some(occupied), false) => occupied.incorporate_counters(update),
                 }
+            } else if self.aggregates(stat.id) && !self.deinitialized.contains_key(&stat.id) {
+                self.pending_sink_statistics
+                    .entry(stat.id)
+                    .or_default()
+                    .push((epoch, stat));
             }
         }
     }
 
-    fn _emit_local(
+    /// Snapshots this worker's local data about the objects this worker aggregates if
+    /// `aggregated_here`, or about the objects other workers aggregate otherwise.
+    fn emit_local_where(
         &mut self,
+        aggregated_here: bool,
     ) -> (
         Vec<(usize, SourceStatisticsRecord)>,
         Vec<(usize, SinkStatisticsRecord)>,
     ) {
+        let worker_id = self.worker_id;
+        let worker_count = self.worker_count;
+        let selected =
+            |id: &GlobalId| (aggregating_worker(*id, worker_count) == worker_id) == aggregated_here;
+
         let sources = self
             .local_source_statistics
-            .values_mut()
-            .flat_map(|(epoch, _, s)| s.snapshot().map(|v| (*epoch, v)))
+            .iter_mut()
+            .filter(|(id, _)| selected(id))
+            .flat_map(|(_, (epoch, _, s))| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
         let sinks = self
             .local_sink_statistics
-            .values_mut()
-            .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
+            .iter_mut()
+            .filter(|(id, _)| selected(id))
+            .flat_map(|(_, (epoch, s))| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
         (sources, sinks)
     }
 
-    /// Emit a snapshot of this workers local data.
+    /// Emit a snapshot of this worker's local data about objects that other workers aggregate.
+    ///
+    /// The data about objects this worker aggregates is ingested in `snapshot`.
     pub fn emit_local(
         &mut self,
     ) -> (
         Vec<(usize, SourceStatisticsRecord)>,
         Vec<(usize, SinkStatisticsRecord)>,
     ) {
-        // As an optimization, worker 0 does not broadcast it data. It ingests
-        // it in `snapshot`.
-        if self.worker_id == 0 {
-            return (Vec::new(), Vec::new());
-        }
-
-        self._emit_local()
+        self.emit_local_where(false)
     }
 
-    /// Emit a _global_ snapshot of data. This does not include objects whose workers have not
-    /// initialized gauges for the current epoch.
+    /// Emit a _global_ snapshot of the data about the objects this worker aggregates. This does
+    /// not include objects whose workers have not initialized gauges for the current epoch.
     pub fn snapshot(&mut self) -> (Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>) {
-        if !self.worker_id == 0 {
-            return (Vec::new(), Vec::new());
-        }
-
-        let (sources, sinks) = self._emit_local();
+        let (sources, sinks) = self.emit_local_where(true);
         self.ingest(sources, sinks);
 
         let sources = self
@@ -1177,3 +1300,6 @@ impl AggregatedStatistics {
         (sources, sinks)
     }
 }
+
+#[cfg(test)]
+mod tests;
