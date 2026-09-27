@@ -251,11 +251,9 @@ Steps for Okta (other IdPs vary in wording but follow the same shape):
      Updates, Push New Users, Push Profile Updates, Push Groups
    - Authentication Mode: **HTTP Header** (not Basic Auth)
    - Authorization / Token: paste `scim.secret`
-   - **Skip "Test Connector Configuration"**. Polis doesn't implement
-     the SCIM discovery endpoints (`/ServiceProviderConfig`,
-     `/ResourceTypes`, `/Schemas`) that Okta probes during the test.
-     Save without running the test; the actual provisioning calls to
-     `/Users` and `/Groups` work.
+   - Click **Test Connector Configuration**; it should report the
+     connector as configured. The base URL's host must be reachable
+     from your IdP's cloud (see [Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/)).
 4. **Provisioning** → **To App** → Edit → enable Create Users, Update
    User Attributes, Deactivate Users. Save.
 5. **Push Groups** tab (appears once SCIM is enabled) → **Push Groups

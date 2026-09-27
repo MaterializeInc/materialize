@@ -40,6 +40,7 @@ you can see which component rejected the flow.
 | Polis SCIM endpoint URLs return `http://localhost:5225/...` | `EXTERNAL_URL` env var not set on Polis | Module sets it automatically from `external_url`; re-run `terraform apply` |
 | Polis logs `OAuth server not configured correctly for openid flow, check if JWT signing keys are loaded` | `OPENID_RSA_PRIVATE_KEY` and `OPENID_RSA_PUBLIC_KEY` missing | Module auto-generates and injects them; re-run `terraform apply` |
 | Polis logs `"pkcs8" must be PKCS#8 formatted string` | RSA private key was PKCS#1 | Module uses the PKCS#8 form; re-run `terraform apply` |
+| Terraform apply fails on the Polis Helm release with `failed to create patch: The order in patch list ... doesn't match $setElementOrder list` | The live Polis Deployment has a duplicated environment variable (older module versions set `OPENID_REDIRECT_EXACT_MATCH` twice), which Kubernetes can't patch once the list changes | Delete the Deployment (`kubectl -n ory delete deployment polis`) and re-run `terraform apply`, which recreates it; Polis's data lives in its database, so nothing is lost |
 | First login fails with `no matching authentication claim found in the JWT` | Hydra issued a token without identity claims. Common causes: the OAuth2 client has `skipConsent: true`, or a `kratos_helm_values` override dropped the module's `oidc`/`saml` registration `session` hooks | Keep `skipConsent: false` on the Materialize client (the module default). The consent handler injects the email and groups claims. If you override `kratos_helm_values`, keep the registration `after` hooks for `oidc` and `saml` |
 | `"Couldn't fetch XML data"` when registering a Polis SAML connection | The IdP's metadata URL is gated by API auth | Post `rawMetadata=<XML>` to Polis instead of `metadataUrl=...` |
 | "Sign in via SAML" button missing on Kratos login | Cached login flow from before the polis provider was added | Hard refresh or open a new incognito session |
@@ -179,15 +180,14 @@ The SCIM connector base URL Polis returns
 **with a trailing slash**. Without it, Okta's client-side validation rejects
 the URL before making any HTTP request. Add `/` at the end and re-test.
 
-### Okta's "Test Connector Configuration" fails, but SCIM push still works
+### Okta's "Test Connector Configuration" fails with "Error authenticating: null"
 
-Polis doesn't implement SCIM's discovery endpoints (`/ServiceProviderConfig`,
-`/ResourceTypes`, `/Schemas`); Okta's connector test probes these and errors
-out. The SCIM operations Okta uses to push users and groups (`GET /Users`,
-`POST /Users`, `POST /Groups`) work fine.
-
-Save the connector configuration without running the test; provisioning
-still works end to end.
+Okta calls the SCIM base URL from its own cloud, so the host in that URL must
+be reachable from the internet (restricted to your IdP's egress ranges if you
+like). If Polis sits behind an internal load balancer or a private network, the
+test fails with this unhelpful message even though the token is correct. Use a
+hostname that resolves to a publicly reachable Polis endpoint for the SCIM base
+URL, keeping the same `/api/scim/v2.0/<directoryId>/` path and token.
 
 ### Users don't appear in Polis's directory after assigning a group
 
@@ -198,9 +198,11 @@ particular).
 
 Diagnose and unstick:
 
-1. Check the app's **Assignments** tab — each assigned user has a push
+1. Check the app's **Assignments** tab. Each assigned user has a push
    status column. A red icon means provisioning failed; hover for the
-   reason.
+   reason. If it says the user "was assigned this application before
+   Provisioning was enabled", click **Provision User** at the top of the
+   tab to provision all pending users.
 2. Force a push manually: **Assignments** tab → **Assign → Assign to
    People** and add the user by email.
 3. Verify in Polis:
