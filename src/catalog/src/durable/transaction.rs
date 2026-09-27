@@ -366,7 +366,7 @@ impl<'a> Transaction<'a> {
         build_version: &str,
         revision: Option<Uuid>,
     ) -> Result<(), CatalogError> {
-        self.set_written_plan_with_owner(id, build_version, revision, None)
+        self.set_written_plan_with_owner(id, build_version, revision, None, BTreeSet::new())
     }
 
     /// Selects replica-local work in the same expression shard and build namespace.
@@ -378,6 +378,7 @@ impl<'a> Transaction<'a> {
         build_version: &str,
         revision: Option<Uuid>,
         replica_owner: Option<crate::durable::objects::ReplicaPlanOwner>,
+        imports: BTreeSet<GlobalId>,
     ) -> Result<(), CatalogError> {
         let key = WrittenPlanKey {
             id,
@@ -406,6 +407,7 @@ impl<'a> Transaction<'a> {
             revision.map(|revision| WrittenPlanValue {
                 revision,
                 replica_owner,
+                imports,
             }),
             self.op_id,
         )?;
@@ -3026,7 +3028,7 @@ impl<'a> Transaction<'a> {
     /// A first storage bound must accompany collection birth. The caller must
     /// secure actual readability at that bound, including when reusing a shard.
     /// Validation checks committed permission and read requirements, not physical
-    /// frontiers. Protected indexes may publish their first bound after birth.
+    /// frontiers. An index's initial bound must be justified by its protected inputs.
     /// `None` denotes the empty frontier, not an ungoverned collection.
     /// Bound-advancing writers must use [`crate::catalog::Catalog::transact`],
     /// which also enforces retention derived from the native catalog definitions.
@@ -3077,6 +3079,16 @@ impl<'a> Transaction<'a> {
     /// Returns all permission identities touched by this transaction.
     pub(crate) fn changed_compaction_bounds(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.collection_compaction_bounds
+            .pending
+            .keys()
+            .map(|key| key.id)
+    }
+
+    /// Returns recovery requirements whose selected imports need revalidation.
+    pub(crate) fn changed_maintained_read_requirements(
+        &self,
+    ) -> impl Iterator<Item = GlobalId> + '_ {
+        self.maintained_read_requirements
             .pending
             .keys()
             .map(|key| key.id)

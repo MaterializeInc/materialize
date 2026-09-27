@@ -1248,12 +1248,14 @@ impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
         proto::WrittenPlanValue {
             revision: self.revision,
             replica_owner: self.replica_owner.into_proto(),
+            imports: self.imports.into_proto(),
         }
     }
     fn from_proto(proto: proto::WrittenPlanValue) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             revision: proto.revision,
             replica_owner: proto.replica_owner.into_rust()?,
+            imports: proto.imports.into_rust()?,
         })
     }
 }

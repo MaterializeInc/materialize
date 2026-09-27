@@ -517,12 +517,12 @@ impl PeekClient {
 
         // # From peek_validate
 
-        let observed_compute = self
+        let candidate_compute = self
             .query_client
             .as_ref()
             .map(|client| client.instance_snapshot(&catalog, cluster.id()));
         let compute_instance_snapshot = if explain_ctx.needs_cluster() {
-            observed_compute
+            candidate_compute
                 .clone()
                 .unwrap_or_else(|| ComputeInstanceSnapshot::new_without_collections(cluster.id()))
         } else {
@@ -627,11 +627,11 @@ impl PeekClient {
         // # From peek_timestamp_read_hold
 
         // EXPLAIN may describe a declared index before its trace is installed.
-        // Actual timestamp/statistics reads use observed access paths, as SELECT
-        // does, without changing the optimizer's catalog-declared candidates.
+        // Timestamp/statistics reads and SELECT use the same candidates for
+        // planning and domain construction, protected independently of installation.
         let dataflow_builder = DataflowBuilder::new(
             catalog.state(),
-            observed_compute.unwrap_or_else(|| compute_instance_snapshot.clone()),
+            candidate_compute.unwrap_or_else(|| compute_instance_snapshot.clone()),
         );
         let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
 
@@ -730,8 +730,10 @@ impl PeekClient {
                     // Simply use the inputs of the current query.
                     &input_id_bundle
                 };
-                let (determination, read_holds) = self
-                    .frontend_determine_timestamp(
+                let (determination, read_holds) = crate::util::run_cancellable(
+                    diagnostic_cancel.clone(),
+                    None,
+                    self.frontend_determine_timestamp(
                         session,
                         catalog.state(),
                         determine_bundle,
@@ -740,8 +742,9 @@ impl PeekClient {
                         &timeline_context,
                         oracle_read_ts,
                         real_time_recency_ts,
-                    )
-                    .await?;
+                    ),
+                )
+                .await?;
 
                 // Explanations use the fresh statement-entry catalog. Their hypothetical
                 // data timestamp can be in the future, with no execution to linearize.

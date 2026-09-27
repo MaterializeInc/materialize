@@ -21,6 +21,7 @@ use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::DEFAULT_DATABASE_NAME;
+use mz_storage_client::storage_collections::CollectionFrontiers;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::{SourceData, SourceExportStatementDetails};
@@ -40,6 +41,7 @@ struct Fixture {
     persist: PersistClient,
     qualifiers: ItemQualifiers,
     prefix: String,
+    observed_uppers: BTreeMap<GlobalId, Antichain<Timestamp>>,
 }
 
 impl Fixture {
@@ -100,6 +102,7 @@ impl Fixture {
             persist,
             qualifiers,
             prefix,
+            observed_uppers: BTreeMap::new(),
         }
     }
 
@@ -139,6 +142,15 @@ impl Fixture {
     }
 
     async fn create(&mut self, name: &str, sql: String) -> (CatalogItemId, GlobalId) {
+        self.create_with_plan(name, sql, None).await
+    }
+
+    async fn create_with_plan(
+        &mut self,
+        name: &str,
+        sql: String,
+        imports: Option<BTreeSet<GlobalId>>,
+    ) -> (CatalogItemId, GlobalId) {
         let (id, global_id) = self
             .catalog
             .allocate_user_id_for_test()
@@ -147,7 +159,7 @@ impl Fixture {
         let item =
             test_support::parse_item(&mut self.catalog.state, global_id, &sql, &BTreeMap::new())
                 .unwrap_or_else(|err| panic!("parse {sql}: {err}"));
-        self.transact(vec![Op::CreateItem {
+        let mut ops = vec![Op::CreateItem {
             id,
             name: QualifiedItemName {
                 qualifiers: self.qualifiers.clone(),
@@ -155,9 +167,24 @@ impl Fixture {
             },
             item,
             owner_id: MZ_SYSTEM_ROLE_ID,
-        }])
-        .await;
+        }];
+        if let Some(imports) = imports {
+            ops.push(self.select_plan(global_id, "test-build", Some(imports)));
+        }
+        self.transact(ops).await;
         (id, global_id)
+    }
+
+    fn select_plan(&self, id: GlobalId, build: &str, imports: Option<BTreeSet<GlobalId>>) -> Op {
+        // Catalog admission checks the selection metadata, not immutable bytes.
+        Op::SetWrittenPlan {
+            id,
+            build_version: build.into(),
+            expected_revision: self.catalog.state().written_plan(id, build),
+            revision: imports.as_ref().map(|_| Uuid::new_v4()),
+            imports: imports.unwrap_or_default(),
+            replica_owner: None,
+        }
     }
 
     async fn source(&mut self, name: &str) -> GlobalId {
@@ -191,15 +218,16 @@ impl Fixture {
         .1
     }
 
-    async fn index(&mut self, on: &str) -> GlobalId {
+    async fn index(&mut self, name: &str, on: &str, imports: &[GlobalId]) -> GlobalId {
         let (_, index) = self
-            .create(
-                "retaining_index",
+            .create_with_plan(
+                name,
                 format!(
-                    "CREATE INDEX retaining_index IN CLUSTER quickstart \
+                    "CREATE INDEX {name} IN CLUSTER quickstart \
                      ON {}.{on} (counter) WITH (RETAIN HISTORY FOR '10 seconds')",
                     self.prefix,
                 ),
+                Some(imports.iter().copied().collect()),
             )
             .await;
         assert!(
@@ -251,6 +279,8 @@ impl Fixture {
             .expect("valid upper advance")
             .expect("uncontended upper advance");
         writer.expire().await;
+        self.observed_uppers
+            .insert(id, Antichain::from_elem(Timestamp::new(upper)));
         // Advance the source's independent recovery requirement from its durable
         // output, so its birth protection cannot mask missing index retention.
         if let Some(mut requirement) = self
@@ -271,29 +301,64 @@ impl Fixture {
 
     async fn propose_bounds(&mut self, ids: &[GlobalId], proposed: u64, expected: u64) {
         let proposed = Timestamp::new(proposed);
+        let frontiers: Vec<_> = self
+            .observed_uppers
+            .iter()
+            .map(|(id, upper)| CollectionFrontiers {
+                id: *id,
+                write_frontier: upper.clone(),
+                implied_capability: Antichain::from_elem(Timestamp::MIN),
+                read_capabilities: Antichain::from_elem(Timestamp::MIN),
+            })
+            .collect();
+        let mut bounds: BTreeMap<_, _> = ids
+            .iter()
+            .map(|id| {
+                let frontier = self
+                    .catalog
+                    .state()
+                    .maintained_read_frontier(*id, &BTreeSet::new())
+                    .map_or(proposed, |required| proposed.min(required));
+                (*id, Antichain::from_elem(frontier))
+            })
+            .collect();
+        bounds.extend(self.catalog.state().index_retention_proposals(&frontiers));
         self.transact(vec![Op::SetReadProtection {
             requirements: vec![],
-            bounds: ids
-                .iter()
-                .map(|id| CollectionCompactionBound {
-                    id: *id,
-                    frontier: Some(
-                        self.catalog
-                            .state()
-                            .maintained_read_frontier(*id, &BTreeSet::new())
-                            .map_or(proposed, |required| proposed.min(required)),
-                    ),
+            bounds: bounds
+                .into_iter()
+                .map(|(id, frontier)| CollectionCompactionBound {
+                    id,
+                    frontier: frontier.as_option().copied(),
                 })
                 .collect(),
         }])
         .await;
         for id in ids {
-            assert_eq!(
-                self.catalog.state().collection_compaction_bounds()[id],
-                Antichain::from_elem(Timestamp::new(expected)),
-                "committed compaction bound for {id}"
-            );
+            self.assert_bound(*id, expected);
         }
+    }
+
+    async fn set_bounds(&mut self, bounds: &[(GlobalId, u64)]) {
+        self.transact(vec![Op::SetReadProtection {
+            requirements: vec![],
+            bounds: bounds
+                .iter()
+                .map(|(id, frontier)| CollectionCompactionBound {
+                    id: *id,
+                    frontier: Some(Timestamp::new(*frontier)),
+                })
+                .collect(),
+        }])
+        .await;
+    }
+
+    fn assert_bound(&self, id: GlobalId, expected: u64) {
+        assert_eq!(
+            self.catalog.state().collection_compaction_bounds()[&id],
+            Antichain::from_elem(Timestamp::new(expected)),
+            "committed compaction bound for {id}",
+        );
     }
 }
 
@@ -303,13 +368,87 @@ async fn index_retention_tracks_durable_input_upper_without_replicas() {
     let mut f = Fixture::new().await;
     let input = f.source("input").await;
     f.advance_upper(input, 100_000).await;
-    f.index("input").await;
+    let index = f.index("retaining_index", "input", &[input]).await;
 
-    f.propose_bounds(&[input], 100_000, 90_000).await;
+    f.propose_bounds(&[input, index], 100_000, 90_000).await;
     // No catalog object or client grant changes. A creation-time pin cannot
     // satisfy this second proposal, only the new durable input upper can.
     f.advance_upper(input, 120_000).await;
-    f.propose_bounds(&[input], 120_000, 110_000).await;
+    f.propose_bounds(&[input, index], 120_000, 110_000).await;
+    assert!(f.catalog.state().client_incarnations().is_empty());
+    assert!(f.catalog.state().client_read_requirements().is_empty());
+    f.catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn index_plan_selection_atomically_protects_actual_imports() {
+    let mut f = Fixture::new().await;
+    let input = f.source("input").await;
+    f.advance_upper(input, 100_000).await;
+    f.set_bounds(&[(input, 20_000)]).await;
+    let old = f.index("old_import", "input", &[input]).await;
+    let replacement = f.index("replacement_import", "input", &[input]).await;
+    let past = f.index("past_import", "input", &[input]).await;
+    // All progress proposals are below the observed upper's retention frontier.
+    // Leave the logical input behind the actual import to distinguish admission.
+    f.set_bounds(&[(old, 40_000), (past, 80_000)]).await;
+    f.assert_bound(input, 20_000);
+    f.assert_bound(old, 40_000);
+    f.assert_bound(past, 80_000);
+
+    let index = f.index("retaining_index", "input", &[old]).await;
+    f.assert_bound(index, 40_000);
+    let initial_revision = f.catalog.state().written_plan(index, "test-build");
+    assert!(initial_revision.is_some());
+    f.set_bounds(&[(old, 80_000)]).await;
+    f.assert_bound(old, 40_000);
+
+    let invalid = f.select_plan(index, "test-build", Some(BTreeSet::from([past])));
+    let ts = f.catalog.current_upper().await;
+    assert!(
+        f.catalog
+            .transact(None, ts, None, vec![invalid])
+            .await
+            .is_err(),
+        "a selected import must still be readable at the owner's bound",
+    );
+    assert_eq!(
+        f.catalog.state().written_plan(index, "test-build"),
+        initial_revision,
+    );
+    f.assert_bound(index, 40_000);
+
+    f.transact(vec![f.select_plan(
+        index,
+        "other-build",
+        Some(BTreeSet::from([old])),
+    )])
+    .await;
+    // Only selection metadata changes. The SQL definition remains unchanged.
+    f.transact(vec![f.select_plan(
+        index,
+        "test-build",
+        Some(BTreeSet::from([replacement])),
+    )])
+    .await;
+    assert_ne!(
+        f.catalog.state().written_plan(index, "test-build"),
+        initial_revision,
+    );
+    f.set_bounds(&[(old, 80_000), (replacement, 80_000)]).await;
+    f.assert_bound(old, 40_000);
+    f.assert_bound(replacement, 40_000);
+
+    // Retiring the other build releases only its import. The replacement is
+    // protected by the surviving selection without any replica or client hold.
+    f.transact(vec![f.select_plan(index, "other-build", None)])
+        .await;
+    f.set_bounds(&[(old, 80_000), (replacement, 80_000)]).await;
+    f.assert_bound(old, 80_000);
+    f.assert_bound(replacement, 40_000);
+    f.assert_bound(index, 40_000);
+    assert!(f.catalog.state().client_incarnations().is_empty());
     f.catalog.expire().await;
 }
 
@@ -325,7 +464,7 @@ async fn closing_client_incarnation_preserves_index_object_retention() {
         vec![((row.clone(), ()), Timestamp::new(50_000), 1)],
     )
     .await;
-    f.index("input").await;
+    f.index("retaining_index", "input", &[input]).await;
 
     let ts = f.catalog.current_upper().await;
     let incarnation = f
@@ -458,7 +597,7 @@ async fn index_retention_protects_logical_input_eliminated_by_optimizer() {
         BTreeSet::from([live]),
         "fixture must actually eliminate the second input"
     );
-    f.index("logical_view").await;
+    f.index("retaining_index", "logical_view", &[live]).await;
     f.propose_bounds(&[live, eliminated], 100_000, 90_000).await;
     f.catalog.expire().await;
 }

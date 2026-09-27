@@ -1072,6 +1072,7 @@ impl Catalog {
 
         let mut updates = Vec::new();
         let mut born_mvs = BTreeSet::new();
+        let mut born_indexes = BTreeSet::new();
         let mut updated_requirements = BTreeSet::new();
         let mut created_client_incarnations = Vec::new();
         let mut selected_plans = BTreeMap::new();
@@ -1089,6 +1090,12 @@ impl Catalog {
             }
             if preliminary_state.catalog_read_protection_enabled() {
                 match &op {
+                    Op::CreateItem {
+                        item: CatalogItem::Index(index),
+                        ..
+                    } => {
+                        born_indexes.insert(index.global_id());
+                    }
                     Op::CreateItem {
                         item: CatalogItem::MaterializedView(mv),
                         ..
@@ -1132,6 +1139,16 @@ impl Catalog {
 
         // Later operations can remove an import or supersede a selection. Validate
         // the surviving selections against the complete candidate, not an op prefix.
+        let admitted_plans: BTreeSet<_> = selected_plans
+            .iter()
+            .filter_map(|((id, build), (revision, _))| {
+                revision
+                    .filter(|revision| {
+                        preliminary_state.written_plan(*id, build) == Some(*revision)
+                    })
+                    .map(|_| *id)
+            })
+            .collect();
         for ((id, build_version), (revision, imports)) in selected_plans {
             if let Some(revision) = revision
                 && preliminary_state.written_plan(id, &build_version) == Some(revision)
@@ -1160,6 +1177,19 @@ impl Catalog {
                 };
                 if !valid {
                     return Err(CatalogError::DDLTransactionRace);
+                }
+            }
+        }
+
+        if matches!(mode, TransactInnerMode::Commit) {
+            for id in born_indexes {
+                if preliminary_state.try_get_entry_by_global_id(&id).is_some()
+                    && !admitted_plans.contains(&id)
+                {
+                    return Err(CatalogError::internal(
+                        "index admission",
+                        format!("index {id} was created without a selected plan"),
+                    ));
                 }
             }
         }
@@ -1263,6 +1293,7 @@ impl Catalog {
 
         // Admission failures must return before entering the fatal commit path.
         // Batch extraction repeats this check for other durable callers.
+        super::retention::admit_index_bounds(tx, &preliminary_state, &admitted_plans)?;
         tx.finalize_index_compaction_bounds();
         if matches!(mode, TransactInnerMode::Commit) {
             // A dry run has synthetic storage identities and grants no compaction
@@ -1277,6 +1308,7 @@ impl Catalog {
             )
             .await?;
         }
+        super::retention::constrain_plan_inputs(tx, &state, &preliminary_state, &admitted_plans)?;
         tx.validate_read_protection()?;
 
         // Storage preparation can retract permission staged by an earlier op
@@ -1334,13 +1366,19 @@ impl Catalog {
                 build_version,
                 expected_revision,
                 revision,
-                imports: _,
+                imports,
                 replica_owner,
             } => {
                 if tx.get_written_plan(id, &build_version) != expected_revision {
                     return Err(CatalogError::DDLTransactionRace);
                 }
-                tx.set_written_plan_with_owner(id, &build_version, revision, replica_owner)?;
+                tx.set_written_plan_with_owner(
+                    id,
+                    &build_version,
+                    revision,
+                    replica_owner,
+                    imports,
+                )?;
             }
             Op::CreateClientIncarnation { replica_id } => {
                 if !state.catalog_read_protection_enabled() {
@@ -4227,6 +4265,7 @@ mod tests {
                 unreachable!("resolved a builtin index");
             };
             let id = index.global_id();
+            let imports = BTreeSet::from([index.on]);
             let revision = Uuid::new_v4();
             let select = |expected_revision, revision, imports| Op::SetWrittenPlan {
                 id,
@@ -4239,7 +4278,7 @@ mod tests {
             let (selected, snapshot) = catalog
                 .transact_incremental_dry_run(
                     &base,
-                    vec![select(None, Some(revision), BTreeSet::new())],
+                    vec![select(None, Some(revision), imports.clone())],
                     None,
                     None,
                     1.into(),
@@ -4247,6 +4286,10 @@ mod tests {
                 .await
                 .expect("select written revision");
             assert_eq!(selected.written_plan(id, "test-build"), Some(revision));
+            assert_eq!(
+                selected.written_plans()[&(id, "test-build".into())].imports,
+                imports,
+            );
             assert_eq!(base.written_plan(id, "test-build"), None);
 
             // Validate against the accumulated transaction, not just the writer's

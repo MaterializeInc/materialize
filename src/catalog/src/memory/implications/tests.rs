@@ -246,6 +246,7 @@ fn selection_changes_include_unselects_and_filter_the_build() {
             build_version: build.into(),
             revision: uuid::Uuid::new_v4(),
             replica_owner: None,
+            imports: BTreeSet::new(),
         }),
         ts: Timestamp::MIN,
         diff,

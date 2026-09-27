@@ -166,6 +166,9 @@ pub struct CatalogState {
     #[serde(serialize_with = "serialize_written_plans")]
     pub(super) written_plans:
         imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
+    /// Selected-plan dependencies ordered by import, owner, and build, independent of frontiers.
+    #[serde(skip)]
+    pub(super) written_plan_importers: imbl::OrdSet<(GlobalId, GlobalId, String)>,
     pub(super) client_incarnations:
         imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue>,
     #[serde(serialize_with = "serialize_client_read_requirements")]
@@ -509,6 +512,7 @@ impl CatalogState {
             collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
             written_plans: Default::default(),
+            written_plan_importers: Default::default(),
             client_incarnations: Default::default(),
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
@@ -2936,11 +2940,35 @@ impl CatalogState {
             .as_ref()
     }
 
-    /// All durable plan selections, including other builds.
+    /// All durable plan selections and their imports, including other builds.
     pub fn written_plans(
         &self,
     ) -> &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue> {
         &self.written_plans
+    }
+
+    /// Selected builds and their plan metadata for an owner, without checking its lifetime.
+    pub fn written_plans_for_owner(
+        &self,
+        owner: GlobalId,
+    ) -> impl Iterator<Item = (&str, &crate::durable::objects::WrittenPlanValue)> + '_ {
+        self.written_plans
+            .range((owner, String::new())..)
+            .take_while(move |((id, _), _)| *id == owner)
+            .map(|((_, build), selection)| (build.as_str(), selection))
+    }
+
+    /// Selected owners and builds importing `input`, including stale foreign selections.
+    /// Callers determine whether each selection is valid and its owner is live.
+    pub fn written_plan_importers(
+        &self,
+        input: GlobalId,
+    ) -> impl Iterator<Item = (GlobalId, &str)> + '_ {
+        // System(0) is the minimum GlobalId, so the range includes every owner.
+        self.written_plan_importers
+            .range((input, GlobalId::System(0), String::new())..)
+            .take_while(move |(id, _, _)| *id == input)
+            .map(|(_, owner, build)| (*owner, build.as_str()))
     }
 
     /// Returns durable incarnation heartbeats and immutable replica identities.
@@ -3176,11 +3204,15 @@ fn serialize_written_plans<S: serde::Serializer>(
     plans: &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(
-        plans.iter().map(|((id, build), selection)| {
-            (id, build, selection.revision, &selection.replica_owner)
-        }),
-    )
+    serializer.collect_seq(plans.iter().map(|((id, build), selection)| {
+        (
+            id,
+            build,
+            selection.revision,
+            &selection.replica_owner,
+            &selection.imports,
+        )
+    }))
 }
 
 fn serialize_client_read_requirements<S: serde::Serializer>(
@@ -3245,6 +3277,7 @@ mod tests {
         use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
         let id = GlobalId::User(42);
+        let imports = BTreeSet::from([GlobalId::User(41)]);
         let revision = uuid::Uuid::new_v4();
         let replacement = uuid::Uuid::new_v4();
         let mut state = CatalogState::empty_test();
@@ -3265,6 +3298,7 @@ mod tests {
                         build_version: "build-a".into(),
                         revision,
                         replica_owner: None,
+                        imports: imports.clone(),
                     }),
                     ts: Timestamp::MIN,
                     diff,
@@ -3282,6 +3316,7 @@ mod tests {
                     };
                     assert_eq!(plan.id, id);
                     assert_eq!(plan.build_version, "build-a");
+                    assert_eq!(plan.imports, imports);
                     assert_eq!(update.ts, Timestamp::MIN);
                     (plan.revision, update.diff)
                 })
@@ -3289,11 +3324,152 @@ mod tests {
             assert_eq!(observed, changes);
             assert_eq!(state.written_plan(id, "build-a"), Some(expected));
             assert_eq!(state.written_plan(id, "build-b"), None);
+            assert_eq!(
+                state.written_plans()[&(id, "build-a".into())].imports,
+                imports
+            );
         }
         let dump = serde_json::to_value(&state).expect("serialize catalog with written selections");
         assert_eq!(
             dump["written_plans"],
-            serde_json::json!([[id, "build-a", replacement, null]])
+            serde_json::json!([[id, "build-a", replacement, null, imports]])
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn written_plan_dependencies_follow_committed_selections() {
+        use crate::durable::objects::WrittenPlan;
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        let input = GlobalId::User(10);
+        let retained_input = GlobalId::User(11);
+        let new_input = GlobalId::User(12);
+        let owner = GlobalId::User(20);
+        let other_owner = GlobalId::User(21);
+        let initial = WrittenPlan {
+            id: owner,
+            build_version: "build-a".into(),
+            revision: uuid::Uuid::new_v4(),
+            replica_owner: None,
+            imports: BTreeSet::from([input, retained_input]),
+        };
+        let other_build = WrittenPlan {
+            build_version: "build-b".into(),
+            ..initial.clone()
+        };
+        let other_plan = WrittenPlan {
+            id: other_owner,
+            ..initial.clone()
+        };
+        let replacement = WrittenPlan {
+            revision: uuid::Uuid::new_v4(),
+            imports: BTreeSet::from([retained_input, new_input]),
+            ..initial.clone()
+        };
+        let mut state = CatalogState::empty_test();
+        let mut snapshot = None;
+        for (retractions, additions, expected) in [
+            (
+                vec![],
+                vec![initial.clone(), other_build.clone(), other_plan.clone()],
+                vec![
+                    (owner, "build-a"),
+                    (owner, "build-b"),
+                    (other_owner, "build-a"),
+                ],
+            ),
+            (
+                vec![initial],
+                vec![replacement.clone()],
+                vec![(owner, "build-b"), (other_owner, "build-a")],
+            ),
+            (vec![other_build, other_plan, replacement], vec![], vec![]),
+        ] {
+            // Additions deliberately precede retractions in the incoming batch.
+            let updates = additions
+                .into_iter()
+                .map(|plan| (plan, StateDiff::Addition))
+                .chain(
+                    retractions
+                        .into_iter()
+                        .map(|plan| (plan, StateDiff::Retraction)),
+                )
+                .map(|(plan, diff)| StateUpdate {
+                    kind: StateUpdateKind::WrittenPlan(plan),
+                    ts: Timestamp::MIN,
+                    diff,
+                })
+                .collect();
+            let _ = state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+            assert_eq!(
+                state.written_plan_importers(input).collect::<Vec<_>>(),
+                expected
+            );
+            for id in [input, retained_input, new_input, GlobalId::User(13)] {
+                assert_eq!(
+                    state.written_plan_importers(id).collect::<Vec<_>>(),
+                    state
+                        .written_plans()
+                        .iter()
+                        .filter(|(_, selection)| selection.imports.contains(&id))
+                        .map(|((owner, build), _)| (*owner, build.as_str()))
+                        .collect::<Vec<_>>()
+                );
+            }
+            for id in [owner, other_owner, GlobalId::User(19), GlobalId::User(22)] {
+                assert_eq!(
+                    state.written_plans_for_owner(id).collect::<Vec<_>>(),
+                    state
+                        .written_plans()
+                        .iter()
+                        .filter(|((owner, _), _)| *owner == id)
+                        .map(|((_, build), selection)| (build.as_str(), selection))
+                        .collect::<Vec<_>>()
+                );
+            }
+            if snapshot.is_none() {
+                snapshot = Some(state.clone());
+                for (old, new) in [(None, 5u64), (Some(5), 6)] {
+                    let updates = old
+                        .into_iter()
+                        .map(|frontier| (frontier, StateDiff::Retraction))
+                        .chain([(new, StateDiff::Addition)])
+                        .map(|(frontier, diff)| StateUpdate {
+                            kind: StateUpdateKind::MaintainedReadRequirement(
+                                MaintainedReadRequirement {
+                                    id: owner,
+                                    inputs: BTreeSet::from([input, retained_input]),
+                                    frontier: Some(Timestamp::from(frontier)),
+                                },
+                            ),
+                            ts: Timestamp::MIN,
+                            diff,
+                        })
+                        .collect();
+                    let _ = state
+                        .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                        .await;
+                    assert_eq!(
+                        state.written_plan_importers,
+                        snapshot
+                            .as_ref()
+                            .expect("snapshot captured")
+                            .written_plan_importers
+                    );
+                }
+            }
+        }
+        assert!(state.written_plan_importers.is_empty());
+        let snapshot = snapshot.expect("snapshot captured");
+        assert_eq!(
+            snapshot.written_plan_importers(input).collect::<Vec<_>>(),
+            vec![
+                (owner, "build-a"),
+                (owner, "build-b"),
+                (other_owner, "build-a")
+            ]
         );
     }
 

@@ -2666,13 +2666,13 @@ impl Coordinator {
             .cluster_scoped_optimizer_overrides(cluster_id)
     }
 
-    /// Commits prepared bootstrap selections, retaining refreshed rows for the
+    /// Commits bootstrap catalog changes, retaining refreshed rows for the
     /// initial system-table reset instead of sending them to the live writer.
     async fn bootstrap_catalog_transact(
         &mut self,
         ops: Vec<crate::catalog::Op>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<Vec<u64>, AdapterError> {
         let revision = self.catalog().transient_revision();
         loop {
             let write_ts = self.get_catalog_write_ts().await;
@@ -2683,7 +2683,7 @@ impl Coordinator {
             {
                 Ok(result) => {
                     builtin_table_updates.extend(result.builtin_table_updates);
-                    return Ok(());
+                    return Ok(result.created_client_incarnations);
                 }
                 Err(error)
                     if matches!(&error,
@@ -2721,7 +2721,7 @@ impl Coordinator {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<Option<Arc<crate::query_client::QueryClient>>, AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
         info!("startup: coordinator init: bootstrap: preamble beginning");
@@ -2879,6 +2879,23 @@ impl Coordinator {
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         let protected_plans = self.catalog().state().catalog_read_protection_enabled();
         let write_plans = protected_plans && !self.read_only_controllers;
+        // Keep construction separate from activation. Bootstrap read policies
+        // still use their initialization holds until the late client handoff.
+        let bootstrap_client = if write_plans {
+            let incarnations = self
+                .bootstrap_catalog_transact(
+                    vec![crate::catalog::Op::CreateClientIncarnation { replica_id: None }],
+                    &mut builtin_table_updates,
+                )
+                .await?;
+            let incarnation = incarnations
+                .into_iter()
+                .next()
+                .expect("created bootstrap client");
+            Some(self.build_query_client(incarnation).await?)
+        } else {
+            None
+        };
         let selections = Box::pin(self.bootstrap_replica_metric_sink_selections()).await?;
         if !selections.is_empty() {
             self.bootstrap_catalog_transact(selections, &mut builtin_table_updates)
@@ -2906,7 +2923,13 @@ impl Coordinator {
                     "selected plan is missing",
                 ));
             }
-            written_ids.extend(written.keys().copied());
+            written_ids.extend(written.iter().filter_map(|(id, plan)| {
+                (!write_plans
+                    || plan
+                        .collection_imports()
+                        .all(|input| self.catalog().try_get_entry_by_global_id(input).is_some()))
+                .then_some(*id)
+            }));
             candidates.extend(written);
         }
         let mut prepared = if write_plans {
@@ -2914,8 +2937,18 @@ impl Coordinator {
         } else {
             BTreeMap::new()
         };
-        let uncached_global_exps =
-            self.bootstrap_dataflow_plans(&entries, candidates, &written_ids)?;
+        let planning_revision = self.catalog().transient_revision();
+        let mut plan_holds = Vec::new();
+        let uncached_global_exps = self
+            .bootstrap_dataflow_plans(
+                &entries,
+                candidates,
+                &written_ids,
+                bootstrap_client.as_ref(),
+                &mut builtin_table_updates,
+                &mut plan_holds,
+            )
+            .await?;
         if write_plans {
             prepared.extend(uncached_global_exps.clone());
             prepared.retain(|id, _| {
@@ -2931,11 +2964,40 @@ impl Coordinator {
                     )
             });
             if !prepared.is_empty() {
-                let selections = self.catalog().write_plans(prepared).await?;
-                self.bootstrap_catalog_transact(selections, &mut builtin_table_updates)
-                    .await?;
+                let mut selections = self.catalog().write_plans(prepared).await?;
+                self.check_bootstrap_planning_revision(planning_revision)?;
+                let client = bootstrap_client
+                    .as_ref()
+                    .expect("writable protected bootstrap");
+                // Selection and issuer liveness must be checked atomically. The
+                // aggregate includes every temporary plan-import hold.
+                let requirements = client.protection.prepare_publication(BTreeMap::new());
+                selections.push(crate::catalog::Op::PublishClientReadRequirements {
+                    incarnation: client.protection.incarnation(),
+                    requirements,
+                });
+                let result = self
+                    .bootstrap_catalog_transact(selections, &mut builtin_table_updates)
+                    .await;
+                client.protection.finish_publication(result.is_ok());
+                if !self
+                    .catalog()
+                    .state()
+                    .client_incarnations()
+                    .contains_key(&client.protection.incarnation())
+                {
+                    client.protection.mark_closed();
+                }
+                result?;
+                client.published();
             }
         }
+        drop(plan_holds);
+        self.publish_bootstrap_read_protection(
+            bootstrap_client.as_ref(),
+            &mut builtin_table_updates,
+        )
+        .await?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
             optimize_dataflows_start.elapsed()
@@ -2974,6 +3036,11 @@ impl Coordinator {
         let mut privatelink_connections = BTreeMap::new();
 
         for entry in &entries {
+            self.publish_bootstrap_read_protection(
+                bootstrap_client.as_ref(),
+                &mut builtin_table_updates,
+            )
+            .await?;
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
@@ -3306,6 +3373,11 @@ impl Coordinator {
         let builtin_update_start = Instant::now();
         info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
 
+        self.publish_bootstrap_read_protection(
+            bootstrap_client.as_ref(),
+            &mut builtin_table_updates,
+        )
+        .await?;
         if self.controller.read_only() {
             info!(
                 "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
@@ -3424,7 +3496,7 @@ impl Coordinator {
             "startup: coordinator init: bootstrap complete in {:?}",
             bootstrap_start.elapsed()
         );
-        Ok(())
+        Ok(bootstrap_client)
     }
 
     /// Prepares tables for writing by resetting them to a known state and
@@ -4193,17 +4265,16 @@ impl Coordinator {
     ///
     /// Returns a map of expressions that were not cached.
     #[instrument]
-    fn bootstrap_dataflow_plans(
+    async fn bootstrap_dataflow_plans(
         &mut self,
         ordered_catalog_entries: &[CatalogEntry],
         mut cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         written_ids: &BTreeSet<GlobalId>,
+        bootstrap_client: Option<&Arc<crate::query_client::QueryClient>>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        plan_holds: &mut Vec<ReadHolds>,
     ) -> Result<BTreeMap<GlobalId, GlobalExpressions>, AdapterError> {
-        // The optimizer expects to be able to query its `ComputeInstanceSnapshot` for
-        // collections the current dataflow can depend on. But since we don't yet install anything
-        // on compute instances, the snapshot information is incomplete. We fix that by manually
-        // updating `ComputeInstanceSnapshot` objects to ensure they contain collections previously
-        // optimized.
+        let revision = self.catalog().transient_revision();
         let mut instance_snapshots: BTreeMap<_, _> = self
             .catalog()
             .clusters()
@@ -4221,184 +4292,333 @@ impl Coordinator {
             })
             .collect();
         let mut uncached_expressions = BTreeMap::new();
-
-        let optimizer_config = |catalog: &Catalog, cluster_id| {
-            let system_config = catalog.system_config();
-            let overrides = catalog.get_cluster(cluster_id).config.features();
-            OptimizerConfig::from(system_config)
-                .override_from(&overrides)
-                // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES`
-                // pin.
+        for entry in ordered_catalog_entries {
+            self.publish_bootstrap_read_protection(bootstrap_client, builtin_table_updates)
+                .await?;
+            self.check_bootstrap_planning_revision(revision)?;
+            let (global_id, cluster_id) = match entry.item() {
+                CatalogItem::Index(index) => (index.global_id(), index.cluster_id),
+                CatalogItem::MaterializedView(mv) => (mv.global_id_writes(), mv.cluster_id),
+                CatalogItem::MetricSink(sink) => (sink.global_id, sink.cluster_id),
+                _ => continue,
+            };
+            let compute_instance = instance_snapshots
+                .get_mut(&cluster_id)
+                .expect("dataflow cluster is declared");
+            if matches!(entry.item(), CatalogItem::Index(_))
+                && compute_instance.contains_collection(&global_id)
+            {
+                continue;
+            }
+            let config = OptimizerConfig::from(self.catalog().system_config())
+                .override_from(&self.catalog().get_cluster(cluster_id).config.features())
                 .override_from(
-                    &catalog
+                    &self
+                        .catalog()
                         .state()
                         .cluster_scoped_optimizer_overrides(cluster_id),
-                )
-        };
-
-        for entry in ordered_catalog_entries {
-            match entry.item() {
-                CatalogItem::Index(idx) => {
-                    // Collect optimizer parameters.
-                    let compute_instance = instance_snapshots
-                        .get_mut(&idx.cluster_id)
-                        .expect("index cluster is declared");
-                    let global_id = idx.global_id();
-
-                    // The index may already be installed on the compute instance. For example,
-                    // this is the case for introspection indexes.
-                    if compute_instance.contains_collection(&global_id) {
-                        continue;
+                );
+            let prepare = bootstrap_client.is_some() && !written_ids.contains(&global_id);
+            // Absence is initial admission, not permission to read at MIN. The
+            // selection transaction computes its bound across same-batch imports.
+            let mut required = if prepare {
+                self.bootstrap_plan_requirement(entry)?
+            } else {
+                None
+            };
+            let mut excluded = BTreeSet::new();
+            let mut cached = cached_global_exprs.remove(&global_id);
+            let expressions = loop {
+                let snapshot = if let Some(required) = required {
+                    // Keep dependency order, but only offer indexes with justified
+                    // permission. Replica installation is deliberately irrelevant.
+                    let candidates = self
+                        .catalog()
+                        .get_cluster(cluster_id)
+                        .log_indexes
+                        .values()
+                        .copied()
+                        .chain(ordered_catalog_entries.iter().filter_map(
+                            |entry| match entry.item() {
+                                CatalogItem::Index(index) if index.cluster_id == cluster_id => {
+                                    Some(index.global_id())
+                                }
+                                CatalogItem::MaterializedView(mv)
+                                    if mv.cluster_id == cluster_id =>
+                                {
+                                    Some(mv.global_id_writes())
+                                }
+                                _ => None,
+                            },
+                        ))
+                        .filter(|id| {
+                            compute_instance.contains_collection(id) && !excluded.contains(id)
+                        })
+                        .filter(|id| {
+                            self.catalog()
+                                .state()
+                                .collection_compaction_bounds()
+                                .get(id)
+                                .map_or_else(
+                                    || {
+                                        self.catalog()
+                                            .get_cluster(cluster_id)
+                                            .log_indexes
+                                            .values()
+                                            .any(|log| log == id)
+                                    },
+                                    |bound| bound.less_equal(&required),
+                                )
+                        })
+                        .collect();
+                    ComputeInstanceSnapshot::new_from_parts(cluster_id, candidates)
+                } else {
+                    compute_instance.clone()
+                };
+                let cache_hit = cached.take().filter(|expressions| {
+                    written_ids.contains(&global_id)
+                        || (expressions.optimizer_features == config.features
+                            && (!prepare
+                                || (expressions.collection_imports().all(|input| {
+                                    self.catalog().try_get_entry_by_global_id(input).is_some()
+                                }) && expressions
+                                    .global_mir
+                                    .index_imports
+                                    .keys()
+                                    .chain(expressions.physical_plan.index_imports.keys())
+                                    .all(|id| snapshot.contains_collection(id)))))
+                });
+                let (expressions, built) = match cache_hit {
+                    Some(expressions) => {
+                        debug!("global expression cache hit for {global_id:?}");
+                        (expressions, false)
                     }
-
-                    let optimizer_config = optimizer_config(&self.catalog, idx.cluster_id);
-
-                    let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&global_id) {
-                            Some(global_expressions)
-                                if written_ids.contains(&global_id)
-                                    || global_expressions.optimizer_features
-                                        == optimizer_config.features =>
-                            {
-                                debug!("global expression cache hit for {global_id:?}");
-                                (
-                                    global_expressions.global_mir,
-                                    global_expressions.physical_plan,
-                                    global_expressions.dataflow_metainfos,
-                                )
-                            }
-                            Some(_) | None => {
-                                let expressions = self.build_index_dataflow_plan(
-                                    Arc::new(self.catalog().state().clone()),
-                                    entry.name(),
-                                    idx,
-                                    compute_instance.clone(),
-                                    optimizer_config,
-                                )?;
-                                uncached_expressions.insert(global_id, expressions.clone());
-                                (
-                                    expressions.global_mir,
-                                    expressions.physical_plan,
-                                    expressions.dataflow_metainfos,
-                                )
-                            }
-                        };
-
-                    let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(idx.global_id(), optimized_plan);
-                    catalog.set_physical_plan(idx.global_id(), physical_plan);
-                    catalog.set_dataflow_metainfo(idx.global_id(), metainfo);
-
-                    compute_instance.insert_collection(idx.global_id());
-                }
-                CatalogItem::MaterializedView(mv) => {
-                    // Collect optimizer parameters.
-                    let compute_instance = instance_snapshots
-                        .get_mut(&mv.cluster_id)
-                        .expect("materialized view cluster is declared");
-                    let global_id = mv.global_id_writes();
-
-                    let optimizer_config = optimizer_config(&self.catalog, mv.cluster_id);
-
-                    let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&global_id) {
-                            Some(global_expressions)
-                                if written_ids.contains(&global_id)
-                                    || global_expressions.optimizer_features
-                                        == optimizer_config.features =>
-                            {
-                                debug!("global expression cache hit for {global_id:?}");
-                                (
-                                    global_expressions.global_mir,
-                                    global_expressions.physical_plan,
-                                    global_expressions.dataflow_metainfos,
-                                )
-                            }
-                            Some(_) | None => {
-                                let expressions = self.build_materialized_view_dataflow_plan(
-                                    Arc::new(self.catalog().state().clone()),
+                    None => {
+                        let catalog = Arc::new(self.catalog().state().clone());
+                        let expressions = match entry.item() {
+                            CatalogItem::Index(index) => self.build_index_dataflow_plan(
+                                catalog,
+                                entry.name(),
+                                index,
+                                snapshot,
+                                config.clone(),
+                            )?,
+                            CatalogItem::MaterializedView(mv) => self
+                                .build_materialized_view_dataflow_plan(
+                                    catalog,
                                     entry.name(),
                                     mv,
-                                    compute_instance.clone(),
-                                    optimizer_config,
-                                )?;
-                                uncached_expressions.insert(global_id, expressions.clone());
-                                (
-                                    expressions.global_mir,
-                                    expressions.physical_plan,
-                                    expressions.dataflow_metainfos,
-                                )
-                            }
+                                    snapshot,
+                                    config.clone(),
+                                )?,
+                            CatalogItem::MetricSink(sink) => self.build_metric_sink_dataflow_plan(
+                                catalog,
+                                entry.name(),
+                                sink,
+                                snapshot,
+                                config.clone(),
+                            )?,
+                            _ => unreachable!(),
                         };
-
-                    let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(mv.global_id_writes(), optimized_plan);
-                    catalog.set_physical_plan(mv.global_id_writes(), physical_plan);
-                    catalog.set_dataflow_metainfo(mv.global_id_writes(), metainfo);
-
-                    compute_instance.insert_collection(mv.global_id_writes());
-                }
-                CatalogItem::MetricSink(metric_sink) => {
-                    // Collect optimizer parameters.
-                    let compute_instance = instance_snapshots
-                        .get_mut(&metric_sink.cluster_id)
-                        .expect("metric sink cluster is declared");
-                    let global_id = metric_sink.global_id;
-                    let optimizer_config = optimizer_config(&self.catalog, metric_sink.cluster_id);
-
-                    let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&global_id) {
-                            Some(global_expressions)
-                                if written_ids.contains(&global_id)
-                                    || global_expressions.optimizer_features
-                                        == optimizer_config.features =>
+                        (expressions, true)
+                    }
+                };
+                if let (Some(client), Some(requested)) = (bootstrap_client, required) {
+                    let bundle = CollectionIdBundle {
+                        storage_ids: expressions
+                            .global_mir
+                            .source_imports
+                            .keys()
+                            .chain(expressions.physical_plan.source_imports.keys())
+                            .copied()
+                            .collect(),
+                        compute_ids: BTreeMap::from([(
+                            cluster_id,
+                            expressions
+                                .global_mir
+                                .index_imports
+                                .keys()
+                                .chain(expressions.physical_plan.index_imports.keys())
+                                .copied()
+                                .collect(),
+                        )]),
+                    };
+                    let acquired = self
+                        .acquire_bootstrap_read_protection(
+                            Arc::clone(client),
+                            bundle.clone(),
+                            Some(requested),
+                            builtin_table_updates,
+                        )
+                        .await;
+                    self.check_bootstrap_planning_revision(revision)?;
+                    // Recovery progress can retire an old input requirement while
+                    // preparation awaits. Use only the newly committed requirement,
+                    // never advance one merely to accommodate an unsuitable import.
+                    let current = self.bootstrap_plan_requirement(entry)?;
+                    required = current;
+                    let Some(required) = current else {
+                        continue;
+                    };
+                    if required < requested {
+                        continue;
+                    }
+                    let (holds, _) = match acquired {
+                        Ok(acquired) => acquired,
+                        Err(error) => {
+                            if !self
+                                .catalog()
+                                .state()
+                                .client_incarnations()
+                                .contains_key(&client.protection.incarnation())
                             {
-                                debug!("global expression cache hit for {global_id:?}");
-                                (
-                                    global_expressions.global_mir,
-                                    global_expressions.physical_plan,
-                                    global_expressions.dataflow_metainfos,
-                                )
+                                return Err(error);
                             }
-                            Some(_) | None => {
-                                let expressions = self.build_metric_sink_dataflow_plan(
-                                    Arc::new(self.catalog().state().clone()),
-                                    entry.name(),
-                                    metric_sink,
-                                    compute_instance.clone(),
-                                    optimizer_config,
-                                )?;
-                                uncached_expressions.insert(global_id, expressions.clone());
-                                (
-                                    expressions.global_mir,
-                                    expressions.physical_plan,
-                                    expressions.dataflow_metainfos,
-                                )
+                            // A refreshed permission can become empty while the
+                            // grant is being acquired. Replan only if an actual
+                            // index import is now demonstrably ineligible.
+                            let before = excluded.len();
+                            excluded.extend(
+                                bundle
+                                    .compute_ids
+                                    .values()
+                                    .flatten()
+                                    .filter(|id| {
+                                        self.catalog()
+                                            .state()
+                                            .collection_compaction_bounds()
+                                            .get(*id)
+                                            .is_some_and(|bound| !bound.less_equal(&required))
+                                    })
+                                    .copied(),
+                            );
+                            if excluded.len() == before {
+                                return Err(error);
                             }
-                        };
-
-                    let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(global_id, optimized_plan);
-                    catalog.set_physical_plan(global_id, physical_plan);
-                    catalog.set_dataflow_metainfo(global_id, metainfo);
-
-                    // NOTE: No `insert_collection` for the export. A metric sink writes to the
-                    // metrics registry rather than to a readable collection, so no later dataflow
-                    // can import it.
+                            continue;
+                        }
+                    };
+                    if !holds.least_valid_read().less_equal(&required) {
+                        if bundle
+                            .storage_ids
+                            .iter()
+                            .any(|id| !holds.since(id).less_equal(&required))
+                        {
+                            return Err(AdapterError::internal(
+                                "bootstrap plan preparation",
+                                "storage cannot support required history",
+                            ));
+                        }
+                        let before = excluded.len();
+                        excluded.extend(
+                            bundle
+                                .compute_ids
+                                .values()
+                                .flatten()
+                                .filter(|id| !holds.since(id).less_equal(&required))
+                                .copied(),
+                        );
+                        if excluded.len() == before {
+                            return Err(AdapterError::internal(
+                                "bootstrap plan preparation",
+                                "imports cannot support required history",
+                            ));
+                        }
+                        // Only imports proven ineligible are removed. A metadata
+                        // conflict does not move the owner's fixed frontier.
+                        continue;
+                    }
+                    plan_holds.push(holds);
                 }
-                CatalogItem::Table(_)
-                | CatalogItem::Source(_)
-                | CatalogItem::Log(_)
-                | CatalogItem::View(_)
-                | CatalogItem::Sink(_)
-                | CatalogItem::Type(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                if built {
+                    uncached_expressions.insert(global_id, expressions.clone());
+                }
+                break expressions;
+            };
+            let catalog = self.catalog_mut();
+            catalog.set_optimized_plan(global_id, expressions.global_mir);
+            catalog.set_physical_plan(global_id, expressions.physical_plan);
+            catalog.set_dataflow_metainfo(global_id, expressions.dataflow_metainfos);
+            if !matches!(entry.item(), CatalogItem::MetricSink(_)) {
+                compute_instance.insert_collection(global_id);
             }
         }
-
         Ok(uncached_expressions)
+    }
+
+    fn bootstrap_plan_requirement(
+        &self,
+        entry: &CatalogEntry,
+    ) -> Result<Option<Timestamp>, AdapterError> {
+        let requirement = match entry.item() {
+            CatalogItem::Index(index) => self
+                .catalog()
+                .state()
+                .collection_compaction_bounds()
+                .get(&index.global_id())
+                .map(|bound| bound.as_option().copied()),
+            CatalogItem::MaterializedView(mv) => self
+                .catalog()
+                .state()
+                .maintained_read_requirements()
+                .get(&mv.global_id_writes())
+                .map(|requirement| requirement.frontier),
+            _ => None,
+        };
+        match requirement {
+            Some(Some(timestamp)) => Ok(Some(timestamp)),
+            Some(None) if matches!(entry.item(), CatalogItem::MaterializedView(_)) => Ok(None),
+            Some(None) => Err(AdapterError::internal(
+                "bootstrap plan preparation",
+                "required history is empty",
+            )),
+            None => Ok(None),
+        }
+    }
+
+    fn check_bootstrap_planning_revision(&self, revision: u64) -> Result<(), AdapterError> {
+        if self.catalog().transient_revision() != revision {
+            return Err(AdapterError::internal(
+                "bootstrap plan preparation",
+                "catalog planning context changed",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn publish_bootstrap_read_protection(
+        &mut self,
+        client: Option<&Arc<crate::query_client::QueryClient>>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+    ) -> Result<(), AdapterError> {
+        let Some(client) = client else { return Ok(()) };
+        let Some(requirements) = client
+            .protection
+            .prepare_publication_if_needed(client.last_publication().elapsed())
+        else {
+            return Ok(());
+        };
+        let result = self
+            .bootstrap_catalog_transact(
+                vec![crate::catalog::Op::PublishClientReadRequirements {
+                    incarnation: client.protection.incarnation(),
+                    requirements,
+                }],
+                builtin_table_updates,
+            )
+            .await;
+        client.protection.finish_publication(result.is_ok());
+        if !self
+            .catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&client.protection.incarnation())
+        {
+            client.protection.mark_closed();
+        }
+        result?;
+        client.published();
+        Ok(())
     }
 
     /// Selects for each compute dataflow an as-of suitable for bootstrapping it.
@@ -5054,7 +5274,7 @@ impl Coordinator {
         ComputeInstanceSnapshot::new(&self.controller, id)
     }
 
-    /// Query planning only offers indexes observed on query connections.
+    /// Query planning offers catalog-declared indexes independently of readiness.
     fn query_instance_snapshot(
         &self,
         id: ComputeInstanceId,
@@ -6186,7 +6406,7 @@ pub fn serve(
                 });
 
                 let bootstrap = handle.block_on(async {
-                    coord
+                    let prepared_client = coord
                         .bootstrap(
                             boot_ts,
                             migrated_storage_collections_0dt,
@@ -6223,7 +6443,7 @@ pub fn serve(
                     }
 
                     coord.prune_arrangement_sizes_history_on_startup().await;
-                    coord.initialize_query_client().await?;
+                    coord.initialize_query_client(prepared_client).await?;
                     if coord.controller.replica_owned_compute() {
                         // These observations execute through the query client.
                         // Their admission must not delay storage/WAL bootstrap.

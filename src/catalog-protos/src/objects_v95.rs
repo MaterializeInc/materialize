@@ -2388,6 +2388,8 @@ pub struct WrittenPlanValue {
     pub revision: Uuid,
     #[serde(default)]
     pub replica_owner: Option<ReplicaPlanOwner>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -9,8 +9,8 @@
 
 //! Publishes durable recovery requirements and compaction permission together.
 
-#[cfg(test)]
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -27,10 +27,25 @@ use mz_storage_client::storage_collections::CollectionFrontiers;
 use timely::progress::Antichain;
 
 use crate::AdapterError;
-use crate::catalog::Op;
+use crate::catalog::{BuiltinTableUpdate, Op};
 use crate::coord::Coordinator;
+use crate::query_client::QueryClient;
 
 pub(super) const CATALOG_SUBSCRIPTION_INTERVAL: Duration = Duration::from_secs(1);
+
+enum ReadProtectionPublication<'a> {
+    Runtime,
+    Bootstrap(&'a mut Vec<BuiltinTableUpdate>),
+}
+
+impl ReadProtectionPublication<'_> {
+    fn catalog<'a>(&self, coord: &'a Coordinator) -> &'a crate::catalog::Catalog {
+        match self {
+            Self::Runtime => coord.client_read_catalog(),
+            Self::Bootstrap(_) => coord.catalog(),
+        }
+    }
+}
 
 impl Coordinator {
     fn client_read_catalog(&self) -> &crate::catalog::Catalog {
@@ -94,21 +109,16 @@ impl Coordinator {
         }
     }
 
-    pub(super) async fn initialize_query_client(&mut self) -> Result<(), AdapterError> {
-        if !self.catalog().state().catalog_read_protection_enabled() {
-            return Ok(());
-        }
+    /// Builds a client for an existing incarnation without activating runtime routing.
+    pub(super) async fn build_query_client(
+        &self,
+        incarnation: u64,
+    ) -> Result<Arc<QueryClient>, AdapterError> {
         use crate::peek_client::CoordinatorClient;
-        use crate::query_client::QueryClient;
         use crate::query_client::connections::{
             QueryReplicaConnections, QueryReplicaConnectionsConfig,
         };
-        use mz_ore::collections::CollectionExt;
 
-        let incarnation = self
-            .transact_client_protection(Op::CreateClientIncarnation { replica_id: None })
-            .await?
-            .into_element();
         let txns_shard = self.catalog().txn_wal_shard().await?;
         let connections = std::sync::Arc::new(QueryReplicaConnections::new(
             QueryReplicaConnectionsConfig {
@@ -122,7 +132,7 @@ impl Coordinator {
             },
         ));
         connections.sync_catalog(self.catalog());
-        let client = std::sync::Arc::new(QueryClient::new(
+        Ok(Arc::new(QueryClient::new(
             incarnation,
             CoordinatorClient::Background {
                 tx: self.internal_cmd_tx.clone(),
@@ -132,7 +142,42 @@ impl Coordinator {
             self.query_persist_location.clone(),
             txns_shard,
             connections,
-        ));
+        )))
+    }
+
+    pub(super) async fn initialize_query_client(
+        &mut self,
+        prepared: Option<Arc<QueryClient>>,
+    ) -> Result<(), AdapterError> {
+        use mz_ore::collections::CollectionExt;
+
+        if !self.catalog().state().catalog_read_protection_enabled() {
+            return Ok(());
+        }
+        let client = match prepared {
+            Some(client) => {
+                // Bootstrap may outlive an incarnation's reclamation grace.
+                // Renew through the catalog before exposing its cached grants.
+                let requirements = client.protection.prepare_publication(BTreeMap::new());
+                let result = self
+                    .transact_client_protection(Op::PublishClientReadRequirements {
+                        incarnation: client.protection.incarnation(),
+                        requirements,
+                    })
+                    .await;
+                client.protection.finish_publication(result.is_ok());
+                result?;
+                client.published();
+                client
+            }
+            None => {
+                let incarnation = self
+                    .transact_client_protection(Op::CreateClientIncarnation { replica_id: None })
+                    .await?
+                    .into_element();
+                self.build_query_client(incarnation).await?
+            }
+        };
         self.query_client = Some(client);
 
         // Keep bootstrap constraints until the client has secured its readable
@@ -254,8 +299,45 @@ impl Coordinator {
                 "incarnation is no longer active",
             ));
         }
-        if !self
-            .client_read_catalog()
+        self.acquire_read_protection(
+            client,
+            bundle,
+            timestamp,
+            ReadProtectionPublication::Runtime,
+        )
+        .await
+    }
+
+    /// Protects actual bootstrap plan imports without activating runtime routing.
+    /// Keep the returned holds through selection commit, and publish the client's
+    /// aggregate in that commit to reject an incarnation reclaimed in the meantime.
+    /// A requested timestamp must still be validated against the returned holds.
+    pub(super) async fn acquire_bootstrap_read_protection(
+        &mut self,
+        client: Arc<QueryClient>,
+        bundle: crate::CollectionIdBundle,
+        read_ts: Option<Timestamp>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+    ) -> Result<(crate::ReadHolds, Antichain<Timestamp>), AdapterError> {
+        self.acquire_read_protection(
+            client,
+            bundle,
+            |_| Ok(read_ts),
+            ReadProtectionPublication::Bootstrap(builtin_table_updates),
+        )
+        .await
+    }
+
+    async fn acquire_read_protection(
+        &mut self,
+        client: Arc<QueryClient>,
+        bundle: crate::CollectionIdBundle,
+        timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
+        mut publication: ReadProtectionPublication<'_>,
+    ) -> Result<(crate::ReadHolds, Antichain<Timestamp>), AdapterError> {
+        let incarnation = client.protection.incarnation();
+        if !publication
+            .catalog(self)
             .state()
             .client_incarnations()
             .contains_key(&incarnation)
@@ -267,7 +349,7 @@ impl Coordinator {
             ));
         }
         let mut prepared = client
-            .prepare_read(self.client_read_catalog(), &bundle, timestamp)
+            .prepare_read(publication.catalog(self), &bundle, timestamp)
             .await?;
         // Timestamp selection is FnOnce. Contention may change the obtainable
         // floor, but must not change the request or the upper that selected it.
@@ -284,22 +366,26 @@ impl Coordinator {
             {
                 return Ok((holds, upper));
             }
-            let extra = self
-                .client_read_catalog()
+            let extra = publication
+                .catalog(self)
                 .state()
                 .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
             let requirements = client.protection.prepare_publication(extra);
-            let result = self
-                .transact_client_protection(Op::PublishClientReadRequirements {
-                    incarnation,
-                    requirements,
-                })
-                .await;
+            let op = Op::PublishClientReadRequirements {
+                incarnation,
+                requirements,
+            };
+            let result = match &mut publication {
+                ReadProtectionPublication::Runtime => self.transact_client_protection(op).await,
+                ReadProtectionPublication::Bootstrap(updates) => {
+                    self.bootstrap_catalog_transact(vec![op], updates).await
+                }
+            };
             // Catalog transaction errors are definitive. Indeterminate commit errors
             // terminate before this point rather than releasing a publication barrier.
             client.protection.finish_publication(result.is_ok());
-            if !self
-                .client_read_catalog()
+            if !publication
+                .catalog(self)
                 .state()
                 .client_incarnations()
                 .contains_key(&incarnation)
@@ -308,7 +394,7 @@ impl Coordinator {
             }
             if let Err(error) = result {
                 if let Some(fresh) = prepared
-                    .retry_publication(&client, self.client_read_catalog(), &error)
+                    .retry_publication(&client, publication.catalog(self), &error)
                     .await?
                 {
                     prepared = fresh;
@@ -497,7 +583,7 @@ impl Coordinator {
         self.read_protection_pending
             .extend(compute_changes.keys().copied());
         let bounds = self.catalog().state().collection_compaction_bounds();
-        let compute_proposals = compute_changes
+        let mut compute_proposals: BTreeMap<_, _> = compute_changes
             .into_iter()
             .filter_map(|(id, proposal)| {
                 let entry = self.catalog().try_get_entry_by_global_id(&id)?;
@@ -517,6 +603,11 @@ impl Coordinator {
                 Some((id, frontier))
             })
             .collect();
+        for (id, proposal) in self.catalog().state().index_retention_proposals(&frontiers) {
+            // Input progress also covers indexes without replicas. Where both
+            // paths propose a bound, retain the history required by either.
+            compute_proposals.entry(id).or_default().extend(proposal);
+        }
         let candidates = publication_candidates(
             self.catalog().state().maintained_read_requirements(),
             self.catalog().state().collection_compaction_bounds(),
@@ -879,8 +970,8 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn first_compute_publication_needs_no_birth_record() {
-        let index = GlobalId::User(1);
+    fn first_logging_publication_needs_no_birth_record() {
+        let index = GlobalId::System(1);
         let candidates = publication_candidates(
             &BTreeMap::new(),
             &BTreeMap::new(),

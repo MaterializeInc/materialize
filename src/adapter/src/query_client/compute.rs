@@ -590,7 +590,7 @@ impl Drop for Actor {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::future::Future;
     use std::time::Duration;
@@ -621,7 +621,7 @@ mod tests {
         }
     }
 
-    struct Peer {
+    pub(in crate::query_client) struct Peer {
         commands: mpsc::UnboundedReceiver<ComputeCommand>,
         responses: mpsc::UnboundedSender<ComputeResponse>,
     }
@@ -633,7 +633,7 @@ mod tests {
                 .expect("connection closed")
         }
 
-        fn respond(&self, response: ComputeResponse) {
+        pub(in crate::query_client) fn respond(&self, response: ComputeResponse) {
             self.responses.send(response).expect("connection closed");
         }
     }
@@ -659,7 +659,7 @@ mod tests {
         )
     }
 
-    async fn connect() -> (ReplicaQueryClient, Peer) {
+    pub(in crate::query_client) async fn connect() -> (ReplicaQueryClient, Peer) {
         let (wire, mut peer) = wire();
         let mut connecting = Box::pin(ReplicaQueryClient::connect(wire, 1024));
         assert!(futures::poll!(&mut connecting).is_pending());

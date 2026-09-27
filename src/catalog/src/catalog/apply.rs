@@ -487,12 +487,28 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::WrittenPlan(plan) => {
+                // sort_updates applies retractions before additions. Each owner/build has
+                // one selection, so a set suffices even when a replacement shares imports.
+                for input in &plan.imports {
+                    let edge = (*input, plan.id, plan.build_version.clone());
+                    match diff {
+                        StateDiff::Addition => {
+                            let prev = self.written_plan_importers.insert(edge);
+                            assert!(prev.is_none(), "written plan import edge already exists");
+                        }
+                        StateDiff::Retraction => {
+                            let prev = self.written_plan_importers.remove(&edge);
+                            assert!(prev.is_some(), "written plan import edge does not exist");
+                        }
+                    }
+                }
                 apply_inverted_lookup(
                     &mut self.written_plans,
                     &(plan.id, plan.build_version),
                     crate::durable::objects::WrittenPlanValue {
                         revision: plan.revision,
                         replica_owner: plan.replica_owner,
+                        imports: plan.imports,
                     },
                     diff,
                 );

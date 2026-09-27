@@ -101,10 +101,9 @@ use tracing::{info, warn};
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
 ///
-/// With `catalog_read_protection` enabled, reconstructed indexes start at their least readable
-/// frontier, regardless of whether they have a published compaction bound. Durable index read
-/// requirements can be admitted independently of selection, so soft preferences must not skip
-/// readable history. Published bounds still govern compaction through the controller.
+/// Committed index bounds are hard upper bounds on reconstruction as-ofs. Catalog admission
+/// protects governed indexes' actual and logical inputs at their current bound. Indexes without
+/// a committed bound use the storage constraints and soft preferences.
 ///
 /// `pending_replacements` supplies creation frontiers for exports that do not yet own output
 /// writes. Protected replacements retain that history independently of their target's progress.
@@ -337,9 +336,6 @@ fn select_inner(
     ctx.apply_upstream_storage_constraints(protected_storage_sinces);
     ctx.apply_downstream_storage_constraints(pending_replacements, catalog_read_protection);
     ctx.apply_committed_index_bounds(committed_index_bounds);
-    if catalog_read_protection {
-        ctx.apply_index_readability_constraints();
-    }
 
     // At this point all collections have as-of bounds that reflect what is required for
     // correctness. The current state isn't very usable though. In particular, most of the upper
@@ -758,38 +754,15 @@ impl<'a> Context<'a> {
             let Some(bound) = bounds.get(id) else {
                 continue;
             };
-            // A saved permission below actual readability cannot be recovered. Replacement
-            // installs at the readable lower bound, never at a later soft preference, and
-            // seeds local governance there until durable publication catches up.
-            let lower = collection.bounds.borrow().lower.clone();
-            let upper = bound.join(&lower);
+            // Readers may still request this bound. An input since beyond it is
+            // a hard conflict, not permission to reconstruct at a later time.
             self.apply_constraint(
                 *id,
                 Constraint {
                     type_: ConstraintType::Hard,
                     bound_type: BoundType::Upper,
-                    frontier: &upper,
+                    frontier: bound,
                     reason: "committed index compaction bound",
-                },
-            );
-        }
-        self.propagate_bounds_upstream(BoundType::Upper);
-    }
-
-    /// Keep all protected indexes at their propagated readable lower bound.
-    fn apply_index_readability_constraints(&self) {
-        for (id, collection) in &self.collections {
-            if !collection.is_index {
-                continue;
-            }
-            let lower = collection.bounds.borrow().lower.clone();
-            self.apply_constraint(
-                *id,
-                Constraint {
-                    type_: ConstraintType::Hard,
-                    bound_type: BoundType::Upper,
-                    frontier: &lower,
-                    reason: "catalog-protected index readability",
                 },
             );
         }
@@ -1364,6 +1337,7 @@ mod tests {
         dataflows: [ "u1" <- ["s1"] => 10, ],
         current_time: 90,
         protected_sinces: { "s1": 10, },
+        committed_bounds: { "u1": 10, },
         catalog_read_protection: true,
     });
 
@@ -1372,6 +1346,7 @@ mod tests {
         dataflows: [ "u1" <- ["s1"] => SEALED, ],
         current_time: 90,
         protected_sinces: { "s1": 10, },
+        committed_bounds: { "u1": 10, },
         read_only: true,
         catalog_read_protection: true,
     });
@@ -1397,11 +1372,12 @@ mod tests {
         },
         dataflows: [
             "u1" <- ["u2"] => 10,
-            "u2" <- ["u3"] => 5,
-            "u3" <- ["u4", "s1"] => 5,
+            "u2" <- ["u3"] => 10,
+            "u3" <- ["u4", "s1"] => 10,
         ],
         current_time: 90,
         live_inputs: { "u4": (5, 100), },
+        committed_bounds: { "u2": 20, "u3": 20, },
         catalog_read_protection: true,
     });
 
@@ -1550,7 +1526,7 @@ mod tests {
             "u2": (10, 100),
         },
         dataflows: [
-            "u1" <- ["s1"] => 40,
+            "u1" <- ["s1"] => 50,
             "u2" <- ["u1"] => 50,
         ],
         current_time: 90,
@@ -1572,22 +1548,21 @@ mod tests {
         pending_replacements: { "u1": 50, },
     });
 
-    // Publication does not enumerate durable index read requirements. Even an unpublished
-    // index must retain readable history rather than select the soft preference at 90.
-    testcase!(protected_index_readability, {
+    // Current bounds retain admitted history rather than the soft preference at 90.
+    testcase!(protected_index_bounds, {
         storage: { "s1": (10, 100), },
         dataflows: [
             "u1" <- ["s1"] => 10,
-            "u2" <- ["s1"] => 10,
+            "u2" <- ["s1"] => 30,
             "u3" <- ["s1"] => 10,
         ],
         current_time: 90,
-        committed_bounds: { "u2": 30, "u3": 5, },
+        committed_bounds: { "u1": 10, "u2": 30, "u3": 10, },
         catalog_read_protection: true,
     });
 
-    // Reverse ID order requires fixed-point lower propagation. The downstream storage
-    // export retains its hard cutoff rather than being pinned like an index.
+    // Reverse ID order requires fixed-point propagation. The downstream storage
+    // export constrains the indexes below their committed bounds.
     testcase!(protected_index_chain, {
         storage: {
             "s1": (10, 100),
@@ -1595,13 +1570,13 @@ mod tests {
             "u4": (20, 26),
         },
         dataflows: [
-            "u1" <- ["u2"] => 20,
-            "u2" <- ["u3", "s2"] => 20,
-            "u3" <- ["s1"] => 10,
+            "u1" <- ["u2"] => 25,
+            "u2" <- ["u3", "s2"] => 25,
+            "u3" <- ["s1"] => 25,
             "u4" <- ["u1"] => 25,
         ],
         current_time: 90,
-        committed_bounds: { "u1": 30, },
+        committed_bounds: { "u1": 30, "u2": 30, "u3": 30, },
         read_only: true,
         catalog_read_protection: true,
     });
@@ -1624,7 +1599,7 @@ mod tests {
             "u2" <- ["u1"] => 20,
         ],
         current_time: 90,
-        committed_bounds: { "u2": 10, },
+        committed_bounds: { "u2": 20, },
     });
 
     testcase!(committed_index_dropped_input, {

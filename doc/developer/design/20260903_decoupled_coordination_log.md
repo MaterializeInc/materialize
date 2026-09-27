@@ -13,11 +13,27 @@ Implementation and validation details belong in the PR, not a diary here.
 
 Implementer session: `2026-09-14-13-05-31-256`.
 
-The shared worktree contains an unfinished adapter read-admission correction.
-Adapt it to the design's creation-time index frontier and protection for logical
-inputs and actual plan imports before landing. The EXPLAIN question is settled:
-preserve transaction effects and zero-replica EXPLAIN through shared
-acquisition, not an installation-dependent exception. The pause is resolved.
+The uncommitted integration establishes initial index bounds from input permission
+at plan selection, persists selected imports, and derives advancing logical/import
+protection without duplicate index requirement records. Existing publishers propose
+zero-replica index advancement from input progress. Shared acquisition no longer
+depends on installation, and native reconstruction honors current committed bounds.
+
+Bootstrap preparation reuses the main query client locally, retains import holds
+through selection, checks issuer liveness in that transaction, and activates the
+client only at the existing late handoff. Recovery frontiers come from current
+committed requirements, not an invented later timestamp for an unsuitable import.
+
+Next, finish integration verification, including the existing transaction and
+zero-replica EXPLAIN fixtures, and land the coherent admission change. Preserve
+transaction effects and reject imports that cannot support required history.
+
+Never-admitted builtin identities may be recorded at catalog open, with no
+protected-history promise until their first selection admits the plan and inputs.
+An existing index's first selection for another build is reconstruction and must
+preserve committed requirements. Coexistence must preserve the already-serving
+deployment's builtin compatibility and visibility, not rely on a global bootstrap
+barrier. SQL creation commits definition, selection and protection together.
 
 M2 remains active. The next end-to-end outcome is same-version native prewarming
 and warm promotion, then compatible-version writer coexistence and handover.
