@@ -99,7 +99,7 @@ locals {
 
 # 1. Configure networking infrastructure including VPC, subnets, and CIDR blocks
 module "networking" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/networking?ref=v13.10.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/networking?ref=v13.12.1"
 
   project_id = var.project_id
   region     = var.region
