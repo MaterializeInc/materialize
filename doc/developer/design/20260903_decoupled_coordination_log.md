@@ -1392,3 +1392,17 @@ protection and output fencing preserved. Cold reconstruction is not the chosen
 handover model. Deployment coexistence and compatible-version catalog/Persist
 writing are part of M2. Pre-feature conversion remains separate, and the
 completed outage, DDL and bounded-throughput proofs stay closed.
+
+### 2026-09-20: Index frontier and selected-input protection at creation
+
+Index DDL commits a justified initial `as_of`, its initial compaction bound, the
+selected plan and protection for both logical inputs and actual plan imports.
+Plan changes admit import protection atomically. This supersedes deferring the
+initial bound to replica publication and the prohibition on durable protection
+of selected physical imports. Logical recovery protection remains required.
+
+SELECT and EXPLAIN share acquisition before installation, preserving transaction
+effects and zero-replica EXPLAIN. Protection advances with current requirements,
+not a permanent birth-time pin. Next: repair the common catalog admission and
+installation contract alongside native warm promotion, without an EXPLAIN
+exception or another acceptance campaign.
