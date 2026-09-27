@@ -26,7 +26,6 @@ use rand_8::rngs::StdRng;
 use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::info;
@@ -46,12 +45,12 @@ pub fn render<'scope>(
 ) -> (
     BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, MzOffset, Infallible>,
-    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     // known and comitted offsets are recorded in the stats operator
     // It's easier to have this operator record the metrics rather than trying to special case it below.
     let stats_button = render_statistics_operator(scope, &config, committed_uppers);
+    let health = config.health.clone();
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
@@ -263,21 +262,20 @@ pub fn render<'scope>(
         })
     });
 
-    let status = export_ids
+    for id in export_ids
         .into_iter()
         .map(Some)
         .chain(std::iter::once(None))
-        .map(|id| HealthStatusMessage {
+    {
+        health.report(HealthStatusMessage {
             id,
             namespace: StatusNamespace::Generator,
             update: HealthStatusUpdate::running(),
-        })
-        .collect::<Vec<_>>()
-        .to_stream(scope);
+        });
+    }
     (
         data_collections,
         progress_stream,
-        status,
         vec![button.press_on_drop(), stats_button],
     )
 }
