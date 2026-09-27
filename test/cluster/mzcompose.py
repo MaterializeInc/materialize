@@ -7495,13 +7495,13 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
 
         # Wait for dataflows to hydrate.
         c.testdrive(dedent("""
-            > SELECT DISTINCT o.name, r.name, hydrated
-              FROM mz_internal.mz_compute_operator_hydration_statuses h
-              JOIN mz_objects o ON (h.object_id = o.id)
-              JOIN mz_cluster_replicas r ON (h.replica_id = r.id)
+            > SET cluster = compute
+            > SELECT DISTINCT o.name, hydrated
+              FROM mz_introspection.mz_compute_operator_hydration_statuses h
+              JOIN mz_objects o ON (h.export_id = o.id)
               WHERE o.id LIKE 'u%';
-            idx replica1 true
-            mv  replica1 true
+            idx true
+            mv  true
             """))
 
         # Restart envd to force a reconciliation on clusterd1.
@@ -7510,13 +7510,13 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
 
         # Verify that the operators still show up as hydrated.
         c.testdrive(dedent("""
-            > SELECT DISTINCT o.name, r.name, hydrated
-              FROM mz_internal.mz_compute_operator_hydration_statuses h
-              JOIN mz_objects o ON (h.object_id = o.id)
-              JOIN mz_cluster_replicas r ON (h.replica_id = r.id)
+            > SET cluster = compute
+            > SELECT DISTINCT o.name, hydrated
+              FROM mz_introspection.mz_compute_operator_hydration_statuses h
+              JOIN mz_objects o ON (h.export_id = o.id)
               WHERE o.id LIKE 'u%';
-            idx replica1 true
-            mv  replica1 true
+            idx true
+            mv  true
             """))
 
 

@@ -1019,9 +1019,9 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::HydrationTime) => 29,
             LogVariant::Compute(ComputeLog::LirMapping) => 30,
             LogVariant::Compute(ComputeLog::DataflowGlobal) => 31,
-            LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => 32,
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => 33,
             LogVariant::Compute(ComputeLog::ResourceUsage) => 34,
+            LogVariant::Timely(TimelyLog::Summaries) => 35,
         };
 
         let mut id: u64 = u64::from(cluster_variant) << 56;

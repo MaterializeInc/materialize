@@ -844,6 +844,7 @@ impl<'a> ActiveComputeState<'a> {
                     object_id,
                     logger,
                     *dataflow_index,
+                    as_of.as_option().copied(),
                     dataflow.import_ids(),
                 );
                 if starts_immediately {
@@ -1047,8 +1048,13 @@ impl<'a> ActiveComputeState<'a> {
                 metrics,
             );
 
-            let logging =
-                CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            let logging = CollectionLogging::new(
+                id,
+                logger.clone(),
+                *dataflow_index,
+                Some(Timestamp::MIN),
+                std::iter::empty(),
+            );
             // Log collections are never suspended and the controller marks them scheduled
             // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
             // start here, or they would sit permanently in the illegal state of being hydrated

@@ -158,7 +158,25 @@ struct SharedLoggingState {
     arrangement_size_activators: BTreeMap<usize, Activator>,
     /// Shared compute logger.
     compute_logger: Option<ComputeLogger>,
+    /// Operator summaries logged by timely but not yet claimed by the timely demux, by operator
+    /// ID.
+    ///
+    /// Summaries use a separate timely logger, which buffers independently of the logger for
+    /// `Operates` events. The timely demux claims an operator's summary once it has seen that
+    /// operator, and retracts it when the operator shuts down.
+    ///
+    /// NOTE: A summary that is flushed only after the demux processed its operator's shutdown is
+    /// never claimed and stays here. That needs an operator to be built and shut down between two
+    /// flushes of the summary logger.
+    pending_summaries: BTreeMap<usize, Vec<SummaryRow>>,
 }
+
+/// One row of an operator's internal summary: the input port, an output port it connects to, and
+/// the outer-timestamp delay along that connection.
+///
+/// An input port that connects to no output is represented by a single row with `None` for the
+/// output port and the delay, so that every operator with inputs has at least one row.
+type SummaryRow = (usize, Option<usize>, Option<u64>);
 
 /// Helper to pack collections of [`Datum`]s into key and value row.
 pub(crate) struct PermutedRowPacker {

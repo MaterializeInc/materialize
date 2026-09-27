@@ -412,20 +412,6 @@ A compute object is hydrated on a given replica when it has fully processed the 
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_hydration_times -->
 
-## `mz_compute_operator_hydration_statuses`
-
-The `mz_compute_operator_hydration_statuses` table describes the dataflow operator hydration status of compute objects (indexes or materialized views).
-
-A dataflow operator is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_operator_hydration_statuses -->
-| Field                   | Type        | Meaning  |
-| ----------------------- | ----------- | -------- |
-| `replica_id`            | [`text`]    | The ID of a cluster replica. |
-| `object_id`             | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views). |
-| `physical_plan_node_id` | [`uint8`]   | The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`. |
-| `hydrated`              | [`boolean`] | Whether the node is hydrated on the replica. |
-
 ## `mz_frontiers`
 
 The `mz_frontiers` table describes the frontiers of each source, sink, table,

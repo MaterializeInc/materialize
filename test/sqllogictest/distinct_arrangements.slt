@@ -1122,7 +1122,6 @@ Arrange Compute(FrontierCurrent)
 Arrange Compute(HydrationTime)
 Arrange Compute(ImportFrontierCurrent)
 Arrange Compute(LirMapping)
-Arrange Compute(OperatorHydrationStatus)
 Arrange Compute(PeekCurrent)
 Arrange Compute(PeekDuration)
 Arrange Differential(ArrangementBatches)
@@ -1145,6 +1144,7 @@ Arrange Timely(MessagesSent)
 Arrange Timely(Operates)
 Arrange Timely(Parks)
 Arrange Timely(Reachability)
+Arrange Timely(Summaries)
 
 statement ok
 COMMIT
@@ -1188,14 +1188,14 @@ JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = 
 GROUP BY mdod.name
 ORDER BY mdod.name
 ----
-AccumulableErrorCheck  4
+AccumulableErrorCheck  3
 Arrange␠ReduceMinsMaxes  1
 Arrange␠errors  1
-ArrangeAccumulable␠[val:␠empty]  4
+ArrangeAccumulable␠[val:␠empty]  3
 ArrangeBy[[Column(0,␠"operator_id")]]  2
 ArrangeBy[[Column(1,␠"dataflow_id")]]  2
 Distinct␠errors  1
-ReduceAccumulable  4
+ReduceAccumulable  3
 ReduceMinsMaxes  1
 ReduceMinsMaxes␠Error␠Check  1
 

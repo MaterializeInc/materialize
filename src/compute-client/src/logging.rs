@@ -110,6 +110,8 @@ pub enum TimelyLog {
     BatchesSent,
     /// TODO(database-issues#7533): Add documentation.
     BatchesReceived,
+    /// Internal connectivity of operators, as path summaries from input to output ports.
+    Summaries,
 }
 
 /// TODO(database-issues#7533): Add documentation.
@@ -176,8 +178,6 @@ pub enum ComputeLog {
     ErrorCount,
     /// Hydration times of exported collections.
     HydrationTime,
-    /// Hydration status of dataflow operators.
-    OperatorHydrationStatus,
     /// Mappings from `GlobalId`/`LirId`` pairs to dataflow addresses.
     LirMapping,
     /// Mappings from dataflows to `GlobalId`s.
@@ -293,6 +293,14 @@ impl LogVariant {
                 .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
                 .finish(),
 
+            LogVariant::Timely(TimelyLog::Summaries) => RelationDesc::builder()
+                .with_column("id", SqlScalarType::UInt64.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("input_port", SqlScalarType::UInt64.nullable(false))
+                .with_column("output_port", SqlScalarType::UInt64.nullable(true))
+                .with_column("delay", SqlScalarType::UInt64.nullable(true))
+                .finish(),
+
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
             | LogVariant::Differential(DifferentialLog::Sharing)
@@ -313,6 +321,7 @@ impl LogVariant {
                 .with_column("export_id", SqlScalarType::String.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("as_of", SqlScalarType::MzTimestamp.nullable(true))
                 .with_key(vec![0, 1])
                 .finish(),
 
@@ -370,14 +379,6 @@ impl LogVariant {
                     SqlScalarType::TimestampTz { precision: None }.nullable(true),
                 )
                 .with_key(vec![0, 1])
-                .finish(),
-
-            LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => RelationDesc::builder()
-                .with_column("export_id", SqlScalarType::String.nullable(false))
-                .with_column("lir_id", SqlScalarType::UInt64.nullable(false))
-                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-                .with_column("hydrated", SqlScalarType::Bool.nullable(false))
-                .with_key(vec![0, 1, 2])
                 .finish(),
 
             LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()

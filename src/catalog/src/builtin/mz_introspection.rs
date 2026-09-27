@@ -357,32 +357,6 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         }),
     });
 
-pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
-    LazyLock::new(|| BuiltinLog {
-        name: "mz_compute_operator_hydration_statuses_per_worker",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
-        variant: LogVariant::Compute(ComputeLog::OperatorHydrationStatus),
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "hydration_status_per_worker",
-            description: "Hydration state for each LIR node per worker.",
-            links: &const {
-                [OntologyLink {
-                    name: "hydration_of",
-                    target: "compute_export_per_worker",
-                    properties: LinkProperties::fk_composite(
-                        "export_id",
-                        "export_id",
-                        Cardinality::ManyToOne,
-                        &[("worker_id", "worker_id")],
-                    ),
-                }]
-            },
-            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
-        }),
-    });
-
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -505,6 +479,16 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::LOG_MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Reachability),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_DATAFLOW_OPERATOR_SUMMARIES_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_dataflow_operator_summaries_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_DATAFLOW_OPERATOR_SUMMARIES_PER_WORKER_OID,
+        variant: LogVariant::Timely(TimelyLog::Summaries),
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
@@ -1977,6 +1961,286 @@ GROUP BY id, port, update_type, time",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
+
+/// Frontiers of dataflow operator ports, reconstructed from reachability logging.
+///
+/// Reachability logging records the pointstamps each progress tracker holds, but not the
+/// frontiers it derives from them. This view derives them the way the tracker does: a port's
+/// frontier is the least pointstamp that can reach it, advanced by the summaries along the path.
+/// Channels connect output ports to input ports, operator summaries connect a leaf operator's
+/// input ports to its output ports, and a scope's ports connect to its children through node 0 of
+/// the scope's tracker. All workers' trackers hold the same pointstamps, so the view reads
+/// worker 0 only.
+pub static MZ_DATAFLOW_OPERATOR_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+    name: "mz_dataflow_operator_frontiers",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_FRONTIERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::UInt64.nullable(false))
+        .with_column("port_type", SqlScalarType::String.nullable(false))
+        .with_column("port", SqlScalarType::UInt64.nullable(false))
+        .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "id",
+            "The ID of the operator. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        (
+            "port_type",
+            "Whether the port is an operator `input` or `output`.",
+        ),
+        (
+            "port",
+            "The index of the port among the operator's ports of that type.",
+        ),
+        (
+            "time",
+            "The frontier of the port, in the outer timestamp. Ports with an empty frontier have no row.",
+        ),
+    ]),
+    sql: "
+WITH
+  addresses AS (
+    SELECT id, address
+    FROM mz_introspection.mz_dataflow_addresses_per_worker
+    WHERE worker_id = 0::uint8
+  ),
+  -- The log records pointstamp counts as multiplicities, which can be transiently negative, so
+  -- keep the tracker locations with a positive count.
+  --
+  -- NOTE: A child's tracker holds a copy of its scope's input frontiers as sources of node 0. The
+  -- copy only advances when timely schedules the scope, which need not happen for a scope without
+  -- operators, so it can remain at the minimum timestamp indefinitely. The parent's frontiers
+  -- propagate into the scope through its input ports, so drop the copy.
+  tracker_pointstamps AS (
+    SELECT id, source, port, update_type, time
+    FROM mz_introspection.mz_dataflow_operator_reachability_raw
+    WHERE worker_id = 0::uint8 AND time IS NOT NULL
+      AND NOT (source = 0::uint8 AND update_type = 'source')
+    GROUP BY id, source, port, update_type, time
+    HAVING pg_catalog.count(*) > 0
+  ),
+  -- Node 0 of a tracker is its scope's boundary: its sources are the scope's inputs, and its
+  -- targets are the scope's outputs.
+  pointstamps AS (
+    SELECT
+      CASE WHEN r.source = 0::uint8 THEN a.address ELSE a.address || r.source END AS address,
+      (r.source = 0::uint8) = (r.update_type = 'source') AS is_input,
+      r.port,
+      r.time::text::uint8 AS time
+    FROM tracker_pointstamps r
+    JOIN addresses a USING (id)
+  ),
+  -- Channels connect an output to an input. Index 0 is the scope itself, whose input ports feed
+  -- its children and whose output ports its children feed.
+  channel_edges AS (
+    SELECT
+      CASE WHEN c.from_index = 0::uint8 THEN a.address ELSE a.address || c.from_index END AS from_address,
+      c.from_index = 0::uint8 AS from_is_input,
+      c.from_port,
+      CASE WHEN c.to_index = 0::uint8 THEN a.address ELSE a.address || c.to_index END AS to_address,
+      c.to_index <> 0::uint8 AS to_is_input,
+      c.to_port,
+      0::uint8 AS delay
+    FROM mz_introspection.mz_dataflow_channels_per_worker c
+    JOIN addresses a USING (id)
+    WHERE c.worker_id = 0::uint8
+  ),
+  scopes AS (
+    SELECT DISTINCT a.address
+    FROM mz_introspection.mz_dataflow_channels_per_worker c
+    JOIN addresses a USING (id)
+    WHERE c.worker_id = 0::uint8
+  ),
+  input_ports AS (
+    SELECT DISTINCT to_address AS address, to_port AS port
+    FROM channel_edges
+    WHERE to_is_input
+  ),
+  output_ports AS (
+    SELECT DISTINCT from_address AS address, from_port AS port
+    FROM channel_edges
+    WHERE NOT from_is_input
+  ),
+  summaries AS (
+    SELECT a.address, s.input_port, s.output_port, s.delay
+    FROM mz_introspection.mz_dataflow_operator_summaries_per_worker s
+    JOIN addresses a USING (id)
+    WHERE s.worker_id = 0::uint8
+  ),
+  -- An operator without a logged summary connects every input to every output without delay,
+  -- which can only understate its frontiers. This covers summaries the demux has not claimed yet,
+  -- and scopes whose timestamp type has no summary logger.
+  operator_edges AS (
+    SELECT address, input_port, output_port, delay
+    FROM summaries
+    WHERE output_port IS NOT NULL
+    UNION ALL
+    SELECT i.address, i.port, o.port, 0::uint8
+    FROM input_ports i
+    JOIN output_ports o USING (address)
+    WHERE i.address NOT IN (SELECT address FROM summaries)
+  ),
+  -- Scopes connect to their children through channels, so only leaf operators contribute
+  -- operator edges.
+  edges AS (
+    SELECT from_address, from_is_input, from_port, to_address, to_is_input, to_port, delay
+    FROM channel_edges
+    UNION ALL
+    SELECT address, true, input_port, address, false, output_port, delay
+    FROM operator_edges
+    WHERE address NOT IN (SELECT address FROM scopes)
+  ),
+  frontiers AS (
+    WITH MUTUALLY RECURSIVE
+      frontiers (address uint8 list, is_input bool, port uint8, time uint8) AS (
+        SELECT address, is_input, port, pg_catalog.min(time)
+        FROM (
+          SELECT address, is_input, port, time FROM pointstamps
+          UNION ALL
+          SELECT e.to_address, e.to_is_input, e.to_port, f.time + e.delay
+          FROM frontiers f
+          JOIN edges e
+            ON f.address = e.from_address
+            AND f.is_input = e.from_is_input
+            AND f.port = e.from_port
+          -- A summary that overflows the timestamp leads nowhere.
+          WHERE f.time <= 18446744073709551615::uint8 - e.delay
+        )
+        GROUP BY address, is_input, port
+      )
+    SELECT address, is_input, port, time FROM frontiers
+  )
+SELECT
+  a.id,
+  CASE WHEN f.is_input THEN 'input' ELSE 'output' END AS port_type,
+  f.port,
+  f.time::mz_timestamp AS time
+FROM frontiers f
+JOIN addresses a ON a.address = f.address
+-- Channels share their scope's address.
+JOIN mz_introspection.mz_dataflow_operators_per_worker o ON o.id = a.id AND o.worker_id = 0::uint8",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+}
+});
+
+/// Hydration status of each LIR node, derived from operator frontiers.
+///
+/// An LIR node is hydrated once the output frontiers of all its dataflow operators have advanced
+/// beyond the dataflow's as-of. An LIR node that renders no operators is hydrated once all leaf
+/// operators its dataflow rendered before it are.
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_compute_operator_hydration_statuses",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::VIEW_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("export_id", SqlScalarType::String.nullable(false))
+            .with_column("lir_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("hydrated", SqlScalarType::Bool.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "export_id",
+                "The ID of the dataflow export. Corresponds to `mz_compute_exports.export_id`.",
+            ),
+            (
+                "lir_id",
+                "The ID of a node in the physical plan of the export's dataflow. Corresponds to `mz_lir_mapping.lir_id` and to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`.",
+            ),
+            ("hydrated", "Whether the node is hydrated."),
+        ]),
+        sql: "
+WITH
+  addresses AS (
+    SELECT id, address
+    FROM mz_introspection.mz_dataflow_addresses_per_worker
+    WHERE worker_id = 0::uint8
+  ),
+  lir_nodes AS (
+    SELECT d.id AS dataflow_id, m.lir_id, m.operator_id_start, m.operator_id_end
+    FROM mz_introspection.mz_compute_lir_mapping_per_worker m
+    JOIN mz_introspection.mz_compute_dataflow_global_ids_per_worker d
+      ON d.worker_id = 0::uint8 AND d.global_id = m.global_id
+    WHERE m.worker_id = 0::uint8
+  ),
+  -- The ID of each dataflow's root scope, which timely allocates before the dataflow's operators.
+  dataflow_starts AS (
+    SELECT address[1] AS dataflow_id, id AS start
+    FROM addresses
+    WHERE mz_catalog.list_length(address) = 1
+  ),
+  -- Channels share their scope's address.
+  scopes AS (
+    SELECT DISTINCT a.address
+    FROM mz_introspection.mz_dataflow_channels_per_worker c
+    JOIN addresses a USING (id)
+    WHERE c.worker_id = 0::uint8
+  ),
+  -- Expand each LIR node's operator ID range, which also covers channel IDs and scopes, and keep
+  -- leaf operators. A scope's frontier also reflects its operators outside the range. An LIR node
+  -- without operators reuses the output of operators rendered before it, and timely allocates
+  -- operator IDs in rendering order.
+  lir_operators AS (
+    SELECT l.dataflow_id, l.lir_id, l.id
+    FROM (
+      SELECT
+        dataflow_id,
+        lir_id,
+        pg_catalog.generate_series(operator_id_start::int8, operator_id_end::int8 - 1)::uint8 AS id
+      FROM lir_nodes
+      WHERE operator_id_start < operator_id_end
+      UNION ALL
+      SELECT
+        n.dataflow_id,
+        n.lir_id,
+        pg_catalog.generate_series(s.start::int8, n.operator_id_start::int8 - 1)::uint8 AS id
+      FROM lir_nodes n
+      JOIN dataflow_starts s USING (dataflow_id)
+      WHERE n.operator_id_start = n.operator_id_end
+    ) l
+    JOIN mz_introspection.mz_dataflow_operators_per_worker o
+      ON o.worker_id = 0::uint8 AND o.id = l.id
+    JOIN addresses a ON a.id = l.id
+    WHERE a.address NOT IN (SELECT address FROM scopes)
+  ),
+  lir_frontiers AS (
+    SELECT l.dataflow_id, l.lir_id, pg_catalog.min(f.time) AS time
+    FROM lir_operators l
+    LEFT JOIN mz_introspection.mz_dataflow_operator_frontiers f
+      ON f.id = l.id AND f.port_type = 'output'
+    GROUP BY l.dataflow_id, l.lir_id
+  ),
+  -- Dataflows whose trackers have reported pointstamps. Before that, a missing frontier means
+  -- the frontier is unknown rather than empty.
+  tracked_dataflows AS (
+    SELECT DISTINCT a.address[1] AS dataflow_id
+    FROM mz_introspection.mz_dataflow_operator_frontiers f
+    JOIN mz_introspection.mz_dataflow_addresses_per_worker a
+      ON a.worker_id = 0::uint8 AND a.id = f.id
+  )
+SELECT
+  e.export_id,
+  l.lir_id,
+  coalesce(CASE
+    WHEN l.time IS NOT NULL THEN l.time > e.as_of
+    -- An empty frontier is hydrated even for an empty or maximal as-of. The export's own frontier
+    -- is empty once its log row is retracted.
+    ELSE l.dataflow_id IN (SELECT dataflow_id FROM tracked_dataflows)
+      OR e.export_id NOT IN (
+        SELECT export_id FROM mz_introspection.mz_compute_frontiers_per_worker WHERE worker_id = 0::uint8
+      )
+  END, false) AS hydrated
+FROM lir_frontiers l
+JOIN mz_introspection.mz_compute_exports_per_worker e
+  ON e.worker_id = 0::uint8 AND e.dataflow_id = l.dataflow_id",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
 
 pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {

@@ -153,6 +153,19 @@ The `mz_compute_operator_durations_histogram` view describes a histogram of the 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_raw -->
 
+## `mz_compute_operator_hydration_statuses`
+
+The `mz_compute_operator_hydration_statuses` view describes the hydration status of each node in the physical plan of each [dataflow] export.
+A node is hydrated when the output frontiers of its dataflow operators have advanced beyond the time at which the dataflow started computing.
+A node that renders no operators is hydrated when the operators rendered before it in its dataflow are.
+
+<!-- RELATION_SPEC mz_introspection.mz_compute_operator_hydration_statuses -->
+| Field       | Type        | Meaning                                                                                                                                                                        |
+| ----------- | ----------- | --------                                                                                                                                                                       |
+| `export_id` | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).                                                                           |
+| `lir_id`    | [`uint8`]   | The ID of a node in the physical plan of the export's dataflow. Corresponds to [`mz_lir_mapping.lir_id`](#mz_lir_mapping) and to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`. |
+| `hydrated`  | [`boolean`] | Whether the node is hydrated.                                                                                                                                                  |
+
 ## `mz_cluster_prometheus_metrics`
 
 The `mz_cluster_prometheus_metrics` source exposes Prometheus metrics collected from each cluster replica process's internal metrics registry.
@@ -485,7 +498,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_hydration_times_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_hydration_statuses_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_frontiers -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_summaries_per_worker -->

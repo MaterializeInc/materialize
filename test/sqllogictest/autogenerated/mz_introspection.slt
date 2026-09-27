@@ -91,6 +91,13 @@ id  uint8  The␠ID␠of␠the␠operator.␠Corresponds␠to␠`mz_dataflow_ope
 duration_ns  uint8  The␠upper␠bound␠of␠the␠duration␠bucket␠in␠nanoseconds.
 count  numeric  The␠(noncumulative)␠count␠of␠invocations␠in␠the␠bucket.
 
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
+----
+export_id  text  The␠ID␠of␠the␠dataflow␠export.␠Corresponds␠to␠`mz_compute_exports.export_id`.
+lir_id  uint8  The␠ID␠of␠a␠node␠in␠the␠physical␠plan␠of␠the␠export's␠dataflow.␠Corresponds␠to␠`mz_lir_mapping.lir_id`␠and␠to␠a␠`node_id`␠displayed␠in␠the␠output␠of␠`EXPLAIN␠PHYSICAL␠PLAN␠WITH␠(node␠identifiers)`.
+hydrated  boolean  Whether␠the␠node␠is␠hydrated.
+
 query TT
 SELECT name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_cluster_prometheus_metrics' ORDER BY position
 ----
@@ -295,7 +302,7 @@ mz_compute_lir_mapping_per_worker
 mz_compute_operator_durations_histogram
 mz_compute_operator_durations_histogram_per_worker
 mz_compute_operator_durations_histogram_raw
-mz_compute_operator_hydration_statuses_per_worker
+mz_compute_operator_hydration_statuses
 mz_dataflow_addresses
 mz_dataflow_addresses_per_worker
 mz_dataflow_arrangement_sizes
@@ -306,11 +313,13 @@ mz_dataflow_channels_per_worker
 mz_dataflow_global_ids
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_per_worker
+mz_dataflow_operator_frontiers
 mz_dataflow_operator_parents
 mz_dataflow_operator_parents_per_worker
 mz_dataflow_operator_reachability
 mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operator_reachability_raw
+mz_dataflow_operator_summaries_per_worker
 mz_dataflow_operators
 mz_dataflow_operators_per_worker
 mz_dataflows

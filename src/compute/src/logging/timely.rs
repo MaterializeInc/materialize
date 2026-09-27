@@ -42,7 +42,7 @@ use crate::logging::{
     EventQueue, LogVariant, OutputSessionColumnar, OutputSessionVec, PermutedRowPacker, TimelyLog,
     Update,
 };
-use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
+use crate::logging::{LogCollection, SharedLoggingState, SummaryRow, consolidate_and_pack};
 use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 use mz_row_spine::RowRowBuilder;
 
@@ -102,6 +102,8 @@ pub(super) fn construct(
         let mut batches_sent_out = OutputBuilder::from(batches_sent_out);
         let (batches_received_out, batches_received) = demux.new_output();
         let mut batches_received_out = OutputBuilder::from(batches_received_out);
+        let (summaries_out, summaries) = demux.new_output();
+        let mut summaries_out = OutputBuilder::from(summaries_out);
 
         let worker_id = scope.index();
         let mut demux_state = DemuxState::default();
@@ -119,6 +121,7 @@ pub(super) fn construct(
                 let mut batches_received = batches_received_out.activate();
                 let mut schedules_duration = schedules_duration_out.activate();
                 let mut schedules_histogram = schedules_histogram_out.activate();
+                let mut summaries = summaries_out.activate();
 
                 input.for_each(|cap, data| {
                     let mut output_buffers = DemuxOutput {
@@ -132,7 +135,16 @@ pub(super) fn construct(
                         schedules_histogram: schedules_histogram.session_with_builder(&cap),
                         batches_sent: batches_sent.session_with_builder(&cap),
                         batches_received: batches_received.session_with_builder(&cap),
+                        summaries: summaries.session_with_builder(&cap),
                     };
+
+                    // Claim summaries that arrived after their operator's `Operates` event.
+                    claim_pending_summaries(
+                        &mut demux_state,
+                        &mut shared_state.borrow_mut(),
+                        &mut output_buffers,
+                        *cap.time(),
+                    );
 
                     for (time, event) in data.drain(..) {
                         if let TimelyEvent::Messages(msg) = &event {
@@ -358,6 +370,27 @@ pub(super) fn construct(
                 },
             );
 
+        let summaries =
+            consolidate_and_pack::<ColumnationChunker<_>, KB<_, _, _>, ColumnBuilder<_>, _, _, _>(
+                summaries,
+                TimelyLog::Summaries,
+                move |data, packer, session| {
+                    for ((datum, ()), time, diff) in data.iter() {
+                        let data = packer.pack_slice(&[
+                            Datum::UInt64(u64::cast_from(datum.operator)),
+                            Datum::UInt64(u64::cast_from(worker_id)),
+                            Datum::UInt64(u64::cast_from(datum.input)),
+                            datum
+                                .output
+                                .map(|o| Datum::UInt64(u64::cast_from(o)))
+                                .unwrap_or(Datum::Null),
+                            datum.delay.map(Datum::UInt64).unwrap_or(Datum::Null),
+                        ]);
+                        session.give((data, time, diff));
+                    }
+                },
+            );
+
         let logs = {
             use TimelyLog::*;
             [
@@ -371,6 +404,7 @@ pub(super) fn construct(
                 (MessagesReceived, messages_received),
                 (BatchesSent, batches_sent),
                 (BatchesReceived, batches_received),
+                (Summaries, summaries),
             ]
         };
 
@@ -426,6 +460,8 @@ struct DemuxState {
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
     schedules_data: BTreeMap<usize, Vec<(isize, Diff)>>,
+    /// Summaries of live operators, claimed from [`SharedLoggingState::pending_summaries`].
+    summaries: BTreeMap<usize, Vec<SummaryRow>>,
 }
 
 struct Park {
@@ -460,6 +496,7 @@ struct DemuxOutput<'a, 'b> {
     messages_received: OutputSessionVec<'a, 'b, Update<(MessageDatum, ())>>,
     schedules_duration: OutputSessionVec<'a, 'b, Update<(usize, ())>>,
     schedules_histogram: OutputSessionVec<'a, 'b, Update<(ScheduleHistogramDatum, ())>>,
+    summaries: OutputSessionVec<'a, 'b, Update<(SummaryDatum, ())>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
@@ -498,6 +535,60 @@ struct ScheduleHistogramDatum {
 
 impl Columnation for ScheduleHistogramDatum {
     type InnerRegion = CopyRegion<Self>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SummaryDatum {
+    operator: usize,
+    input: usize,
+    output: Option<usize>,
+    delay: Option<u64>,
+}
+
+impl Columnation for SummaryDatum {
+    type InnerRegion = CopyRegion<Self>;
+}
+
+impl SummaryDatum {
+    fn new(operator: usize, (input, output, delay): SummaryRow) -> Self {
+        Self {
+            operator,
+            input,
+            output,
+            delay,
+        }
+    }
+}
+
+/// Move pending summaries of operators the demux has already seen into the demux state and emit
+/// them at `ts`.
+fn claim_pending_summaries(
+    state: &mut DemuxState,
+    shared_state: &mut SharedLoggingState,
+    output: &mut DemuxOutput,
+    ts: Timestamp,
+) {
+    if shared_state.pending_summaries.is_empty() {
+        return;
+    }
+    let claimable: Vec<_> = shared_state
+        .pending_summaries
+        .keys()
+        .copied()
+        .filter(|id| state.operators.contains_key(id))
+        .collect();
+    for id in claimable {
+        let rows = shared_state
+            .pending_summaries
+            .remove(&id)
+            .expect("key collected above");
+        for row in &rows {
+            output
+                .summaries
+                .give(((SummaryDatum::new(id, *row), ()), ts, Diff::ONE));
+        }
+        state.summaries.insert(id, rows);
+    }
 }
 
 /// Event handler of the demux operator.
@@ -549,6 +640,14 @@ impl DemuxHandler<'_, '_, '_> {
         let datum = (event.id, event.addr.clone());
         self.output.addresses.give((datum, ts, Diff::ONE));
 
+        if let Some(rows) = self.shared_state.pending_summaries.remove(&event.id) {
+            for row in &rows {
+                let datum = SummaryDatum::new(event.id, *row);
+                self.output.summaries.give(((datum, ()), ts, Diff::ONE));
+            }
+            self.state.summaries.insert(event.id, rows);
+        }
+
         self.state.operators.insert(event.id, event);
     }
 
@@ -588,6 +687,17 @@ impl DemuxHandler<'_, '_, '_> {
         let ts = self.ts();
         let datum = (operator.id, operator.name);
         self.output.operates.give((datum, ts, Diff::MINUS_ONE));
+
+        // Retract the operator's summary, and forget a summary that was never claimed.
+        if let Some(rows) = self.state.summaries.remove(&event.id) {
+            for row in rows {
+                let datum = SummaryDatum::new(event.id, row);
+                self.output
+                    .summaries
+                    .give(((datum, ()), ts, Diff::MINUS_ONE));
+            }
+        }
+        self.shared_state.pending_summaries.remove(&event.id);
 
         // Retract schedules information for the operator
         if let Some(schedules) = self.state.schedules_data.remove(&event.id) {
