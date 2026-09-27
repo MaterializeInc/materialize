@@ -83,7 +83,7 @@ impl StandingQueryExecuteClient {
         sink_id: GlobalId,
         write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
-        advance_upper_rx: watch::Receiver<Timestamp>,
+        advance_upper_rx: watch::Receiver<Option<Timestamp>>,
     ) -> Self {
         let (batcher_tx, batcher_rx) = mpsc::unbounded_channel();
         spawn_batcher_task(
@@ -154,8 +154,8 @@ impl StandingQueryExecuteClient {
         }
 
         // Wait for results from the subscribe handler.
-        // The batcher retracts every param row it wrote with its next write,
-        // so no explicit cleanup is needed on cancellation.
+        // The batcher retracts every param row in the same write that inserts
+        // it, so no explicit cleanup is needed on cancellation.
         result_rx
             .await
             .map_err(|_| StandingQueryExecuteError::ResultChannelClosed)?
@@ -178,7 +178,7 @@ fn spawn_batcher_task(
     write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     batcher_rx: mpsc::UnboundedReceiver<BatcherCmd>,
     flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
-    advance_upper_rx: watch::Receiver<Timestamp>,
+    advance_upper_rx: watch::Receiver<Option<Timestamp>>,
 ) {
     mz_ore::task::spawn(
         || format!("standing-query-batcher-{sink_id}"),
@@ -197,7 +197,7 @@ async fn batcher_task(
     write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     mut batcher_rx: mpsc::UnboundedReceiver<BatcherCmd>,
     flush_tx: mpsc::UnboundedSender<StandingQueryFlush>,
-    mut advance_upper_rx: watch::Receiver<Timestamp>,
+    mut advance_upper_rx: watch::Receiver<Option<Timestamp>>,
 ) {
     let current_upper: Timestamp = write_handle
         .shared_upper()
@@ -207,7 +207,7 @@ async fn batcher_task(
     debug!(
         %sink_id,
         %current_upper,
-        initial_target = %*advance_upper_rx.borrow(),
+        initial_target = ?*advance_upper_rx.borrow(),
         "batcher started",
     );
 
@@ -217,7 +217,6 @@ async fn batcher_task(
         flush_tx,
         current_upper,
         next_batch: Instant::now(),
-        pending_retractions: Vec::new(),
     };
     let mut cmds: Vec<BatcherCmd> = Vec::new();
     // Requests whose `min_ts` the param shard has not reached, by `min_ts`.
@@ -232,15 +231,25 @@ async fn batcher_task(
         // param shard upper advances past its as_of. Using borrow_and_update
         // (not has_changed) ensures we catch values sent before we started
         // listening, not just new notifications.
-        {
-            let target = *advance_upper_rx.borrow_and_update();
-            batcher.advance_upper(target).await;
-        }
+        //
+        // No target means the coordinator is read-only. The param shard then
+        // belongs to the leader, so this task must not write it, and requests
+        // stay parked until a target arrives.
+        let target = *advance_upper_rx.borrow_and_update();
+        let writable = match target {
+            Some(target) => {
+                batcher.advance_upper(target).await;
+                true
+            }
+            None => false,
+        };
 
-        let ready = take_ready(&mut parked, batcher.current_upper);
-        if !ready.is_empty() {
-            batcher.write(ready).await;
-            continue;
+        if writable {
+            let ready = take_ready(&mut parked, batcher.current_upper);
+            if !ready.is_empty() {
+                batcher.write(ready).await;
+                continue;
+            }
         }
 
         // Wait for at least one command or an upper-advance notification.
@@ -269,9 +278,11 @@ async fn batcher_task(
                     let min_ts = req.min_ts.unwrap_or_else(TimelyTimestamp::minimum);
                     parked.entry(min_ts).or_default().push(req);
                 }
-                let ready = take_ready(&mut parked, batcher.current_upper);
-                if !ready.is_empty() {
-                    batcher.write(ready).await;
+                if writable {
+                    let ready = take_ready(&mut parked, batcher.current_upper);
+                    if !ready.is_empty() {
+                        batcher.write(ready).await;
+                    }
                 }
             }
         }
@@ -297,46 +308,46 @@ struct Batcher {
     current_upper: Timestamp,
     /// The earliest time the next batch may start.
     next_batch: Instant,
-    /// Param rows of the last write, retracted by the next write.
-    pending_retractions: Vec<Row>,
 }
 
 impl Batcher {
-    /// Writes `requests` at the current upper, retracting the previous
-    /// write's param rows there, and notifies the handler.
+    /// Writes `requests` at the current upper and retracts them one
+    /// timestamp later, in the same append, and notifies the handler.
     ///
-    /// Every write, here or in `advance_upper`, starts at the current upper,
-    /// which the previous write left at its timestamp + 1, so each param row
-    /// exists for exactly one timestamp. The handler relies on this: a
-    /// request's results are the positive updates at its write timestamp.
+    /// Each param row therefore exists for exactly one timestamp, and a row
+    /// is never durable without its retraction. The handler relies on the
+    /// former: a request's results are the positive updates at its write
+    /// timestamp.
     async fn write(&mut self, requests: Vec<WriteRequest>) {
-        // Each batch consumes one timestamp. Timestamps are milliseconds, and
+        // Each batch consumes two timestamps. Timestamps are milliseconds, and
         // the inputs' write frontier, which bounds how far ahead of the inputs
         // the param shard can be written without results waiting for the next
         // tick, advances with wall-clock time. Starting at most one batch per
-        // millisecond keeps the param shard from outrunning the frontier and
-        // using up the gap `advance_standing_query_uppers` leaves. Requests
+        // two milliseconds keeps the param shard from outrunning the frontier
+        // and using up the gap `advance_standing_query_uppers` leaves. Requests
         // that arrive meanwhile join the next batch.
-        const BATCH_INTERVAL: Duration = Duration::from_millis(1);
+        const BATCH_INTERVAL: Duration = Duration::from_millis(2);
         tokio::time::sleep_until(self.next_batch.into()).await;
 
         let sink_id = self.sink_id;
         let lower = self.current_upper;
-        let upper = TimestampManipulation::step_forward(&lower);
+        // A row inserted without its retraction would outlive a crash of this
+        // process: nothing retracts it later, and a restarted dataflow would
+        // see it at its as-of and answer it again. So both go in one append.
+        let retract_ts = TimestampManipulation::step_forward(&lower);
+        let upper = TimestampManipulation::step_forward(&retract_ts);
         let request_ids: Vec<_> = requests.iter().map(|req| req.request_id).collect();
 
-        let mut writes: Vec<_> = self
-            .pending_retractions
-            .drain(..)
-            .map(|row| ((SourceData(Ok(row)), ()), lower, -1))
+        let writes: Vec<_> = requests
+            .into_iter()
+            .flat_map(|req| {
+                let row = req.param_row;
+                [
+                    ((SourceData(Ok(row.clone())), ()), lower, 1),
+                    ((SourceData(Ok(row)), ()), retract_ts, -1),
+                ]
+            })
             .collect();
-        self.pending_retractions
-            .extend(requests.into_iter().map(|req| req.param_row));
-        writes.extend(
-            self.pending_retractions
-                .iter()
-                .map(|row| ((SourceData(Ok(row.clone())), ()), lower, 1)),
-        );
 
         self.next_batch = Instant::now() + BATCH_INTERVAL;
         let append_start = Instant::now();
@@ -366,11 +377,7 @@ impl Batcher {
         }
     }
 
-    /// Advance the param shard's upper to at least `target`, retracting the
-    /// pending retractions at the current upper.
-    ///
-    /// Leaves the pending retractions in place if the upper is already at or
-    /// past `target`, or on an upper mismatch.
+    /// Advance the param shard's upper to at least `target`.
     async fn advance_upper(&mut self, target: Timestamp) {
         let sink_id = self.sink_id;
         let upper = self.current_upper;
@@ -380,17 +387,10 @@ impl Batcher {
 
         debug!(%sink_id, %upper, %target, "advance upper");
 
-        // Without this, an idle standing query would keep its last param rows,
-        // and their results, live until the next execution.
-        let retractions: Vec<_> = self
-            .pending_retractions
-            .iter()
-            .map(|row| ((SourceData(Ok(row.clone())), ()), upper, -1))
-            .collect();
         let res = self
             .write_handle
             .compare_and_append(
-                retractions,
+                std::iter::empty::<((SourceData, ()), Timestamp, StorageDiff)>(),
                 Antichain::from_elem(upper),
                 Antichain::from_elem(target),
             )
@@ -400,7 +400,6 @@ impl Batcher {
         match res {
             Ok(()) => {
                 self.current_upper = target;
-                self.pending_retractions.clear();
             }
             Err(mismatch) => {
                 warn!(
@@ -457,3 +456,6 @@ pub enum StandingQueryExecuteError {
     #[error("{0}")]
     Evaluation(String),
 }
+
+#[cfg(test)]
+mod tests;

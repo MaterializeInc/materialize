@@ -255,7 +255,7 @@ impl Coordinator {
                     let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (advance_upper_tx, advance_upper_rx) =
-                        tokio::sync::watch::channel(initial_upper_target);
+                        tokio::sync::watch::channel(Some(initial_upper_target));
                     let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
                         item_id,
                         global_id,

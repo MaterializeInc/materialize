@@ -42,8 +42,10 @@ pub(crate) struct ActiveStandingQuery {
     pub client: StandingQueryExecuteClient,
     /// Channel to forward subscribe batches to the handler task.
     pub subscribe_tx: mpsc::UnboundedSender<SubscribeBatch>,
-    /// Channel to tell the handler task to advance the param shard upper.
-    pub advance_upper_tx: watch::Sender<Timestamp>,
+    /// Channel to tell the batcher task to advance the param shard upper.
+    /// `None` while the coordinator is read-only, which keeps the batcher
+    /// from writing the param shard.
+    pub advance_upper_tx: watch::Sender<Option<Timestamp>>,
     /// The initial upper target (as_of + 1). We never lag below this to
     /// avoid reading at timestamps before the inputs had any data.
     pub initial_upper: Timestamp,
@@ -60,6 +62,11 @@ impl Coordinator {
     /// For standing queries with no input dependencies (constant queries),
     /// uses the coordinator's current write timestamp instead.
     pub(crate) async fn advance_standing_query_uppers(&self) {
+        // A read-only coordinator must not write the param shards, which the
+        // leader's batchers own.
+        if self.controller.read_only() {
+            return;
+        }
         for asq in self.active_standing_queries.values() {
             let ts = if asq.input_ids.is_empty() {
                 self.peek_local_write_ts().await
@@ -76,8 +83,8 @@ impl Coordinator {
             // the subscribe can resolve immediately (it needs all inputs
             // past the write timestamp, and the table is already 1s ahead).
             //
-            // The batcher consumes one timestamp per batch and starts at most
-            // one batch per millisecond, so it cannot outrun the input
+            // The batcher consumes two timestamps per batch and starts at most
+            // one batch per two milliseconds, so it cannot outrun the input
             // frontier and the gap is never used up. Without this gap, the
             // batcher would write at the table's exact upper, forcing the
             // subscribe to wait for the next AdvanceTimelines tick (~1s).
@@ -86,7 +93,7 @@ impl Coordinator {
             // before the inputs had any data (e.g. right after CREATE).
             let target = ts.saturating_sub(1000).max(asq.initial_upper);
             debug!(item_id = ?asq.item_id, %target, input_frontier = %ts, "advance upper");
-            let _ = asq.advance_upper_tx.send(target);
+            let _ = asq.advance_upper_tx.send(Some(target));
         }
     }
 }

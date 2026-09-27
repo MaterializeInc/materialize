@@ -134,7 +134,7 @@ flowchart TD
     F["Handler task: demux + deliver
     1. Buffer positive diffs by request_id
     2. frontier > T → deliver results
-    3. Discard retraction diffs (next write)"]
+    3. Discard retraction diffs (T+1)"]
 
     G["Coordinator: advance upper
     min(input frontiers) → batcher
@@ -171,7 +171,7 @@ Each standing query has three components:
 
 The param shard upper determines the timestamp at which param writes land.
 On each group commit tick, the coordinator advances it to min(input frontiers) - 1s, so every write lands at a time all inputs have completed.
-Each batch consumes one timestamp and the batcher writes at most one batch per millisecond, so the 1s gap is the headroom that lets batches proceed between ticks without waiting for the inputs.
+Each batch consumes two timestamps and the batcher writes at most one batch per two milliseconds, so the 1s gap is the headroom that lets batches proceed between ticks without waiting for the inputs.
 
 * **Serializable**: a request is written at the current param shard upper.
 * **Strict serializable**: a request carries the oracle read timestamp taken after it arrives, and the batcher parks it until the param shard upper reaches that timestamp.
@@ -180,9 +180,9 @@ Serializable results therefore reflect inputs up to about one tick older than a 
 
 #### Batch lifecycle
 
-1. **Write**: The session client generates a `request_id` (UUID), registers a result oneshot channel, and sends the param row to the batcher task. The batcher writes `(row, T, +1)` via `compare_and_append` and retracts the previous batch's param rows at `T` in the same call, advancing the upper by 1. Each param row exists from its write to the next write, or to the next upper advance when the standing query is idle. The batcher starts at most one batch per millisecond, so the param shard consumes timestamps no faster than the input frontier advances and never catches up to it.
+1. **Write**: The session client generates a `request_id` (UUID), registers a result oneshot channel, and sends the param row to the batcher task. The batcher writes `(row, T, +1)` and `(row, T+1, -1)` in one `compare_and_append`, advancing the upper by 2. Each param row exists for exactly one timestamp, and no param row is ever durable without its retraction, so a crash leaves nothing to clean up. The batcher starts at most one batch per two milliseconds, so the param shard consumes timestamps no faster than the input frontier advances and never catches up to it.
 2. **Notify**: The batcher sends a flush notification to the handler task mapping write_ts T → request_ids for the batch.
-3. **Observe**: The SUBSCRIBE emits positive diffs at timestamp T (join results) and negative diffs at the next write (retractions).
+3. **Observe**: The SUBSCRIBE emits positive diffs at timestamp T (join results) and negative diffs at T+1 (retractions).
 4. **Progress**: When the SUBSCRIBE frontier advances past T, the handler knows all results for this request are in. Empty result sets (request_ids with no diffs) are detected at this point.
 5. **Deliver**: The handler groups result rows by `request_id` and sends them via the oneshot channel. Only positive diffs are buffered; negative diffs (retractions) are discarded.
 
@@ -191,7 +191,7 @@ The handler demuxes by timestamp and request_id.
 
 #### Future: SUBSCRIBE to a standing query
 
-The write pattern naturally extends to a streaming mode where clients subscribe to a standing query's results rather than executing one-shot queries. In this mode, the batcher would not retract the param row with its next write, so only the `(row, T, +1)` is written. The param row persists in the arrangement, and the client receives ongoing updates (inserts and deletes on the result set) as the underlying data changes. When the client cancels the subscribe or disconnects, the retraction `(row, T', -1)` is emitted to clean up.
+The write pattern naturally extends to a streaming mode where clients subscribe to a standing query's results rather than executing one-shot queries. In this mode, the batcher would not retract the param row at T+1, so only the `(row, T, +1)` is written. The param row persists in the arrangement, and the client receives ongoing updates (inserts and deletes on the result set) as the underlying data changes. When the client cancels the subscribe or disconnects, the retraction `(row, T', -1)` is emitted to clean up.
 
 This would give users a way to say "watch this parameterized query" and receive a stream of diffs, combining the convenience of standing query parameters with the streaming semantics of SUBSCRIBE.
 
@@ -200,7 +200,7 @@ This would give users a way to say "watch this parameterized query" and receive 
 * One long-lived SUBSCRIBE per standing query, started when the standing query is created.
 * Runs on the standing query's cluster.
 * Modeled after existing introspection subscribes, extended for this use case.
-* The SUBSCRIBE is not replica-targeted; cluster restarts are invisible to the coordinator. On environmentd restart, the coordinator clears all parameter tables (removes stale rows from the previous incarnation) and re-establishes the SUBSCRIBE for each standing query.
+* The SUBSCRIBE is not replica-targeted; cluster restarts are invisible to the coordinator. On environmentd restart, the coordinator re-establishes the SUBSCRIBE for each standing query. The parameter collections need no cleanup, because every param row is written together with its retraction. A read-only environmentd does not write the parameter collections, which belong to the leader, until it is promoted.
 * When idle (no parameter rows), the SUBSCRIBE consumes minimal resources.
 
 #### Observability
@@ -288,7 +288,7 @@ This was rejected because it requires knowing parameter values in advance, doesn
 
 ### Known issue: subscribe accumulation
 
-Under sustained load, the subscribe's internal arrangements accumulate param rows and join results faster than compaction can clean them up. After extended runs (minutes), this triggers `max_result_size` errors. Retracting each param row with the next write bounds the *logical* working set, but the *physical* arrangement retains data until the `since` frontier advances. This needs investigation into compaction pacing for the param shard.
+Under sustained load, the subscribe's internal arrangements accumulate param rows and join results faster than compaction can clean them up. After extended runs (minutes), this triggers `max_result_size` errors. Retracting each param row at T+1 bounds the *logical* working set, but the *physical* arrangement retains data until the `since` frontier advances. This needs investigation into compaction pacing for the param shard.
 
 ## Implementation plan
 
@@ -489,9 +489,8 @@ The row description is the standing query's result schema (fixed at CREATE time)
 
 **Environmentd restart.**
 The SUBSCRIBE is not replica-targeted; cluster restarts are invisible to the coordinator.
-On environmentd startup:
-1. Clear all parameter tables (DELETE all rows) to remove stale requests from a previous incarnation.
-2. Re-establish the long-lived SUBSCRIBE for each standing query.
+On environmentd startup, re-establish the long-lived SUBSCRIBE for each standing query.
+Clearing the parameter collections at startup would race a leader that still writes them during a zero-downtime deployment. Instead, the batcher writes each param row and its retraction in one append, so no incarnation leaves live rows behind.
 There are no pending `ExecuteContext`s to error since environmentd restarted — all client connections are gone.
 
 **DROP sequencing.**
@@ -542,7 +541,7 @@ Suggested implementation phases:
 ## Open questions
 
 * **Error propagation**: A single error taints the entire collection in Materialize's current model. Standing queries amplify this since many clients share one dataflow. Should we add error detection and dataflow restart as a mitigation?
-* **Subscribe accumulation**: Under sustained load, the subscribe's arrangements grow because compaction doesn't keep pace with param writes. Retracting each param row with the next write bounds the logical working set, but the physical arrangement retains data until the `since` frontier advances. This causes `max_result_size` errors after extended runs.
+* **Subscribe accumulation**: Under sustained load, the subscribe's arrangements grow because compaction doesn't keep pace with param writes. Retracting each param row at T+1 bounds the logical working set, but the physical arrangement retains data until the `since` frontier advances. This causes `max_result_size` errors after extended runs.
 * **Persist write latency floor**: The minimum persist write latency (~10-30ms) dominates the end-to-end budget. Peak throughput of ~900 QPS at 256 connections is far from the 100k aspirational target. Achieving higher throughput would require sub-millisecond persist writes or a non-persistent parameter path.
 * **Persisting param_collection_id** (**blocker**): Each standing query has an internal parameter collection with its own `GlobalId`, currently derived as `standing_query_global_id + 1` during catalog recovery. This is unsafe — the +1 assumption is an implicit contract not enforced by the ID allocator, and orphaned shard GC could collect a param collection that isn't explicitly listed in the catalog. The param_collection_id must be persisted alongside the standing query. Options considered: (a) encode in `create_sql` via `WITH` options — no existing precedent for encoding a GlobalId this way; (b) use `extra_versions` — semantically wrong, that's for schema evolution; (c) new durable catalog collection mapping standing query → param collection. Needs team input on the right catalog persistence pattern.
 * **Serializable freshness**: Should the param shard upper follow serializable timestamp selection, min(input frontiers) - 1, rather than lag it by 1s? Table frontiers advance once per group commit tick, and each batch needs its own timestamp, so tracking the peek timestamp leaves no timestamps for the batches between ticks. Options: size the headroom from the observed batch rate at each tick, track input frontiers continuously (helps only inputs that advance between ticks), or advance table frontiers more often. The staleness this costs has not been measured.

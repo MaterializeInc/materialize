@@ -3034,8 +3034,12 @@ impl Coordinator {
                         .expect("valid persist usage");
                     let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
                     let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
-                    let (advance_upper_tx, advance_upper_rx) =
-                        tokio::sync::watch::channel(initial_upper_target);
+                    // A read-only coordinator leaves the param shard to the
+                    // leader. `advance_standing_query_uppers` sends the first
+                    // target once it is writable.
+                    let (advance_upper_tx, advance_upper_rx) = tokio::sync::watch::channel(
+                        (!self.controller.read_only()).then_some(initial_upper_target),
+                    );
                     let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
                         entry.id(),
                         sq.global_id(),
