@@ -786,6 +786,32 @@ metrics:
   - instance_id
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_logging_records_total
+  help: The number of log records handed to the logging dataflow, by log.
+  labels:
+  - log
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_bucket
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_count
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_sum
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_peek_duration_seconds_bucket
   help: A histogram of peek durations since restart.
   labels:
