@@ -590,6 +590,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: standing-queries
+    topics: [postgres]
     label: Standing queries
     depends_on: build-aarch64
     timeout_in_minutes: 180
