@@ -540,17 +540,21 @@ class BulkPrivilegeGrant(Scenario):
                                 conn_info=conn_infos["materialized"],
                                 strict_serializable=False,
                             ),
-                            # A `SELECT 1` queues behind the grant transaction in
-                            # flight, so its latency distribution tracks the grant
-                            # duration and where the query lands relative to it.
-                            # Comparing percentiles against a baseline measures
-                            # that noise. The guarantee below guards the stall.
-                            report_regressions=False,
                         )
                         for _ in range(10)
                     ],
                 ),
             ],
+            regression_thresholds={
+                # A `SELECT 1` waits out the grant statement in flight. p50 is
+                # stable at about half a statement's duration, so it tracks the
+                # per-statement coordinator stall and keeps the default
+                # threshold. p95 lands anywhere between one half and one full
+                # statement depending on where queries fall relative to the
+                # grants, so it can double from placement alone. avg and qps
+                # inherit part of that swing.
+                "SELECT 1 (reuse connection)": {"p95": 2.5, "avg": 2.0, "qps": 2.0},
+            },
             guarantees={
                 # Before the fix a single bulk grant blocked the coordinator for
                 # minutes. This bound catches that regression while leaving headroom
