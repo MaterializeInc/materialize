@@ -210,7 +210,7 @@ module "nodepool_materialize" {
 
 # 3. Install AWS Load Balancer Controller
 module "aws_lbc" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/aws-lbc?ref=v13.10.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/aws-lbc?ref=v13.12.1"
 
   name_prefix       = var.name_prefix
   eks_cluster_name  = module.eks.cluster_name
