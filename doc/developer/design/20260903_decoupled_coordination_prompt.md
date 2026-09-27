@@ -7,11 +7,11 @@ Working PR: https://github.com/MaterializeInc/materialize/pull/38696
 Bookmark: decoupled-coordination
 Remote: origin, pointing to the contributor fork, not upstream
 
-Read the design and the latest handoff in
+Read the design and the current handoff in
 doc/developer/design/20260903_decoupled_coordination_log.md, then inspect the
-code, worktree and remote bookmark. Preserve other sessions' work. Where
-instructions differ, the current design and steering supersede historical
-proposals. The log is context, not a cumulative task list.
+code, worktree and remote bookmark. Preserve other sessions' work. The archived
+log is historical context, not required reading or a task list. Consult it only
+for a specific question. Current design and steering supersede old proposals.
 
 Current steering
 
@@ -74,16 +74,17 @@ contracts at their boundaries and use existing regressions where they suffice.
 Compare disputed behavior against the baseline. Seek independent review when
 warranted. Report failed, pending and unverified results explicitly.
 
-Keep implementation and validation status in the PR description. Append only
-consequential decisions, unresolved questions and the next useful step to the
-design log, not CI results or tool status. Preserve earlier entries. Design and
-prompt bodies are designer-owned unless documentation work is explicitly
-assigned. Flag resolved steering for removal. Re-read this prompt after
-compaction.
+Keep detailed implementation and validation status in the PR description.
+Maintain the current handoff in place with only live work, unresolved decisions
+and the next useful step. Remove resolved or superseded items rather than append
+a diary. Do not add CI results or tool status, or append to the archived log.
+Design and prompt bodies are designer-owned unless documentation work is
+explicitly assigned. Flag resolved steering for removal. Re-read this prompt
+after compaction.
 
 Commit coherent changes with jj and continue beyond intermediate commits. You
 may commit and push to the bookmark above without asking. Before finishing,
-fold your own fixups and log updates into a straight implementation history
+fold your own fixups and handoff updates into a straight implementation history
 while preserving useful review boundaries. Check remote changes before pushing.
 Ask before rewriting others' commits or commits others have built on.
 

@@ -597,6 +597,7 @@ record is required. Existing asynchronous MV replacement and startup-only
 parameter semantics remain unchanged. Token and wakeup mechanics are
 implementation choices.
 
-Implementation history is in the [log](20260903_decoupled_coordination_log.md).
-Workflow and current steering are in the
-[implementer prompt](20260903_decoupled_coordination_prompt.md).
+Resume from the [current handoff](20260903_decoupled_coordination_log.md) and
+[implementer prompt](20260903_decoupled_coordination_prompt.md). The
+[archived log](20260903_decoupled_coordination_log_archive.md) is historical
+context, not required reading or current steering.
