@@ -112,6 +112,21 @@ fn test_standing_query_sees_prior_writes_through_new_index() {
         .unwrap();
     assert_eq!(rows.len(), 1000);
 
+    // Under strict serializability, which is the default, each execution
+    // observes the write acknowledged just before it.
+    for round in 1..=3 {
+        let first_id = 100_000 * round + 1;
+        client
+            .batch_execute(&format!(
+                "INSERT INTO orders SELECT g, 1000 FROM generate_series({first_id}, {}) AS g",
+                first_id + 9
+            ))
+            .unwrap();
+        let rows = client
+            .query("EXECUTE STANDING QUERY by_customer (1000)", &[])
+            .unwrap();
+        assert_eq!(rows.len(), 10 * round, "round {round}");
+    }
 }
 
 #[mz_ore::test]

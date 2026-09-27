@@ -63,6 +63,7 @@ use crate::command::{
 };
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::read_then_write::DependencyPolicy;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
@@ -1519,6 +1520,30 @@ impl SessionClient {
 
         let item_id = plan.id;
 
+        // Isolation levels that anchor reads at the oracle must observe every
+        // write acknowledged before this execution, so its param row is
+        // written no earlier than the oracle's read timestamp. The others may
+        // read at whatever timestamp the batcher is at.
+        let isolation_level = self
+            .session
+            .as_ref()
+            .expect("session invariant")
+            .vars()
+            .transaction_isolation()
+            .clone();
+        let min_ts = if Coordinator::needs_linearized_read_ts(
+            &isolation_level,
+            &mz_sql::plan::QueryWhen::Immediately,
+        ) {
+            let oracle = self
+                .peek_client
+                .ensure_oracle(mz_storage_types::sources::Timeline::EpochMilliseconds)
+                .await?;
+            Some(oracle.read_ts().await)
+        } else {
+            None
+        };
+
         // Get or cache the standing query client.
         if !self.standing_query_clients.contains_key(&item_id) {
             let inner = self.inner().clone();
@@ -1533,7 +1558,7 @@ impl SessionClient {
             .get(&item_id)
             .expect("just inserted");
 
-        match sq_client.execute(&plan.params).await {
+        match sq_client.execute(&plan.params, min_ts).await {
             Ok(rows) => {
                 use mz_repr::IntoRowIterator;
                 // TODO(mh): Should we use `SendingRowsStreaming` instead?

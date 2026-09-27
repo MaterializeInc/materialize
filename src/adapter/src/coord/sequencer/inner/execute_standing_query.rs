@@ -14,6 +14,7 @@ use mz_sql::plan;
 use crate::ExecuteContext;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::error::AdapterError;
 
 impl Coordinator {
@@ -44,10 +45,19 @@ impl Coordinator {
             ));
         };
 
+        // See `SessionClient::try_frontend_standing_query_execute`.
+        let isolation_level = ctx.session().vars().transaction_isolation();
+        let min_ts =
+            if Self::needs_linearized_read_ts(isolation_level, &plan::QueryWhen::Immediately) {
+                Some(self.get_local_read_ts().await)
+            } else {
+                None
+            };
+
         // Execute off the coordinator loop via the shared client.
         let params_clone = params.clone();
         mz_ore::task::spawn(|| "standing-query-execute-fallback", async move {
-            match sq_client.execute(&params_clone).await {
+            match sq_client.execute(&params_clone, min_ts).await {
                 Ok(rows) => {
                     use mz_repr::IntoRowIterator;
                     ctx.retire(Ok(crate::command::ExecuteResponse::SendingRowsImmediate {
