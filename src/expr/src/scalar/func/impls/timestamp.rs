@@ -21,13 +21,13 @@ use mz_repr::adt::timestamp::{
     CheckedTimestamp, MAX_PRECISION, TimestampPrecision, checked_add_with_leapsecond,
     checked_sub_with_leapsecond,
 };
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
 use crate::func::parse_timezone;
+use crate::scalar::func::TimestampLike;
 use crate::scalar::func::format::DateTimeFormat;
-use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 
 #[sqlfunc(
     sqlname = "timestamp_to_text",
@@ -87,44 +87,31 @@ pub struct CastTimestampToTimestampTz {
     pub to: Option<TimestampPrecision>,
 }
 
-impl EagerUnaryFunc for CastTimestampToTimestampTz {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let out =
-            CheckedTimestamp::try_from(DateTime::<Utc>::from_naive_utc_and_offset(a.into(), Utc))?;
-        let updated = out.round_to_precision(self.to)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
+#[sqlfunc(
+    CastTimestampToTimestampTz,
+    sqlname = "timestamp_to_timestamp_with_time_zone",
+    output_type_expr = SqlScalarType::TimestampTz { precision: self.to }
+        .nullable(input_type.nullable),
+    preserves_uniqueness = {
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
         to_p >= from_p
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampTzToTimestamp {
-            from: self.from,
-            to: self.to
-        })
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastTimestampToTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_to_timestamp_with_time_zone")
-    }
+    },
+    inverse = super::CastTimestampTzToTimestamp {
+        from: self.from,
+        to: self.to
+    },
+    is_monotone = true
+)]
+fn cast_timestamp_to_timestamp_tz(
+    &self,
+    a: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    let out =
+        CheckedTimestamp::try_from(DateTime::<Utc>::from_naive_utc_and_offset(a.into(), Utc))?;
+    let updated = out.round_to_precision(self.to)?;
+    Ok(updated)
 }
 
 #[derive(
@@ -143,43 +130,29 @@ pub struct AdjustTimestampPrecision {
     pub to: Option<TimestampPrecision>,
 }
 
-impl EagerUnaryFunc for AdjustTimestampPrecision {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        // This should never have been called if precisions are same.
-        // Adding a soft-assert to flag if there are such instances.
-        mz_ore::soft_assert_no_log!(self.to != self.from);
-
-        let updated = a.round_to_precision(self.to)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
+#[sqlfunc(
+    AdjustTimestampPrecision,
+    sqlname = "adjust_timestamp_precision",
+    output_type_expr = SqlScalarType::Timestamp { precision: self.to }
+        .nullable(input_type.nullable),
+    preserves_uniqueness = {
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
         to_p >= from_p
-    }
+    },
+    is_monotone = true
+)]
+fn adjust_timestamp_precision(
+    &self,
+    a: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    // This should never have been called if precisions are same.
+    // Adding a soft-assert to flag if there are such instances.
+    mz_ore::soft_assert_no_log!(self.to != self.from);
 
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for AdjustTimestampPrecision {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("adjust_timestamp_precision")
-    }
+    let updated = a.round_to_precision(self.to)?;
+    Ok(updated)
 }
 
 #[derive(
@@ -198,43 +171,30 @@ pub struct CastTimestampTzToTimestamp {
     pub to: Option<TimestampPrecision>,
 }
 
-impl EagerUnaryFunc for CastTimestampTzToTimestamp {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let out = CheckedTimestamp::try_from(a.naive_utc())?;
-        let updated = out.round_to_precision(self.to)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
+#[sqlfunc(
+    CastTimestampTzToTimestamp,
+    sqlname = "timestamp_with_time_zone_to_timestamp",
+    output_type_expr = SqlScalarType::Timestamp { precision: self.to }
+        .nullable(input_type.nullable),
+    preserves_uniqueness = {
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
         to_p >= from_p
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampToTimestampTz {
-            from: self.from,
-            to: self.to
-        })
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastTimestampTzToTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_with_time_zone_to_timestamp")
-    }
+    },
+    inverse = super::CastTimestampToTimestampTz {
+        from: self.from,
+        to: self.to
+    },
+    is_monotone = true
+)]
+fn cast_timestamp_tz_to_timestamp(
+    &self,
+    a: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    let out = CheckedTimestamp::try_from(a.naive_utc())?;
+    let updated = out.round_to_precision(self.to)?;
+    Ok(updated)
 }
 
 #[derive(
@@ -253,43 +213,29 @@ pub struct AdjustTimestampTzPrecision {
     pub to: Option<TimestampPrecision>,
 }
 
-impl EagerUnaryFunc for AdjustTimestampTzPrecision {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        // This should never have been called if precisions are same.
-        // Adding a soft-assert to flag if there are such instances.
-        mz_ore::soft_assert_no_log!(self.to != self.from);
-
-        let updated = a.round_to_precision(self.to)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
+#[sqlfunc(
+    AdjustTimestampTzPrecision,
+    sqlname = "adjust_timestamp_with_time_zone_precision",
+    output_type_expr = SqlScalarType::TimestampTz { precision: self.to }
+        .nullable(input_type.nullable),
+    preserves_uniqueness = {
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
         to_p >= from_p
-    }
+    },
+    is_monotone = true
+)]
+fn adjust_timestamp_tz_precision(
+    &self,
+    a: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    // This should never have been called if precisions are same.
+    // Adding a soft-assert to flag if there are such instances.
+    mz_ore::soft_assert_no_log!(self.to != self.from);
 
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for AdjustTimestampTzPrecision {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("adjust_timestamp_with_time_zone_precision")
-    }
+    let updated = a.round_to_precision(self.to)?;
+    Ok(updated)
 }
 
 #[sqlfunc(sqlname = "timestamp_to_time", preserves_uniqueness = false)]
@@ -350,17 +296,9 @@ where
 )]
 pub struct ExtractInterval(pub DateTimeUnits);
 
-impl EagerUnaryFunc for ExtractInterval {
-    type Input<'a> = Interval;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_interval_inner(self.0, a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
-    }
+#[sqlfunc(ExtractInterval, skip_display = true)]
+fn extract_interval(&self, a: Interval) -> Result<Numeric, EvalError> {
+    date_part_interval_inner(self.0, a)
 }
 
 impl fmt::Display for ExtractInterval {
@@ -382,17 +320,9 @@ impl fmt::Display for ExtractInterval {
 )]
 pub struct DatePartInterval(pub DateTimeUnits);
 
-impl EagerUnaryFunc for DatePartInterval {
-    type Input<'a> = Interval;
-    type Output<'a> = Result<f64, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_interval_inner(self.0, a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Float64.nullable(input.nullable)
-    }
+#[sqlfunc(DatePartInterval, skip_display = true)]
+fn date_part_interval(&self, a: Interval) -> Result<f64, EvalError> {
+    date_part_interval_inner(self.0, a)
 }
 
 impl fmt::Display for DatePartInterval {
@@ -460,21 +390,13 @@ pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
 )]
 pub struct ExtractTimestamp(pub DateTimeUnits);
 
-impl EagerUnaryFunc for ExtractTimestamp {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_timestamp_inner(self.0, &*a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        most_significant_unit(self.0)
-    }
+#[sqlfunc(
+    ExtractTimestamp,
+    skip_display = true,
+    is_monotone = most_significant_unit(self.0)
+)]
+fn extract_timestamp(&self, a: CheckedTimestamp<NaiveDateTime>) -> Result<Numeric, EvalError> {
+    date_part_timestamp_inner(self.0, &*a)
 }
 
 impl fmt::Display for ExtractTimestamp {
@@ -496,24 +418,16 @@ impl fmt::Display for ExtractTimestamp {
 )]
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
-impl EagerUnaryFunc for ExtractTimestampTz {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_timestamp_inner(self.0, &*a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        // Unlike the timezone-less timestamp, it's not safe to extract the "high-order bits" like
-        // year: year takes timezone into account, and it's quite possible for a different timezone
-        // to be in a previous year while having a later UTC-equivalent time.
-        self.0 == DateTimeUnits::Epoch
-    }
+#[sqlfunc(
+    ExtractTimestampTz,
+    skip_display = true,
+    // Unlike the timezone-less timestamp, it's not safe to extract the "high-order bits" like
+    // year: year takes timezone into account, and it's quite possible for a different timezone
+    // to be in a previous year while having a later UTC-equivalent time.
+    is_monotone = self.0 == DateTimeUnits::Epoch
+)]
+fn extract_timestamp_tz(&self, a: CheckedTimestamp<DateTime<Utc>>) -> Result<Numeric, EvalError> {
+    date_part_timestamp_inner(self.0, &*a)
 }
 
 impl fmt::Display for ExtractTimestampTz {
@@ -535,17 +449,9 @@ impl fmt::Display for ExtractTimestampTz {
 )]
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
-impl EagerUnaryFunc for DatePartTimestamp {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = Result<f64, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_timestamp_inner(self.0, &*a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Float64.nullable(input.nullable)
-    }
+#[sqlfunc(DatePartTimestamp, skip_display = true)]
+fn date_part_timestamp(&self, a: CheckedTimestamp<NaiveDateTime>) -> Result<f64, EvalError> {
+    date_part_timestamp_inner(self.0, &*a)
 }
 
 impl fmt::Display for DatePartTimestamp {
@@ -567,17 +473,9 @@ impl fmt::Display for DatePartTimestamp {
 )]
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
-impl EagerUnaryFunc for DatePartTimestampTz {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = Result<f64, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_timestamp_inner(self.0, &*a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Float64.nullable(input.nullable)
-    }
+#[sqlfunc(DatePartTimestampTz, skip_display = true)]
+fn date_part_timestamp_tz(&self, a: CheckedTimestamp<DateTime<Utc>>) -> Result<f64, EvalError> {
+    date_part_timestamp_inner(self.0, &*a)
 }
 
 impl fmt::Display for DatePartTimestampTz {
@@ -628,21 +526,12 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
 )]
 pub struct DateTruncTimestamp(pub DateTimeUnits);
 
-impl EagerUnaryFunc for DateTruncTimestamp {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_trunc_inner(self.0, &*a)?.try_into().err_into()
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: None }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
+#[sqlfunc(DateTruncTimestamp, skip_display = true, is_monotone = true)]
+fn date_trunc_timestamp(
+    &self,
+    a: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    date_trunc_inner(self.0, &*a)?.try_into().err_into()
 }
 
 impl fmt::Display for DateTruncTimestamp {
@@ -664,21 +553,12 @@ impl fmt::Display for DateTruncTimestamp {
 )]
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
-impl EagerUnaryFunc for DateTruncTimestampTz {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_trunc_inner(self.0, &*a)?.try_into().err_into()
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: None }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
+#[sqlfunc(DateTruncTimestampTz, skip_display = true, is_monotone = true)]
+fn date_trunc_timestamp_tz(
+    &self,
+    a: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    date_trunc_inner(self.0, &*a)?.try_into().err_into()
 }
 
 impl fmt::Display for DateTruncTimestampTz {
@@ -744,17 +624,12 @@ pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Result<NaiveDat
 )]
 pub struct TimezoneTimestamp(pub Timezone);
 
-impl EagerUnaryFunc for TimezoneTimestamp {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        timezone_timestamp(self.0, a.to_naive())
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: None }.nullable(input.nullable)
-    }
+#[sqlfunc(TimezoneTimestamp, skip_display = true)]
+fn timezone_timestamp(
+    &self,
+    a: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    timezone_timestamp(self.0, a.to_naive())
 }
 
 impl fmt::Display for TimezoneTimestamp {
@@ -776,19 +651,14 @@ impl fmt::Display for TimezoneTimestamp {
 )]
 pub struct TimezoneTimestampTz(pub Timezone);
 
-impl EagerUnaryFunc for TimezoneTimestampTz {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        timezone_timestamptz(self.0, a.into())?
-            .try_into()
-            .err_into()
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: None }.nullable(input.nullable)
-    }
+#[sqlfunc(TimezoneTimestampTz, skip_display = true)]
+fn timezone_timestamp_tz(
+    &self,
+    a: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    timezone_timestamptz(self.0, a.into())?
+        .try_into()
+        .err_into()
 }
 
 impl fmt::Display for TimezoneTimestampTz {
@@ -813,17 +683,9 @@ pub struct ToCharTimestamp {
     pub format: DateTimeFormat,
 }
 
-impl EagerUnaryFunc for ToCharTimestamp {
-    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
-    type Output<'a> = String;
-
-    fn call<'a>(&self, input: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        self.format.render(&*input)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input.nullable)
-    }
+#[sqlfunc(ToCharTimestamp, skip_display = true)]
+fn to_char_timestamp(&self, input: CheckedTimestamp<NaiveDateTime>) -> String {
+    self.format.render(&*input)
 }
 
 impl fmt::Display for ToCharTimestamp {
@@ -848,17 +710,9 @@ pub struct ToCharTimestampTz {
     pub format: DateTimeFormat,
 }
 
-impl EagerUnaryFunc for ToCharTimestampTz {
-    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
-    type Output<'a> = String;
-
-    fn call<'a>(&self, input: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        self.format.render(&*input)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input.nullable)
-    }
+#[sqlfunc(ToCharTimestampTz, skip_display = true)]
+fn to_char_timestamp_tz(&self, input: CheckedTimestamp<DateTime<Utc>>) -> String {
+    self.format.render(&*input)
 }
 
 impl fmt::Display for ToCharTimestampTz {
