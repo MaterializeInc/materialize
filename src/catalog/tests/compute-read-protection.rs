@@ -120,6 +120,111 @@ fn cluster_id() -> ClusterId {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn warm_promotion_rejects_managed_replica_pins_before_fencing() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_deploy_generation(7);
+    let bootstrap = test_bootstrap_args();
+    let mut active = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    active.sync_to_current_updates().await.unwrap();
+    let mut tx = active.transaction().await.unwrap();
+    tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    let mut cluster = tx
+        .get_clusters()
+        .find(|cluster| {
+            matches!(cluster.config.variant, ClusterVariant::Managed(_))
+                && tx
+                    .get_cluster_replicas()
+                    .any(|replica| replica.cluster_id == cluster.id && replica.name == "r1")
+        })
+        .expect("bootstrap has a managed cluster with replica r1");
+    commit(tx).await;
+
+    let next = builder.clone().with_deploy_generation(8);
+    let pending = next
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap();
+    // Capture a promotion handle before the serving writer adds the unsupported
+    // definition. Admission must refresh it, not rely on the prewarming snapshot.
+    let promotion = next.clone().unwrap_build().await;
+    let mut tx = active.transaction().await.unwrap();
+    tx.insert_item(
+        CatalogItemId::User(1000), 20000, GlobalId::User(1000), SchemaId::User(1),
+        "pinned", format!(
+            "CREATE MATERIALIZED VIEW materialize.public.pinned IN CLUSTER [{}] REPLICA r1 AS SELECT 1",
+            cluster.id
+        ), RoleId::User(1), Vec::new(), BTreeMap::new(), None,
+    ).unwrap();
+    commit(tx).await;
+    let before = active.snapshot().await.unwrap();
+    let error = promotion
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("replica-targeted materialized view"),
+        "{error}"
+    );
+    active.sync_to_current_updates().await.unwrap();
+    assert_eq!(active.snapshot().await.unwrap(), before);
+
+    let error = next
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("replica-targeted materialized view"),
+        "{error}"
+    );
+
+    // Same-generation recovery must preserve the single-deployment feature.
+    let restart = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    restart.expire().await;
+
+    // The rejected takeover leaves the serving writer usable. A pin backed by
+    // an explicit unmanaged declaration does not impose the managed exclusion.
+    active.sync_to_current_updates().await.unwrap();
+    let mut tx = active.transaction().await.unwrap();
+    cluster.config.variant = ClusterVariant::Unmanaged;
+    tx.update_cluster(cluster.id, cluster).unwrap();
+    commit(tx).await;
+    let promoted = next
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    assert!(active.sync_to_current_updates().await.is_err());
+    pending.expire().await;
+    promoted.expire().await;
+    active.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
     use mz_catalog_protos::objects::ClientIncarnationKey;

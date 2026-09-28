@@ -204,7 +204,7 @@ pub async fn preflight_0dt(
             .expect("incompatible catalog/persist version");
 
             let _catalog = openable_adapter_storage
-                .open(boot_ts, &bootstrap_args)
+                .open_for_promotion(boot_ts, &bootstrap_args)
                 .await
                 .unwrap_or_terminate("unexpected error while fencing out old deployment");
 

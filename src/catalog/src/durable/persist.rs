@@ -1163,6 +1163,7 @@ pub(crate) type UnopenedPersistCatalogState =
 #[derive(Clone, Copy, Debug)]
 enum OpenPurpose<'a> {
     Bootstrap(&'a BootstrapArgs),
+    Promotion(&'a BootstrapArgs),
     Join,
     Prewarm(&'a str),
 }
@@ -1333,7 +1334,7 @@ impl UnopenedPersistCatalogState {
         purpose: OpenPurpose<'_>,
     ) -> Result<Box<PersistCatalogState>, CatalogError> {
         let bootstrap_args = match purpose {
-            OpenPurpose::Bootstrap(args) => Some(args),
+            OpenPurpose::Bootstrap(args) | OpenPurpose::Promotion(args) => Some(args),
             OpenPurpose::Join | OpenPurpose::Prewarm(_) => None,
         };
         let join = bootstrap_args.is_none();
@@ -1431,6 +1432,16 @@ impl UnopenedPersistCatalogState {
                 .token()
                 .expect("admitted token")
                 .deploy_generation;
+            if protection_enabled
+                && durable_generation.is_some_and(|generation| generation < admitted_generation)
+                && matches!(purpose, OpenPurpose::Promotion(_) | OpenPurpose::Prewarm(_))
+            {
+                // Revalidate on every CAS attempt. A serving writer can add a
+                // targeted MV after prewarming starts or promotion is authorized.
+                super::promotion::validate_native_promotion(
+                    self.snapshot.iter().map(|(kind, _, _)| kind),
+                )?;
+            }
             if join
                 && prewarming_plan_build.is_none()
                 && durable_generation != Some(admitted_generation)
@@ -1789,6 +1800,22 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
                 Mode::Writable,
                 initial_ts,
                 OpenPurpose::Bootstrap(bootstrap_args),
+            )
+            .boxed()
+            .await?)
+    }
+
+    #[mz_ore::instrument]
+    async fn open_for_promotion(
+        self: Box<Self>,
+        initial_ts: Timestamp,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                initial_ts,
+                OpenPurpose::Promotion(bootstrap_args),
             )
             .boxed()
             .await?)

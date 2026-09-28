@@ -54,6 +54,7 @@ pub mod initialize;
 mod metrics;
 pub mod objects;
 mod persist;
+mod promotion;
 mod traits;
 mod transaction;
 mod upgrade;
@@ -177,6 +178,14 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open(
         mut self: Box<Self>,
+        initial_ts: Timestamp,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+
+    /// Opens for warm handover, validating protected-catalog promotion policy
+    /// against the same snapshot used to fence the serving generation.
+    async fn open_for_promotion(
+        self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
