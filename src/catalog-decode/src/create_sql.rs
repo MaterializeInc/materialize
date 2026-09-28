@@ -939,7 +939,7 @@ mod tests {
         let hex = encode_pg_details("materialize_abc", Some(42));
         let sql = pg_source_sql(&hex);
         let out = super::postgres_source_details(&sql).expect("ok");
-        assert_eq!(out, json!({ "slot": "materialize_abc", "timeline_id": 42 }),);
+        assert_eq!(out, json!({ "slot": "materialize_abc", "timeline_id": 42 }));
     }
 
     #[mz_ore::test]
@@ -1061,7 +1061,6 @@ mod tests {
              FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
              (TOPIC = my_topic, GROUP ID PREFIX = my_prefix) FORMAT TEXT";
         let out = super::kafka_source_details(sql).expect("ok");
-        let out = out;
         assert_eq!(out["topic"], json!("my_topic"));
         assert_eq!(out["group_id_prefix"], json!("my_prefix"));
     }
@@ -1409,7 +1408,6 @@ mod tests {
               ASSUME ROLE ARN 'arn:aws:iam::123:role/mz', \
               ASSUME ROLE SESSION NAME = mysession)";
         let out = super::connection_details(sql).expect("ok");
-        let out = out;
         assert_eq!(out["endpoint"], json!("localhost"));
         assert_eq!(out["region"], json!("useast1"));
         assert_eq!(out["assume_role_session_name"], json!("mysession"));
@@ -1568,7 +1566,6 @@ mod tests {
         // the composite form even though both halves are `text`.
         let sql = kafka_sink_sql(Some("a"), "FORMAT TEXT", "UPSERT");
         let out = super::item_details(&sql).expect("ok");
-        let out = out;
         assert_eq!(out["format"], json!("key-text-value-text"));
         assert_eq!(out["key_format"], json!("text"));
         assert_eq!(out["value_format"], json!("text"));
