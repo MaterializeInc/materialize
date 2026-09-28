@@ -257,13 +257,20 @@ impl QueryClient {
         let mut ids = BTreeSet::new();
         if let Some(instance) = catalog.try_get_cluster(cluster) {
             ids.extend(instance.log_indexes.values().copied());
-            ids.extend(instance.bound_objects.iter().filter_map(|item| {
-                match catalog.get_entry(item).item() {
-                    CatalogItem::Index(index) => Some(index.global_id()),
-                    _ => None,
-                }
-            }));
         }
+        // Cluster bound objects exclude system entries, including builtin
+        // indexes that are valid access paths for catalog queries.
+        ids.extend(
+            catalog
+                .state()
+                .get_entries()
+                .filter_map(|(_, entry)| match entry.item() {
+                    CatalogItem::Index(index) if index.cluster_id == cluster => {
+                        Some(index.global_id())
+                    }
+                    _ => None,
+                }),
+        );
         ComputeInstanceSnapshot::new_from_parts(cluster, ids)
     }
 
@@ -1235,6 +1242,23 @@ mod tests {
         assert!(catalog.get_cluster(cluster).replicas().next().is_none());
         let candidates = client.instance_snapshot(catalog, cluster);
         assert!(candidates.contains_collection(&index));
+        let builtin = catalog
+            .state()
+            .resolve_builtin_object(
+                &mz_catalog::builtin::Builtin::<mz_sql::catalog::IdReference>::Index(
+                    &mz_catalog::builtin::MZ_SOURCES_IND,
+                ),
+            );
+        let builtin_entry = catalog.get_entry(&builtin);
+        let CatalogItem::Index(builtin_index) = builtin_entry.item() else {
+            panic!("builtin index expected");
+        };
+        assert!(
+            client
+                .instance_snapshot(catalog, builtin_index.cluster_id)
+                .contains_collection(&builtin_entry.latest_global_id()),
+            "builtin declarations are candidates independently of installation"
+        );
         assert!(
             !client
                 .observed_instance_snapshot(catalog, cluster)
