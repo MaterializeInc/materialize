@@ -39,7 +39,7 @@ use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -57,7 +57,7 @@ use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFr
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    VersionedRelationDesc,
+    ReprColumnType, SqlScalarType, VersionedRelationDesc,
 };
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
@@ -1011,6 +1011,7 @@ impl CatalogState {
                     })
             })
             .transpose()?;
+        let (columns, index_keys) = self.durable_item_metadata(&entry.item);
         let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
         Ok(mz_catalog::durable::Item {
             id: entry.id,
@@ -1023,7 +1024,84 @@ impl CatalogState {
             privileges: entry.privileges.into_all_values().collect(),
             extra_versions,
             ephemeral_owner_session,
+            columns,
+            index_keys,
         })
+    }
+
+    /// The planner-resolved metadata the durable catalog records alongside
+    /// `item`'s definition: the columns of a relation, each by the identity
+    /// its type presents as, and the keys of an index. See
+    /// `mz_catalog::durable::Item::columns`.
+    ///
+    /// An index's keys are typed against the version of the indexed relation
+    /// it was created on, which must be in this catalog.
+    pub(super) fn durable_item_metadata(
+        &self,
+        item: &CatalogItem,
+    ) -> (
+        Option<Vec<mz_catalog::durable::ItemColumn>>,
+        Option<Vec<mz_catalog::durable::IndexKey>>,
+    ) {
+        let columns = item
+            .relation_desc(RelationVersionSelector::Latest)
+            .map(|desc| {
+                desc.iter()
+                    .map(|(name, typ)| {
+                        let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                        let custom_type = match &typ.scalar_type {
+                            SqlScalarType::List {
+                                custom_id: Some(id),
+                                ..
+                            }
+                            | SqlScalarType::Map {
+                                custom_id: Some(id),
+                                ..
+                            }
+                            | SqlScalarType::Record {
+                                custom_id: Some(id),
+                                ..
+                            } => Some(*id),
+                            _ => None,
+                        };
+                        mz_catalog::durable::ItemColumn {
+                            name: name.clone(),
+                            nullable: typ.nullable,
+                            type_oid: pg_type.oid(),
+                            type_mod: pg_type.typmod(),
+                            custom_type,
+                        }
+                    })
+                    .collect()
+            });
+        let index_keys = match item {
+            CatalogItem::Index(index) => {
+                let on_entry = self.get_entry_by_global_id(&index.on);
+                let on_desc = on_entry
+                    .relation_desc()
+                    .expect("indexes are built on relations");
+                let column_types: Vec<ReprColumnType> = on_desc
+                    .typ()
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect();
+                let keys = index
+                    .keys
+                    .iter()
+                    .map(|key| mz_catalog::durable::IndexKey {
+                        column: match key {
+                            MirScalarExpr::Column(column, _) => Some(*column),
+                            _ => None,
+                        },
+                        nullable: key.typ(&column_types).nullable,
+                    })
+                    .collect();
+                Some(keys)
+            }
+            _ => None,
+        };
+        (columns, index_keys)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
