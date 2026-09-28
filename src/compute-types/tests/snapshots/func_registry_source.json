@@ -249,7 +249,7 @@
     "cast_array_to_array": {"display":"arraytoarray","sqlfunc_decl":null,"body_fingerprint":null},
     "cast_array_to_jsonb": {"display":"arraytojsonb","sqlfunc_decl":null,"body_fingerprint":null},
     "cast_array_to_list_one_dim": {"display":"arraytolist","sqlfunc_decl":"#[sqlfunc(sqlname = \"arraytolist\")] fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>, EvalError>","body_fingerprint":"62ae04042cf94d79"},
-    "cast_array_to_string": {"display":"arraytostr","sqlfunc_decl":null,"body_fingerprint":null},
+    "cast_array_to_string": {"display":"arraytostr","sqlfunc_decl":"#[sqlfunc(CastArrayToString, sqlname = \"arraytostr\", preserves_uniqueness = true)] fn cast_array_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError>","body_fingerprint":"57de61553fc8ac26"},
     "cast_bool_to_int32": {"display":"boolean_to_integer","sqlfunc_decl":"#[sqlfunc(sqlname = \"boolean_to_integer\", preserves_uniqueness = true, inverse = super::CastInt32ToBool, is_monotone = true)] fn cast_bool_to_int32(a: bool) -> i32","body_fingerprint":"593c44fb5565e5fd"},
     "cast_bool_to_int64": {"display":"boolean_to_bigint","sqlfunc_decl":"#[sqlfunc(sqlname = \"boolean_to_bigint\", preserves_uniqueness = true, inverse = super::CastInt64ToBool, is_monotone = true)] fn cast_bool_to_int64(a: bool) -> i64","body_fingerprint":"593c44fb5565e5fd"},
     "cast_bool_to_string": {"display":"boolean_to_text","sqlfunc_decl":"#[sqlfunc(sqlname = \"boolean_to_text\", preserves_uniqueness = true, inverse = super::CastStringToBool, is_monotone = true)] fn cast_bool_to_string<'a>(a: bool) -> &'a str","body_fingerprint":"c7aac8105dc5f1c7"},
