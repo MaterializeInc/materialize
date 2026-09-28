@@ -192,7 +192,7 @@
     "vite-plugin-svgr": "^4.3.0",
     "vite-plugin-wasm": "^3.4.1",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^3.2.6"
+    "vitest": "^5.0.2"
   },
   "eslintConfig": {
     "env": {
