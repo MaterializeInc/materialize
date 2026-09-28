@@ -193,9 +193,9 @@ Avoid "X rather than Y" unless Y is what a reader would otherwise assume. Where
 Y is not a live prior it is unconstrained and unfalsifiable, and it rots
 silently, since the code can move to Y with the sentence still reading
 correctly. Where Y is a real trap, assert the failure instead of the contrast
-("awaiting here deadlocks, because the caller is a `Drop`"), which gives the
-claim truth conditions. A failure mode that cannot be named means the comment
-records a preference and not a reason.
+("blocking on this future deadlocks, because `drop` runs on the worker thread
+that has to poll it"), which gives the claim truth conditions. A failure mode
+that cannot be named means the comment records a preference and not a reason.
 
 The same economy applies to tests: a test whose name and assert messages
 state the property needs no doc comment. Keep test docs for non-obvious
