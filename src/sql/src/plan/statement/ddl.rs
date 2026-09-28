@@ -286,10 +286,36 @@ pub fn describe_create_table(
     Ok(StatementDesc::new(None))
 }
 
+/// Rewrites each column default of `stmt` to the form planning transforms it
+/// to (see `transform_ast`), which is the form `Table::defaults` holds.
+/// Storing that form in `create_sql` lets `mz_columns` read the defaults back
+/// without a planner. Returns whether anything changed; the rewrite is
+/// idempotent.
+pub(crate) fn transform_table_defaults(
+    scx: &StatementContext,
+    stmt: &mut CreateTableStatement<Aug>,
+) -> Result<bool, PlanError> {
+    let mut changed = false;
+    for column in &mut stmt.columns {
+        for option in &mut column.options {
+            if let ColumnOption::Default(expr) = &mut option.option {
+                let mut transformed = expr.clone();
+                transform_ast::transform(scx, &mut transformed)?;
+                if *expr != transformed {
+                    *expr = transformed;
+                    changed = true;
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
 pub fn plan_create_table(
     scx: &StatementContext,
-    stmt: CreateTableStatement<Aug>,
+    mut stmt: CreateTableStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    transform_table_defaults(scx, &mut stmt)?;
     let CreateTableStatement {
         name,
         columns,
@@ -337,9 +363,7 @@ pub fn plan_create_table(
                 ColumnOption::Default(expr) => {
                     // Ensure expression can be planned and yields the correct
                     // type.
-                    let mut expr = expr.clone();
-                    transform_ast::transform(scx, &mut expr)?;
-                    let _ = query::plan_default_expr(scx, &expr, &ty)?;
+                    let _ = query::plan_default_expr(scx, expr, &ty)?;
                     default = expr.clone();
                 }
                 ColumnOption::Unique { is_primary } => {

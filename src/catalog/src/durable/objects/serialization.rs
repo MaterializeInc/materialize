@@ -11,6 +11,7 @@
 
 use mz_ore::cast::CastFrom;
 use mz_proto::TryFromProtoError;
+use mz_repr::ColumnName;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
@@ -18,9 +19,9 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
     ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, IndexKey,
+    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemColumn, ItemKey,
+    ItemValue, NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
@@ -570,6 +571,8 @@ impl RustType<proto::ItemValue> for ItemValue {
                 })
                 .collect(),
             ephemeral_owner_session: self.ephemeral_owner_session,
+            columns: self.columns.into_proto(),
+            index_keys: self.index_keys.into_proto(),
         }
     }
 
@@ -596,6 +599,46 @@ impl RustType<proto::ItemValue> for ItemValue {
             global_id: proto.global_id.into_rust()?,
             extra_versions,
             ephemeral_owner_session: proto.ephemeral_owner_session,
+            columns: proto.columns.into_rust()?,
+            index_keys: proto.index_keys.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::RelationColumn> for ItemColumn {
+    fn into_proto(&self) -> proto::RelationColumn {
+        proto::RelationColumn {
+            name: self.name.to_string(),
+            nullable: self.nullable,
+            type_oid: self.type_oid,
+            type_mod: self.type_mod,
+            custom_type: self.custom_type.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::RelationColumn) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumn {
+            name: ColumnName::from(proto.name),
+            nullable: proto.nullable,
+            type_oid: proto.type_oid,
+            type_mod: proto.type_mod,
+            custom_type: proto.custom_type.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexKey> for IndexKey {
+    fn into_proto(&self) -> proto::IndexKey {
+        proto::IndexKey {
+            column: self.column.map(u64::cast_from),
+            nullable: self.nullable,
+        }
+    }
+
+    fn from_proto(proto: proto::IndexKey) -> Result<Self, TryFromProtoError> {
+        Ok(IndexKey {
+            column: proto.column.map(usize::cast_from),
+            nullable: proto.nullable,
         })
     }
 }

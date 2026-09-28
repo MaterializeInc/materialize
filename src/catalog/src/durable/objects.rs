@@ -40,7 +40,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -635,12 +635,50 @@ pub struct Item {
     /// `Some(uuid)` marks a temporary item owned by, and only visible to, the
     /// session with that UUID. `None` is a normal durable item.
     pub ephemeral_owner_session: Option<Uuid>,
+    /// The columns of a relation item as planning resolved them, `None` for
+    /// an item that is not a relation.
+    ///
+    /// Planning derives these from `create_sql`, so they are redundant with
+    /// it, but only a planner can do that derivation. Recording them lets
+    /// catalog views report columns from the durable catalog alone. Every
+    /// write of the item records what its planner produced, and bootstrap
+    /// rewrites any item whose recorded columns differ from what the running
+    /// build's planner produces.
+    pub columns: Option<Vec<ItemColumn>>,
+    /// The keys of an index as planning resolved them, `None` for any other
+    /// item. Maintained like `columns`.
+    pub index_keys: Option<Vec<IndexKey>>,
 }
 
 impl Item {
     pub fn item_type(&self) -> CatalogItemType {
         item_type(&self.create_sql)
     }
+}
+
+/// A column of a relation item, as planning resolved it, by the identity its
+/// type presents as: the OID and type modifier of its PostgreSQL-compatible
+/// type (see `mz_pgrepr::Type`), and the `CREATE TYPE` item of a list, map or
+/// record type that one defines.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct ItemColumn {
+    pub name: ColumnName,
+    pub nullable: bool,
+    pub type_oid: u32,
+    pub type_mod: i32,
+    pub custom_type: Option<CatalogItemId>,
+}
+
+/// A key of an index, as planning resolved it.
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct IndexKey {
+    /// The 0-based column of the indexed relation when the key is a bare
+    /// column reference, `None` for any other expression.
+    pub column: Option<usize>,
+    /// Whether the key can evaluate to `NULL`.
+    pub nullable: bool,
 }
 
 impl DurableType for Item {
@@ -660,6 +698,8 @@ impl DurableType for Item {
                 privileges: self.privileges,
                 extra_versions: self.extra_versions,
                 ephemeral_owner_session: self.ephemeral_owner_session,
+                columns: self.columns,
+                index_keys: self.index_keys,
             },
         )
     }
@@ -676,6 +716,8 @@ impl DurableType for Item {
             privileges: value.privileges,
             extra_versions: value.extra_versions,
             ephemeral_owner_session: value.ephemeral_owner_session,
+            columns: value.columns,
+            index_keys: value.index_keys,
         }
     }
 
@@ -1531,6 +1573,8 @@ pub struct ItemValue {
     pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
     #[cfg_attr(test, proptest(strategy = "proptest::option::of(any_uuid())"))]
     pub(crate) ephemeral_owner_session: Option<Uuid>,
+    pub(crate) columns: Option<Vec<ItemColumn>>,
+    pub(crate) index_keys: Option<Vec<IndexKey>>,
 }
 
 impl ItemValue {

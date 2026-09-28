@@ -1193,6 +1193,10 @@ impl CatalogState {
                     privileges,
                     extra_versions,
                     ephemeral_owner_session,
+                    // Recorded planner output, which planning the item below
+                    // recomputes.
+                    columns: _,
+                    index_keys: _,
                 } = item;
 
                 // Temporary items live in the temporary schema of the owning
