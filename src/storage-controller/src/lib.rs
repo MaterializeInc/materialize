@@ -2725,8 +2725,9 @@ where
     /// reconcile it with the previous state.
     ///
     /// `replica_owned` selects passive inventory instead of legacy execution.
-    /// The caller must enable it only for protected, writable native environments.
-    /// Read-only prewarming uses legacy execution.
+    /// The caller must enable it only for protected native environments, including
+    /// read-only prewarming. Read-only mode restricts adapter-owned writes without
+    /// changing execution ownership. Native replicas follow durable output authority.
     ///
     /// # Panics
     /// If `txn` is missing the durably initialized transaction WAL identity.
@@ -2745,10 +2746,6 @@ where
         txn: &dyn StorageTxn,
         storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     ) -> Self {
-        assert!(
-            !replica_owned || !read_only,
-            "read-only prewarming requires legacy execution"
-        );
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
