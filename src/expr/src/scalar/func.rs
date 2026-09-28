@@ -133,7 +133,6 @@ macro_rules! func_name {
 }
 
 func_name! {
-    AdjustNumericScale => "adjust_numeric_scale",
     AdjustTimestampPrecision => "adjust_timestamp_precision",
     AdjustTimestampTzPrecision => "adjust_timestamp_tz_precision",
     CaseLiteral => "case_literal",
