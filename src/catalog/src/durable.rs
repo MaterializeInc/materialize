@@ -170,11 +170,10 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     ///
     /// Unprotected catalogs increment the process epoch and reclaim ephemeral items.
     /// In protected catalogs, same-generation opens preserve owners, including those left by a
-    /// crashed process. Promotion fences the outgoing generation before reclaiming
-    /// its ephemeral items. If another writer advances the cleanup snapshot, open
-    /// returns `CatalogOutOfSync` after promotion without reclaiming items. An
-    /// interrupted promotion can likewise leave items behind. Reopening in the now
-    /// active generation does not reclaim them.
+    /// crashed process. Promotion fences the outgoing generation, then reclaims
+    /// temporary owners captured in the admitted snapshot. Cleanup retries preserve
+    /// owners created after that snapshot. A crash between fencing and cleanup can
+    /// leave items behind. Reopening in the active generation does not reclaim them.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open(

@@ -622,6 +622,19 @@ impl Coordinator {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        if self.query_client.is_some() {
+            // Frontend sequencing may have acquired holds before a concurrent
+            // DROP. Holds protect history, not object lifetime; checking only
+            // logical dependencies misses optimizer-selected index imports.
+            for id in df_desc.import_ids() {
+                if self.catalog().try_get_entry_by_global_id(&id).is_none() {
+                    return Err(AdapterError::ConcurrentDependencyDrop {
+                        dependency_kind: "collection",
+                        dependency_id: id.to_string(),
+                    });
+                }
+            }
+        }
         let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();

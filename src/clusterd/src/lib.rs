@@ -651,6 +651,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         info!("replica removed from catalog, stopping native execution");
                         mz_ore::process::exit_thread_safe(166);
                     }
+                    if is_deployment_fence(&error) {
+                        info!(%error, "deployment superseded, stopping native execution");
+                        mz_ore::process::exit_thread_safe(166);
+                    }
                     mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
                 }
                 error!(%error, "catalog follower stopped");
@@ -681,6 +685,40 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     future::pending().await
 }
 
+/// A newer deployment is expected retirement, not an execution fault. Other
+/// fencing causes remain errors because they need not imply authorized handover.
+fn is_deployment_fence(error: &anyhow::Error) -> bool {
+    use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError};
+    error.chain().any(|source| {
+        let durable = source
+            .downcast_ref::<DurableCatalogError>()
+            .or_else(|| match source.downcast_ref::<CatalogError>() {
+                Some(CatalogError::Durable(error)) => Some(error),
+                _ => None,
+            })
+            .or_else(
+                || match source.downcast_ref::<mz_catalog::catalog::CatalogError>() {
+                    Some(mz_catalog::catalog::CatalogError::Catalog(error)) => match &error.kind {
+                        mz_catalog::memory::error::ErrorKind::Durable(error) => Some(error),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            );
+        let fence = source.downcast_ref::<FenceError>().or(match durable {
+            Some(DurableCatalogError::Fence(error)) => Some(error),
+            _ => None,
+        });
+        matches!(
+            fence,
+            Some(FenceError::DeployGeneration {
+                current_generation,
+                fence_generation,
+            }) if fence_generation > current_generation
+        )
+    })
+}
+
 /// Per-connection errors from `accept()` that can be skipped immediately.
 /// All other errors (e.g., EMFILE/ENFILE resource exhaustion) warrant a sleep
 /// before retrying. Mirrors hyper's `AddrIncoming` classification.
@@ -696,6 +734,36 @@ fn is_connection_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn deployment_fence_retirement_is_typed() {
+        use mz_catalog::durable::{DurableCatalogError, FenceError};
+
+        let fence = FenceError::DeployGeneration {
+            current_generation: 0,
+            fence_generation: 1,
+        };
+        for error in [
+            anyhow::Error::new(DurableCatalogError::from(fence.clone())),
+            anyhow::Error::new(mz_catalog::durable::CatalogError::from(fence.clone())),
+            anyhow::Error::new(mz_catalog::catalog::CatalogError::from(
+                mz_catalog::durable::CatalogError::from(fence),
+            )),
+        ] {
+            assert!(is_deployment_fence(
+                &error.context("following committed catalog")
+            ));
+        }
+        assert!(!is_deployment_fence(&anyhow::anyhow!(
+            "current catalog deployment generation 0 fenced by new catalog deployment generation 1"
+        )));
+        assert!(!is_deployment_fence(&anyhow::Error::new(
+            FenceError::MigrationUpper {
+                expected_upper: 1.into(),
+                actual_upper: 2.into(),
+            }
+        )));
+    }
 
     #[mz_ore::test]
     fn test_process_ordinal_from_hostname() {

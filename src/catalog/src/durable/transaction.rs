@@ -989,8 +989,7 @@ impl<'a> Transaction<'a> {
     /// it: storage collection metadata (moving the backing shards to the
     /// finalization WAL), comments, and source references.
     ///
-    /// Used to reclaim temporary items when the catalog is opened with write
-    /// intent, at which point every session that could own one is dead.
+    /// The caller must have invalidated every session that could own one.
     ///
     /// This must mirror everything the graceful `Op::DropObjects` path
     /// persists for a temporary item, because nothing revisits the leftovers:
@@ -999,11 +998,20 @@ impl<'a> Transaction<'a> {
     /// `unfinalized_shards` collection, so a metadata row that outlives its
     /// item leaks the persist shard permanently.
     pub fn remove_ephemeral_items(&mut self) {
+        self.remove_ephemeral_items_for_owners(None);
+    }
+
+    /// Reclaims temporary items belonging to the selected invalidated owners.
+    /// `None` selects all owners and requires exclusive cleanup authority.
+    pub(super) fn remove_ephemeral_items_for_owners(&mut self, owners: Option<&BTreeSet<Uuid>>) {
         let mut keys = Vec::new();
         let mut item_ids = BTreeSet::new();
         let mut global_ids = BTreeSet::new();
         for (key, value) in self.items.items() {
-            if value.ephemeral_owner_session.is_none() {
+            let Some(owner) = value.ephemeral_owner_session else {
+                continue;
+            };
+            if owners.is_some_and(|owners| !owners.contains(&owner)) {
                 continue;
             }
             item_ids.insert(key.id);
