@@ -263,19 +263,22 @@ def workflow_test_github_3553(c: Composition) -> None:
     try:
         c.sql("""
             SET statement_timeout = '1 s';
-            -- Crash loop the cluster.
+            -- Crash compute during the read.
             INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
             """)
-    except QueryCanceled as e:
-        # Ensure we received the correct error message
-        assert "statement timeout" in str(e)
-        # Ensure the statement_timeout setting is ~honored
+    except (QueryCanceled, InternalError_) as e:
+        if isinstance(e, QueryCanceled):
+            assert "statement timeout" in str(e)
+        else:
+            # Native query disconnection is terminal rather than replayed.
+            assert "query connection lost" in str(e)
+        # An immediate execution error is valid, but neither path may hang.
         elapsed = time.time() - start_time
         assert elapsed < 2, f"statement_timeout not respected ({elapsed=})"
     else:
         raise RuntimeError("unexpected success in test_github_3553")
 
-    # Ensure we can select from tables after cancellation.
+    # Ensure we can select from tables after the failed statement.
     c.sql("SELECT * FROM log_table;")
 
 
