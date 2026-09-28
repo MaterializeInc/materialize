@@ -319,9 +319,85 @@ updates:
     default-days: 3
   open-pull-requests-limit: 20
   labels: [A-dependencies]
+  # Packages that only work at matching versions share a group, so an update
+  # arrives as one PR instead of several that each fail on their own. A
+  # dependency joins the first group it matches, so the families come before
+  # `simple`. The families take major updates too, which is where they break
+  # apart.
   groups:
+    typescript:
+      applies-to: version-updates
+      patterns:
+        - "typescript"
+        - "typescript-eslint"
+        - "@typescript-eslint/*"
+    vite:
+      applies-to: version-updates
+      patterns:
+        - "vite"
+        - "vitest"
+        - "@vitest/*"
+        - "@vitejs/*"
+        - "@rolldown/*"
+        - "vite-plugin-*"
+        - "vite-tsconfig-paths"
+        - "vite-bundle-analyzer"
+        - "jsdom"
+    eslint:
+      applies-to: version-updates
+      patterns:
+        - "eslint"
+        - "@eslint/*"
+        - "eslint-plugin-*"
+        - "eslint-config-*"
+        - "@tanstack/eslint-plugin-query"
+        - "globals"
+    forms:
+      applies-to: version-updates
+      patterns:
+        - "zod"
+        - "@hookform/resolvers"
+        - "react-hook-form"
+    codemirror:
+      applies-to: version-updates
+      patterns:
+        - "codemirror"
+        - "@codemirror/*"
+        - "@codemirror-toolkit/*"
+        - "@lezer/*"
+        - "style-mod"
+    kysely:
+      applies-to: version-updates
+      patterns:
+        - "kysely"
+        - "kysely-codegen"
+    tanstack-db:
+      applies-to: version-updates
+      patterns:
+        - "@tanstack/db"
+        - "@tanstack/react-db"
+    jotai:
+      applies-to: version-updates
+      patterns:
+        - "jotai"
+        - "jotai-*"
+    storybook:
+      applies-to: version-updates
+      patterns:
+        - "storybook"
+        - "@storybook/*"
+    # msw, downshift, and @frontegg/* tighten types in minor releases that
+    # existing code relies on, and @intercom/* is on 0.0.x, where any release
+    # can break. Each comes as its own PR rather than breaking the whole group.
     simple:
       applies-to: version-updates
       update-types:
         - minor
         - patch
+      patterns:
+        - "*"
+      exclude-patterns:
+        - "msw"
+        - "downshift"
+        - "@frontegg/*"
+        - "@intercom/*"
