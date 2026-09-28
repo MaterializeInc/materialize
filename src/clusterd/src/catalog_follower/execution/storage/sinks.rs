@@ -86,21 +86,9 @@ impl ReplicaEnactment {
     }
 
     fn kafka_eligible(&self, catalog: &Catalog, cluster: ClusterId) -> bool {
-        let replicas: BTreeSet<_> = catalog
-            .get_cluster(cluster)
-            .replicas()
-            .map(|replica| replica.replica_id)
-            .collect();
         // Membership comes from the committed catalog. The immutable tag is not
         // a fence, and a heartbeat age alone does not reclaim an incarnation.
-        catalog
-            .state()
-            .client_incarnations()
-            .iter()
-            .filter(|(_, value)| value.replica_id.is_some_and(|id| replicas.contains(&id)))
-            .map(|(incarnation, _)| *incarnation)
-            .min()
-            == Some(self.protection.incarnation())
+        catalog.state().oldest_replica_incarnation(cluster) == Some(self.protection.incarnation())
     }
 
     pub(super) fn desired_sinks(

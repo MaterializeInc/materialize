@@ -51,12 +51,14 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
     ClientReadRequirementValue, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBound,
-    CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey, CommentValue, Config,
-    ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaDeclaration,
+    ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue, ClusterReplicaKey,
+    ClusterReplicaValue, ClusterRuntime, ClusterRuntimeKey, ClusterRuntimeValue,
+    ClusterSystemConfiguration, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CollectionCompactionBound, CollectionCompactionBoundKey,
+    CollectionCompactionBoundValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, MaintainedReadRequirement,
     MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
     NetworkPolicyValue, ReadProtectionIndex, ReplicaConfig, ReplicaSystemConfiguration,
@@ -105,6 +107,9 @@ pub struct Transaction<'a> {
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
+    cluster_replica_declarations:
+        TableTransaction<ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue>,
+    cluster_runtimes: TableTransaction<ClusterRuntimeKey, ClusterRuntimeValue>,
     introspection_sources:
         TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
@@ -223,6 +228,8 @@ impl<'a> Transaction<'a> {
             clusters,
             network_policies,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             introspection_sources,
             id_allocator,
             configs,
@@ -259,7 +266,15 @@ impl<'a> Transaction<'a> {
         let network_policy_unique_fn: fn(&NetworkPolicyValue, &NetworkPolicyValue) -> bool =
             |a, b| a.name == b.name;
         let cluster_replica_unique_fn: fn(&ClusterReplicaValue, &ClusterReplicaValue) -> bool =
-            |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
+            |a, b| {
+                a.cluster_id == b.cluster_id
+                    && a.deployment_generation == b.deployment_generation
+                    && a.name == b.name
+            };
+        let declaration_unique_fn: fn(
+            &ClusterReplicaDeclarationValue,
+            &ClusterReplicaDeclarationValue,
+        ) -> bool = |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
 
         Ok(Transaction {
             durable_catalog: None,
@@ -323,6 +338,12 @@ impl<'a> Transaction<'a> {
                 cluster_replica_unique_fn,
                 cluster_replica_unique_fn,
             )?,
+            cluster_replica_declarations: TableTransaction::new_with_uniqueness_fn(
+                cluster_replica_declarations,
+                declaration_unique_fn,
+                declaration_unique_fn,
+            )?,
+            cluster_runtimes: TableTransaction::new(cluster_runtimes)?,
             introspection_sources: TableTransaction::new(introspection_sources)?,
             id_allocator: TableTransaction::new(id_allocator)?,
             configs: TableTransaction::new(configs)?,
@@ -785,6 +806,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// The immutable deployment identity of this transaction's catalog handle.
+    pub fn deployment_generation(&self) -> u64 {
+        self.deployment_generation
+    }
+
+    /// Inserts a physical replica owned by this transaction's deployment.
     pub fn insert_cluster_replica_with_id(
         &mut self,
         cluster_id: ClusterId,
@@ -792,6 +819,7 @@ impl<'a> Transaction<'a> {
         replica_name: &str,
         config: ReplicaConfig,
         owner_id: RoleId,
+        declaration_id: Option<ReplicaId>,
     ) -> Result<(), CatalogError> {
         if let Err(_) = self.cluster_replicas.insert(
             ClusterReplicaKey { id: replica_id },
@@ -800,6 +828,8 @@ impl<'a> Transaction<'a> {
                 name: replica_name.into(),
                 config,
                 owner_id,
+                deployment_generation: self.deployment_generation,
+                declaration_id,
             },
             self.op_id,
         ) {
@@ -1342,6 +1372,8 @@ impl<'a> Transaction<'a> {
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
             cluster_replicas: self.cluster_replicas.current_items_proto(),
+            cluster_replica_declarations: self.cluster_replica_declarations.current_items_proto(),
+            cluster_runtimes: self.cluster_runtimes.current_items_proto(),
             introspection_sources: self.introspection_sources.current_items_proto(),
             id_allocator: self.id_allocator.current_items_proto(),
             configs: self.configs.current_items_proto(),
@@ -1973,7 +2005,7 @@ impl<'a> Transaction<'a> {
 
     /// Updates cluster replica `replica_id` in the transaction to `replica`.
     ///
-    /// Returns an error if `replica_id` is not found.
+    /// Returns an error if `replica_id` is not found or its deployment generation changes.
     ///
     /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
     /// DO NOT call this function in a loop.
@@ -1982,6 +2014,13 @@ impl<'a> Transaction<'a> {
         replica_id: ReplicaId,
         replica: ClusterReplica,
     ) -> Result<(), CatalogError> {
+        if self
+            .cluster_replicas
+            .get(&ClusterReplicaKey { id: replica_id })
+            .is_some_and(|previous| previous.deployment_generation != replica.deployment_generation)
+        {
+            return Err(DurableCatalogError::UniquenessViolation.into());
+        }
         let updated = self.cluster_replicas.update_by_key(
             ClusterReplicaKey { id: replica_id },
             replica.into_key_value().1,
@@ -2241,12 +2280,23 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Set persisted replica.
+    /// Sets persisted replicas without changing existing deployment ownership.
     pub fn set_replicas(&mut self, replicas: Vec<ClusterReplica>) -> Result<(), CatalogError> {
         if replicas.is_empty() {
             return Ok(());
         }
 
+        for replica in &replicas {
+            if self
+                .cluster_replicas
+                .get(&replica.key())
+                .is_some_and(|previous| {
+                    previous.deployment_generation != replica.deployment_generation
+                })
+            {
+                return Err(DurableCatalogError::UniquenessViolation.into());
+            }
+        }
         let replicas = replicas
             .into_iter()
             .map(DurableType::into_key_value)
@@ -2394,6 +2444,16 @@ impl<'a> Transaction<'a> {
     /// Updates the catalog `system_config_synced` "config" value to true.
     pub fn set_system_config_synced_once(&mut self) -> Result<(), CatalogError> {
         self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), Some(1))
+    }
+
+    /// Returns comments for an object, including pending transaction writes.
+    pub fn get_object_comments(&self, object_id: CommentObjectId) -> Vec<(Option<usize>, String)> {
+        self.comments
+            .items()
+            .into_iter()
+            .filter(|(key, _)| key.object_id == object_id)
+            .map(|(key, value)| (key.sub_component, value.comment.clone()))
+            .collect()
     }
 
     pub fn update_comment(
@@ -2571,6 +2631,90 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
+    pub fn get_cluster_replica_declaration(
+        &self,
+        id: ReplicaId,
+    ) -> Option<ClusterReplicaDeclaration> {
+        let key = ClusterReplicaDeclarationKey { id };
+        self.cluster_replica_declarations
+            .get(&key)
+            .map(|value| DurableType::from_key_value(key, value.clone()))
+    }
+
+    pub fn get_cluster_replica_declarations(
+        &self,
+    ) -> impl Iterator<Item = ClusterReplicaDeclaration> + use<'_> {
+        self.cluster_replica_declarations
+            .items()
+            .into_iter()
+            .map(|(key, value)| DurableType::from_key_value(key.clone(), value.clone()))
+    }
+
+    /// Inserts or replaces shared replica intent, unique by cluster and name.
+    pub fn set_cluster_replica_declaration(
+        &mut self,
+        declaration: ClusterReplicaDeclaration,
+    ) -> Result<(), CatalogError> {
+        let (key, value) = declaration.into_key_value();
+        self.cluster_replica_declarations
+            .set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Removes shared replica intent, returning it if present. Physical replicas are unchanged.
+    pub fn remove_cluster_replica_declaration(
+        &mut self,
+        id: ReplicaId,
+    ) -> Option<ClusterReplicaDeclaration> {
+        let key = ClusterReplicaDeclarationKey { id };
+        self.cluster_replica_declarations
+            .delete_by_key(key.clone(), self.op_id)
+            .map(|value| DurableType::from_key_value(key, value))
+    }
+
+    pub fn get_cluster_runtime(
+        &self,
+        cluster_id: ClusterId,
+        deployment_generation: u64,
+    ) -> Option<ClusterRuntime> {
+        let key = ClusterRuntimeKey {
+            cluster_id,
+            deployment_generation,
+        };
+        self.cluster_runtimes
+            .get(&key)
+            .map(|value| DurableType::from_key_value(key, value.clone()))
+    }
+
+    pub fn get_cluster_runtimes(&self) -> impl Iterator<Item = ClusterRuntime> + use<'_> {
+        self.cluster_runtimes
+            .items()
+            .into_iter()
+            .map(|(key, value)| DurableType::from_key_value(key.clone(), value.clone()))
+    }
+
+    /// Inserts or replaces runtime state for exactly one cluster and deployment generation.
+    pub fn set_cluster_runtime(&mut self, runtime: ClusterRuntime) -> Result<(), CatalogError> {
+        let (key, value) = runtime.into_key_value();
+        self.cluster_runtimes.set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Removes runtime state for exactly one cluster and deployment generation, if present.
+    pub fn remove_cluster_runtime(
+        &mut self,
+        cluster_id: ClusterId,
+        deployment_generation: u64,
+    ) -> Option<ClusterRuntime> {
+        let key = ClusterRuntimeKey {
+            cluster_id,
+            deployment_generation,
+        };
+        self.cluster_runtimes
+            .delete_by_key(key.clone(), self.op_id)
+            .map(|value| DurableType::from_key_value(key, value))
+    }
+
     pub fn get_databases(&self) -> impl Iterator<Item = Database> + use<'_> {
         self.databases
             .items()
@@ -2729,6 +2873,8 @@ impl<'a> Transaction<'a> {
             clusters,
             network_policies,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             introspection_sources,
             system_gid_mapping,
             system_configurations,
@@ -2819,6 +2965,16 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 cluster_replicas,
                 StateUpdateKind::ClusterReplica,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                cluster_replica_declarations,
+                StateUpdateKind::ClusterReplicaDeclaration,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                cluster_runtimes,
+                StateUpdateKind::ClusterRuntime,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -3520,6 +3676,8 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             introspection_sources,
             id_allocator,
             configs,
@@ -3565,14 +3723,13 @@ impl<'a> Transaction<'a> {
             roles,
             role_auth,
             clusters,
-            cluster_replicas,
+            cluster_replica_declarations,
             introspection_sources,
             configs,
             settings,
             system_gid_mapping,
             system_configurations,
             cluster_system_configurations,
-            replica_system_configurations,
             default_privileges,
             source_references,
             system_privileges,
@@ -3583,6 +3740,36 @@ impl<'a> Transaction<'a> {
         );
         if !audit_log_updates.is_empty() {
             return Err(denied("audit log"));
+        }
+        // Private membership does not authorize another deployment's lifecycle.
+        // Check both sides so deletion followed by replacement cannot transfer it.
+        for key in cluster_replicas.changed_keys() {
+            if cluster_replicas
+                .initial
+                .get(key)
+                .into_iter()
+                .chain(cluster_replicas.get(key))
+                .any(|replica| replica.deployment_generation != *deployment_generation)
+            {
+                return Err(denied("another deployment's physical replica"));
+            }
+        }
+        for key in cluster_runtimes.changed_keys() {
+            if key.deployment_generation != *deployment_generation {
+                return Err(denied("another deployment's cluster runtime"));
+            }
+        }
+        let owns_replica = |id| {
+            let key = ClusterReplicaKey { id };
+            cluster_replicas
+                .get(&key)
+                .or_else(|| cluster_replicas.initial.get(&key))
+                .is_some_and(|replica| replica.deployment_generation == *deployment_generation)
+        };
+        for key in replica_system_configurations.changed_keys() {
+            if !owns_replica(key.replica_id) {
+                return Err(denied("another deployment's replica configuration"));
+            }
         }
         // Reservations are monotone and confer no authority to create SQL definitions.
         for key in id_allocator.changed_keys() {
@@ -3611,7 +3798,11 @@ impl<'a> Transaction<'a> {
                     .get(key)
                     .into_iter()
                     .chain(written_plans.get(key))
-                    .any(|plan| plan.replica_owner.is_some())
+                    .any(|plan| {
+                        plan.replica_owner
+                            .as_ref()
+                            .is_some_and(|owner| !owns_replica(owner.replica_id))
+                    })
             {
                 return Err(denied("foreign or unscoped replica plan selection"));
             }
@@ -3646,6 +3837,47 @@ impl<'a> Transaction<'a> {
     pub(crate) fn into_parts(
         mut self,
     ) -> Result<(TransactionBatch, &'a mut dyn DurableCatalogState), CatalogError> {
+        for key in self.cluster_replicas.changed_keys() {
+            if let Some(next) = self.cluster_replicas.get(key) {
+                let generation = self
+                    .cluster_replicas
+                    .initial
+                    .get(key)
+                    .map_or(self.deployment_generation, |previous| {
+                        previous.deployment_generation
+                    });
+                if next.deployment_generation != generation {
+                    return Err(DurableCatalogError::NotWritable(
+                        "physical replica ownership cannot be transferred".into(),
+                    )
+                    .into());
+                }
+                if let Some(id) = next.declaration_id {
+                    let declaration = self
+                        .cluster_replica_declarations
+                        .get(&ClusterReplicaDeclarationKey { id });
+                    if !declaration
+                        .is_some_and(|declaration| declaration.cluster_id == next.cluster_id)
+                    {
+                        return Err(DurableCatalogError::NotWritable(
+                            "physical replica must reference a declaration in its cluster".into(),
+                        )
+                        .into());
+                    }
+                }
+            }
+        }
+        for key in self.cluster_runtimes.changed_keys() {
+            if self.cluster_runtimes.get(key).is_some()
+                && !self.cluster_runtimes.initial.contains_key(key)
+                && key.deployment_generation != self.deployment_generation
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "cluster runtime creation belongs to its deployment".into(),
+                )
+                .into());
+            }
+        }
         self.finalize_index_compaction_bounds();
         self.validate_read_protection()?;
         self.validate_prewarming_writes()?;
@@ -3667,6 +3899,8 @@ impl<'a> Transaction<'a> {
             role_auth: self.role_auth.pending(),
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
+            cluster_replica_declarations: self.cluster_replica_declarations.pending(),
+            cluster_runtimes: self.cluster_runtimes.pending(),
             network_policies: self.network_policies.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
@@ -3734,6 +3968,8 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -3768,6 +4004,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(role_auth);
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
+        differential_dataflow::consolidation::consolidate_updates(cluster_replica_declarations);
+        differential_dataflow::consolidation::consolidate_updates(cluster_runtimes);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
@@ -4010,6 +4248,12 @@ pub struct TransactionBatch {
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
+    pub(crate) cluster_replica_declarations: Vec<(
+        proto::ClusterReplicaDeclarationKey,
+        proto::ClusterReplicaDeclarationValue,
+        Diff,
+    )>,
+    pub(crate) cluster_runtimes: Vec<(proto::ClusterRuntimeKey, proto::ClusterRuntimeValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
@@ -4097,6 +4341,8 @@ impl TransactionBatch {
             role_auth,
             clusters,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -4129,6 +4375,8 @@ impl TransactionBatch {
             && role_auth.is_empty()
             && clusters.is_empty()
             && cluster_replicas.is_empty()
+            && cluster_replica_declarations.is_empty()
+            && cluster_runtimes.is_empty()
             && network_policies.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
@@ -4200,6 +4448,7 @@ mod unique_name {
 
     impl_unique_name! {
         ClusterReplicaValue,
+        ClusterReplicaDeclarationValue,
         ClusterValue,
         DatabaseValue,
         ItemValue,
@@ -4211,6 +4460,7 @@ mod unique_name {
     impl_no_unique_name!(
         (),
         ClusterIntrospectionSourceIndexValue,
+        ClusterRuntimeValue,
         ClusterSystemConfigurationValue,
         CommentValue,
         ConfigValue,
@@ -5713,7 +5963,7 @@ mod tests {
 
         // Step 2: insert a replica with that explicit id and commit.
         let mut txn = state.transaction().await.unwrap();
-        txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id)
+        txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id, None)
             .unwrap();
         let commit_ts = txn.upper();
         txn.commit_internal(commit_ts).await.unwrap();

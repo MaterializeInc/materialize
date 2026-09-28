@@ -7,13 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Projects a managed cluster's durable catalog config into the
-//! [`ExpectedClusterState`] compare-and-append witness, and checks a witness
-//! against the current config.
+//! Projects shared cluster intent and deployment-owned realization into the
+//! [`ExpectedClusterState`] compare-and-append witness.
 //!
-//! [`project_expected`] is the one projection from catalog config to the
-//! witness. Building the witness the same way wherever a write is conditioned
-//! and wherever it is checked keeps the compared fields from drifting apart.
+//! [`project_deployment_expected`] is shared by observation and transaction
+//! validation, so a decision cannot discard either its shared configuration
+//! dependency or its own realization context.
 
 use crate::memory::objects::{
     BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -46,6 +45,7 @@ pub fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClusterState
         burst,
     } = managed;
     ExpectedClusterState {
+        intent: None,
         size: size.clone(),
         replication_factor: *replication_factor,
         availability_zones: AvailabilityZones(availability_zones.clone()),
@@ -58,6 +58,61 @@ pub fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClusterState
     }
 }
 
+/// Projects shared policy and this deployment's durable realization together.
+/// The witness includes shared request state, but never a peer's runtime state.
+pub fn project_deployment_expected(
+    state: &CatalogState,
+    cluster_id: ClusterId,
+) -> Option<ExpectedClusterState> {
+    let cluster = state.try_get_cluster(cluster_id)?;
+    let ClusterVariant::Managed(managed) = &cluster.config.variant else {
+        return None;
+    };
+    let mut expected = project_expected(managed);
+    if !state.catalog_read_protection_enabled() {
+        return Some(expected);
+    }
+    expected.intent = Some(mz_adapter_types::cluster_state::ClusterIntent {
+        accepted: ReconfigurationTarget {
+            size: expected.size.clone(),
+            replication_factor: expected.replication_factor,
+            availability_zones: expected.availability_zones.clone(),
+            logging: expected.logging.clone(),
+            arrangement_compression: expected.arrangement_compression,
+        },
+        reconfiguration: expected.reconfiguration.clone(),
+        may_settle: state.active_deployment_generation() == Some(state.deployment_generation),
+    });
+    // A newly joining deployment starts from accepted intent, not from another
+    // deployment's hydration or terminal local outcome.
+    expected.reconfiguration = None;
+    expected.burst = None;
+    if let Some(runtime) = state
+        .cluster_runtimes
+        .get(&(cluster_id, state.deployment_generation))
+    {
+        let realized = &runtime.realized_config;
+        expected.size.clone_from(&realized.size);
+        expected.replication_factor = realized.replication_factor;
+        expected.availability_zones = AvailabilityZones(realized.availability_zones.clone());
+        expected.logging = realized.logging.clone();
+        expected.arrangement_compression = realized.arrangement_compression;
+        expected.reconfiguration = runtime
+            .reconfiguration
+            .clone()
+            .map(Into::into)
+            .as_ref()
+            .map(reconfiguration_record);
+        expected.burst = runtime
+            .burst
+            .clone()
+            .map(Into::into)
+            .as_ref()
+            .map(burst_record);
+    }
+    Some(expected)
+}
+
 /// Whether `cluster_id`'s current managed state still equals `expected`. A
 /// missing or unmanaged cluster never matches. This is the compare half of the
 /// compare-and-append, evaluated inside the catalog transaction so the check and
@@ -67,13 +122,7 @@ pub(crate) fn cluster_matches_expected(
     cluster_id: ClusterId,
     expected: &ExpectedClusterState,
 ) -> bool {
-    let Some(cluster) = state.try_get_cluster(cluster_id) else {
-        return false;
-    };
-    let ClusterVariant::Managed(managed) = &cluster.config.variant else {
-        return false;
-    };
-    project_expected(managed) == *expected
+    project_deployment_expected(state, cluster_id).as_ref() == Some(expected)
 }
 
 fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecord {

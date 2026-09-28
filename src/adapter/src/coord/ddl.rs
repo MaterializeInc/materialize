@@ -27,12 +27,11 @@ use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, GlobalId};
-use mz_sql::catalog::{CatalogClusterReplica, CatalogSchema};
+use mz_sql::catalog::CatalogSchema;
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
@@ -336,7 +335,9 @@ impl Coordinator {
         let creates_scoped_object = ops.iter().any(|op| {
             matches!(
                 op,
-                catalog::Op::CreateCluster { .. } | catalog::Op::CreateClusterReplica { .. }
+                catalog::Op::CreateCluster { .. }
+                    | catalog::Op::CreateClusterReplica { .. }
+                    | catalog::Op::CreateClusterReplicaRealization { .. }
             )
         });
         if creates_scoped_object {
@@ -824,7 +825,10 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
-        if self.read_only_controllers {
+        let internal_metadata = conn_id.is_none()
+            && self.controller.replica_owned_compute()
+            && ops.iter().all(catalog::Op::is_deployment_metadata);
+        if self.read_only_controllers && !internal_metadata {
             return Err(AdapterError::ReadOnly);
         }
 
@@ -838,35 +842,9 @@ impl Coordinator {
         let phase_start = Instant::now();
 
         let mut webhook_sources_to_restart = BTreeSet::new();
-        let mut clusters_to_drop = vec![];
-        let mut cluster_replicas_to_drop = vec![];
-        let mut clusters_to_create = vec![];
-        let mut cluster_replicas_to_create = vec![];
 
         for op in &ops {
             match op {
-                catalog::Op::DropObjects(drop_object_infos) => {
-                    for drop_object_info in drop_object_infos {
-                        match &drop_object_info {
-                            catalog::DropObjectInfo::Item(_) => {
-                                // Nothing to do, these will be handled by
-                                // applying the side effects that we return.
-                            }
-                            catalog::DropObjectInfo::Cluster(id) => {
-                                clusters_to_drop.push(*id);
-                            }
-                            catalog::DropObjectInfo::ClusterReplica((
-                                cluster_id,
-                                replica_id,
-                                _reason,
-                            )) => {
-                                // Drop the cluster replica itself.
-                                cluster_replicas_to_drop.push((*cluster_id, *replica_id));
-                            }
-                            _ => (),
-                        }
-                    }
-                }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
                     let is_webhook_source = item
@@ -894,21 +872,6 @@ impl Coordinator {
                             .unwrap_or(false)
                     });
                     webhook_sources_to_restart.extend(webhook_sources);
-                }
-                catalog::Op::CreateCluster { id, .. } => {
-                    clusters_to_create.push(*id);
-                }
-                catalog::Op::CreateClusterReplica {
-                    cluster_id,
-                    name,
-                    config,
-                    ..
-                } => {
-                    cluster_replicas_to_create.push((
-                        *cluster_id,
-                        name.clone(),
-                        config.location.num_processes(),
-                    ));
                 }
                 _ => (),
             }
@@ -1069,14 +1032,7 @@ impl Coordinator {
             }
         };
 
-        let Coordinator {
-            catalog,
-            active_conns,
-            cluster_replica_statuses,
-            ..
-        } = self;
-        let catalog = Arc::make_mut(catalog);
-        let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+        let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection must exist"));
 
         let TransactionResult {
             builtin_table_updates,
@@ -1097,29 +1053,6 @@ impl Coordinator {
                 .optimization_notices
                 .with_label_values(&["RewrittenPlans"])
                 .inc();
-        }
-
-        for (cluster_id, replica_id) in &cluster_replicas_to_drop {
-            cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
-        }
-        for cluster_id in &clusters_to_drop {
-            cluster_replica_statuses.remove_cluster_statuses(cluster_id);
-        }
-        for cluster_id in clusters_to_create {
-            cluster_replica_statuses.initialize_cluster_statuses(cluster_id);
-        }
-        let now = to_datetime((catalog.config().now)());
-        for (cluster_id, replica_name, num_processes) in cluster_replicas_to_create {
-            let replica_id = catalog
-                .resolve_replica_in_cluster(&cluster_id, &replica_name)
-                .expect("just created")
-                .replica_id();
-            cluster_replica_statuses.initialize_cluster_replica_statuses(
-                cluster_id,
-                replica_id,
-                num_processes,
-                now,
-            );
         }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
@@ -1598,6 +1531,9 @@ impl Coordinator {
                 }
                 Op::CreateClusterReplica {
                     cluster_id, config, ..
+                }
+                | Op::CreateClusterReplicaRealization {
+                    cluster_id, config, ..
                 } => {
                     if cluster_id.is_user() {
                         *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
@@ -1648,6 +1584,18 @@ impl Coordinator {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::MetricSink(_) => {}
+                    }
+                }
+                Op::DropClusterReplicaRealization {
+                    cluster_id,
+                    replica_id,
+                } => {
+                    if cluster_id.is_user() {
+                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                        let replica = self.catalog().get_cluster_replica(*cluster_id, *replica_id);
+                        if let ReplicaLocation::Managed(location) = &replica.config.location {
+                            new_credit_consumption_rate -= self.replica_credits_per_hour(location);
+                        }
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1768,6 +1716,7 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
+                | Op::UpdateClusterRuntime { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
@@ -1780,6 +1729,8 @@ impl Coordinator {
                 | Op::ReclaimClientIncarnation { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
+                | Op::CheckClusterDeclarations { .. }
+                | Op::AssociateReplicaDeclaration { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
         }

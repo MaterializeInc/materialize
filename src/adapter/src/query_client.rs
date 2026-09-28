@@ -174,6 +174,38 @@ impl QueryClient {
         self.connections.ready_clients(cluster, target)
     }
 
+    /// Join actual output frontiers from hydrated, eligible replicas in this
+    /// deployment. `None` means no such observation, not completed output.
+    /// Since timestamps are totally ordered, the join preserves per-collection
+    /// existential readiness without borrowing progress from an unhydrated replica.
+    pub(crate) fn hydrated_output_frontier(
+        &self,
+        catalog: &Catalog,
+        cluster: ComputeInstanceId,
+        id: GlobalId,
+        target: Option<mz_sql::catalog::ReplicaTarget>,
+    ) -> Option<Antichain<Timestamp>> {
+        catalog
+            .try_get_cluster(cluster)?
+            .replicas()
+            .filter(|replica| {
+                catalog
+                    .state()
+                    .replica_matches_target(cluster, replica.replica_id, target)
+            })
+            .flat_map(|replica| self.replica_clients(cluster, Some(replica.replica_id)))
+            .filter_map(|client| {
+                let observation = client.collection_frontiers(id).ok().flatten()?;
+                (observation.hydrated == Some(true))
+                    .then_some(observation.output_frontier)
+                    .flatten()
+            })
+            .reduce(|mut frontier, output| {
+                frontier.join_assign(&output);
+                frontier
+            })
+    }
+
     /// Return requested indexes with a nonempty actual read frontier on at least
     /// one ready replica. This only inspects cached observations, without waiting
     /// for replicas or granting read protection.
@@ -206,10 +238,18 @@ impl QueryClient {
         &self,
         catalog: &CatalogState,
         cluster: ComputeInstanceId,
-        target: Option<ReplicaId>,
+        target: Option<mz_sql::catalog::ReplicaTarget>,
         read_ts: Timestamp,
     ) -> BTreeSet<GlobalId> {
-        let replicas = self.replica_clients(cluster, target);
+        let replicas: Vec<_> = self
+            .connections
+            .ready_replicas()
+            .into_iter()
+            .filter(|((owner, replica), _)| {
+                *owner == cluster && catalog.replica_matches_target(cluster, *replica, target)
+            })
+            .map(|(_, client)| client)
+            .collect();
         catalog
             .get_entries()
             .filter_map(|(_, entry)| match entry.item() {
@@ -349,9 +389,13 @@ impl QueryClient {
                                 for (replica_id, frontiers) in &references {
                                     if catalog.try_get_entry_by_global_id(id).is_some_and(|entry| {
                                         match entry.item() {
-                                            CatalogItem::MaterializedView(mv) => mv
-                                                .target_replica
-                                                .is_some_and(|target| target != *replica_id),
+                                            CatalogItem::MaterializedView(mv) => {
+                                                !catalog.state().replica_matches_target(
+                                                    mv.cluster_id,
+                                                    *replica_id,
+                                                    mv.target_replica,
+                                                )
+                                            }
                                             _ => false,
                                         }
                                     }) {

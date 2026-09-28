@@ -2525,13 +2525,20 @@ impl Coordinator {
 
         let mut replicas = Vec::new();
         for op in ops {
-            let crate::catalog::Op::CreateClusterReplica {
+            let (crate::catalog::Op::CreateClusterReplica {
                 cluster_id,
                 replica_id,
                 name,
                 config,
                 ..
-            } = op
+            }
+            | crate::catalog::Op::CreateClusterReplicaRealization {
+                cluster_id,
+                replica_id,
+                name,
+                config,
+                ..
+            }) = op
             else {
                 continue;
             };
@@ -2878,7 +2885,8 @@ impl Coordinator {
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         let protected_plans = self.catalog().state().catalog_read_protection_enabled();
-        let write_plans = protected_plans && !self.read_only_controllers;
+        let write_plans = protected_plans
+            && (!self.read_only_controllers || self.controller.replica_owned_compute());
         // Keep construction separate from activation. Bootstrap read policies
         // still use their initialization holds until the late client handoff.
         let bootstrap_client = if write_plans {
@@ -3166,8 +3174,13 @@ impl Coordinator {
                     }
 
                     if !self.controller.replica_owned_compute() {
-                        self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
-                            .await;
+                        let target = self
+                            .materialized_view_physical_target(
+                                mview.cluster_id,
+                                mview.target_replica,
+                            )
+                            .unwrap_or_terminate("dataflow target unavailable");
+                        self.ship_dataflow(df_desc, mview.cluster_id, target).await;
                     }
 
                     // A pending `REPLACEMENT FOR` MV must stay read-only until
@@ -4874,7 +4887,16 @@ impl Coordinator {
                     // does not depend on the savepoint's publication setting.
                     _ = subscription_timer.as_mut(),
                         if self.compaction_bound_subscriber.is_some()
+                            || self.controller.replica_owned_compute()
                             || !self.pending_compute_installations.is_empty() => {
+                        if self.controller.replica_owned_compute() {
+                            if let Err(error) = self.refresh_catalog(None).await {
+                                warn!(%error, "unable to follow committed native catalog state");
+                            }
+                            if let Err(error) = self.reconcile_declared_replicas().await {
+                                warn!(%error, "unable to realize declared replicas");
+                            }
+                        }
                         self.install_pending_compute_collections().await;
                         if let Err(error) = self.sync_compute_read_protection().await {
                             warn!(%error, "unable to follow catalog read protection");
@@ -5313,6 +5335,28 @@ impl Coordinator {
             }
         }));
         Ok(ComputeInstanceSnapshot::new_from_parts(id, indexes))
+    }
+
+    /// Translate an MV pin for legacy controller installation. An explicit pin
+    /// without a local realization is an error, never an untargeted dataflow.
+    fn materialized_view_physical_target(
+        &self,
+        cluster: ComputeInstanceId,
+        target: Option<mz_sql::catalog::ReplicaTarget>,
+    ) -> Result<Option<ReplicaId>, DataflowCreationError> {
+        use mz_sql::catalog::ReplicaTarget;
+
+        target
+            .map(|target| {
+                self.catalog()
+                    .state()
+                    .physical_replica_for_target(cluster, target)
+                    .ok_or_else(|| {
+                        let (ReplicaTarget::Declaration(id) | ReplicaTarget::Physical(id)) = target;
+                        DataflowCreationError::ReplicaMissing(id)
+                    })
+            })
+            .transpose()
     }
 
     /// Call into the compute controller to install a finalized dataflow, and
@@ -6208,6 +6252,7 @@ pub fn serve(
                     trigger,
                     exclude_collections,
                     cluster_stability: BTreeMap::new(),
+                    policy_read_ts: None,
                 }
             });
 

@@ -961,6 +961,12 @@ impl PersistCatalogState {
                     StateUpdateKind::ClusterReplica(key, value) => {
                         apply(&mut snapshot.cluster_replicas, key, value, diff);
                     }
+                    StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                        apply(&mut snapshot.cluster_replica_declarations, key, value, diff);
+                    }
+                    StateUpdateKind::ClusterRuntime(key, value) => {
+                        apply(&mut snapshot.cluster_runtimes, key, value, diff);
+                    }
                     StateUpdateKind::Comment(key, value) => {
                         apply(&mut snapshot.comments, key, value, diff);
                     }
@@ -1876,6 +1882,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
+    async fn catalog_read_protection_enabled(&mut self) -> Result<bool, CatalogError> {
+        Ok(self
+            .get_current_config(READ_PROTECTION_CONFIG)
+            .await?
+            .is_some_and(|value| value != 0))
+    }
+
+    #[mz_ore::instrument(level = "debug")]
     async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError> {
         let value = self
             .get_current_config(WITH_0DT_DEPLOYMENT_MAX_WAIT)
@@ -2652,6 +2666,13 @@ impl Trace {
                 StateUpdateKind::Cluster(k, v) => trace.clusters.values.push(((k, v), ts, diff)),
                 StateUpdateKind::ClusterReplica(k, v) => {
                     trace.cluster_replicas.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::ClusterReplicaDeclaration(k, v) => trace
+                    .cluster_replica_declarations
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::ClusterRuntime(k, v) => {
+                    trace.cluster_runtimes.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),

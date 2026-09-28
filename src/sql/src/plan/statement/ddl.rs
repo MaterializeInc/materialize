@@ -2859,15 +2859,10 @@ pub fn plan_create_materialized_view(
         Some(replica_name) => {
             scx.require_feature_flag(&ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS)?;
 
-            let cluster = scx.catalog.get_cluster(cluster_id);
-            let replica_id = cluster
-                .replica_ids()
-                .get(replica_name.as_str())
-                .copied()
-                .ok_or_else(|| {
-                    CatalogError::UnknownClusterReplica(replica_name.as_str().to_string())
-                })?;
-            Some(replica_id)
+            Some(
+                scx.catalog
+                    .resolve_materialized_view_replica(cluster_id, replica_name.as_str())?,
+            )
         }
         None => None,
     };

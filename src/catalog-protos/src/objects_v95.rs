@@ -160,11 +160,47 @@ pub struct ClusterReplicaKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaDeclarationKey {
+    pub id: ReplicaId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaDeclarationValue {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub config: ReplicaConfig,
+    pub owner_id: RoleId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterRuntimeKey {
+    pub cluster_id: ClusterId,
+    pub deployment_generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterRuntimeValue {
+    pub realized_config: ReconfigurationTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconfiguration: Option<ReconfigurationState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst: Option<BurstState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterReplicaValue {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub deployment_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration_id: Option<ReplicaId>,
 }
 
 #[derive(
@@ -2025,6 +2061,8 @@ pub enum StateUpdateKind {
     Cluster(Cluster),
     ClusterIntrospectionSourceIndex(ClusterIntrospectionSourceIndex),
     ClusterReplica(ClusterReplica),
+    ClusterReplicaDeclaration(ClusterReplicaDeclaration),
+    ClusterRuntime(ClusterRuntime),
     Comment(Comment),
     Config(Config),
     Database(Database),
@@ -2064,6 +2102,20 @@ pub struct AuditLog {
 pub struct Cluster {
     pub key: ClusterKey,
     pub value: ClusterValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaDeclaration {
+    pub key: ClusterReplicaDeclarationKey,
+    pub value: ClusterReplicaDeclarationValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterRuntime {
+    pub key: ClusterRuntimeKey,
+    pub value: ClusterRuntimeValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

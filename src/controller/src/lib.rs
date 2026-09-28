@@ -729,8 +729,8 @@ impl Controller {
 
         let collections_ctl: Arc<dyn StorageCollections + Send + Sync> = Arc::new(collections_ctl);
 
-        let catalog_persist_location = (catalog_read_protection_enabled && !read_only)
-            .then(|| config.persist_location.clone());
+        let catalog_persist_location =
+            catalog_read_protection_enabled.then(|| config.persist_location.clone());
         let replica_owned = mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
             && catalog_persist_location.is_some();
         let storage_controller = mz_storage_controller::Controller::new(

@@ -965,6 +965,7 @@ pub static MZ_CLUSTER_AUTO_SCALING_STRATEGIES: LazyLock<BuiltinMaterializedView>
             // Absent fields serialize as JSON `null`. `state` is keyed by
             // strategy so a future strategy's state is another key, not a
             // schema change.
+            // Shared policy is paired with the active deployment's realization.
             sql: "
 IN CLUSTER mz_catalog_server
 WITH (
@@ -981,12 +982,25 @@ WITH
         WHERE
             data->>'kind' = 'Cluster' AND
             data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    ),
+    active_runtime AS (
+        SELECT
+            mz_internal.parse_catalog_id(r.data->'key'->'cluster_id') AS cluster_id,
+            r.data->'value'->'burst' AS burst
+        FROM (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterRuntime') r
+        JOIN (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken') f
+            ON (r.data->'key'->>'deployment_generation')::uint8 = (f.data->>'deploy_generation')::uint8
+    ),
+    visible AS (
+        SELECT m.cluster_id, m.strategy,
+            CASE WHEN r.cluster_id IS NULL THEN m.burst ELSE r.burst END AS burst
+        FROM managed m LEFT JOIN active_runtime r USING (cluster_id)
     )
 SELECT
     m.cluster_id,
     COALESCE(m.strategy, 'null'::jsonb) AS strategy,
     CASE WHEN m.burst != 'null' THEN jsonb_build_object('burst', m.burst) END AS state
-FROM managed m
+FROM visible m
 WHERE m.strategy != 'null' OR m.burst != 'null'",
             is_retained_metrics_object: false,
             access: vec![PUBLIC_SELECT],
@@ -3485,9 +3499,10 @@ pub static MZ_COMMENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         //
         // Schema and ClusterReplica are nested structs in `mz_catalog_raw`.
         // We reach one level deeper for them: Schema picks `schema.Id` and
-        // drops the database, ClusterReplica picks `replica_id` and drops
-        // the cluster. That matches what `mz_objects.id` holds for those
-        // rows.
+        // drops the database. Replica comments use declaration identity when
+        // present, but expose the active physical ID, matching mz_cluster_replicas.
+        // FenceToken makes this projection shared and materializable rather than
+        // dependent on the deployment evaluating it.
         //
         // New variants on `proto::CommentObject` need branches in both CASE
         // expressions below.
@@ -3504,6 +3519,14 @@ WITH commented AS (
            data->'value'->>'comment' AS comment
     FROM mz_internal.mz_catalog_raw
     WHERE data->>'kind' = 'Comment'
+), active_replicas AS (
+    SELECT
+        mz_internal.parse_catalog_id(r.data->'key'->'id') AS id,
+        r.data->'value'->'cluster_id' AS cluster_id,
+        COALESCE(NULLIF(r.data->'value'->'declaration_id', 'null'::jsonb), r.data->'key'->'id') AS comment_id
+    FROM (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica') r
+    JOIN (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken') f
+        ON COALESCE((r.data->'value'->>'deployment_generation')::uint8, 0) = (f.data->>'deploy_generation')::uint8
 )
 SELECT
     CASE
@@ -3521,7 +3544,7 @@ SELECT
         WHEN obj ? 'Database'         THEN mz_internal.parse_catalog_id(obj->'Database')
         WHEN obj ? 'Schema'           THEN mz_internal.parse_catalog_id(obj->'Schema'->'schema'->'Id')
         WHEN obj ? 'Cluster'          THEN mz_internal.parse_catalog_id(obj->'Cluster')
-        WHEN obj ? 'ClusterReplica'   THEN mz_internal.parse_catalog_id(obj->'ClusterReplica'->'replica_id')
+        WHEN obj ? 'ClusterReplica'   THEN active_replicas.id
         WHEN obj ? 'NetworkPolicy'    THEN mz_internal.parse_catalog_id(obj->'NetworkPolicy')
     END                                                              AS id,
     CASE
@@ -3544,7 +3567,11 @@ SELECT
     END                                                              AS object_type,
     (sub->'ColumnPos')::int4                                          AS object_sub_id,
     comment
-FROM commented",
+FROM commented
+LEFT JOIN active_replicas
+    ON obj->'ClusterReplica'->'replica_id' = active_replicas.comment_id
+    AND obj->'ClusterReplica'->'cluster_id' = active_replicas.cluster_id
+WHERE NOT (obj ? 'ClusterReplica') OR active_replicas.id IS NOT NULL",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {

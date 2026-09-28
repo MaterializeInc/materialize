@@ -47,13 +47,14 @@ impl Coordinator {
         ops: &mut Vec<Op>,
         write_ts: Timestamp,
     ) -> Result<(), AdapterError> {
-        if !self.replica_owned_metric_sinks() || self.read_only_controllers {
+        if !self.replica_owned_metric_sinks() {
             return Ok(());
         }
         let replicas: BTreeSet<_> = ops
             .iter()
             .filter_map(|op| match op {
-                Op::CreateClusterReplica { replica_id, .. } => Some(*replica_id),
+                Op::CreateClusterReplica { replica_id, .. }
+                | Op::CreateClusterReplicaRealization { replica_id, .. } => Some(*replica_id),
                 _ => None,
             })
             .collect();
@@ -93,7 +94,7 @@ impl Coordinator {
     pub(in crate::coord) async fn bootstrap_replica_metric_sink_selections(
         &mut self,
     ) -> Result<Vec<Op>, AdapterError> {
-        if !self.replica_owned_metric_sinks() || self.read_only_controllers {
+        if !self.replica_owned_metric_sinks() {
             return Ok(Vec::new());
         }
         let revision = self.catalog().transient_revision();
@@ -133,10 +134,22 @@ async fn prepare_selections(
     let enabled = ENABLE_METRIC_SINK.enabled(candidate.system_config());
     let denylist_changed = candidate.system_config().disabled_metric_sinks()
         != catalog.system_config().disabled_metric_sinks();
+    let local_replicas: BTreeSet<_> = candidate
+        .for_system_session()
+        .get_cluster_replicas()
+        .into_iter()
+        .map(|replica| replica.replica_id())
+        .collect();
     let owned: BTreeMap<_, _> = candidate
         .written_plans()
         .iter()
-        .filter(|((_, version), selection)| version == &build && selection.replica_owner.is_some())
+        .filter(|((_, version), selection)| {
+            version == &build
+                && selection
+                    .replica_owner
+                    .as_ref()
+                    .is_some_and(|owner| local_replicas.contains(&owner.replica_id))
+        })
         .map(|((id, _), selection)| (*id, selection))
         .collect();
     let mut retractions = Vec::new();

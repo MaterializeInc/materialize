@@ -91,6 +91,8 @@ impl Debug for StableTrace<'_> {
             clusters,
             introspection_sources,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             comments,
             configs,
             databases,
@@ -142,6 +144,8 @@ impl Debug for StableTrace<'_> {
             .field("clusters", clusters)
             .field("introspection_sources", introspection_sources)
             .field("cluster_replicas", cluster_replicas)
+            .field("cluster_replica_declarations", cluster_replica_declarations)
+            .field("cluster_runtimes", cluster_runtimes)
             .field("comments", comments)
             .field("configs", &configs)
             .field("databases", databases)

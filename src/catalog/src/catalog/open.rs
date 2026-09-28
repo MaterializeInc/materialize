@@ -167,8 +167,12 @@ impl Catalog {
 
     pub(crate) async fn reconstruct_state(
         &self,
-        input: crate::durable::CatalogSnapshot,
+        mut input: crate::durable::CatalogSnapshot,
     ) -> Result<CatalogState, CatalogError> {
+        // The independent readonly acquisition observes the active fence. Its
+        // contents must be projected for this catalog's deployment, which can be
+        // prewarming. This changes no durable authority or captured updates.
+        input.deployment_generation = self.state.deployment_generation;
         let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
         config.system_parameter_defaults = self.state.system_config().defaults();
         Self::reconstruct_state_from_config(config, input).await
@@ -257,6 +261,45 @@ impl Catalog {
                 }
                 Err(error) => return Err(error.into()),
             };
+            if config.read_only
+                && writable
+                && txn.get_config("catalog_read_protection_enabled".into()) == Some(1)
+            {
+                // A joined prewarmer consumes committed definitions. It may
+                // publish its plans and protection, but cannot run shared restart
+                // migrations or reconcile another deployment's builtin identities.
+                let before = txn.current_snapshot();
+                let upper = txn.upper();
+                let persist = config.persist_client.clone();
+                let build = Self::expression_build_version(config.build_info);
+                let expression_shard = txn.get_expression_cache_shard().ok_or_else(|| {
+                    CatalogError::Internal("joined catalog has no expression shard".into())
+                })?;
+                let mut config = config;
+                config.skip_migrations = true;
+                let (mut result, cleanup) =
+                    Self::initialize_state_from_updates(config, updates, &mut txn, None).await?;
+                cleanup.await;
+                if txn.current_snapshot() != before {
+                    return Err(CatalogError::Internal(
+                        "native prewarming reconstruction requires shared catalog changes".into(),
+                    ));
+                }
+                if result.expr_cache_handle.is_none() {
+                    result.expr_cache_handle = Some(
+                        ExpressionCacheHandle::open_plan_store(build, &persist, expression_shard)
+                            .await,
+                    );
+                }
+                return Ok((
+                    result,
+                    Some(CatalogPosition {
+                        shard_id,
+                        deployment_generation: deploy_generation,
+                        upper,
+                    }),
+                ));
+            }
             let separate_replay = writable
                 && txn.get_config("catalog_read_protection_enabled".into()) == Some(1)
                 && get_migration_version(&txn) == Some(config.build_info.semver_version())
@@ -381,6 +424,9 @@ impl Catalog {
             ambient_schemas_by_id: imbl::OrdMap::new(),
             clusters_by_name: imbl::OrdMap::new(),
             clusters_by_id: imbl::OrdMap::new(),
+            replica_membership: Default::default(),
+            cluster_replica_declarations: Default::default(),
+            cluster_runtimes: Default::default(),
             roles_by_name: imbl::OrdMap::new(),
             roles_by_id: imbl::OrdMap::new(),
             network_policies_by_id: imbl::OrdMap::new(),
@@ -398,6 +444,7 @@ impl Catalog {
             written_plans: Default::default(),
             written_plan_importers: Default::default(),
             client_incarnations: Default::default(),
+            deployment_generation: txn.deployment_generation(),
             active_deployment_generation: None,
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
@@ -514,6 +561,8 @@ impl Catalog {
                 | StateUpdateKind::ReplicaSystemConfiguration(_)
                 | StateUpdateKind::Cluster(_)
                 | StateUpdateKind::NetworkPolicy(_)
+                | StateUpdateKind::ClusterReplicaDeclaration(_)
+                | StateUpdateKind::ClusterRuntime(_)
                 | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
                     kind,
                     ts,
@@ -637,7 +686,7 @@ impl Catalog {
                 persist: config.persist_client.clone(),
                 current_items,
                 remove_prior_versions: !config.read_only,
-                compact_shard: config.read_only,
+                compact_shard: config.read_only && deploy_generation.is_some(),
                 dyncfgs,
             };
             let (expr_cache_handle, cached_local_exprs, cached_global_exprs) =
@@ -926,6 +975,7 @@ impl Catalog {
 
         let mut storage = self.storage().await;
         let shard_id = storage.shard_id();
+        let is_savepoint = storage.is_savepoint();
         let mut txn = storage.transaction().await?;
         let existing_collections = txn.get_collection_metadata();
 
@@ -941,6 +991,25 @@ impl Catalog {
         // `MZ_CATALOG_RAW` builtin source.
         let item_id = self.resolve_builtin_storage_collection(&MZ_CATALOG_RAW);
         let global_id = self.get_entry(&item_id).latest_global_id();
+        if self.diagnostic_config.read_only
+            && !is_savepoint
+            && state.catalog_read_protection_enabled()
+        {
+            // Pending native execution consumes shared mappings. It cannot mint
+            // shards or initialize a finalization queue for another deployment.
+            let missing: Vec<_> = collections
+                .iter()
+                .filter(|id| !existing_collections.contains_key(id))
+                .copied()
+                .collect();
+            if !missing.is_empty() || existing_collections.get(&global_id) != Some(&shard_id) {
+                return Err(crate::durable::DurableCatalogError::NotWritable(format!(
+                    "native prewarming requires committed storage mappings: missing {missing:?}"
+                ))
+                .into());
+            }
+            return Ok(());
+        }
         match txn.get_collection_metadata().get(&global_id) {
             None => {
                 txn.insert_collection_metadata([(global_id, shard_id)].into())
@@ -1543,7 +1612,8 @@ fn reconcile_builtin_cluster_replicas(
     let mut replicas_by_cluster: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> =
         BTreeMap::new();
     for replica in txn.get_cluster_replicas().filter(|replica| {
-        builtin_cluster_ids.contains(&replica.cluster_id)
+        replica.deployment_generation == txn.deployment_generation()
+            && builtin_cluster_ids.contains(&replica.cluster_id)
             && !matches!(
                 replica.config.location,
                 ReplicaLocation::Managed { internal: true, .. }
@@ -1564,6 +1634,14 @@ fn reconcile_builtin_cluster_replicas(
         let ClusterVariant::Managed(managed) = &cluster.config.variant else {
             continue;
         };
+        // Recover an admitted realization through the controller's normal
+        // two-phase reconciliation, not by reshaping it from shared intent.
+        if txn
+            .get_cluster_runtime(cluster.id, txn.deployment_generation())
+            .is_some()
+        {
+            continue;
+        }
 
         // The bootstrap flags seed a cluster at creation and are never re-applied,
         // which is what keeps an `ALTER CLUSTER` from being reverted on every
@@ -1607,6 +1685,7 @@ fn reconcile_builtin_cluster_replicas(
                 // stamping `mz_system` here would stop those roles from altering
                 // a replica of a cluster they own.
                 cluster.owner_id,
+                None,
             )?;
             info!(
                 cluster = %cluster.name, replica = %replica_name, %replica_id,
@@ -1794,6 +1873,15 @@ fn remove_pending_cluster_replicas_migration(
     let occurred_at = boot_ts.into();
 
     for replica in tx.get_cluster_replicas().collect::<Vec<_>>() {
+        if replica.deployment_generation != tx.deployment_generation() {
+            continue;
+        }
+        if tx
+            .get_cluster_runtime(replica.cluster_id, tx.deployment_generation())
+            .is_some()
+        {
+            continue;
+        }
         if let crate::durable::ReplicaLocation::Managed { pending: true, .. } =
             replica.config.location
         {

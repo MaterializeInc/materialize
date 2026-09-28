@@ -34,12 +34,13 @@ pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 pub use crate::durable::objects::{
     BurstState, ClientIncarnation, ClientReadRequirement, Cluster, ClusterConfig, ClusterReplica,
-    ClusterSystemConfiguration, ClusterVariant, ClusterVariantManaged, Comment, Database,
-    DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReconfigurationState,
-    ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
-    ReplicaSystemConfiguration, Role, RoleAuth, Schema, SourceReference, SourceReferences,
-    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
-    UnfinalizedShard, WrittenPlan, managed_cluster_replica_name,
+    ClusterReplicaDeclaration, ClusterRuntime, ClusterSystemConfiguration, ClusterVariant,
+    ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
+    NetworkPolicy, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
+    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema,
+    SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
+    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, WrittenPlan,
+    managed_cluster_replica_name,
 };
 pub use crate::durable::persist::{CatalogSnapshotReader, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
@@ -222,6 +223,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the most recent deployment generation written to the catalog. Not necessarily the
     /// deploy generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
+
+    /// Whether this catalog uses durable read protection and native deployment admission.
+    async fn catalog_read_protection_enabled(&mut self) -> Result<bool, CatalogError>;
 
     /// Get the `with_0dt_deployment_max_wait` config value of this instance.
     ///

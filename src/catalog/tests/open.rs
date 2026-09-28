@@ -92,6 +92,8 @@ impl Debug for StableSnapshot<'_> {
             clusters,
             network_policies,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             introspection_sources,
             id_allocator,
             configs,
@@ -128,6 +130,8 @@ impl Debug for StableSnapshot<'_> {
             .field("clusters", clusters)
             .field("network_policies", network_policies)
             .field("cluster_replicas", cluster_replicas)
+            .field("cluster_replica_declarations", cluster_replica_declarations)
+            .field("cluster_runtimes", cluster_runtimes)
             .field("introspection_sources", introspection_sources)
             .field("id_allocator", id_allocator)
             .field("configs", &configs)

@@ -16,10 +16,11 @@ use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
     ClientReadRequirementValue, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaKey, ClusterReplicaValue,
-    ClusterSystemConfigurationKey, ClusterSystemConfigurationValue, ClusterValue,
-    CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey, CommentValue,
-    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaDeclarationKey,
+    ClusterReplicaDeclarationValue, ClusterReplicaKey, ClusterReplicaValue, ClusterRuntimeKey,
+    ClusterRuntimeValue, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey,
+    CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
     MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
@@ -427,6 +428,74 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
     }
 }
 
+impl RustType<proto::ClusterReplicaDeclarationKey> for ClusterReplicaDeclarationKey {
+    fn into_proto(&self) -> proto::ClusterReplicaDeclarationKey {
+        proto::ClusterReplicaDeclarationKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaDeclarationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaDeclarationKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaDeclarationValue> for ClusterReplicaDeclarationValue {
+    fn into_proto(&self) -> proto::ClusterReplicaDeclarationValue {
+        proto::ClusterReplicaDeclarationValue {
+            cluster_id: self.cluster_id.into_proto(),
+            name: self.name.to_string(),
+            config: self.config.into_proto(),
+            owner_id: self.owner_id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaDeclarationValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaDeclarationValue {
+            cluster_id: proto.cluster_id.into_rust()?,
+            name: proto.name,
+            config: proto.config.into_rust()?,
+            owner_id: proto.owner_id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterRuntimeKey> for ClusterRuntimeKey {
+    fn into_proto(&self) -> proto::ClusterRuntimeKey {
+        proto::ClusterRuntimeKey {
+            cluster_id: self.cluster_id.into_proto(),
+            deployment_generation: self.deployment_generation,
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterRuntimeKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterRuntimeKey {
+            cluster_id: proto.cluster_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
+        })
+    }
+}
+
+impl RustType<proto::ClusterRuntimeValue> for ClusterRuntimeValue {
+    fn into_proto(&self) -> proto::ClusterRuntimeValue {
+        proto::ClusterRuntimeValue {
+            realized_config: self.realized_config.into_proto(),
+            reconfiguration: self.reconfiguration.into_proto(),
+            burst: self.burst.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterRuntimeValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterRuntimeValue {
+            realized_config: proto.realized_config.into_rust()?,
+            reconfiguration: proto.reconfiguration.into_rust()?,
+            burst: proto.burst.into_rust()?,
+        })
+    }
+}
+
 impl RustType<proto::ClusterReplicaKey> for ClusterReplicaKey {
     fn into_proto(&self) -> proto::ClusterReplicaKey {
         proto::ClusterReplicaKey {
@@ -448,6 +517,8 @@ impl RustType<proto::ClusterReplicaValue> for ClusterReplicaValue {
             name: self.name.to_string(),
             config: self.config.into_proto(),
             owner_id: self.owner_id.into_proto(),
+            deployment_generation: self.deployment_generation,
+            declaration_id: self.declaration_id.into_proto(),
         }
     }
 
@@ -457,6 +528,8 @@ impl RustType<proto::ClusterReplicaValue> for ClusterReplicaValue {
             name: proto.name,
             config: proto.config.into_rust()?,
             owner_id: proto.owner_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
+            declaration_id: proto.declaration_id.into_rust()?,
         })
     }
 }

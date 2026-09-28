@@ -86,25 +86,33 @@ pub async fn preflight_0dt(
     info!(%catalog_generation, "catalog initialized");
     if catalog_generation < deploy_generation {
         info!("this deployment is a new generation; booting in read only mode");
+        let native_prewarming = openable_adapter_storage
+            .catalog_read_protection_enabled()
+            .await?;
 
         let (caught_up_trigger, mut caught_up_receiver) = trigger::channel();
 
         // Spawn a background task to handle promotion to leader.
         mz_ore::task::spawn(|| "preflight_0dt", async move {
-            let (initial_next_user_item_id, initial_next_replica_id) = get_next_ids(
-                boot_ts,
-                persist_client.clone(),
-                environment_id.clone(),
-                deploy_generation,
-                Arc::clone(&catalog_metrics),
-                bootstrap_args.clone(),
-            )
-            .await;
+            // Native prewarming follows committed definitions and allocates its
+            // own replicas. ID changes are not a reason to discard that execution.
+            let initial_ids = if native_prewarming {
+                None
+            } else {
+                Some(
+                    get_next_ids(
+                        boot_ts,
+                        persist_client.clone(),
+                        environment_id.clone(),
+                        deploy_generation,
+                        Arc::clone(&catalog_metrics),
+                        bootstrap_args.clone(),
+                    )
+                    .await,
+                )
+            };
 
-            info!(
-                %initial_next_user_item_id,
-                %initial_next_replica_id,
-                "waiting for deployment to be caught up");
+            info!(?initial_ids, "waiting for deployment to be caught up");
 
             let caught_up_max_wait_fut = async {
                 tokio::time::sleep(caught_up_max_wait).await;
@@ -139,7 +147,8 @@ pub async fn preflight_0dt(
                         info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
                         break;
                     }
-                    _ = check_ddl_changes_interval.tick() => {
+                    _ = check_ddl_changes_interval.tick(), if initial_ids.is_some() => {
+                        let (initial_next_user_item_id, initial_next_replica_id) = initial_ids.expect("legacy DDL check");
                         check_ddl_changes(
                             boot_ts,
                             persist_client.clone(),
@@ -157,7 +166,9 @@ pub async fn preflight_0dt(
 
             // Check for DDL changes one last time before announcing as ready to
             // promote.
-            if !should_skip_catchup {
+            if !should_skip_catchup
+                && let Some((initial_next_user_item_id, initial_next_replica_id)) = initial_ids
+            {
                 check_ddl_changes(
                     boot_ts,
                     persist_client.clone(),

@@ -49,9 +49,9 @@ pub fn parse_state_update(
     let kind = match state_update.kind {
         StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item)),
         StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster)),
-        StateUpdateKind::ClusterReplica(replica) => {
-            Some(parse_cluster_replica_update(catalog, replica))
-        }
+        StateUpdateKind::ClusterReplica(replica) => (replica.deployment_generation
+            == catalog.deployment_generation)
+            .then(|| parse_cluster_replica_update(catalog, replica)),
         StateUpdateKind::IntrospectionSourceIndex(isi) => {
             Some(parse_introspection_source_index_update(isi))
         }

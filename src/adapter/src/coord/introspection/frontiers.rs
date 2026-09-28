@@ -64,7 +64,11 @@ impl Coordinator {
                     CatalogItem::Index(index) => (index.cluster_id, false),
                     CatalogItem::MaterializedView(mv)
                         if mv.global_id_writes() == id
-                            && mv.target_replica.is_none_or(|target| target == replica) =>
+                            && self.catalog().state().replica_matches_target(
+                                mv.cluster_id,
+                                replica,
+                                mv.target_replica,
+                            ) =>
                     {
                         (mv.cluster_id, true)
                     }
@@ -275,8 +279,11 @@ impl Coordinator {
             // A pending export has undefined lag, not an absent lag row. This
             // does not synthesize frontiers, hydration, or execution readiness.
             for replica in cluster.replicas() {
-                if target.is_none_or(|target| target == replica.replica_id)
-                    && !observed_replicas.contains(&(id, replica.replica_id))
+                if self.catalog().state().replica_matches_target(
+                    cluster_id,
+                    replica.replica_id,
+                    target,
+                ) && !observed_replicas.contains(&(id, replica.replica_id))
                 {
                     replicas.push(((id, replica.replica_id), WallclockLag::Undefined));
                 }

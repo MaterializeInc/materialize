@@ -1976,8 +1976,9 @@ pub struct MaterializedView {
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
-    /// If set, only install this materialized view's dataflow on the specified replica.
-    pub target_replica: Option<ReplicaId>,
+    /// If set, install only on replicas matching this binding. Missing realization
+    /// does not make a bound materialized view untargeted.
+    pub target_replica: Option<crate::catalog::ReplicaTarget>,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,

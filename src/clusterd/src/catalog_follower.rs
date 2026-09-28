@@ -148,7 +148,11 @@ impl ReplicaEffects {
                         Some((index.global_id(), RelationVersion::root()))
                     }
                     CatalogItem::MaterializedView(mv)
-                        if mv.target_replica.is_none_or(|id| id == replica) =>
+                        if catalog.state().replica_matches_target(
+                            cluster,
+                            replica,
+                            mv.target_replica,
+                        ) =>
                     {
                         Some((
                             mv.global_id_writes(),
@@ -265,7 +269,7 @@ pub(crate) async fn run(
         Some(config.timestamp_oracle.clone()),
     )
     .await?
-    .join()
+    .join_prewarming(&build.to_string())
     .await?;
     let state_config = config.reconstruction.into_state(
         config.build_info,

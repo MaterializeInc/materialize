@@ -710,7 +710,7 @@ impl Listeners {
             ddl_check_interval: with_0dt_deployment_ddl_check_interval,
         };
         let PreflightOutput {
-            openable_adapter_storage,
+            mut openable_adapter_storage,
             read_only,
             caught_up_trigger,
         } = deployment::preflight::preflight_0dt(preflight_config).await?;
@@ -731,7 +731,15 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let mut adapter_storage = if read_only {
+        let protected_prewarming = read_only
+            && openable_adapter_storage
+                .catalog_read_protection_enabled()
+                .await?;
+        let adapter_storage = if protected_prewarming {
+            let build =
+                mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
+            openable_adapter_storage.join_prewarming(&build).await?
+        } else if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
@@ -754,37 +762,9 @@ impl Listeners {
             adapter_storage
         };
 
-        let protected_prewarming = read_only
-            && adapter_storage
-                .snapshot()
-                .await?
-                .configs
-                .iter()
-                .any(|(key, value)| {
-                    key.key == "catalog_read_protection_enabled" && value.value != 0
-                });
-        let compaction_bound_subscriber = if protected_prewarming {
-            // The savepoint reconstructs SQL but cannot follow durable updates. Only
-            // environments born with read protection can use an independent reader.
-            let subscriber = mz_catalog::durable::persist_backed_catalog_state(
-                persist_client.clone(),
-                config.environment_id.organization_id(),
-                BUILD_INFO.semver_version(),
-                // Adopt the active generation so promotion fences this reader.
-                None,
-                Arc::clone(&config.catalog_config.metrics),
-                None,
-            )
-            .await?
-            .open_read_only(&bootstrap_args)
-            .await
-            .context(
-                "opening protected catalog subscriber, which requires no catalog migrations",
-            )?;
-            Some(subscriber)
-        } else {
-            None
-        };
+        // Native prewarming follows committed metadata through its own joined
+        // handle, including read protection. It does not borrow active authority.
+        let compaction_bound_subscriber = None;
 
         // Enable Persist compaction if we're not in read only.
         if !read_only {
@@ -832,12 +812,18 @@ impl Listeners {
 
         let client_protection_storage = if protected_prewarming {
             Some(
-                mz_catalog::durable::persist_backed_catalog_join_active(
+                mz_catalog::durable::persist_backed_catalog_state(
                     persist_client.clone(),
                     config.environment_id.organization_id(),
                     config.controller.build_info.semver_version(),
+                    Some(config.controller.deploy_generation),
                     Arc::clone(&config.catalog_config.metrics),
                     Some(catalog_timestamp_oracle.clone()),
+                )
+                .await?
+                .join_prewarming(
+                    &mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO)
+                        .to_string(),
                 )
                 .await?,
             )

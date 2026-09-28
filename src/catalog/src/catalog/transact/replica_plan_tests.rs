@@ -260,6 +260,97 @@ async fn catalog_positions_use_actual_commit_upper() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn joined_prewarming_serving_open_replays_without_shared_writes() {
+    for cache_override in [None, Some(false)] {
+        let (active, persist, organization) = protected_catalog().await;
+        let active_generation = active.state().deployment_generation();
+        let pending_generation = active_generation + 1;
+        let build = Catalog::expression_build_version(&mz_build_info::DUMMY_BUILD_INFO).to_string();
+        let storage = crate::durable::TestCatalogStateBuilder::new(persist)
+            .with_organization_id(organization)
+            .with_deploy_generation(pending_generation)
+            .unwrap_build()
+            .await
+            .join_prewarming(&build)
+            .await
+            .expect("join same-schema prewarming deployment");
+        assert!(!storage.is_read_only());
+        assert!(!storage.is_savepoint());
+        let shard_id = storage.shard_id();
+        // Leave the joined handle's initial updates for the serving entrypoint.
+        let before = active.storage().await.snapshot().await.expect("snapshot");
+        let upper = active.current_upper().await;
+        let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+        state.read_only = true;
+        // The serving entrypoint must choose safe replay, not the caller.
+        state.skip_migrations = false;
+        state.builtin_item_migration_config.read_only = true;
+        state.enable_expression_cache_override = cache_override;
+        let opened = Catalog::open(crate::config::Config {
+            storage,
+            metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
+            state,
+        })
+        .await
+        .expect("open output-readonly joined serving catalog");
+        let pending = opened.catalog;
+        assert_eq!(
+            active.storage().await.snapshot().await.expect("snapshot"),
+            before,
+            "serving replay must not change shared durable definitions"
+        );
+        assert_eq!(active.current_upper().await, upper);
+        assert_eq!(pending.state().deployment_generation(), pending_generation);
+        assert_eq!(
+            pending
+                .storage()
+                .await
+                .get_deployment_generation()
+                .await
+                .expect("joined identity"),
+            pending_generation
+        );
+        assert_eq!(
+            pending.state().active_deployment_generation(),
+            Some(active_generation)
+        );
+        let position = pending
+            .observed_position()
+            .expect("joined catalog position");
+        assert_eq!(position.shard_id, shard_id);
+        assert_eq!(position.deployment_generation, pending_generation);
+        assert_eq!(position.upper, upper);
+        assert_eq!(pending.planning_position(), Some(position));
+        assert!(pending.state().catalog_read_protection_enabled());
+        assert_eq!(
+            pending
+                .entries()
+                .map(|entry| (entry.id(), entry.name().clone()))
+                .collect::<BTreeMap<_, _>>(),
+            active
+                .entries()
+                .map(|entry| (entry.id(), entry.name().clone()))
+                .collect::<BTreeMap<_, _>>(),
+            "replay retains committed catalog definitions"
+        );
+        assert!(
+            !opened.builtin_table_updates.is_empty(),
+            "serving open retains bootstrap rows for its output collections"
+        );
+        assert!(
+            pending
+                .read_written_plans(vec![(GlobalId::Transient(1_000_000), Uuid::new_v4())])
+                .await
+                .expect("serving plan store is open even with the cache disabled")
+                .is_empty()
+        );
+        pending.expire().await;
+        active.expire().await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn savepoint_catalog_has_no_position_certificate() {
     let (catalog, persist, organization) = protected_catalog().await;
     let bootstrap = crate::catalog::test_bootstrap_args();
@@ -647,6 +738,289 @@ fn select(
         imports,
         replica_owner,
     }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn staged_materialized_view_rejects_renamed_replica_binding() {
+    use mz_sql::DEFAULT_SCHEMA;
+    use mz_sql::catalog::{CatalogDatabase, ReplicaTarget};
+    use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::session::vars::DEFAULT_DATABASE_NAME;
+    use mz_sql_parser::ast::{Ident, QualifiedReplica};
+
+    use crate::SYSTEM_CONN_ID;
+    use crate::catalog::state::LocalExpressionCache;
+    use crate::memory::objects::{CatalogItem, ClusterConfig, ClusterVariant};
+
+    let (mut catalog, persist, organization) = protected_catalog().await;
+    let replica_config = catalog
+        .user_cluster_replicas()
+        .next()
+        .expect("bootstrap replica")
+        .config
+        .clone();
+    let cluster_id = catalog
+        .allocate_user_cluster_id(catalog.current_upper().await)
+        .await
+        .expect("allocate cluster");
+    catalog
+        .transact(
+            None,
+            catalog.current_upper().await,
+            None,
+            vec![Op::CreateCluster {
+                id: cluster_id,
+                name: "pin_race".into(),
+                introspection_sources: crate::builtin::BUILTINS::logs().collect(),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+                config: ClusterConfig {
+                    variant: ClusterVariant::Unmanaged,
+                    workload_class: None,
+                },
+            }],
+        )
+        .await
+        .expect("create unmanaged cluster");
+    let replica_ids = catalog
+        .allocate_user_replica_ids(3, catalog.current_upper().await)
+        .await
+        .expect("allocate replica identities");
+    let create_replica = |replica_id| Op::CreateClusterReplica {
+        cluster_id,
+        replica_id,
+        name: "r1".into(),
+        config: replica_config.clone(),
+        owner_id: MZ_SYSTEM_ROLE_ID,
+        reason: ReplicaCreateDropReason::Manual,
+    };
+    catalog
+        .transact(
+            None,
+            catalog.current_upper().await,
+            None,
+            vec![create_replica(replica_ids[0])],
+        )
+        .await
+        .expect("create original declaration");
+    let target = ReplicaTarget::Declaration(replica_ids[0]);
+    let database = catalog
+        .resolve_database(DEFAULT_DATABASE_NAME)
+        .expect("default database");
+    let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+    let schema = catalog
+        .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+        .expect("default schema");
+    let qualifiers = ItemQualifiers {
+        database_spec,
+        schema_spec: schema.id.clone(),
+    };
+    let prefix = format!("{}.{}", database.name, schema.name.schema);
+    let plan_mv = |catalog: &Catalog, id, global_id, name: &str, replica: &str| {
+        let sql = format!(
+            "CREATE MATERIALIZED VIEW {prefix}.{name} IN CLUSTER pin_race REPLICA {replica} AS SELECT 1 AS a AS OF 0"
+        );
+        let item = catalog
+            .state()
+            .clone()
+            .with_enable_for_item_parsing(|state| {
+                state.parse_item(
+                    global_id,
+                    &sql,
+                    &BTreeMap::new(),
+                    None,
+                    false,
+                    None,
+                    &mut LocalExpressionCache::Closed,
+                    None,
+                )
+            })
+            .expect("plan pinned MV");
+        let CatalogItem::MaterializedView(mv) = &item else {
+            panic!("expected MV");
+        };
+        assert_eq!(mv.target_replica, Some(target));
+        Op::CreateItem {
+            id,
+            name: QualifiedItemName {
+                qualifiers: qualifiers.clone(),
+                item: name.into(),
+            },
+            item,
+            owner_id: MZ_SYSTEM_ROLE_ID,
+        }
+    };
+    let (existing_id, existing_gid) = catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("existing MV identity");
+    let existing = plan_mv(&catalog, existing_id, existing_gid, "existing_pin", "r1");
+    catalog
+        .transact(None, catalog.current_upper().await, None, vec![existing])
+        .await
+        .expect("commit existing pinned MV");
+    let existing_shard = catalog.state().storage_metadata().collection_metadata[&existing_gid];
+    catalog
+        .transact(
+            None,
+            catalog.current_upper().await,
+            None,
+            vec![Op::DropClusterReplicaRealization {
+                cluster_id,
+                replica_id: replica_ids[0],
+            }],
+        )
+        .await
+        .expect("retire execution without dropping shared intent");
+    assert!(catalog.try_get_entry(&existing_id).is_some());
+    assert_eq!(
+        catalog
+            .state()
+            .resolve_materialized_view_replica(cluster_id, "r1"),
+        Ok(target)
+    );
+    assert_eq!(
+        catalog
+            .state()
+            .physical_replica_for_target(cluster_id, target),
+        None
+    );
+    catalog
+        .transact(
+            None,
+            catalog.current_upper().await,
+            None,
+            vec![Op::CreateClusterReplicaRealization {
+                cluster_id,
+                replica_id: replica_ids[2],
+                name: "r1".into(),
+                config: replica_config.clone(),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+                declaration_id: Some(replica_ids[0]),
+            }],
+        )
+        .await
+        .expect("reconstruct execution from the declaration");
+    assert_eq!(
+        catalog
+            .state()
+            .physical_replica_for_target(cluster_id, target),
+        Some(replica_ids[2])
+    );
+    let (stale_id, stale_gid) = catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("staged MV identity");
+    // This item is off-thread planning work, not a committed bound object that
+    // the rename transaction can rewrite.
+    let staged = plan_mv(&catalog, stale_id, stale_gid, "stale_pin", "r1");
+    catalog
+        .transact(
+            None,
+            catalog.current_upper().await,
+            None,
+            vec![Op::RenameClusterReplica {
+                cluster_id,
+                replica_id: replica_ids[2],
+                name: QualifiedReplica {
+                    cluster: Ident::new_unchecked("pin_race"),
+                    replica: Ident::new_unchecked("r1"),
+                },
+                to_name: "r2".into(),
+            }],
+        )
+        .await
+        .expect("rename original declaration and committed MV reference");
+
+    for reuse_name in [false, true] {
+        if reuse_name {
+            catalog
+                .transact(
+                    None,
+                    catalog.current_upper().await,
+                    None,
+                    vec![create_replica(replica_ids[1])],
+                )
+                .await
+                .expect("reuse r1 for a different declaration");
+            assert_eq!(
+                catalog
+                    .state()
+                    .resolve_materialized_view_replica(cluster_id, "r1"),
+                Ok(ReplicaTarget::Declaration(replica_ids[1]))
+            );
+        }
+        let result = catalog
+            .transact(
+                None,
+                catalog.current_upper().await,
+                None,
+                vec![staged.clone()],
+            )
+            .await;
+        assert!(
+            matches!(result, Err(CatalogError::DDLTransactionRace)),
+            "reuse_name={reuse_name}: {:?}",
+            result.err()
+        );
+        assert!(catalog.state().try_get_entry(&stale_id).is_none());
+        assert!(
+            !catalog
+                .state()
+                .storage_metadata()
+                .collection_metadata
+                .contains_key(&stale_gid)
+        );
+    }
+
+    let (fresh_id, fresh_gid) = catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("fresh MV identity");
+    let fresh = plan_mv(&catalog, fresh_id, fresh_gid, "fresh_pin", "r2");
+    catalog
+        .transact(None, catalog.current_upper().await, None, vec![fresh])
+        .await
+        .expect("fresh plan uses renamed declaration");
+    let bootstrap = crate::catalog::test_bootstrap_args();
+    let follower = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)
+        .await
+        .expect("reconstruct pinned MVs");
+    for state in [catalog.state(), follower.state()] {
+        assert!(state.try_get_entry(&stale_id).is_none());
+        assert_eq!(
+            state.resolve_materialized_view_replica(cluster_id, "r2"),
+            Ok(target)
+        );
+        assert_eq!(
+            state.storage_metadata().collection_metadata[&existing_gid],
+            existing_shard
+        );
+        for id in [existing_id, fresh_id] {
+            let CatalogItem::MaterializedView(mv) = state.get_entry(&id).item() else {
+                panic!("expected committed MV");
+            };
+            assert_eq!(mv.target_replica, Some(target));
+            let mz_sql_parser::ast::Statement::CreateMaterializedView(definition) =
+                mz_sql::parse::parse(&mv.create_sql)
+                    .expect("persisted MV SQL")
+                    .remove(0)
+                    .ast
+            else {
+                panic!("expected MV SQL");
+            };
+            assert_eq!(
+                definition
+                    .in_cluster_replica
+                    .expect("committed MV retains its explicit replica target")
+                    .as_str(),
+                "r2"
+            );
+        }
+    }
+    follower.expire().await;
+    catalog.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

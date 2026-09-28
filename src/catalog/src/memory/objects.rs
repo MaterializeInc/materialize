@@ -538,6 +538,8 @@ pub struct ClusterReplica {
     pub replica_id: ReplicaId,
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
+    pub deployment_generation: u64,
+    pub declaration_id: Option<ReplicaId>,
 }
 
 impl From<ClusterReplica> for durable::ClusterReplica {
@@ -548,6 +550,8 @@ impl From<ClusterReplica> for durable::ClusterReplica {
             name: replica.name,
             config: replica.config.into(),
             owner_id: replica.owner_id,
+            deployment_generation: replica.deployment_generation,
+            declaration_id: replica.declaration_id,
         }
     }
 }
@@ -1434,8 +1438,9 @@ pub struct MaterializedView {
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
-    /// If set, only install this materialized view's dataflow on the specified replica.
-    pub target_replica: Option<ReplicaId>,
+    /// If set, install only on replicas matching this binding, including when a
+    /// declared target has no physical realization in this deployment yet.
+    pub target_replica: Option<mz_sql::catalog::ReplicaTarget>,
     /// Column indexes that we assert are not `NULL`.
     ///
     /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
@@ -4342,6 +4347,8 @@ pub enum StateUpdateKind {
     ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    ClusterReplicaDeclaration(durable::objects::ClusterReplicaDeclaration),
+    ClusterRuntime(durable::objects::ClusterRuntime),
     ClusterReplica(durable::objects::ClusterReplica),
     ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),

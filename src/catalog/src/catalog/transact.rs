@@ -49,7 +49,7 @@ use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller_types::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::CollectionPlan;
-use mz_ore::collections::HashSet;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
@@ -74,7 +74,8 @@ use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{DEFAULT_SCHEMA, rbac};
-use mz_sql_parser::ast::{QualifiedReplica, Value};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{Ident, QualifiedReplica, Statement, Value};
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_client::storage_collections::{StorageCollections, prepare_collection_state};
 use mz_storage_types::sources::envelope::SourceEnvelope;
@@ -206,6 +207,31 @@ pub enum Op {
         owner_id: RoleId,
         reason: ReplicaCreateDropReason,
     },
+    /// Realizes existing intent in this deployment without creating a SQL declaration.
+    CreateClusterReplicaRealization {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        name: String,
+        config: ReplicaConfig,
+        owner_id: RoleId,
+        declaration_id: Option<ReplicaId>,
+    },
+    /// Retires a local execution, not its shared declaration or bound objects.
+    DropClusterReplicaRealization {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    },
+    /// Retains a compatible execution when shared configuration declares its identity.
+    AssociateReplicaDeclaration {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        declaration_id: ReplicaId,
+    },
+    /// Guards unmanaged realization against acknowledged declaration changes.
+    CheckClusterDeclarations {
+        cluster_id: ClusterId,
+        expected: Vec<crate::durable::ClusterReplicaDeclaration>,
+    },
     CreateItem {
         id: CatalogItemId,
         name: QualifiedItemName,
@@ -272,6 +298,11 @@ pub enum Op {
         role_id: RoleId,
         member_id: RoleId,
         grantor_id: RoleId,
+    },
+    /// Updates this deployment's realization without replacing shared intent.
+    UpdateClusterRuntime {
+        runtime: crate::durable::ClusterRuntime,
+        burst_audit: Option<BurstAudit>,
     },
     UpdateClusterConfig {
         id: ClusterId,
@@ -356,6 +387,31 @@ pub enum Op {
         cluster_id: ClusterId,
         expected: ExpectedClusterState,
     },
+}
+
+impl Op {
+    /// Whether this operation can participate in internal read-only prewarming.
+    /// Durable transaction validation separately enforces namespace and ownership.
+    pub fn is_deployment_metadata(&self) -> bool {
+        match self {
+            Self::CheckClusterState { .. }
+            | Self::UpdateClusterRuntime { .. }
+            | Self::CreateClusterReplicaRealization { .. }
+            | Self::DropClusterReplicaRealization { .. }
+            | Self::AssociateReplicaDeclaration { .. }
+            | Self::CheckClusterDeclarations { .. }
+            | Self::CreateClientIncarnation { .. }
+            | Self::PublishClientReadRequirements { .. }
+            | Self::ReclaimClientIncarnation { .. }
+            | Self::SetReadProtection { .. }
+            | Self::SetWrittenPlan { .. } => true,
+            Self::UpdateScopedSystemParameters {
+                scoped,
+                prune_scope,
+            } => scoped.cluster.is_empty() && prune_scope.clusters.is_empty(),
+            _ => false,
+        }
+    }
 }
 
 /// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
@@ -1112,17 +1168,7 @@ impl Catalog {
             // Candidate config application can update shared dynamic-config handles.
             // Check operation authority before staging those effects. The final
             // batch separately validates namespace, ownership and derived mutations.
-            if tx.is_prewarming()
-                && !matches!(
-                    &op,
-                    Op::CheckClusterState { .. }
-                        | Op::CreateClientIncarnation { .. }
-                        | Op::PublishClientReadRequirements { .. }
-                        | Op::ReclaimClientIncarnation { .. }
-                        | Op::SetReadProtection { .. }
-                        | Op::SetWrittenPlan { .. }
-                )
-            {
+            if tx.is_prewarming() && !op.is_deployment_metadata() {
                 return Err(DurableCatalogError::NotWritable(
                     "prewarming deployment cannot change shared definitions or configuration"
                         .into(),
@@ -1980,12 +2026,25 @@ impl Catalog {
                 // The replica id is allocated out-of-band by the durable
                 // allocator before the transaction, mirroring cluster and item
                 // ids. Nothing allocates a replica id in-apply.
+                let declaration_id = (!cluster.is_managed()).then_some(replica_id);
+                if declaration_id.is_some() {
+                    tx.set_cluster_replica_declaration(
+                        crate::durable::ClusterReplicaDeclaration {
+                            cluster_id,
+                            replica_id,
+                            name: name.clone(),
+                            config: config.clone().into(),
+                            owner_id,
+                        },
+                    )?;
+                }
                 tx.insert_cluster_replica_with_id(
                     cluster_id,
                     replica_id,
                     &name,
                     config.clone().into(),
                     owner_id,
+                    declaration_id,
                 )?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
@@ -2020,12 +2079,135 @@ impl Catalog {
                     )?;
                 }
             }
+            Op::CheckClusterDeclarations {
+                cluster_id,
+                expected,
+            } => {
+                if state
+                    .try_get_cluster(cluster_id)
+                    .is_none_or(|cluster| cluster.is_managed())
+                    || tx
+                        .get_cluster_replica_declarations()
+                        .filter(|declaration| declaration.cluster_id == cluster_id)
+                        .collect::<Vec<_>>()
+                        != expected
+                {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
+            }
+            Op::AssociateReplicaDeclaration {
+                cluster_id,
+                replica_id,
+                declaration_id,
+            } => {
+                let declaration = tx
+                    .get_cluster_replica_declaration(declaration_id)
+                    .ok_or(CatalogError::DDLTransactionRace)?;
+                let mut replica: crate::durable::ClusterReplica = state
+                    .get_cluster(cluster_id)
+                    .replica(replica_id)
+                    .ok_or(CatalogError::DDLTransactionRace)?
+                    .clone()
+                    .into();
+                if replica.deployment_generation != tx.deployment_generation()
+                    || replica.declaration_id.is_some()
+                    || declaration.cluster_id != cluster_id
+                    || declaration.name != replica.name
+                    || declaration.owner_id != replica.owner_id
+                    || declaration.config != replica.config
+                {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
+                replica.declaration_id = Some(declaration_id);
+                tx.update_cluster_replica(replica_id, replica)?;
+            }
+            Op::CreateClusterReplicaRealization {
+                cluster_id,
+                replica_id,
+                name,
+                config,
+                owner_id,
+                declaration_id,
+            } => {
+                let config: crate::durable::ReplicaConfig = config.into();
+                if let Some(id) = declaration_id {
+                    let declaration = tx
+                        .get_cluster_replica_declaration(id)
+                        .ok_or(CatalogError::DDLTransactionRace)?;
+                    if declaration.cluster_id != cluster_id
+                        || declaration.name != name
+                        || declaration.config != config
+                        || declaration.owner_id != owner_id
+                    {
+                        return Err(CatalogError::DDLTransactionRace);
+                    }
+                } else if !state.get_cluster(cluster_id).is_managed() {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
+                tx.insert_cluster_replica_with_id(
+                    cluster_id,
+                    replica_id,
+                    &name,
+                    config,
+                    owner_id,
+                    declaration_id,
+                )?;
+            }
+            Op::DropClusterReplicaRealization {
+                cluster_id,
+                replica_id,
+            } => {
+                let replica = state
+                    .get_cluster(cluster_id)
+                    .replica(replica_id)
+                    .ok_or(CatalogError::DDLTransactionRace)?;
+                if replica.deployment_generation != tx.deployment_generation() {
+                    return Err(DurableCatalogError::NotWritable(
+                        "replica retirement belongs to its deployment".into(),
+                    )
+                    .into());
+                }
+                let build = Self::expression_build_version(state.config().build_info).to_string();
+                let plans: Vec<_> = tx
+                    .get_written_plans()
+                    .filter(|plan| {
+                        plan.build_version == build
+                            && plan
+                                .replica_owner
+                                .as_ref()
+                                .is_some_and(|owner| owner.replica_id == replica_id)
+                    })
+                    .map(|plan| plan.id)
+                    .collect();
+                for id in plans {
+                    tx.set_written_plan(id, &build, None)?;
+                }
+                let configs: Vec<_> = tx
+                    .get_replica_system_configurations()
+                    .filter(|config| config.replica_id == replica_id)
+                    .map(|config| config.name)
+                    .collect();
+                for name in configs {
+                    tx.remove_replica_system_config(replica_id, &name);
+                }
+                // Declaration comments outlive individual realizations. A
+                // physical-only comment must retire with its physical owner.
+                if replica.declaration_id.is_none() {
+                    tx.drop_comments(
+                        &[CommentObjectId::ClusterReplica((cluster_id, replica_id))].into(),
+                    )?;
+                }
+                tx.remove_cluster_replica(replica_id)?;
+            }
             Op::CreateItem {
                 id,
                 name,
                 item,
                 owner_id,
             } => {
+                if let CatalogItem::MaterializedView(mv) = &item {
+                    state.validate_materialized_view_target(mv)?;
+                }
                 state.check_unstable_dependencies(&item)?;
 
                 match &item {
@@ -2390,7 +2572,11 @@ impl Catalog {
                 sub_component,
                 comment,
             } => {
-                tx.update_comment(object_id, sub_component, comment)?;
+                tx.update_comment(
+                    state.canonical_comment_id(object_id),
+                    sub_component,
+                    comment,
+                )?;
                 let entry = state.get_comment_id_entry(&object_id);
                 let should_log = entry
                     .map(|entry| Self::should_audit_log_item(entry.item()))
@@ -2600,8 +2786,63 @@ impl Catalog {
                     info!("drop network policy {}", policy.name.clone());
                 }
 
-                // Drop any replicas.
-                let replicas: BTreeSet<_> = delta.replicas.keys().copied().collect();
+                // Shared DROP removes a declaration and all its realizations.
+                // Private runtime retirement uses the physical removal API, not
+                // this SQL cascade path.
+                let mut declarations: BTreeSet<_> = delta
+                    .replicas
+                    .iter()
+                    .filter_map(|(replica_id, (cluster_id, _))| {
+                        state
+                            .get_cluster(*cluster_id)
+                            .replica(*replica_id)
+                            .and_then(|replica| replica.declaration_id)
+                    })
+                    .collect();
+                declarations.extend(
+                    tx.get_cluster_replica_declarations()
+                        .filter(|declaration| delta.clusters.contains(&declaration.cluster_id))
+                        .map(|declaration| declaration.replica_id),
+                );
+                let removed_realizations: Vec<_> = tx
+                    .get_cluster_replicas()
+                    .filter(|replica| {
+                        delta.replicas.contains_key(&replica.replica_id)
+                            || delta.clusters.contains(&replica.cluster_id)
+                            || replica
+                                .declaration_id
+                                .is_some_and(|id| declarations.contains(&id))
+                    })
+                    .collect();
+                let replicas: BTreeSet<_> = delta
+                    .replicas
+                    .keys()
+                    .copied()
+                    .chain(
+                        removed_realizations
+                            .iter()
+                            .map(|replica| replica.replica_id),
+                    )
+                    .collect();
+                let replica_comments = removed_realizations
+                    .iter()
+                    .map(|replica| {
+                        CommentObjectId::ClusterReplica((replica.cluster_id, replica.replica_id))
+                    })
+                    .collect();
+                tx.drop_comments(&replica_comments)?;
+                for declaration_id in declarations {
+                    let declaration = tx
+                        .remove_cluster_replica_declaration(declaration_id)
+                        .expect("replica declaration exists in transaction snapshot");
+                    tx.drop_comments(
+                        &[CommentObjectId::ClusterReplica((
+                            declaration.cluster_id,
+                            declaration_id,
+                        ))]
+                        .into(),
+                    )?;
+                }
                 if !replicas.is_empty() {
                     let build =
                         Self::expression_build_version(state.config().build_info).to_string();
@@ -2649,6 +2890,14 @@ impl Catalog {
                 }
 
                 // Drop any clusters.
+                let runtimes: Vec<_> = tx
+                    .get_cluster_runtimes()
+                    .filter(|runtime| delta.clusters.contains(&runtime.cluster_id))
+                    .collect();
+                for runtime in runtimes {
+                    tx.remove_cluster_runtime(runtime.cluster_id, runtime.deployment_generation)
+                        .expect("cluster runtime exists in transaction snapshot");
+                }
                 tx.remove_clusters(&delta.clusters)?;
 
                 for cluster_id in delta.clusters {
@@ -2917,7 +3166,47 @@ impl Catalog {
                         ErrorKind::ReservedReplicaName(to_name),
                     )));
                 }
-                tx.rename_cluster_replica(replica_id, &name, &to_name)?;
+                let cluster = state.get_cluster(cluster_id);
+                let replica = cluster.replica(replica_id).expect("catalog out of sync");
+                if let Some(declaration_id) = replica.declaration_id {
+                    let mut declaration = tx
+                        .get_cluster_replica_declaration(declaration_id)
+                        .expect("physical replica refers to a declaration");
+                    declaration.name.clone_from(&to_name);
+                    tx.set_cluster_replica_declaration(declaration)?;
+                    let realizations = tx
+                        .get_cluster_replicas()
+                        .filter(|replica| replica.declaration_id == Some(declaration_id))
+                        .map(|mut replica| {
+                            replica.name.clone_from(&to_name);
+                            replica
+                        })
+                        .collect();
+                    tx.set_replicas(realizations)?;
+                } else {
+                    tx.rename_cluster_replica(replica_id, &name, &to_name)?;
+                }
+                // The durable MV definition names its target. Rename that reference
+                // in the same transaction so every deployment can reconstruct it.
+                for item_id in &cluster.bound_objects {
+                    if let CatalogItem::MaterializedView(mv) = state.get_entry(item_id).item()
+                        && mv.target_replica.is_some()
+                        && state.replica_matches_target(cluster_id, replica_id, mv.target_replica)
+                    {
+                        let mut item = tx.get_item(item_id).expect("bound MV exists");
+                        let mut statement = mz_sql::parse::parse(&item.create_sql)
+                            .expect("valid persisted MV SQL")
+                            .into_element()
+                            .ast;
+                        let Statement::CreateMaterializedView(definition) = &mut statement else {
+                            unreachable!("MV definition is CREATE MATERIALIZED VIEW");
+                        };
+                        definition.in_cluster_replica =
+                            Some(Ident::new(&to_name).expect("validated replica name"));
+                        item.create_sql = statement.to_ast_string_stable();
+                        tx.update_item(*item_id, item)?;
+                    }
+                }
                 add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
@@ -3192,6 +3481,22 @@ impl Catalog {
                             )));
                         }
                         replica.owner_id = new_owner;
+                        if let Some(declaration_id) = replica.declaration_id {
+                            let mut declaration = tx
+                                .get_cluster_replica_declaration(declaration_id)
+                                .expect("physical replica refers to a declaration");
+                            declaration.owner_id = new_owner;
+                            tx.set_cluster_replica_declaration(declaration)?;
+                            let realizations = tx
+                                .get_cluster_replicas()
+                                .filter(|replica| replica.declaration_id == Some(declaration_id))
+                                .map(|mut replica| {
+                                    replica.owner_id = new_owner;
+                                    replica
+                                })
+                                .collect();
+                            tx.set_replicas(realizations)?;
+                        }
                         tx.update_cluster_replica(*replica_id, replica.into())?;
                     }
                     ObjectId::Database(id) => {
@@ -3282,6 +3587,56 @@ impl Catalog {
                     }),
                 )?;
             }
+            Op::UpdateClusterRuntime {
+                runtime,
+                burst_audit,
+            } => {
+                let id = runtime.cluster_id;
+                if runtime.deployment_generation != tx.deployment_generation() {
+                    return Err(DurableCatalogError::NotWritable(
+                        "cluster runtime belongs to another deployment".into(),
+                    )
+                    .into());
+                }
+                let cluster = state.get_cluster(id);
+                let mut old_config = cluster.config.clone();
+                let ClusterVariant::Managed(old) = &mut old_config.variant else {
+                    return Err(CatalogError::ClusterStateChanged { cluster_id: id });
+                };
+                old.burst = tx
+                    .get_cluster_runtime(id, runtime.deployment_generation)
+                    .and_then(|runtime| runtime.burst)
+                    .map(Into::into);
+                let mut new_config = old_config.clone();
+                let ClusterVariant::Managed(new) = &mut new_config.variant else {
+                    unreachable!("managed runtime");
+                };
+                new.burst = runtime.burst.clone().map(Into::into);
+                let audit = burst_audit
+                    .map(|audit| {
+                        Self::burst_audit_details(
+                            &old_config,
+                            &new_config,
+                            id,
+                            &cluster.name,
+                            audit,
+                        )
+                    })
+                    .transpose()?;
+                tx.set_cluster_runtime(runtime)?;
+                if let Some(details) = audit {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::ClusterHydrationBurstV1(details),
+                    )?;
+                }
+            }
             Op::UpdateClusterConfig {
                 id,
                 name,
@@ -3335,6 +3690,78 @@ impl Catalog {
                         Self::burst_audit_details(&cluster.config, &config, id, &name, audit)
                     })
                     .transpose()?;
+                if cluster.is_managed() != matches!(config.variant, ClusterVariant::Managed(_)) {
+                    let replicas: Vec<_> = tx
+                        .get_cluster_replicas()
+                        .filter(|replica| replica.cluster_id == id)
+                        .collect();
+                    if matches!(config.variant, ClusterVariant::Unmanaged) {
+                        // The serving deployment's existing replicas become the
+                        // shared declaration. Peers realize it independently.
+                        for mut replica in replicas.into_iter().filter(|replica| {
+                            replica.deployment_generation == state.deployment_generation()
+                        }) {
+                            tx.set_cluster_replica_declaration(
+                                crate::durable::ClusterReplicaDeclaration {
+                                    cluster_id: id,
+                                    replica_id: replica.replica_id,
+                                    name: replica.name.clone(),
+                                    config: replica.config.clone(),
+                                    owner_id: replica.owner_id,
+                                },
+                            )?;
+                            replica.declaration_id = Some(replica.replica_id);
+                            tx.update_cluster_replica(replica.replica_id, replica)?;
+                        }
+                    } else {
+                        let declarations: Vec<_> = tx
+                            .get_cluster_replica_declarations()
+                            .filter(|declaration| declaration.cluster_id == id)
+                            .map(|declaration| declaration.replica_id)
+                            .collect();
+                        for declaration in declarations {
+                            let old_id = CommentObjectId::ClusterReplica((id, declaration));
+                            let comments = tx.get_object_comments(old_id);
+                            if !comments.is_empty() {
+                                // Only the serving realization inherits the comment.
+                                // A peer's physical identity is not the shared object.
+                                let replica = replicas
+                                    .iter()
+                                    .find(|replica| {
+                                        replica.declaration_id == Some(declaration)
+                                            && replica.deployment_generation
+                                                == state.deployment_generation()
+                                    })
+                                    .ok_or(CatalogError::DDLTransactionRace)?;
+                                let new_id =
+                                    CommentObjectId::ClusterReplica((id, replica.replica_id));
+                                if old_id != new_id {
+                                    tx.drop_comments(&[old_id].into())?;
+                                    for (sub_component, comment) in comments {
+                                        tx.update_comment(new_id, sub_component, Some(comment))?;
+                                    }
+                                }
+                            }
+                            tx.remove_cluster_replica_declaration(declaration);
+                        }
+                        tx.set_replicas(
+                            replicas
+                                .into_iter()
+                                .map(|mut replica| {
+                                    replica.declaration_id = None;
+                                    replica
+                                })
+                                .collect(),
+                        )?;
+                    }
+                    let runtimes: Vec<_> = tx
+                        .get_cluster_runtimes()
+                        .filter(|runtime| runtime.cluster_id == id)
+                        .collect();
+                    for runtime in runtimes {
+                        tx.remove_cluster_runtime(id, runtime.deployment_generation);
+                    }
+                }
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
@@ -3380,6 +3807,9 @@ impl Catalog {
                 }
             }
             Op::UpdateItem { id, name, to_item } => {
+                if let CatalogItem::MaterializedView(mv) = &to_item {
+                    state.validate_materialized_view_target(mv)?;
+                }
                 // A non-temporary item must not depend on a temporary one.
                 // Temporary objects are session-scoped and disappear with
                 // their session, so a longer-lived item referencing one would
@@ -3548,10 +3978,17 @@ impl Catalog {
                     .get_cluster_replicas()
                     .map(|replica| replica.replica_id)
                     .collect();
+                let pending = tx.is_prewarming();
+                let own_replicas: BTreeSet<_> = tx
+                    .get_cluster_replicas()
+                    .filter(|replica| replica.deployment_generation == tx.deployment_generation())
+                    .map(|replica| replica.replica_id)
+                    .collect();
 
                 // Cluster-coherent scope.
                 let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
                     .get_cluster_system_configurations()
+                    .filter(|_| !pending)
                     .map(|c| ((c.cluster_id, c.name), c.value))
                     .collect();
                 let mut desired_cluster: BTreeSet<(ClusterId, String)> = BTreeSet::new();
@@ -3578,6 +4015,7 @@ impl Catalog {
                 // Replica-local scope.
                 let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
                     .get_replica_system_configurations()
+                    .filter(|config| !pending || own_replicas.contains(&config.replica_id))
                     .map(|r| ((r.replica_id, r.name), r.value))
                     .collect();
                 let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
@@ -4240,6 +4678,10 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod incarnation_tests;
+#[cfg(test)]
+mod replica_comment_tests;
+#[cfg(test)]
+mod replica_conversion_tests;
 #[cfg(test)]
 mod replica_plan_tests;
 #[cfg(test)]

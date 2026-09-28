@@ -57,6 +57,9 @@ pub enum CollectionType {
     ComputeInstance,
     ComputeIntrospectionSourceIndex,
     ComputeReplicas,
+    ClusterReplicaDeclaration,
+    ClusterRuntime,
+
     Comments,
     Config,
     Database,
@@ -158,6 +161,22 @@ collection_impl!({
     collection_type: CollectionType::ComputeReplicas,
     trace_field: cluster_replicas,
     update: StateUpdateKind::ClusterReplica,
+});
+collection_impl!({
+    name: ClusterReplicaDeclarationCollection,
+    key: proto::ClusterReplicaDeclarationKey,
+    value: proto::ClusterReplicaDeclarationValue,
+    collection_type: CollectionType::ClusterReplicaDeclaration,
+    trace_field: cluster_replica_declarations,
+    update: StateUpdateKind::ClusterReplicaDeclaration,
+});
+collection_impl!({
+    name: ClusterRuntimeCollection,
+    key: proto::ClusterRuntimeKey,
+    value: proto::ClusterRuntimeValue,
+    collection_type: CollectionType::ClusterRuntime,
+    trace_field: cluster_runtimes,
+    update: StateUpdateKind::ClusterRuntime,
 });
 collection_impl!({
     name: CommentCollection,
@@ -395,6 +414,9 @@ pub struct Trace {
     pub clusters: CollectionTrace<ClusterCollection>,
     pub introspection_sources: CollectionTrace<ClusterIntrospectionSourceIndexCollection>,
     pub cluster_replicas: CollectionTrace<ClusterReplicaCollection>,
+    pub cluster_replica_declarations: CollectionTrace<ClusterReplicaDeclarationCollection>,
+    pub cluster_runtimes: CollectionTrace<ClusterRuntimeCollection>,
+
     pub comments: CollectionTrace<CommentCollection>,
     pub configs: CollectionTrace<ConfigCollection>,
     pub databases: CollectionTrace<DatabaseCollection>,
@@ -456,6 +478,9 @@ impl Trace {
             clusters: CollectionTrace::new(),
             introspection_sources: CollectionTrace::new(),
             cluster_replicas: CollectionTrace::new(),
+            cluster_replica_declarations: CollectionTrace::new(),
+            cluster_runtimes: CollectionTrace::new(),
+
             comments: CollectionTrace::new(),
             configs: CollectionTrace::new(),
             databases: CollectionTrace::new(),
@@ -490,6 +515,9 @@ impl Trace {
             clusters,
             introspection_sources,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
+
             comments,
             configs,
             databases,
@@ -520,6 +548,9 @@ impl Trace {
         clusters.sort();
         introspection_sources.sort();
         cluster_replicas.sort();
+        cluster_replica_declarations.sort();
+        cluster_runtimes.sort();
+
         comments.sort();
         configs.sort();
         databases.sort();
