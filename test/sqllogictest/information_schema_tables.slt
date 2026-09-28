@@ -766,7 +766,7 @@ VIEW
 materialize
 mz_internal
 mz_source_references
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_source_statistics
