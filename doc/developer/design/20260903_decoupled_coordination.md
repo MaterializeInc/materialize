@@ -35,6 +35,14 @@ are protected across all logical inputs. It must not skip pending results by mov
 the recovery timestamp forward. Fresh environments must still survive same-version
 restarts, replanning, and ownership handover.
 
+Native warm handover with replica-targeted MVs on managed clusters is outside
+M2. Reject that combination before promotion, leaving the active deployment
+intact, without retargeting or dropping the MVs. Preserve single-deployment
+behavior and handover support for pins to explicitly declared replicas on
+unmanaged clusters. The broader
+[replica-pinning identity question](#future-work-replica-targeted-mv-identity)
+is deferred.
+
 Query-local dataflows that do not go through the catalog, including slow-path
 SELECTs, SUBSCRIBEs, and COPY TO, remain on the fast protocol. Their creation,
 execution, responses, and cleanup are part of request-scoped execution, not
@@ -629,6 +637,20 @@ including existing dependents and builtin migration. Current expression
 preparation rejects context-dependent functions in maintained queries. Explicit
 scope for durable queries and request-scoped binding for subscriptions are
 options, not approved changes to existing SQL behavior.
+
+## Future work: replica-targeted MV identity
+
+Explicit replica declarations offer shared logical targets that each deployment
+can realize independently. Declaration identity and deployment-local runtime
+identity are distinct, regardless of their name/ID representation. Retiring a
+realization must not act as a DROP of the shared declaration or its dependents.
+Controller-created replicas on managed clusters need not have corresponding
+logical targets across deployments.
+
+Settle whether MV pins should be restricted to shared replica declarations,
+including how cluster conversions affect them, before extending managed-pinning
+support. The milestone exclusion does not change which pins can be created
+within a single deployment or prescribe a new name/ID model.
 
 Resume from the [current handoff](20260903_decoupled_coordination_log.md) and
 [implementer prompt](20260903_decoupled_coordination_prompt.md). The

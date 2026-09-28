@@ -45,6 +45,10 @@ acknowledged replica DDL must survive promotion even if it follows prewarming's
 snapshot. Mirroring only the active deployment's realized inventory would drop
 the design's independently scoped realization requirement and is not approved.
 
+Replica-targeted MVs persist a SQL name and resolve the replica ID in local
+catalog state, not the written plan. This alone does not give controller-created
+replicas a shared logical identity across deployments.
+
 The remaining query-client closure investigation concerns long serving-coordinator
 publication stalls that may exhaust reclamation grace. Establish the actual
 heartbeat/reclamation sequence without changing grace. Keep this separate from
@@ -57,6 +61,10 @@ concrete integration repairs without starting another acceptance campaign.
 
 ## Additional settled scope
 
+- M2 excludes native warm handover with replica-targeted MVs on managed
+  clusters. Reject before promotion, preserving the active deployment and MVs.
+  Keep single-deployment behavior and handover for explicitly declared replicas
+  on unmanaged clusters. Broader pinning/name/ID semantics remain future work.
 - For these milestones, `mz_cluster_replicas` shows the catalog's active
   deployment and stays shared and materializable. Own-deployment routing,
   reconciliation and readiness use internal inventory with deployment identity.

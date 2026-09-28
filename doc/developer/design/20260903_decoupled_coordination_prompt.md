@@ -44,6 +44,12 @@ Routing, reconciliation and prewarming readiness use their own deployment's
 inventory. Query-relative public catalog views and their maintained-query
 semantics are future work, not a prerequisite or an implementation task here.
 
+M2 excludes native warm handover with replica-targeted MVs on managed clusters.
+Reject that combination before promotion, leaving the active deployment intact.
+Preserve single-deployment behavior and handover for explicitly declared
+replicas on unmanaged clusters. Do not retarget pins or cascade-drop shared
+MVs when retiring private replicas. Broader pinning semantics are future work.
+
 Close the known serving-compatibility gaps at their owning boundaries:
 - Establish the index's initial as_of, bound and logical/actual-input protection
   with its definition and selected plan in the DDL transaction. Plan changes
