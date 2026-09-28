@@ -644,6 +644,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .await
             {
                 if replica_owned {
+                    if error.is::<catalog_follower::ReplicaRemoved>() {
+                        // Catalog deletion must stop execution immediately, but
+                        // it is not an operational fault. Keep the halt exit code
+                        // so supervisor behavior is independent of log severity.
+                        info!("replica removed from catalog, stopping native execution");
+                        mz_ore::process::exit_thread_safe(166);
+                    }
                     mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
                 }
                 error!(%error, "catalog follower stopped");

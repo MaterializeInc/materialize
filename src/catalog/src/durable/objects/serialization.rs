@@ -854,12 +854,14 @@ impl RustType<proto::ClientIncarnationValue> for ClientIncarnationValue {
     fn into_proto(&self) -> proto::ClientIncarnationValue {
         proto::ClientIncarnationValue {
             heartbeat: self.heartbeat,
+            deployment_generation: self.deployment_generation,
             replica_id: self.replica_id.into_proto(),
         }
     }
     fn from_proto(proto: proto::ClientIncarnationValue) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             heartbeat: proto.heartbeat,
+            deployment_generation: proto.deployment_generation,
             replica_id: proto.replica_id.into_rust()?,
         })
     }

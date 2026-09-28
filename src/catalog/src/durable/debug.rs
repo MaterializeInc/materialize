@@ -619,6 +619,7 @@ mod tests {
                 proto::ClientIncarnationKey { id: 1 },
                 proto::ClientIncarnationValue {
                     heartbeat: u64::MAX,
+                    deployment_generation: 0,
                     replica_id: None,
                 },
             ),

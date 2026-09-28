@@ -12,8 +12,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
-use mz_controller_types::ReplicaId;
+use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_RECORDING_INTERVAL;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -28,9 +29,35 @@ pub(super) struct NativeWallclockLag {
     last_recorded: Option<DateTime<Utc>>,
     maxima: BTreeMap<(GlobalId, ReplicaId), WallclockLag>,
     histograms: BTreeMap<GlobalId, BTreeMap<HistogramKey, Diff>>,
+    metrics: BTreeMap<(GlobalId, ReplicaId), WallclockLagMetrics>,
 }
 
 impl NativeWallclockLag {
+    /// Sample public metrics from the same lag values used for SQL history.
+    /// Omitted identities release their metric handles, including on DROP.
+    pub(super) fn update_metrics(
+        &mut self,
+        metrics: &ControllerMetrics,
+        samples: impl IntoIterator<Item = (ClusterId, GlobalId, ReplicaId, WallclockLag)>,
+    ) {
+        let mut current = BTreeSet::new();
+        for (cluster, id, replica, lag) in samples {
+            let key = (id, replica);
+            current.insert(key);
+            self.metrics
+                .entry(key)
+                .or_insert_with(|| {
+                    metrics.wallclock_lag_metrics(
+                        id.to_string(),
+                        Some(cluster.to_string()),
+                        Some(replica.to_string()),
+                    )
+                })
+                .observe(lag.unwrap_seconds_or(u64::MAX));
+        }
+        self.metrics.retain(|key, _| current.contains(key));
+    }
+
     /// Sample the supplied current collections once per invocation. The caller
     /// owns readability, lag calculation, labels, and the sampling cadence.
     pub(super) fn update(

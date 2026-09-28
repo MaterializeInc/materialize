@@ -108,6 +108,12 @@ impl ReplicaEnactment {
         catalog: &Catalog,
         cluster: ClusterId,
     ) -> BTreeMap<GlobalId, StorageSinkDesc<()>> {
+        // External sink startup can write metadata or fence a transactional
+        // producer before consuming input. Catalog membership alone cannot
+        // authorize those effects in a prewarming deployment.
+        if !self.has_output_write_authority(catalog) {
+            return BTreeMap::new();
+        }
         let kafka_eligible = self.kafka_eligible(catalog, cluster);
         catalog
             .entries()

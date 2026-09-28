@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use differential_dataflow::lattice::Lattice;
 use futures::future::{BoxFuture, FutureExt};
 use mz_catalog::memory::objects::{CatalogItem, TableDataSource};
 use mz_compute_client::protocol::command::Peek;
@@ -256,13 +257,20 @@ impl QueryClient {
         let mut ids = BTreeSet::new();
         if let Some(instance) = catalog.try_get_cluster(cluster) {
             ids.extend(instance.log_indexes.values().copied());
-            ids.extend(instance.bound_objects.iter().filter_map(|item| {
-                match catalog.get_entry(item).item() {
-                    CatalogItem::Index(index) => Some(index.global_id()),
-                    _ => None,
-                }
-            }));
         }
+        // Cluster bound objects exclude system entries, including builtin
+        // indexes that are valid access paths for catalog queries.
+        ids.extend(
+            catalog
+                .state()
+                .get_entries()
+                .filter_map(|(_, entry)| match entry.item() {
+                    CatalogItem::Index(index) if index.cluster_id == cluster => {
+                        Some(index.global_id())
+                    }
+                    _ => None,
+                }),
+        );
         ComputeInstanceSnapshot::new_from_parts(cluster, ids)
     }
 
@@ -295,23 +303,115 @@ impl QueryClient {
         ComputeInstanceSnapshot::new_from_parts(cluster, ids)
     }
 
-    /// Whether the current query connection observed actual hydration of every
-    /// expected collection on this replica. Missing observations are not readiness.
-    pub(crate) fn collections_hydrated_on_replica(
+    /// Whether this replica has hydrated every expected collection and caught up
+    /// to the hosting reference replicas within the optional output-lag allowance.
+    /// Missing observations are not readiness.
+    pub(crate) fn collections_ready_on_replica(
         &self,
+        catalog: &Catalog,
         cluster: ComputeInstanceId,
         replica: ReplicaId,
         expected: &BTreeSet<GlobalId>,
+        allowed_lag: Option<Timestamp>,
+        reference: &BTreeSet<ReplicaId>,
     ) -> bool {
+        use mz_compute_client::controller::CollectionReadiness;
+
+        let references: Vec<_> = reference
+            .iter()
+            .map(|id| {
+                let frontiers = self
+                    .replica_clients(cluster, Some(*id))
+                    .into_iter()
+                    .next()
+                    .and_then(|client| client.frontiers().ok());
+                (*id, frontiers)
+            })
+            .collect();
         self.replica_clients(cluster, Some(replica))
             .iter()
             .any(|client| {
                 client.frontiers().is_ok_and(|frontiers| {
-                    expected.iter().all(|id| {
-                        frontiers
-                            .get(id)
-                            .is_some_and(|frontiers| frontiers.hydrated == Some(true))
-                    })
+                    let mut unobserved = BTreeSet::new();
+                    let mut unhydrated = BTreeSet::new();
+                    let mut lagging_ticks = BTreeMap::new();
+                    let mut awaiting_completion = BTreeSet::new();
+                    // Evaluate every expected export so the probe reports all
+                    // reasons for waiting, rather than only the first blocker.
+                    for id in expected {
+                        let readiness = (|| {
+                            let Some(target) = frontiers.get(id) else {
+                                return None;
+                            };
+                            let mut reference_upper = Antichain::from_elem(Timestamp::MIN);
+                            let mut has_reference = false;
+                            if allowed_lag.is_some() {
+                                for (replica_id, frontiers) in &references {
+                                    if catalog.try_get_entry_by_global_id(id).is_some_and(|entry| {
+                                        match entry.item() {
+                                            CatalogItem::MaterializedView(mv) => mv
+                                                .target_replica
+                                                .is_some_and(|target| target != *replica_id),
+                                            _ => false,
+                                        }
+                                    }) {
+                                        continue;
+                                    }
+                                    let Some(output) = frontiers
+                                        .as_ref()
+                                        .and_then(|frontiers| frontiers.get(id))
+                                        .and_then(|frontiers| frontiers.output_frontier.as_ref())
+                                    else {
+                                        return None;
+                                    };
+                                    has_reference = true;
+                                    reference_upper.join_assign(output);
+                                }
+                            }
+                            let lag = allowed_lag.filter(|_| has_reference);
+                            if lag.is_some() && target.output_frontier.is_none() {
+                                return None;
+                            }
+                            Some(CollectionReadiness::classify(
+                                target.hydrated == Some(true),
+                                target.output_frontier.as_ref().unwrap_or(&reference_upper),
+                                lag.map(|lag| (&reference_upper, lag)),
+                            ))
+                        })();
+                        match readiness {
+                            Some(CollectionReadiness::Ready) => {}
+                            Some(CollectionReadiness::Unhydrated) => {
+                                unhydrated.insert(*id);
+                            }
+                            Some(CollectionReadiness::Lagging { lag: Some(lag) }) => {
+                                lagging_ticks.insert(*id, lag);
+                            }
+                            Some(CollectionReadiness::Lagging { lag: None }) => {
+                                awaiting_completion.insert(*id);
+                            }
+                            None => {
+                                unobserved.insert(*id);
+                            }
+                        }
+                    }
+                    let ready = unobserved.is_empty()
+                        && unhydrated.is_empty()
+                        && lagging_ticks.is_empty()
+                        && awaiting_completion.is_empty();
+                    if !ready {
+                        tracing::info!(
+                            ?cluster,
+                            ?replica,
+                            ?reference,
+                            ?unobserved,
+                            ?unhydrated,
+                            ?lagging_ticks,
+                            ?awaiting_completion,
+                            ?allowed_lag,
+                            "collections are not ready on target replica",
+                        );
+                    }
+                    ready
                 })
             })
     }
@@ -1183,6 +1283,23 @@ mod tests {
         assert!(catalog.get_cluster(cluster).replicas().next().is_none());
         let candidates = client.instance_snapshot(catalog, cluster);
         assert!(candidates.contains_collection(&index));
+        let builtin = catalog
+            .state()
+            .resolve_builtin_object(
+                &mz_catalog::builtin::Builtin::<mz_sql::catalog::IdReference>::Index(
+                    &mz_catalog::builtin::MZ_SOURCES_IND,
+                ),
+            );
+        let builtin_entry = catalog.get_entry(&builtin);
+        let CatalogItem::Index(builtin_index) = builtin_entry.item() else {
+            panic!("builtin index expected");
+        };
+        assert!(
+            client
+                .instance_snapshot(catalog, builtin_index.cluster_id)
+                .contains_collection(&builtin_entry.latest_global_id()),
+            "builtin declarations are candidates independently of installation"
+        );
         assert!(
             !client
                 .observed_instance_snapshot(catalog, cluster)

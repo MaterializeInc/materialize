@@ -538,6 +538,100 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn prewarming_denied_configuration_preserves_live_dyncfg() {
+    use crate::durable::TestCatalogStateBuilder;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_sql::session::vars::OwnedVarInput;
+
+    let persist = PersistClient::new_for_tests().await;
+    let organization = Uuid::new_v4();
+    let bootstrap = test_bootstrap_args();
+    let builder = TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation();
+    let mut seed = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("seed catalog");
+    seed.sync_to_current_updates()
+        .await
+        .expect("consume seed updates");
+    let mut tx = seed
+        .transaction()
+        .await
+        .expect("seed protection transaction");
+    tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .expect("enable protection");
+    let ts = tx.upper();
+    let _ = tx.get_and_commit_op_updates();
+    tx.commit(ts).await.expect("commit protected birth");
+    seed.expire().await;
+    let writer = Catalog::open_debug_catalog(persist, organization, &bootstrap)
+        .await
+        .expect("open active catalog");
+    let storage = builder
+        .with_deploy_generation(1)
+        .unwrap_build()
+        .await
+        .join_prewarming(&Catalog::expression_build_version(writer.config().build_info).to_string())
+        .await
+        .expect("join pending generation");
+    let mut pending = Catalog::open_committed(
+        Catalog::diagnostic_state_config(&writer.diagnostic_config),
+        storage,
+    )
+    .await
+    .expect("reconstruct pending catalog")
+    .catalog;
+    let setting = mz_persist_client::cfg::SOURCE_FETCH_CONCURRENCY;
+    let handle = setting.handle(pending.system_config().dyncfgs());
+    let before = handle.get();
+    let durable_before = pending
+        .storage()
+        .await
+        .snapshot()
+        .await
+        .expect("snapshot before rejection");
+    let ts = pending.current_upper().await;
+    let error = pending
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::UpdateSystemConfiguration {
+                name: setting.name().into(),
+                value: OwnedVarInput::Flat((before + 1).to_string()),
+            }],
+        )
+        .await
+        .err()
+        .expect("prewarming configuration change must reject");
+    assert!(matches!(error, crate::catalog::CatalogError::Catalog(error)
+        if matches!(&error.kind, crate::memory::error::ErrorKind::Durable(
+            DurableCatalogError::NotWritable(_)))));
+    assert_eq!(
+        handle.get(),
+        before,
+        "rejection must not change a live config handle"
+    );
+    assert_eq!(
+        pending
+            .storage()
+            .await
+            .snapshot()
+            .await
+            .expect("snapshot after rejection"),
+        durable_before
+    );
+    pending.expire().await;
+    writer.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn owned_catalog_reconstruction_preserves_protection_snapshot() {
     use crate::durable::TestCatalogStateBuilder;
     use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
@@ -586,6 +680,7 @@ async fn owned_catalog_reconstruction_preserves_protection_snapshot() {
     let mut writer = Catalog::open_debug_catalog(persist.clone(), organization, &bootstrap)
         .await
         .expect("failed to open writer catalog");
+    assert_eq!(writer.state().active_deployment_generation(), Some(0));
     let expected = writer
         .state()
         .dump(None)
@@ -639,6 +734,35 @@ async fn owned_catalog_reconstruction_preserves_protection_snapshot() {
             .dump(None)
             .expect("can dump reconstructed catalog state")
     );
+    assert_eq!(reconstructed.active_deployment_generation(), Some(0));
+
+    // A pending deployment's local identity must not synthesize write authority.
+    let mut pending = TestCatalogStateBuilder::new(persist)
+        .with_organization_id(organization)
+        .with_deploy_generation(1)
+        .unwrap_build()
+        .await
+        .open_savepoint(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("open pending savepoint");
+    assert_eq!(
+        pending
+            .get_deployment_generation()
+            .await
+            .expect("read pending deployment identity"),
+        1
+    );
+    let pending = Catalog::open_committed(
+        Catalog::diagnostic_state_config(&writer.diagnostic_config),
+        pending,
+    )
+    .await
+    .expect("reconstruct pending deployment");
+    assert_eq!(
+        pending.catalog.state().active_deployment_generation(),
+        Some(0)
+    );
+    pending.catalog.expire().await;
     drop(memory);
     writer.expire().await;
 }

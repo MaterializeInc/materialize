@@ -3457,9 +3457,8 @@ impl Coordinator {
             .iter()
             .map(|meta| (meta.table.global_id_writes(), Vec::new()))
             .collect();
-        // Append the tables in the background. We apply the write timestamp before getting a read
-        // timestamp and reading a snapshot of each table, so the snapshots will block on their own
-        // until the appends are complete.
+        // Append the tables in the background. Snapshots at the fence timestamp
+        // block until the WAL passes that timestamp.
         let table_fence_rx = self
             .table_write_handle
             .append(write_ts.clone(), advance_to, appends);
@@ -3468,7 +3467,10 @@ impl Coordinator {
 
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
-        let read_ts = self.get_local_read_ts().await;
+        // Catalog publishers can advance the shared oracle without advancing the
+        // table WAL. Reading that newer time here could wait for table progress
+        // that only starts after bootstrap finishes.
+        let read_ts = write_ts;
 
         let retained_across_restarts = BTreeSet::from([
             self.catalog()
@@ -3563,7 +3565,8 @@ impl Coordinator {
             builtin_table_updates.push(retractions);
         }
 
-        // Now that the snapshots are complete, the appends must also be complete.
+        // Snapshot completion establishes WAL progress past the fence timestamp.
+        // Check that our fence append itself succeeded before resetting the tables.
         table_fence_rx
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")

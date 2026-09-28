@@ -1109,6 +1109,26 @@ impl Catalog {
                     _ => (),
                 }
             }
+            // Candidate config application can update shared dynamic-config handles.
+            // Check operation authority before staging those effects. The final
+            // batch separately validates namespace, ownership and derived mutations.
+            if tx.is_prewarming()
+                && !matches!(
+                    &op,
+                    Op::CheckClusterState { .. }
+                        | Op::CreateClientIncarnation { .. }
+                        | Op::PublishClientReadRequirements { .. }
+                        | Op::ReclaimClientIncarnation { .. }
+                        | Op::SetReadProtection { .. }
+                        | Op::SetWrittenPlan { .. }
+                )
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "prewarming deployment cannot change shared definitions or configuration"
+                        .into(),
+                )
+                .into());
+            }
             Self::transact_op(
                 oracle_write_ts,
                 session,
@@ -1310,6 +1330,7 @@ impl Catalog {
         }
         super::retention::constrain_plan_inputs(tx, &state, &preliminary_state, &admitted_plans)?;
         tx.validate_read_protection()?;
+        tx.validate_prewarming_writes()?;
 
         // Storage preparation can retract permission staged by an earlier op
         // when it deletes metadata. Derive implications from the consolidated

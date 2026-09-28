@@ -263,19 +263,22 @@ def workflow_test_github_3553(c: Composition) -> None:
     try:
         c.sql("""
             SET statement_timeout = '1 s';
-            -- Crash loop the cluster.
+            -- Crash compute during the read.
             INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
             """)
-    except QueryCanceled as e:
-        # Ensure we received the correct error message
-        assert "statement timeout" in str(e)
-        # Ensure the statement_timeout setting is ~honored
+    except (QueryCanceled, InternalError_) as e:
+        if isinstance(e, QueryCanceled):
+            assert "statement timeout" in str(e)
+        else:
+            # Native query disconnection is terminal rather than replayed.
+            assert "query connection lost" in str(e)
+        # An immediate execution error is valid, but neither path may hang.
         elapsed = time.time() - start_time
         assert elapsed < 2, f"statement_timeout not respected ({elapsed=})"
     else:
         raise RuntimeError("unexpected success in test_github_3553")
 
-    # Ensure we can select from tables after cancellation.
+    # Ensure we can select from tables after the failed statement.
     c.sql("SELECT * FROM log_table;")
 
 
@@ -3027,33 +3030,11 @@ class Metrics:
             "mz_compute_replica_history_command_count", command_type
         )
 
-    def get_compute_controller_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_compute_controller_history_command_count", command_type
-        )
-
-    def get_storage_controller_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_storage_controller_history_command_count", command_type
-        )
-
     def get_compute_commands_total(self, command_type: str) -> float:
         return self.get_command_count("mz_compute_commands_total", command_type)
 
     def get_compute_responses_total(self, response_type: str) -> float:
         return self.get_response_count("mz_compute_responses_total", response_type)
-
-    def get_storage_commands_total(self, command_type: str) -> float:
-        return self.get_command_count("mz_storage_commands_total", command_type)
-
-    def get_storage_responses_total(self, response_type: str) -> float:
-        return self.get_response_count("mz_storage_responses_total", response_type)
-
-    def get_peeks_total(self, result: str) -> float:
-        metrics = self.with_name("mz_compute_peeks_total")
-        values = [v for k, v in metrics.items() if f'result="{result}"' in k]
-        assert len(values) == 1
-        return values[0]
 
     def get_wallclock_lag_count(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
@@ -3275,7 +3256,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
-    """Test metrics exposed by the compute controller."""
+    """Test native compute results, hydration, lag observations and cleanup."""
 
     c.up("materialized", Service("testdrive", idle=True))
 
@@ -3295,120 +3276,35 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
         CREATE INDEX idx ON t (a);
         CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
-
-        SELECT * FROM t;
-        SELECT * FROM mv;
         """)
+    expected = [(i,) for i in range(1, 11)]
+    assert sorted(c.sql_query("SELECT * FROM t")) == expected
+    assert sorted(c.sql_query("SELECT * FROM mv")) == expected
 
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
 
-    # Wait a bit to let the controller refresh its metrics.
+    c.testdrive(
+        args=["--no-reset", "--materialize-param=cluster=test"],
+        input=dedent(f"""
+            > SELECT o.name, h.hydrated
+              FROM mz_internal.mz_compute_hydration_statuses h
+              JOIN mz_objects o ON o.id = h.object_id
+              WHERE h.object_id IN ('{index_id}', '{mv_id}')
+              ORDER BY o.name
+            idx true
+            mv true
+            """),
+    )
+
+    # Allow the native frontier observer to sample public lag metrics.
     time.sleep(2)
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
-    # mz_compute_commands_total
-    count = metrics.get_compute_commands_total("hello")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_commands_total("create_instance")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_commands_total("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics.get_compute_commands_total("create_dataflow")
-    assert count >= 3, f"got {count}"
-    count = metrics.get_compute_commands_total("peek")
-    assert count == 2, f"got {count}"
-    count = metrics.get_compute_commands_total("cancel_peek")
-    assert count == 2, f"got {count}"
-    count = metrics.get_compute_commands_total("initialization_complete")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_commands_total("update_configuration")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_commands_total("schedule")
-    assert count > 0, f"got {count}"
-    count = metrics.get_compute_commands_total("allow_writes")
-    assert count >= 1, f"got {count}"
-
-    # mz_compute_responses_total
-    count = metrics.get_compute_responses_total("frontiers")
-    assert count > 0, f"got {count}"
-    count = metrics.get_compute_responses_total("peek_response")
-    assert count == 2, f"got {count}"
-    count = metrics.get_compute_responses_total("subscribe_response")
-    assert count >= 0, f"got {count}"
-    count = metrics.get_compute_responses_total("status")
-    assert count == 0, f"got {count}"
-
-    count = metrics.get_value("mz_compute_command_message_bytes_total")
-    assert count > 0, f"got {count}"
-    count = metrics.get_value("mz_compute_response_message_bytes_total")
-    assert count > 0, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_replica_count")
-    assert count == 1, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_collection_count")
-    assert count > 0, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_collection_unscheduled_count")
-    assert count == 0, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_peek_count")
-    assert count == 0, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_subscribe_count")
-    assert count > 0, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_command_queue_size")
-    assert count < 10, f"got {count}"
-    send_count = metrics.get_value("mz_compute_controller_response_send_count")
-    assert send_count > 10, f"got {send_count}"
-    recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
-    assert recv_count > 10, f"got {recv_count}"
-    # recv within 50% of send: channel invariant gives recv <= send, and we
-    # want the controller to have drained at least half of what was sent.
-    assert recv_count >= send_count / 2, f"got {send_count}, {recv_count}"
-    count = metrics.get_value("mz_compute_controller_hydration_queue_size")
-    assert count == 0, f"got {count}"
-
-    # mz_compute_controller_history_command_count
-    count = metrics.get_compute_controller_history_command_count("hello")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("create_instance")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("create_dataflow")
-    assert count > 0, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("peek")
-    assert count <= 2, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("cancel_peek")
-    assert count <= 2, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count(
-        "initialization_complete"
-    )
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("update_configuration")
-    assert count == 1, f"got {count}"
-    count = metrics.get_compute_controller_history_command_count("allow_writes")
-    assert count > 0, f"got {count}"
-
-    count = metrics.get_value("mz_compute_controller_history_dataflow_count")
-    assert count >= 2, f"got {count}"
-
-    # mz_compute_peeks_total
-    count = metrics.get_peeks_total("rows") + metrics.get_peeks_total("rows_stashed")
-    assert count == 2, f"got {count}"
-    count = metrics.get_peeks_total("error")
-    assert count == 0, f"got {count}"
-    count = metrics.get_peeks_total("canceled")
-    assert count == 0, f"got {count}"
-
-    count = metrics.get_value("mz_compute_controller_connected_replica_count")
-    assert count == 1, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_replica_connects_total")
-    assert count == 1, f"got {count}"
-    duration = metrics.get_value(
-        "mz_compute_controller_replica_connect_wait_time_seconds_total"
-    )
-    assert duration > 0, f"got {duration}"
-
+    # Lifecycle transport, replay and response-queue accounting belong to the
+    # legacy controller. Native queries and hydration are observed directly.
     # mz_dataflow_wallclock_lag_seconds_count
     count = metrics.get_wallclock_lag_count(index_id)
     assert count, f"got {count}"
@@ -3421,14 +3317,16 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         DROP MATERIALIZED VIEW mv;
         """)
 
-    # Wait for the controller to asynchronously drop the dataflows and update
-    # metrics. We can inspect the controller's view of things in
-    # `mz_frontiers`, which is updated at the same time as these metrics are.
-    c.testdrive(input=dedent("""
+    # Native frontier reporting retires public metrics with dropped exports.
+    # Keep the catalog intact so fixture reset cannot satisfy cleanup assertions.
+    c.testdrive(
+        args=["--no-reset", "--materialize-param=cluster=test"],
+        input=dedent(f"""
             > SELECT *
               FROM mz_internal.mz_frontiers
-              WHERE object_id LIKE 'u%'
-            """))
+              WHERE object_id IN ('{index_id}', '{mv_id}')
+            """),
+    )
 
     # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
@@ -3436,60 +3334,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert metrics.get_wallclock_lag_count(mv_id) is None
 
 
-def workflow_test_response_count_survives_replica_replacement(
-    c: Composition,
-) -> None:
-    """Test that response_{send,recv}_count metrics survive replica drops."""
-
-    c.up("materialized")
-
-    def fetch_metrics() -> Metrics:
-        resp = c.exec(
-            "materialized", "curl", "localhost:6878/metrics", capture=True
-        ).stdout
-        return Metrics(resp).for_instance("u2")
-
-    c.sql("""
-        CREATE CLUSTER test MANAGED, SIZE 'scale=1,workers=1';
-        SET cluster = test;
-        CREATE TABLE t (a int);
-        INSERT INTO t SELECT generate_series(1, 10);
-        CREATE INDEX idx ON t (a);
-        SELECT * FROM t;
-        """)
-    time.sleep(2)
-
-    metrics = fetch_metrics()
-    send_before = metrics.get_value("mz_compute_controller_response_send_count")
-    recv_before = metrics.get_value("mz_compute_controller_response_recv_count")
-    assert send_before > 0, f"got {send_before}"
-    assert recv_before > 0, f"got {recv_before}"
-
-    c.sql("ALTER CLUSTER test SET (SIZE 'scale=1,workers=2')")
-    time.sleep(2)
-
-    metrics = fetch_metrics()
-    assert len(metrics.with_name("mz_compute_controller_response_send_count")) > 0
-    assert len(metrics.with_name("mz_compute_controller_response_recv_count")) > 0
-
-    c.sql("""
-        SET cluster = test;
-        INSERT INTO t SELECT generate_series(11, 20);
-        SELECT * FROM t;
-        """)
-    time.sleep(2)
-
-    metrics = fetch_metrics()
-    send_after = metrics.get_value("mz_compute_controller_response_send_count")
-    recv_after = metrics.get_value("mz_compute_controller_response_recv_count")
-    assert send_after > send_before, f"got {send_before} -> {send_after}"
-    assert recv_after > recv_before, f"got {recv_before} -> {recv_after}"
-
-    c.sql("DROP CLUSTER test CASCADE")
-
-
 def workflow_test_storage_controller_metrics(c: Composition) -> None:
-    """Test metrics exposed by the storage controller."""
+    """Test storage collection lag observations and metric cleanup."""
 
     c.up(
         "materialized",
@@ -3557,62 +3403,8 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     metrics_u2 = metrics.for_instance("u2")
     metrics_ux = metrics.for_instance("")
 
-    # mz_storage_commands_total
-    count = metrics_u2.get_storage_commands_total("hello")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("initialization_complete")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("allow_writes")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("update_configuration")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("run_ingestion")
-    assert count == 2, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("run_sink")
-    assert count == 1, f"got {count}"
-
-    # mz_storage_responses_total
-    count = metrics_u2.get_storage_responses_total("frontier_upper")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_responses_total("status_update")
-    assert count > 0, f"got {count}"
-
-    count = metrics_u2.get_value("mz_storage_command_message_bytes_total")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_value("mz_storage_response_message_bytes_total")
-    assert count > 0, f"got {count}"
-
-    # mz_storage_controller_history_command_count
-    count = metrics_u2.get_storage_controller_history_command_count("hello")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("run_ingestion")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("run_sink")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count(
-        "initialization_complete"
-    )
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count(
-        "update_configuration"
-    )
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("allow_writes")
-    assert count == 1, f"got {count}"
-
-    count = metrics_u2.get_value("mz_storage_controller_connected_replica_count")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_value("mz_storage_controller_replica_connects_total")
-    assert count == 1, f"got {count}"
-    duration = metrics_u2.get_value(
-        "mz_storage_controller_replica_connect_wait_time_seconds_total"
-    )
-    assert duration > 0, f"got {duration}"
-
+    # Native replicas own lifecycle execution. The controller exposes observed
+    # collection lag, not lifecycle transport or command-history accounting.
     # mz_dataflow_wallclock_lag_seconds_count
     count = metrics_ux.get_wallclock_lag_count(table1_id)
     assert count, f"got {count}"

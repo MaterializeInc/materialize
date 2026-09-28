@@ -601,9 +601,14 @@ impl Coordinator {
                     })
                     .collect();
                 let (tx, rx) = oneshot::channel();
-                let _ = tx.send(
-                    client.collections_hydrated_on_replica(cluster_id, replica_id, &expected),
-                );
+                let _ = tx.send(client.collections_ready_on_replica(
+                    self.catalog(),
+                    cluster_id,
+                    replica_id,
+                    &expected,
+                    allowed_lag,
+                    reference,
+                ));
                 rx
             } else {
                 match self.controller.compute.collections_ready_for_replicas(

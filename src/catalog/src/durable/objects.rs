@@ -1378,6 +1378,8 @@ impl DurableType for MaintainedReadRequirement {
 pub struct ClientIncarnation {
     pub id: u64,
     pub heartbeat: u64,
+    /// Immutable deployment that owns this client's protection publications.
+    pub deployment_generation: u64,
     /// Immutable participant identity, not write ownership or fencing authority.
     pub replica_id: Option<ReplicaId>,
 }
@@ -1390,6 +1392,7 @@ pub struct ClientIncarnationKey {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
 pub struct ClientIncarnationValue {
     pub heartbeat: u64,
+    pub deployment_generation: u64,
     pub replica_id: Option<ReplicaId>,
 }
 
@@ -1401,6 +1404,7 @@ impl DurableType for ClientIncarnation {
             ClientIncarnationKey { id: self.id },
             ClientIncarnationValue {
                 heartbeat: self.heartbeat,
+                deployment_generation: self.deployment_generation,
                 replica_id: self.replica_id,
             },
         )
@@ -1409,6 +1413,7 @@ impl DurableType for ClientIncarnation {
         Self {
             id: key.id,
             heartbeat: value.heartbeat,
+            deployment_generation: value.deployment_generation,
             replica_id: value.replica_id,
         }
     }
@@ -1665,9 +1670,10 @@ impl Snapshot {
 
 /// Token used to fence out other processes.
 ///
-/// Protected catalogs compare deployment generations only, allowing components
-/// in the same generation to cooperate. Unprotected catalogs also compare epochs
-/// to give each ordinary writable opener exclusive ownership.
+/// Protected catalogs fence generations below the active generation. Pending
+/// generations can participate with restricted metadata authority without
+/// advancing this durable token. Unprotected catalogs also compare epochs to
+/// give each ordinary writable opener exclusive ownership.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct FenceToken {

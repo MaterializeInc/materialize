@@ -292,6 +292,21 @@ impl Coordinator {
                 collections.push((id, WallclockLag::Undefined, labels));
             }
         }
+        let metric_samples = replicas
+            .iter()
+            .map(|((id, replica), lag)| {
+                let cluster = self
+                    .catalog()
+                    .get_entry_by_global_id(id)
+                    .item()
+                    .cluster_id()
+                    .expect("maintained compute export has a cluster");
+                (cluster, *id, *replica, *lag)
+            })
+            .collect::<Vec<_>>();
+        self.native_frontiers
+            .wallclock_lag
+            .update_metrics(&self.controller.metrics, metric_samples);
         self.native_frontiers.wallclock_lag.update(
             now,
             &dyncfg,

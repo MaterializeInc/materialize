@@ -171,6 +171,8 @@ pub struct CatalogState {
     pub(super) written_plan_importers: imbl::OrdSet<(GlobalId, GlobalId, String)>,
     pub(super) client_incarnations:
         imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue>,
+    /// Output-write authority from the committed catalog fence, not local membership.
+    pub(super) active_deployment_generation: Option<u64>,
     #[serde(serialize_with = "serialize_client_read_requirements")]
     pub(super) client_read_requirements: imbl::OrdMap<(u64, GlobalId), Timestamp>,
     /// Client requirements ordered by collection, frontier, and incarnation.
@@ -514,6 +516,7 @@ impl CatalogState {
             written_plans: Default::default(),
             written_plan_importers: Default::default(),
             client_incarnations: Default::default(),
+            active_deployment_generation: None,
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
             maintained_input_requirements: Default::default(),
@@ -2971,7 +2974,12 @@ impl CatalogState {
             .map(|(_, owner, build)| (*owner, build.as_str()))
     }
 
-    /// Returns durable incarnation heartbeats and immutable replica identities.
+    /// Returns the deployment with committed output-write authority at this prefix.
+    pub fn active_deployment_generation(&self) -> Option<u64> {
+        self.active_deployment_generation
+    }
+
+    /// Returns durable incarnation heartbeats and immutable deployment/replica identities.
     pub fn client_incarnations(
         &self,
     ) -> &imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue> {
@@ -3484,6 +3492,7 @@ mod tests {
             StateUpdateKind::ClientIncarnation(ClientIncarnation {
                 id,
                 heartbeat,
+                deployment_generation: 0,
                 replica_id: None,
             })
         };
@@ -3583,6 +3592,7 @@ mod tests {
                 id,
                 crate::durable::objects::ClientIncarnationValue {
                     heartbeat: 0,
+                    deployment_generation: 0,
                     replica_id: None
                 }
             )))
@@ -3590,7 +3600,7 @@ mod tests {
         let dump = serde_json::to_value(&snapshot).expect("can serialize catalog state");
         assert_eq!(
             dump["client_incarnations"],
-            serde_json::json!({"1": {"heartbeat": 0, "replica_id": null}, "2": {"heartbeat": 0, "replica_id": null}})
+            serde_json::json!({"1": {"heartbeat": 0, "deployment_generation": 0, "replica_id": null}, "2": {"heartbeat": 0, "deployment_generation": 0, "replica_id": null}})
         );
         assert_eq!(
             dump["client_read_requirements"],

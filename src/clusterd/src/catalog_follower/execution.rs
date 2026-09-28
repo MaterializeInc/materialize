@@ -776,6 +776,20 @@ impl ReplicaEnactment {
         }
     }
 
+    /// Whether committed authority permits this deployment to start writing.
+    /// Enabled Persist writers rely on collection protocols for overlap, not
+    /// per-append deployment fencing.
+    fn has_output_write_authority(&self, catalog: &Catalog) -> bool {
+        catalog
+            .state()
+            .client_incarnations()
+            .get(&self.protection.incarnation())
+            .is_some_and(|participant| {
+                catalog.state().active_deployment_generation()
+                    == Some(participant.deployment_generation)
+            })
+    }
+
     pub fn ensure_live(&self, catalog: &Catalog) -> anyhow::Result<()> {
         let participant = catalog
             .state()
@@ -790,7 +804,7 @@ impl ReplicaEnactment {
             catalog
                 .try_get_cluster_replica(self.cluster, self.replica)
                 .is_some(),
-            "replica was removed"
+            super::ReplicaRemoved
         );
         Ok(())
     }
@@ -925,6 +939,10 @@ impl ReplicaEnactment {
         metadata: &storage_metadata::Resolution,
         apply_permissions: bool,
     ) {
+        let allow_writes = self.has_output_write_authority(catalog);
+        if allow_writes && let Some(storage) = &mut self.io.storage {
+            storage.allow_writes();
+        }
         let ready: BTreeSet<_> = self
             .installed
             .iter()
@@ -977,7 +995,7 @@ impl ReplicaEnactment {
                 matches!(entry.item(), CatalogItem::MaterializedView(mv)
                     if mv.replacement_target.is_some())
             });
-            if !collection.index && !collection.writes_allowed && !replacement {
+            if allow_writes && !collection.index && !collection.writes_allowed && !replacement {
                 self.io.send(ComputeCommand::AllowWrites(*id));
                 collection.writes_allowed = true;
             }

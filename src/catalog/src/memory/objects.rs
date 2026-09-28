@@ -4330,6 +4330,7 @@ pub struct StateUpdate {
 /// Variants are listed in dependency order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
+    ActiveDeploymentGeneration(u64),
     Role(durable::objects::Role),
     RoleAuth(durable::objects::RoleAuth),
     Database(durable::objects::Database),

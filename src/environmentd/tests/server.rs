@@ -72,6 +72,47 @@ use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_bootstrap_snapshots_with_independent_oracle_progress() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+    let server = harness.clone().start().await;
+    let oracle = server.timestamp_oracle().await;
+    drop(server);
+
+    // Catalog writers can complete timestamps without advancing the table WAL.
+    // Keep doing so across restart, including the system-table reset fence.
+    let (started_tx, started_rx) = oneshot::channel();
+    let _publisher = task::spawn(|| "independent bootstrap oracle progress", async move {
+        let mut started_tx = Some(started_tx);
+        loop {
+            let timestamp = oracle.write_ts().await;
+            oracle.apply_write(timestamp.timestamp).await;
+            if let Some(tx) = started_tx.take() {
+                tx.send(()).unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .abort_on_drop();
+    started_rx.await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let server = harness.start().await;
+        let client = server.connect().await.unwrap();
+        let readable: bool = client
+            .query_one("SELECT count(*) > 0 FROM mz_internal.mz_sessions", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(readable, "system tables must be readable after bootstrap");
+    })
+    .await
+    .expect("bootstrap must not wait for unrelated oracle progress");
+}
+
 // Allow the use of banned rdkafka methods, because we are just in tests.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]

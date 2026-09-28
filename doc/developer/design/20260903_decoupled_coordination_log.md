@@ -30,6 +30,26 @@ output ownership per deployment. No generic per-output fence or all-output
 completion gate is required. Escalate concrete protocol safety gaps, not
 overlapping writes that preserve correctness throughout.
 
+The deployment implementation separates a handle's own generation from the
+active generation it observes in the existing durable fence. Membership derives
+from deployment-scoped replicas, without another durable registry. Restricted
+metadata joins admit protection and ordinary build-owned selections without
+promotion. Complete deployment-owned lifecycle permissions and replica/runtime
+scoping before wiring production prewarming. Scoping includes managed realized
+state, routing, visibility and retirement, not only replica names.
+
+Keep shared replica declarations distinct from deployment realization. Explicit
+replica rows on unmanaged clusters are their declaration today. Copying an
+active deployment's inventory into a pending one cannot replace that authority:
+acknowledged replica DDL must survive promotion even if it follows prewarming's
+snapshot. Mirroring only the active deployment's realized inventory would drop
+the design's independently scoped realization requirement and is not approved.
+
+The remaining query-client closure investigation concerns long serving-coordinator
+publication stalls that may exhaust reclamation grace. Establish the actual
+heartbeat/reclamation sequence without changing grace. Keep this separate from
+planning-snapshot absence, which now consults the live protection writer.
+
 M2 remains active. The next end-to-end outcome is same-version native prewarming
 and warm promotion, then compatible-version writer coexistence and handover.
 The outage, targeted DDL and bounded-throughput proofs remain closed. Continue

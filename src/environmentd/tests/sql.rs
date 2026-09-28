@@ -58,8 +58,9 @@ use tracing::{debug, info};
 #[path = "sql/prepared_rewrites.rs"]
 mod prepared_rewrites;
 
-/// Unavailable peer plan bytes must not block unrelated compute installation or
-/// SQL. Both indexes are admitted at birth, and retention advances after DROP.
+/// A peer index selected only in another build must not block unrelated compute
+/// installation or SQL. Both indexes are admitted at birth, and retention advances
+/// after DROP.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_peer_index_pending_installation() {
     use mz_catalog::durable::objects::{CollectionCompactionBound, DurableType};
@@ -133,12 +134,28 @@ async fn test_peer_index_pending_installation() {
             .build_version
             .parse()
             .expect("valid selected build version");
+        assert_eq!(
+            build,
+            mz_catalog::expr_cache::expression_build_version(&mz_environmentd::BUILD_INFO)
+        );
+        // Keep semantic compatibility and the development namespace prefix, but
+        // model a peer build for which this replica has no selected plan.
+        let mut pending_build = build.clone();
+        pending_build.build = semver::BuildMetadata::new(&if build.build.is_empty() {
+            "peer-pending-test".to_owned()
+        } else {
+            format!("{}.peer-pending-test", build.build)
+        })
+        .unwrap();
+        let pending_store =
+            ExpressionCacheHandle::open_plan_store(pending_build.clone(), &persist, shard).await;
+        let pending_build = pending_build.to_string();
         let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
         let mut plans = store
             .read_plans(vec![(selection.id, selection.revision)])
             .await
             .unwrap();
-        let mut plan = plans.remove(&(selection.id, selection.revision)).unwrap();
+        let plan = plans.remove(&(selection.id, selection.revision)).unwrap();
 
         // Reserve fresh identities durably before writing immutable bytes. No dropped
         // SQL object's identity is recycled, even if the item transaction loses a CAS.
@@ -150,7 +167,7 @@ async fn test_peer_index_pending_installation() {
         // The first index on a table needs no internal-ID remapper. Assert that
         // both SQL-produced plans are a single source-only export before cloning.
         macro_rules! rename_export {
-            ($df:expr) => {{
+            ($df:expr, $id:expr, $name:expr) => {{
                 let df = &mut $df;
                 assert!(df.index_imports.is_empty());
                 assert!(df.sink_exports.is_empty());
@@ -167,28 +184,27 @@ async fn test_peer_index_pending_installation() {
                 );
                 let export = df.index_exports.remove(&template.global_id).unwrap();
                 assert_eq!(export.0.on_id, input.global_id);
-                df.index_exports.insert(selected_id, export);
-                df.objects_to_build[0].id = selected_id;
-                df.debug_name = "peer_selected".into();
-                assert_eq!(
-                    df.depends_on(selected_id),
-                    [selected_id, input.global_id].into()
-                );
+                df.index_exports.insert($id, export);
+                df.objects_to_build[0].id = $id;
+                df.debug_name = $name.into();
+                assert_eq!(df.depends_on($id), [$id, input.global_id].into());
             }};
         }
-        rename_export!(plan.global_mir);
-        rename_export!(plan.physical_plan);
         assert_eq!(selection.imports, [input.global_id].into());
         assert!(selection.replica_owner.is_none());
         let revision = uuid::Uuid::new_v4();
-        store
-            .write_plans(vec![(selected_id, revision, plan)])
-            .await
-            .unwrap();
-
-        // Select an immutable revision whose bytes are unavailable, as opposed to
-        // creating an index without an admitted selection.
         let pending_revision = uuid::Uuid::new_v4();
+        // Each build durably writes its real plan before selecting it. The
+        // pending index lacks an own-build selection, not the selected bytes.
+        for (store, id, name, revision) in [
+            (&pending_store, pending_id, "peer_pending", pending_revision),
+            (&store, selected_id, "peer_selected", revision),
+        ] {
+            let mut plan = plan.clone();
+            rename_export!(plan.global_mir, id, name);
+            rename_export!(plan.physical_plan, id, name);
+            store.write_plans(vec![(id, revision, plan)]).await.unwrap();
+        }
         let initial_bound = loop {
             peer.sync_to_current_updates().await.unwrap();
             let mut txn = match peer.transaction().await {
@@ -229,9 +245,21 @@ async fn test_peer_index_pending_installation() {
             // for Catalog::transact's constrain_plan_inputs. Commit's catalog
             // CAS prevents racing input compaction. No fixed maintained read
             // requirement is needed for an index's advancing retention.
-            for (item_id, global_id, name, revision) in [
-                (pending_item, pending_id, "peer_pending", pending_revision),
-                (selected_item, selected_id, "peer_selected", revision),
+            for (item_id, global_id, name, revision, build) in [
+                (
+                    pending_item,
+                    pending_id,
+                    "peer_pending",
+                    pending_revision,
+                    &pending_build,
+                ),
+                (
+                    selected_item,
+                    selected_id,
+                    "peer_selected",
+                    revision,
+                    &selection.build_version,
+                ),
             ] {
                 let oid = txn.allocate_oid(&Default::default()).unwrap();
                 txn.insert_item(
@@ -249,7 +277,7 @@ async fn test_peer_index_pending_installation() {
                 .unwrap();
                 txn.set_written_plan_with_owner(
                     global_id,
-                    &selection.build_version,
+                    build,
                     Some(revision),
                     None,
                     selection.imports.clone(),
@@ -321,7 +349,7 @@ async fn test_peer_index_pending_installation() {
         .get(0);
         assert!(
             absent,
-            "index without selected plan bytes must not enter compute"
+            "index without an own-build selection must not enter compute"
         );
         let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
             .await
@@ -355,11 +383,17 @@ async fn test_peer_index_pending_installation() {
         loop {
             peer.sync_to_current_updates().await.unwrap();
             let snapshot = peer.snapshot().await.unwrap();
-            assert!(
+            // DROP retires this writer's selections, not another build's
+            // metadata. A selection with no live catalog owner grants no
+            // protection and cannot install an export.
+            assert_eq!(
                 snapshot
                     .written_plans
                     .keys()
-                    .all(|key| key.id != pending_id.into_proto())
+                    .filter(|key| key.id == pending_id.into_proto())
+                    .map(|key| key.build_version.as_str())
+                    .collect::<Vec<_>>(),
+                [pending_build.as_str()]
             );
             let bound = snapshot
                 .collection_compaction_bounds

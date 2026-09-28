@@ -73,7 +73,7 @@ use crate::durable::{
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
     SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -92,6 +92,10 @@ pub struct Transaction<'a> {
     durable_catalog: Option<&'a mut dyn DurableCatalogState>,
     is_bootstrap_complete: bool,
     is_savepoint: bool,
+    deployment_generation: u64,
+    /// Restricted authority at this transaction's base. A promotion is catalog
+    /// content, so CAS rebasing cannot silently retain a stale authority decision.
+    prewarming_plan_build: Option<String>,
     read_protection_index: ReadProtectionIndex,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
@@ -172,6 +176,7 @@ impl DryRunTransaction<'static> {
         upper: mz_repr::Timestamp,
         is_bootstrap_complete: bool,
         is_savepoint: bool,
+        deployment_generation: u64,
     ) -> Result<Self, CatalogError> {
         Ok(Self {
             transaction: Transaction::from_snapshot(
@@ -179,6 +184,7 @@ impl DryRunTransaction<'static> {
                 upper,
                 is_bootstrap_complete,
                 is_savepoint,
+                deployment_generation,
             )?,
         })
     }
@@ -189,14 +195,18 @@ impl<'a> Transaction<'a> {
         durable_catalog: &'a mut dyn DurableCatalogState,
         snapshot: Snapshot,
         upper: mz_repr::Timestamp,
+        deployment_generation: u64,
+        prewarming_plan_build: Option<String>,
     ) -> Result<Transaction<'a>, CatalogError> {
         let mut transaction = Self::from_snapshot(
             snapshot,
             upper,
             durable_catalog.is_bootstrap_complete(),
             durable_catalog.is_savepoint(),
+            deployment_generation,
         )?;
         transaction.durable_catalog = Some(durable_catalog);
+        transaction.prewarming_plan_build = prewarming_plan_build;
         transaction.commit_capability = Some(CommitCapability);
         Ok(transaction)
     }
@@ -236,6 +246,7 @@ impl<'a> Transaction<'a> {
         upper: mz_repr::Timestamp,
         is_bootstrap_complete: bool,
         is_savepoint: bool,
+        deployment_generation: u64,
     ) -> Result<Transaction<'a>, CatalogError> {
         // For these collections uniqueness is plain equality of the name fields, so the same
         // predicate answers both "do these two conflict?" and "did this update keep the same key?".
@@ -254,6 +265,8 @@ impl<'a> Transaction<'a> {
             durable_catalog: None,
             is_bootstrap_complete,
             is_savepoint,
+            deployment_generation,
+            prewarming_plan_build: None,
             read_protection_index,
             databases: TableTransaction::new_with_uniqueness_fn(
                 databases,
@@ -2704,6 +2717,8 @@ impl<'a> Transaction<'a> {
             durable_catalog: _,
             is_bootstrap_complete: _,
             is_savepoint: _,
+            deployment_generation: _,
+            prewarming_plan_build: _,
             read_protection_index: _,
             databases,
             schemas,
@@ -2923,6 +2938,7 @@ impl<'a> Transaction<'a> {
             ClientIncarnationKey { id },
             ClientIncarnationValue {
                 heartbeat: 0,
+                deployment_generation: self.deployment_generation,
                 replica_id,
             },
             self.op_id,
@@ -2950,6 +2966,13 @@ impl<'a> Transaction<'a> {
                 ))
             })?
             .clone();
+        if previous.deployment_generation != self.deployment_generation {
+            return Err(DurableCatalogError::InvalidReadProtection(format!(
+                "client incarnation {incarnation} belongs to deployment {}, not {}",
+                previous.deployment_generation, self.deployment_generation,
+            ))
+            .into());
+        }
         let heartbeat = previous.heartbeat.checked_add(1).ok_or_else(|| {
             DurableCatalogError::InvalidReadProtection(format!(
                 "client incarnation {incarnation} heartbeat exhausted"
@@ -3473,11 +3496,159 @@ impl<'a> Transaction<'a> {
             .await
     }
 
+    pub(crate) fn is_prewarming(&self) -> bool {
+        self.prewarming_plan_build.is_some()
+    }
+
+    pub(crate) fn validate_prewarming_writes(&self) -> Result<(), CatalogError> {
+        let Some(build) = &self.prewarming_plan_build else {
+            return Ok(());
+        };
+        // Exhaustive destructuring makes each new collection an explicit authority decision.
+        let Transaction {
+            durable_catalog: _,
+            is_bootstrap_complete: _,
+            is_savepoint: _,
+            deployment_generation,
+            prewarming_plan_build: _,
+            read_protection_index: _,
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            role_auth,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            system_gid_mapping,
+            system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
+            default_privileges,
+            source_references,
+            system_privileges,
+            network_policies,
+            storage_collection_metadata,
+            collection_compaction_bounds: _,
+            maintained_read_requirements: _,
+            client_incarnations,
+            written_plans,
+            client_read_requirements,
+            unfinalized_shards,
+            txn_wal_shard,
+            audit_log_updates,
+            upper: _,
+            op_id: _,
+            commit_capability: _,
+        } = self;
+        let denied = |what: &str| {
+            CatalogError::from(DurableCatalogError::NotWritable(format!(
+                "prewarming deployment cannot modify {what}"
+            )))
+        };
+        macro_rules! forbid_changes {
+            ($($table:ident),* $(,)?) => {
+                $(if $table.changed_keys().next().is_some() {
+                    return Err(denied(stringify!($table)));
+                })*
+            };
+        }
+        forbid_changes!(
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            role_auth,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            configs,
+            settings,
+            system_gid_mapping,
+            system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
+            default_privileges,
+            source_references,
+            system_privileges,
+            network_policies,
+            storage_collection_metadata,
+            unfinalized_shards,
+            txn_wal_shard,
+        );
+        if !audit_log_updates.is_empty() {
+            return Err(denied("audit log"));
+        }
+        // Reservations are monotone and confer no authority to create SQL definitions.
+        for key in id_allocator.changed_keys() {
+            if !matches!(
+                key.name.as_str(),
+                "client_incarnation"
+                    | USER_ITEM_ALLOC_KEY
+                    | USER_REPLICA_ID_ALLOC_KEY
+                    | SYSTEM_REPLICA_ID_ALLOC_KEY
+                    | AUDIT_LOG_ID_ALLOC_KEY
+            ) || id_allocator.get(key).is_none_or(|next| {
+                id_allocator
+                    .initial
+                    .get(key)
+                    .is_some_and(|old| next.next_id < old.next_id)
+            }) {
+                return Err(denied(
+                    "ID allocator outside monotone metadata reservations",
+                ));
+            }
+        }
+        for key in written_plans.changed_keys() {
+            if key.build_version != *build
+                || written_plans
+                    .initial
+                    .get(key)
+                    .into_iter()
+                    .chain(written_plans.get(key))
+                    .any(|plan| plan.replica_owner.is_some())
+            {
+                return Err(denied("foreign or unscoped replica plan selection"));
+            }
+        }
+        for key in client_incarnations.changed_keys() {
+            if let Some(client) = client_incarnations.get(key)
+                && (client.deployment_generation != *deployment_generation
+                    || client_incarnations.initial.get(key).is_some_and(|old| {
+                        old.deployment_generation != client.deployment_generation
+                            || old.replica_id != client.replica_id
+                    }))
+            {
+                return Err(denied("another deployment's client incarnation"));
+            }
+        }
+        for key in client_read_requirements.changed_keys() {
+            match client_incarnations.get(&ClientIncarnationKey {
+                id: key.incarnation,
+            }) {
+                Some(client) if client.deployment_generation == *deployment_generation => {}
+                // Heartbeat-qualified reclamation removes the incarnation and its
+                // requirements together. It does not transfer their ownership.
+                None if client_read_requirements.get(key).is_none() => {}
+                _ => return Err(denied("another deployment's read requirements")),
+            }
+        }
+        // Shared compaction proposals remain subject to the complete protection
+        // validation. A deployment role is not permission to discard required history.
+        Ok(())
+    }
+
     pub(crate) fn into_parts(
         mut self,
     ) -> Result<(TransactionBatch, &'a mut dyn DurableCatalogState), CatalogError> {
         self.finalize_index_compaction_bounds();
         self.validate_read_protection()?;
+        self.validate_prewarming_writes()?;
         let commit_capability = self
             .commit_capability
             .ok_or(DurableCatalogError::DryRunTransaction)?;
@@ -3530,7 +3701,8 @@ impl<'a> Transaction<'a> {
     /// Commits the storage transaction to durable storage.
     ///
     /// [`DurableCatalogError::DryRunTransaction`],
-    /// [`DurableCatalogError::InvalidReadProtection`], and
+    /// [`DurableCatalogError::InvalidReadProtection`],
+    /// [`DurableCatalogError::NotWritable`], and
     /// [`DurableCatalogError::CatalogOutOfSync`] do not commit this transaction.
     /// On a content conflict, consume peer updates and rebuild against the refreshed
     /// projection before retrying. Read protection validation fails before any commit
@@ -4103,6 +4275,12 @@ where
     K: Ord + Eq + Clone + Debug,
     V: Ord + Clone + Debug + UniqueName,
 {
+    fn changed_keys(&self) -> impl Iterator<Item = &K> {
+        self.pending
+            .keys()
+            .filter(|key| self.initial.get(*key) != self.get(*key))
+    }
+
     /// Create a new TableTransaction with initial data.
     ///
     /// Internally the catalog serializes data as protobuf. All fields in a proto message are
