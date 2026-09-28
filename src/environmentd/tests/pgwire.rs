@@ -35,6 +35,54 @@ use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Compare SQL preparation with pgwire Parse directly.
+fn test_sql_prepare_inferred_parameter_error_timing() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    for reuse in [false, true] {
+        system
+            .batch_execute(&format!(
+                "ALTER SYSTEM SET enable_prepared_query_reuse = {reuse}"
+            ))
+            .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for (name, query, error) in [
+            (
+                "param_left",
+                "SELECT $1 = ROW(1, 2)",
+                "operator does not exist: text = record(f1: integer,f2: integer)",
+            ),
+            (
+                "param_right",
+                "SELECT ROW(1, 2) = $1",
+                "operator does not exist: record(f1: integer,f2: integer) = text",
+            ),
+        ] {
+            client
+                .batch_execute(&format!("PREPARE {name} AS {query}"))
+                .unwrap();
+            let stmt = client.prepare(query).unwrap();
+            assert_eq!(stmt.params(), &[Type::TEXT]);
+            for value in ["(1,2)", "(1,2,3)"] {
+                assert_eq!(
+                    client
+                        .simple_query(&format!("EXECUTE {name} ('{value}')"))
+                        .unwrap_db_error()
+                        .message(),
+                    error,
+                    "SQL PREPARE with reuse={reuse}"
+                );
+                assert_eq!(
+                    client.query(&stmt, &[&value]).unwrap_db_error().message(),
+                    error,
+                    "pgwire Parse with reuse={reuse}"
+                );
+            }
+        }
+    }
+}
+
+#[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_bind_params() {
     let server = test_util::TestHarness::default()

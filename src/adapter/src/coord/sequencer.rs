@@ -583,7 +583,10 @@ impl Coordinator {
                                         self.catalog(),
                                         ctx.session_mut(),
                                         Some(plan.stmt.clone()),
-                                        plan.desc.param_types.iter().cloned().map(Some).collect(),
+                                        // Match plan_prepare's inference inputs. Supplying
+                                        // its finalized types can change overload resolution
+                                        // and move execution errors into PREPARE.
+                                        Vec::new(),
                                     ),
                                     ctx
                                 )
