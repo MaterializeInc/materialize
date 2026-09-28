@@ -275,11 +275,11 @@ fn test_bind_params() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)] // Exercise the client's SQL protocol directly.
 fn test_reused_prepared_select_context() {
-    for frontend in [true, false] {
+    for templates in [true, false] {
         let server = test_util::TestHarness::default()
             .with_system_parameter_default(
-                "enable_frontend_peek_sequencing".into(),
-                frontend.to_string(),
+                "enable_prepared_query_templates".into(),
+                templates.to_string(),
             )
             .start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
@@ -383,7 +383,7 @@ fn test_reused_prepared_select_context() {
         );
         let after = optimizer_count();
         assert_eq!(sql_compiler_counts(), before_sql_compiler);
-        if frontend {
+        if templates {
             assert!(
                 before_compilation[2] > 0,
                 "the template compiler was exercised"
@@ -398,7 +398,7 @@ fn test_reused_prepared_select_context() {
         } else {
             assert!(
                 after >= before + 6,
-                "coordinator custom path must exercise the optimizer metric"
+                "custom frontend path must exercise the optimizer metric"
             );
         }
         client
@@ -425,7 +425,7 @@ fn test_reused_prepared_select_context() {
                 .all(|(after, before)| after > before),
             "SQL EXECUTE compiles its wrapper, but not the prepared SELECT body"
         );
-        if frontend {
+        if templates {
             assert_eq!(compilation_counts(), before_compilation);
             assert_eq!(prepared_count("generic_execute"), before_generic + 3);
             assert_eq!(
@@ -446,7 +446,7 @@ fn test_reused_prepared_select_context() {
             assert_eq!(row.get::<_, String>(1), "two-new");
             assert_eq!(
                 prepared_count("generic_execute") - before_generic,
-                u64::from(frontend && has_index),
+                u64::from(templates && has_index),
                 "index removal must fall back, and its replacement must be usable"
             );
         }
