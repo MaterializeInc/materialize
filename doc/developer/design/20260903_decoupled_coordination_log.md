@@ -13,20 +13,10 @@ Implementation and validation details belong in the PR, not a diary here.
 
 Implementer session: `2026-09-14-13-05-31-256`.
 
-The uncommitted integration establishes initial index bounds from input permission
-at plan selection, persists selected imports, and derives advancing logical/import
-protection without duplicate index requirement records. Existing publishers propose
-zero-replica index advancement from input progress. Shared acquisition no longer
-depends on installation, and native reconstruction honors current committed bounds.
-
-Bootstrap preparation reuses the main query client locally, retains import holds
-through selection, checks issuer liveness in that transaction, and activates the
-client only at the existing late handoff. Recovery frontiers come from current
-committed requirements, not an invented later timestamp for an unsuitable import.
-
-Next, finish integration verification, including the existing transaction and
-zero-replica EXPLAIN fixtures, and land the coherent admission change. Preserve
-transaction effects and reject imports that cannot support required history.
+Index admission landed in `ed751836`, with the restart-fixture update in
+`d740a5fc`. Continue concrete integration repairs alongside native warm
+promotion, preserving transaction effects and rejecting imports that cannot
+support required history.
 
 Never-admitted builtin identities may be recorded at catalog open, with no
 protected-history promise until their first selection admits the plan and inputs.
@@ -34,6 +24,11 @@ An existing index's first selection for another build is reconstruction and must
 preserve committed requirements. Coexistence must preserve the already-serving
 deployment's builtin compatibility and visibility, not rely on a global bootstrap
 barrier. SQL creation commits definition, selection and protection together.
+
+Promotion uses the existing concurrent-writer protocols, not exclusive Persist
+output ownership per deployment. No generic per-output fence or all-output
+completion gate is required. Escalate concrete protocol safety gaps, not
+overlapping writes that preserve correctness throughout.
 
 M2 remains active. The next end-to-end outcome is same-version native prewarming
 and warm promotion, then compatible-version writer coexistence and handover.
