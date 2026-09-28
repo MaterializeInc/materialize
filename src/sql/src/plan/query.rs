@@ -133,6 +133,8 @@ pub fn plan_root_query(
     mut query: Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedRootQuery<HirRelationExpr>, PlanError> {
+    scx.catalog
+        .record_plan_operation(crate::catalog::PlanOperation::RootQuery);
     transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let PlannedQuery {
