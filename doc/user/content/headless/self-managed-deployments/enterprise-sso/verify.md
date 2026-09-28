@@ -27,6 +27,6 @@ curl -fsSL -o /dev/null -w "%{http_code}\n" https://console.example.com
 
 Then sign in end to end, which is what proves SSO works:
 
-1. Open `https://console.example.com`. You are redirected to the selfservice UI at `auth.example.com`, with one button per `upstream_identity_providers` entry and per `saml_providers` entry. Each button's text comes from that entry's `label`; see [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/).
+1. Open `https://console.example.com`. You are redirected to the selfservice UI at `auth.example.com`, with one button per `upstream_identity_providers` entry and per `saml_providers` entry. Each button's text comes from that entry's `label`; see [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/).
 2. Sign in through one of them. You should land back in the Console as that user.
 3. Run `SELECT current_user;`. It should return the user's email.

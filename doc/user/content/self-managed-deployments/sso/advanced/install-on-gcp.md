@@ -1,6 +1,6 @@
 ---
 title: "Install on GCP"
-description: "Deploy the Ory-based enterprise SSO stack on GCP with Materialize."
+description: "Deploy the advanced SSO stack on GCP with Materialize."
 menu:
   main:
     parent: "enterprise-sso"
@@ -14,7 +14,11 @@ example in the [Materialize Terraform
 repository](https://github.com/MaterializeInc/materialize-terraform-self-managed),
 which extends the base [Install on
 GCP](/self-managed-deployments/installation/install-on-gcp/) walkthrough with
-the Ory-based enterprise SSO stack on GKE.
+the advanced SSO stack on GKE.
+
+If Materialize is already running, see [Add to an existing
+installation](/self-managed-deployments/sso/advanced/existing-installation/)
+instead.
 
 {{% self-managed/materialize-components-sentence %}} This example layers the
 Ory stack (Kratos, Hydra, the selfservice UI, and optional Polis) on top so
@@ -71,7 +75,7 @@ additions below.
 
 Cross-cutting requirements (license key with the `ory` entitlement, DNS
 hostnames, cert-manager strategy, required tools) are covered on the shared
-[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/)
+[Prerequisites](/self-managed-deployments/sso/advanced/prerequisites/)
 page. This section only lists the GCP-specific bits.
 
 A Google account with permission to enable the required APIs on your project and to create:
@@ -82,7 +86,7 @@ A Google account with permission to enable the required APIs on your project and
 - VPC networks, subnets, Cloud Router, Cloud NAT
 - Service accounts and IAM bindings
 
-## Getting Started: Enterprise SSO Example
+## Getting Started: Advanced SSO Example
 
 {{< note >}}
 
@@ -153,11 +157,11 @@ A Google account with permission to enable the required APIs on your project and
    }
    ```
 
-1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/polis-tfvars" %}}
+1. {{% include-headless "/headless/self-managed-deployments/sso/advanced/polis-tfvars" %}}
 
-1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/cert-issuer-tfvars" %}}
+1. {{% include-headless "/headless/self-managed-deployments/sso/advanced/cert-issuer-tfvars" %}}
 
-1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/upstream-oidc-tfvars" %}}
+1. {{% include-headless "/headless/self-managed-deployments/sso/advanced/upstream-oidc-tfvars" %}}
 
 ### Step 3: Apply the Terraform
 
@@ -187,15 +191,15 @@ A Google account with permission to enable the required APIs on your project and
 
 ### Step 4: Create DNS Records
 
-{{% include-headless "/headless/self-managed-deployments/enterprise-sso/dns-records" %}}
+{{% include-headless "/headless/self-managed-deployments/sso/advanced/dns-records" %}}
 
 ### Step 5: Verify the Deployment
 
-{{% include-headless "/headless/self-managed-deployments/enterprise-sso/verify" %}}
+{{% include-headless "/headless/self-managed-deployments/sso/advanced/verify" %}}
 
 If you haven't configured an identity provider yet, see
 [Configure identity
-providers](/self-managed-deployments/enterprise-sso/identity-providers/).
+providers](/self-managed-deployments/sso/advanced/identity-providers/).
 
 ## Customizing Your Deployment
 
@@ -228,11 +232,11 @@ Notes specific to GCP:
 terraform destroy
 ```
 
-{{% include-headless "/headless/self-managed-deployments/enterprise-sso/destroy-finalizer-note" %}}
+{{% include-headless "/headless/self-managed-deployments/sso/advanced/destroy-finalizer-note" %}}
 
 ## See Also
 
-- [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/)
-- [Operations](/self-managed-deployments/enterprise-sso/operations/)
-- [Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/)
+- [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/)
+- [Operations](/self-managed-deployments/sso/advanced/operations/)
+- [Troubleshooting](/self-managed-deployments/sso/advanced/troubleshooting/)
 - [Install on GCP (base Materialize stack)](/self-managed-deployments/installation/install-on-gcp/)

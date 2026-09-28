@@ -1,6 +1,6 @@
 ---
 title: "Troubleshooting"
-description: "Diagnose and fix common issues with the Ory-based enterprise SSO stack."
+description: "Diagnose and fix common issues with the advanced SSO stack."
 menu:
   main:
     parent: "enterprise-sso"
@@ -223,7 +223,7 @@ See the cloud-specific notes:
 - **Azure**: usually the OAuth2Client finalizer (see the symptom table
   above)
 - **AWS**: the AWS Load Balancer Controller can race with namespace
-  deletion. See [AWS-specific notes](/self-managed-deployments/enterprise-sso/install-on-aws/#cleanup)
+  deletion. See [AWS-specific notes](/self-managed-deployments/sso/advanced/install-on-aws/#cleanup)
 - **GCP**: the GKE master IP allocator can be slow; usually patience is
   the fix
 

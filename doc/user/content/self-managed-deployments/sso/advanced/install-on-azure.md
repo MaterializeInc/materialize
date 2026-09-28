@@ -1,20 +1,24 @@
 ---
-title: "Install on AWS"
-description: "Deploy the Ory-based enterprise SSO stack on AWS with Materialize."
+title: "Install on Azure"
+description: "Deploy the advanced SSO stack on Azure with Materialize."
 menu:
   main:
     parent: "enterprise-sso"
-    identifier: "enterprise-sso-aws"
-    weight: 20
+    identifier: "enterprise-sso-azure"
+    weight: 30
 ---
 
 This guide walks through the
-[`aws/examples/enterprise`](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws/examples/enterprise)
+[`azure/examples/enterprise`](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/enterprise)
 example in the [Materialize Terraform
 repository](https://github.com/MaterializeInc/materialize-terraform-self-managed),
 which extends the base [Install on
-AWS](/self-managed-deployments/installation/install-on-aws/) walkthrough with
-the Ory-based enterprise SSO stack on EKS.
+Azure](/self-managed-deployments/installation/install-on-azure/) walkthrough
+with the advanced SSO stack on AKS.
+
+If Materialize is already running, see [Add to an existing
+installation](/self-managed-deployments/sso/advanced/existing-installation/)
+instead.
 
 {{% self-managed/materialize-components-sentence %}} This example layers the
 Ory stack (Kratos, Hydra, the selfservice UI, and optional Polis) on top so
@@ -32,28 +36,23 @@ into your own Terraform rather than used only through the example.
 ## What Gets Created
 
 This example provisions everything from the base [Install on
-AWS](/self-managed-deployments/installation/install-on-aws/) guide, plus the
-additions below.
+Azure](/self-managed-deployments/installation/install-on-azure/) guide, plus
+the additions below.
 
 ### Networking
 
 | Resource | Description |
 |----------|-------------|
 | Public Hostnames | Six browser-facing hostnames (Hydra, Kratos, the selfservice UI, optional Polis, the Materialize Console, balancerd). DNS records are created by you after `terraform apply`. |
-| LoadBalancer Services | One per browser-facing service in the `ory` and `materialize-environment` namespaces. Backed by AWS Network Load Balancers via the AWS Load Balancer Controller, target type `ip`. |
+| LoadBalancer Services | One per browser-facing service in the `ory` and `materialize-environment` namespaces. Backed by Azure standard load balancers. |
 
 ### Database
 
 | Resource | Description |
 |----------|-------------|
-| Ory Kratos RDS | Dedicated RDS instance for the `kratos` database. PostgreSQL 18, `db.t3.small`. |
-| Ory Hydra RDS | Dedicated RDS instance for the `hydra` database. PostgreSQL 18, `db.t3.small`. |
-| Ory Polis RDS (optional) | Dedicated RDS instance for the `polis` database when `enable_polis = true`. PostgreSQL 18, `db.t3.small`. |
-| User | `oryadmin` shared across instances, with auto-generated password. |
-
-AWS RDS is one-database-per-instance, so each Ory component gets its own RDS
-instance. (GCP Cloud SQL, in contrast, hosts them as separate databases on a
-single shared instance.)
+| Ory Azure PostgreSQL Flexible Server | Separate instance from the Materialize backend. PostgreSQL 18, `Standard_B1ms` SKU, 32GB storage, private endpoint only. |
+| Databases | `kratos`, `hydra`, plus `polis` when `enable_polis = true`. |
+| User | `oryadmin` with auto-generated password. |
 
 ### Kubernetes Add-ons
 
@@ -72,22 +71,23 @@ single shared instance.)
 |----------|-------------|
 | Materialize Instance | Configured for OIDC sign-in against the Hydra issuer URL. The browser-facing console hostname is registered as the OAuth2 redirect URI. |
 
-## AWS-Specific Requirements
+## Azure-Specific Requirements
 
 Cross-cutting requirements (license key with the `ory` entitlement, DNS
 hostnames, cert-manager strategy, required tools) are covered on the shared
-[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/)
-page. This section only lists the AWS-specific bits.
+[Prerequisites](/self-managed-deployments/sso/advanced/prerequisites/)
+page. This section only lists the Azure-specific bits.
 
-An active AWS account with permission to create:
+An active Azure subscription with permission to create:
 
-- EKS clusters and Karpenter nodepools
-- RDS instances
-- S3 buckets
-- VPCs and networking resources
-- IAM roles and policies
+- Resource groups
+- Virtual networks, subnets, and NAT gateways
+- AKS clusters and node pools
+- Azure Database for PostgreSQL Flexible Servers
+- Storage accounts
+- Managed identities and role assignments
 
-## Getting Started: Enterprise SSO Example
+## Getting Started: Advanced SSO Example
 
 {{< note >}}
 
@@ -106,39 +106,41 @@ An active AWS account with permission to create:
 1. Open a terminal window.
 
 1. Clone the Materialize Terraform repository and go to the
-   `aws/examples/enterprise` directory:
+   `azure/examples/enterprise` directory:
 
    ```bash
    git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
-   cd materialize-terraform-self-managed/aws/examples/enterprise
+   cd materialize-terraform-self-managed/azure/examples/enterprise
    ```
 
-1. Ensure your AWS CLI is configured with the appropriate profile, substituting
-   `<your-aws-profile>` with the profile to use:
+1. Sign in to Azure and select the subscription you'll deploy into:
 
    ```bash
-   export AWS_PROFILE=<your-aws-profile>
+   az login
+   az account set --subscription <your-subscription-id>
    ```
 
 ### Step 2: Configure Terraform Variables
 
 1. Create a `terraform.tfvars` file with the required variables:
 
-   - `aws_region`: AWS region (defaults to `us-east-1`)
-   - `aws_profile`: AWS CLI profile to use
+   - `subscription_id`: Azure subscription ID
+   - `resource_group_name`: Name of the resource group to create
    - `name_prefix`: Prefix for all resource names
+   - `location`: Azure region
    - `license_key`: Materialize license key JWT with the `ory` entitlement
-   - `k8s_apiserver_authorized_networks`: CIDRs allowed to reach the EKS API server (required, no default)
+   - `k8s_apiserver_authorized_networks`: CIDRs allowed to reach the AKS API server (required, no default)
    - `ory_hydra_fqdn`, `ory_ui_fqdn`, `ory_kratos_fqdn`, `materialize_console_fqdn`, `materialize_balancerd_fqdn`: Hostnames for the browser-facing services
    - `internal_load_balancer`: Defaults to `true`, which gives every load balancer a private address. Set it to `false` to reach the endpoints from outside the VPC. SCIM from a cloud IdP such as Okta requires this, because the IdP must reach Polis
    - `ingress_cidr_blocks`: CIDRs allowed to reach the load balancers when `internal_load_balancer = false` (defaults to `0.0.0.0/0`, tighten for production)
    - `tags`: Map of tags to apply to resources
 
    ```hcl
-   aws_region  = "us-east-1"
-   aws_profile = "default"
-   name_prefix = "mz-enterprise"
-   license_key = "your-materialize-license-key"
+   subscription_id     = "12345678-1234-1234-1234-123456789012"
+   resource_group_name = "materialize-enterprise-rg"
+   name_prefix         = "mz-enterprise"
+   location            = "westus2"
+   license_key         = "your-materialize-license-key"
 
    k8s_apiserver_authorized_networks = ["0.0.0.0/0"]   # tighten for production
 
@@ -153,11 +155,11 @@ An active AWS account with permission to create:
    }
    ```
 
-1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/polis-tfvars" %}}
+1. {{% include-headless "/headless/self-managed-deployments/sso/advanced/polis-tfvars" %}}
 
-1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/cert-issuer-tfvars" %}}
+1. {{% include-headless "/headless/self-managed-deployments/sso/advanced/cert-issuer-tfvars" %}}
 
-1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/upstream-oidc-tfvars" %}}
+1. {{% include-headless "/headless/self-managed-deployments/sso/advanced/upstream-oidc-tfvars" %}}
 
 ### Step 3: Apply the Terraform
 
@@ -173,53 +175,49 @@ An active AWS account with permission to create:
    terraform apply
    ```
 
-   Expect 30 to 45 minutes for the full apply. The slowest parts are EKS
-   provisioning, the RDS instances, and the Materialize instance reaching
-   ready.
+   Expect 30 to 45 minutes for the full apply. The slowest parts are AKS
+   provisioning, the two Flexible Server instances, and the Materialize
+   instance reaching ready.
 
 1. Configure `kubectl` against the new cluster:
 
    ```bash
-   aws eks update-kubeconfig \
-     --name $(terraform output -raw eks_cluster_name) \
-     --region <your-aws-region>
+   az aks get-credentials \
+     --resource-group $(terraform output -raw resource_group_name) \
+     --name $(terraform output -raw aks_cluster_name)
    ```
 
 ### Step 4: Create DNS Records
 
-{{% include-headless "/headless/self-managed-deployments/enterprise-sso/dns-records" %}}
+{{% include-headless "/headless/self-managed-deployments/sso/advanced/dns-records" %}}
 
 ### Step 5: Verify the Deployment
 
-{{% include-headless "/headless/self-managed-deployments/enterprise-sso/verify" %}}
+{{% include-headless "/headless/self-managed-deployments/sso/advanced/verify" %}}
 
 If you haven't configured an identity provider yet, see
 [Configure identity
-providers](/self-managed-deployments/enterprise-sso/identity-providers/).
+providers](/self-managed-deployments/sso/advanced/identity-providers/).
 
 ## Customizing Your Deployment
 
 You can override module inputs independently. For details on the per-cloud
 modules, see the [top-level
 README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
-and the [AWS-specific
-README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws).
+and the [Azure-specific
+README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure).
 
-Notes specific to AWS:
+Notes specific to Azure:
 
-- **One RDS per Ory component**: AWS RDS is one-database-per-instance, so
-  Kratos, Hydra, and Polis (when enabled) each get their own `db.t3.small`
-  RDS instance. GCP Cloud SQL hosts them as separate databases on a single
-  shared instance.
-- **EKS API server access**: `k8s_apiserver_authorized_networks` has no
+- **PostgreSQL version**: The example targets PostgreSQL 18 on Azure
+  Database for PostgreSQL Flexible Server. The `azurerm` provider declaration
+  in `versions.tf` is pinned at `>= 4.55.0` to support PG 18.
+- **AKS API server access**: `k8s_apiserver_authorized_networks` has no
   default. Production deployments should pin a tight allowlist instead of
   `0.0.0.0/0`.
-- **Karpenter nodepools**: The generic nodepool defaults to `t4g.xlarge`
-  (arm64 Graviton); the Materialize nodepool uses `r7gd.2xlarge`. Both use
-  Bottlerocket. Override via the `instance_types_*` locals in `main.tf`.
-- **NLB target type `ip`**: Ory and console Services are exposed via Network
-  Load Balancers with the `ip` target type, so traffic goes directly to pod
-  IPs without an intermediate node hop.
+- **VM sizes**: Default node pool uses `Standard_D4ps_v6` (arm64). The
+  Materialize node pool uses `Standard_E*` instances. Adjust via
+  `materialize_nodepool` and the default pool size variables.
 
 ## Cleanup
 
@@ -227,22 +225,11 @@ Notes specific to AWS:
 terraform destroy
 ```
 
-{{< note >}}
-
-**AWS-specific teardown gotchas:** the AWS Load Balancer Controller and
-Karpenter can deadlock each other on destroy. If `terraform destroy` hangs,
-you may need to manually delete Karpenter-managed nodes and the LBC-created
-NLB target groups before the destroy can finish. See the example
-[README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws/examples/enterprise#destroy)
-for the exact cleanup commands.
-
-{{</ note >}}
-
-{{% include-headless "/headless/self-managed-deployments/enterprise-sso/destroy-finalizer-note" %}}
+{{% include-headless "/headless/self-managed-deployments/sso/advanced/destroy-finalizer-note" %}}
 
 ## See Also
 
-- [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/)
-- [Operations](/self-managed-deployments/enterprise-sso/operations/)
-- [Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/)
-- [Install on AWS (base Materialize stack)](/self-managed-deployments/installation/install-on-aws/)
+- [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/)
+- [Operations](/self-managed-deployments/sso/advanced/operations/)
+- [Troubleshooting](/self-managed-deployments/sso/advanced/troubleshooting/)
+- [Install on Azure (base Materialize stack)](/self-managed-deployments/installation/install-on-azure/)

@@ -17,4 +17,4 @@ upstream_identity_providers = [
 ]
 ```
 
-Register the redirect URI `https://<ory_kratos_fqdn>/self-service/methods/oidc/callback/<id>` at the upstream IdP. See [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/) for SAML and SCIM setup once the stack is up.
+Register the redirect URI `https://<ory_kratos_fqdn>/self-service/methods/oidc/callback/<id>` at the upstream IdP. See [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/) for SAML and SCIM setup once the stack is up.

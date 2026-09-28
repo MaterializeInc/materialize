@@ -1,6 +1,6 @@
 ---
 title: "Prerequisites"
-description: "Requirements to deploy the Ory-based enterprise SSO stack."
+description: "Requirements to deploy the advanced SSO stack."
 menu:
   main:
     parent: "enterprise-sso"
@@ -11,9 +11,9 @@ menu:
 Before running the enterprise example for your cloud, gather the items
 below.
 
-## License Key with the `ory` Entitlement
+## First, get a license key that includes the advanced SSO entitlements
 
-The enterprise SSO stack requires a Materialize enterprise license whose JWT
+The advanced SSO stack requires a Materialize enterprise license whose JWT
 carries the `ory` entitlement. Community licenses don't include this
 entitlement, and licenses issued before the entitlement existed will keep
 working for Materialize itself but will be rejected by the Ory registry
@@ -21,20 +21,7 @@ proxy. Contact
 [Materialize support](/support/) to have an
 ory-enabled key issued.
 
-The Ory components ship as private OEL (Ory Enterprise License) images.
-Materialize hosts a registry proxy at `ory.registry.cloud.materialize.com`
-that pulls these images on behalf of customers. Authentication to the proxy
-uses your Materialize license key JWT (passed as the password in a Kubernetes
-`imagePullSecret`), so there is no separate Ory credential to manage.
-
-{{< note >}}
-
-The license key is also used by Materialize itself; the same JWT covers both.
-There is no separate "Ory key" to manage.
-
-{{</ note >}}
-
-## Cluster Egress
+## Allow cluster egress
 
 The Ory pods need network egress to two hosts:
 
@@ -44,12 +31,21 @@ The Ory pods need network egress to two hosts:
 | `storage.googleapis.com` | The proxy returns HTTP 307 redirects to signed GCS URLs for blob layers, which the kubelet follows directly. |
 
 If your cluster has egress restrictions or a NAT gateway with allowlist
-rules, both hosts must be reachable.
+rules, both hosts must be reachable. For example, to check from inside the
+cluster:
 
-## DNS Hostnames
+```bash
+kubectl run egress-check --rm -it --restart=Never --image=curlimages/curl -- \
+  sh -c 'curl -sS -o /dev/null -w "%{http_code}\n" https://ory.registry.cloud.materialize.com/v2/; \
+         curl -sS -o /dev/null -w "%{http_code}\n" https://storage.googleapis.com/'
+```
 
-You need DNS hostnames you control for each browser-facing service. With
-Polis enabled, that is six hostnames:
+Any HTTP status code, such as `401` from the registry or `400` from
+`storage.googleapis.com`, means the host is reachable. A timeout or connection error means egress is blocked.
+
+## Set up DNS hostnames
+
+You need DNS hostnames you control for each browser-facing service:
 
 | Hostname | Purpose |
 |----------|---------|
@@ -65,14 +61,14 @@ on AWS) after the first `terraform apply`. The example does not create the
 DNS records for you; the per-cloud install pages show the exact commands to
 look up each LB.
 
-## cert-manager and a `ClusterIssuer`
+## Install cert-manager and set up a `ClusterIssuer`
 
 cert-manager is required to provision TLS certificates for each
 browser-facing hostname. The [self-managed Terraform](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/kubernetes/modules/cert-manager)
 provides a module to deploy it. cert-manager must be paired with a
 `ClusterIssuer`, which you can configure in one of three modes:
 
-### In-Cluster Self-Signed (Demos and Air-Gapped Clusters)
+### In-cluster self-signed (demos and air-gapped clusters)
 
 The default when `cert_issuer_ref` is not set: cert-manager generates an
 in-cluster CA and signs all browser-facing certs from it. Browsers will not
@@ -81,7 +77,7 @@ trust the certs out of the box.
 Suitable for offline demos or proof-of-concept clusters where no public DNS
 or ACME path is available. Production deployments should use a real issuer.
 
-### Bring Your Own `ClusterIssuer`
+### Bring your own `ClusterIssuer`
 
 Set `cert_issuer_ref` in tfvars to point at an existing `ClusterIssuer` you
 manage yourself, outside the Materialize Terraform modules. Typical sources:
@@ -111,7 +107,7 @@ A starter `letsencrypt.tf` block is documented in the README of each
 per-cloud enterprise example. Drop it into your root module, set your DNS
 provider API token, and point `cert_issuer_ref` at it.
 
-## Polis (Optional, SAML and SCIM)
+## Optional: Enable SAML
 
 Polis is the SAML-to-OIDC bridge that acts as the SAML service provider for
 your IdP. Kratos consumes it through its SAML sign-in method (`saml_providers`),
@@ -123,7 +119,7 @@ The Polis Helm chart and image are pulled through the same OEL registry
 proxy as the rest of the Ory stack, authenticated with the same license key
 JWT.
 
-## Required Tools
+## Required tools
 
 - [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform) (>= 1.8)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
@@ -134,11 +130,13 @@ JWT.
   [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html)
 - `jq` (optional, helpful when piping through admin API responses)
 
-## Next Steps
+## Next steps
 
 Once you have the license key, DNS plan, and cert-manager strategy sorted,
-pick your cloud and follow the install guide:
+add the stack to your existing installation, or pick your cloud and follow
+the install guide:
 
-- [Install on Azure](/self-managed-deployments/enterprise-sso/install-on-azure/)
-- [Install on GCP](/self-managed-deployments/enterprise-sso/install-on-gcp/)
-- [Install on AWS](/self-managed-deployments/enterprise-sso/install-on-aws/)
+- [Add to an existing installation](/self-managed-deployments/sso/advanced/existing-installation/)
+- [Install on Azure](/self-managed-deployments/sso/advanced/install-on-azure/)
+- [Install on GCP](/self-managed-deployments/sso/advanced/install-on-gcp/)
+- [Install on AWS](/self-managed-deployments/sso/advanced/install-on-aws/)

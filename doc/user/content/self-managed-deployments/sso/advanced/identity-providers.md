@@ -1,6 +1,6 @@
 ---
 title: "Configure identity providers"
-description: "Wire your IdP into the Ory-based enterprise SSO stack via OIDC, SAML, or SCIM."
+description: "Wire your IdP into the advanced SSO stack via OIDC, SAML, or SCIM."
 menu:
   main:
     parent: "enterprise-sso"
@@ -127,7 +127,7 @@ POLIS_API_KEY=$(kubectl get secret -n ory polis-config \
 You can register through the Polis admin API (below) or through the Polis
 admin UI, which is easier for ongoing management but requires bootstrapping
 first, see
-[Unlock the Polis admin UI without SMTP](/self-managed-deployments/enterprise-sso/operations/#unlock-the-polis-admin-ui-without-smtp).
+[Unlock the Polis admin UI without SMTP](/self-managed-deployments/sso/advanced/operations/#unlock-the-polis-admin-ui-without-smtp).
 
 If the IdP exposes a publicly-fetchable metadata URL:
 
@@ -218,7 +218,7 @@ Materialize. Builds on the SAML setup above.
 ### Step 1. Create a SCIM directory in Polis
 
 Same choice as with SAML: register through the API (below) or through the
-Polis admin UI ([bootstrapped separately](/self-managed-deployments/enterprise-sso/operations/#unlock-the-polis-admin-ui-without-smtp)).
+Polis admin UI ([bootstrapped separately](/self-managed-deployments/sso/advanced/operations/#unlock-the-polis-admin-ui-without-smtp)).
 
 ```bash
 curl -X POST https://<your-polis-hostname>/api/v1/dsync \
@@ -253,7 +253,7 @@ Steps for Okta (other IdPs vary in wording but follow the same shape):
    - Authorization / Token: paste `scim.secret`
    - Click **Test Connector Configuration**; it should report the
      connector as configured. The base URL's host must be reachable
-     from your IdP's cloud (see [Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/)).
+     from your IdP's cloud (see [Troubleshooting](/self-managed-deployments/sso/advanced/troubleshooting/)).
 4. **Provisioning** → **To App** → Edit → enable Create Users, Update
    User Attributes, Deactivate Users. Save.
 5. **Push Groups** tab (appears once SCIM is enabled) → **Push Groups
@@ -326,7 +326,7 @@ curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
 Group memberships flow all the way to the JWT (via the `groups` claim) and
 Materialize can automatically translate them into SQL role memberships on
 each login. Enable it via the `oidc_group_role_sync_enabled` system
-parameter; see [Enable OIDC group-to-role sync](/self-managed-deployments/enterprise-sso/operations/#enable-oidc-group-to-role-sync)
+parameter; see [Enable role mapping](/self-managed-deployments/sso/advanced/operations/#enable-role-mapping)
 for details and the naming convention.
 
 ## What happens when users sign in
@@ -348,9 +348,9 @@ To grant privileges, see the role / permission management docs at
 
 ## See also
 
-- [SSO (direct OIDC)](/security/self-managed/sso/) -- the simpler path
+- [SSO (direct OIDC)](/self-managed-deployments/sso/oidc/) -- the simpler path
   for OIDC-only deployments
-- [Operations](/self-managed-deployments/enterprise-sso/operations/) -- day-2: rotating credentials, adding
+- [Operations](/self-managed-deployments/sso/advanced/operations/) -- day-2: rotating credentials, adding
   OAuth2 clients
-- [Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/) -- common errors during the
+- [Troubleshooting](/self-managed-deployments/sso/advanced/troubleshooting/) -- common errors during the
   IdP-side setup

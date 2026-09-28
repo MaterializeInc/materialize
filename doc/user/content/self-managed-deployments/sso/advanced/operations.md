@@ -1,6 +1,6 @@
 ---
 title: "Operations"
-description: "Day-2 tasks for the Ory-based enterprise SSO stack."
+description: "Day-2 tasks for the advanced SSO stack."
 menu:
   main:
     parent: "enterprise-sso"
@@ -170,7 +170,7 @@ configure a NextAuth provider for login (see
 ### Unlock the Polis admin UI without SMTP
 
 Once the admin UI is up, prefer it over the direct API calls in
-[Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/)
+[Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/)
 for registering SAML connections and SCIM directories going forward.
 
 The default admin login flow uses an email magic link, which requires
@@ -203,7 +203,7 @@ For a production deployment, register a **separate** SAML app on the
 IdP side for admin access (rather than reusing the end-user app), so
 you can control admin membership independently.
 
-## Enable OIDC group-to-role sync
+## Enable role mapping
 
 Materialize can automatically grant and revoke SQL role memberships based
 on the `groups` claim in the JWT Hydra issues, so you manage a user's
@@ -339,15 +339,3 @@ Key signals to alert on:
 - Pod restart counts on any Ory component
 - PostgreSQL connection failures from any Ory component (suggests DB
   saturation or networking issues)
-
-## Future work
-
-Items tracked but not yet shipped:
-
-- **API key management for service accounts** via Ory Talos
-  is tracked as future work. When this lands, this page will gain a section
-  on issuing and revoking API keys for non-interactive clients.
-- **Multi-IdP support on a single Polis tenant**. Polis supports
-  multiple SAML connections per tenant, but the example doesn't
-  document the multi-tenant Polis setup yet. Useful for customers with
-  parallel IdPs (e.g., one for employees, one for contractors).
