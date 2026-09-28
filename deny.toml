@@ -108,6 +108,8 @@ skip = [
     { name = "lru", version = "0.16.3" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
+    # reqsign-core is on 0.7, while opendal still pulls 0.6.
+    { name = "asyncband", version = "0.6.7" },
     # Used by junit-report
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
