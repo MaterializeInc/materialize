@@ -1553,6 +1553,24 @@
       "dyncfg": false
     },
     {
+      "name": "enable_prepared_query_reuse",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Retain and reuse analyzed prepared SELECT queries. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_prepared_query_templates",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Use generic indexed-query templates for eligible analyzed prepared SELECTs. Disabling retains analysis reuse but forces custom optimization. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_primary_key_not_enforced",
       "typeName": "boolean",
       "default": "off",
