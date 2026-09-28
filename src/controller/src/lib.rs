@@ -152,6 +152,8 @@ pub struct Controller {
     pub storage: Box<dyn StorageController>,
     pub storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     pub compute: ComputeController,
+    /// Shared collection metrics for lifecycle owners and passive observers.
+    pub metrics: ControllerMetrics,
     /// The clusterd image to use when starting new cluster processes.
     clusterd_image: String,
     /// The init container image to use for clusterd.
@@ -309,6 +311,7 @@ impl Controller {
             storage_collections,
             storage,
             compute,
+            metrics: _,
             clusterd_image: _,
             init_container_image: _,
             deploy_generation,
@@ -755,7 +758,7 @@ impl Controller {
             catalog_read_protection_enabled,
             &config.metrics_registry,
             config.persist_location,
-            controller_metrics,
+            controller_metrics.clone(),
             config.now.clone(),
             wallclock_lag_fn,
         );
@@ -765,6 +768,7 @@ impl Controller {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
+            metrics: controller_metrics,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
