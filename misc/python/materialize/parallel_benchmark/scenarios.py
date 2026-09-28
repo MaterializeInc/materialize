@@ -438,6 +438,7 @@ class Read(Scenario):
                 "SELECT 1 (reuse connection)": {
                     "qps": 1400,
                     "p99_99": 100,
+                    "max": 2000,
                     "slope": 0.1,
                 },
             },
