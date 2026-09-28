@@ -23,12 +23,11 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use axum::response::IntoResponse;
 use axum::{Router, routing};
 use bytes::BytesMut;
 use futures::TryFutureExt;
@@ -47,7 +46,9 @@ use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
-use mz_ore::metrics::{ComputedGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry};
+use mz_ore::metrics::{
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry,
+};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
@@ -79,8 +80,9 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, PRE_RESOLVED_TIMEOUT,
-    SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
+    CONNECTION_HIGH_WATERMARK, CONNECTION_LOW_WATERMARK, INJECT_PROXY_PROTOCOL_HEADER_HTTP,
+    MAX_CONNECTIONS, PRE_RESOLVED_TIMEOUT, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
+    has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -375,7 +377,7 @@ impl BalancerService {
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
-                limiter,
+                limiter: Arc::clone(&limiter),
                 configs: self.configs.clone(),
                 internal_tls: self.cfg.internal_tls,
             };
@@ -409,7 +411,19 @@ impl BalancerService {
                     "/api/livez",
                     routing::get(mz_http_util::handle_liveness_check),
                 )
-                .route("/api/readyz", routing::get(handle_readiness_check));
+                .route("/api/readyz", {
+                    let limiter = Arc::clone(&limiter);
+                    routing::get(move || async move {
+                        if limiter.accepting() {
+                            (StatusCode::OK, "ready")
+                        } else {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "at the connection high watermark",
+                            )
+                        }
+                    })
+                });
             let internal_http = InternalHttpServer { router };
             let (handle, stream) = self.internal_http;
             server_handles.push(handle);
@@ -425,6 +439,15 @@ impl BalancerService {
                 warn!("internal_http server exited");
             });
         }
+        // Lets the dwell expire and config changes take effect without connection activity.
+        // Detached so that it does not keep `serve` from returning once the listeners are gone.
+        spawn(|| "connection_watermark_tick", async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                limiter.evaluate_watermarks();
+            }
+        });
         #[cfg(unix)]
         {
             let mut sigterm =
@@ -453,11 +476,6 @@ impl BalancerService {
         }
         Ok(())
     }
-}
-
-#[allow(clippy::unused_async)]
-async fn handle_readiness_check() -> impl IntoResponse {
-    (StatusCode::OK, "ready")
 }
 
 struct InternalHttpServer {
@@ -659,8 +677,61 @@ struct ConnectionLimiter {
     /// Whether connections are currently being refused, so that reaching and clearing the limit
     /// are logged once each rather than once per connection.
     limited: AtomicBool,
+    /// Whether `/api/readyz` reports ready. Mirrors `out_of_rotation_since` for lock-free reads.
+    accepting: Arc<AtomicBool>,
+    /// When balancerd left load balancer rotation, `None` while in rotation. Transitions and the
+    /// connection count they act on are read under this lock, so the last evaluation after a
+    /// count change sees that change.
+    out_of_rotation_since: Mutex<Option<tokio::time::Instant>>,
+    /// The last watermark misconfiguration warned about, so it is logged once per change.
+    last_watermark_warning: Mutex<Option<String>>,
     rejected: IntCounter,
+    watermark_transitions: IntCounter,
     _limit: ComputedUIntGauge,
+    _accepting: ComputedIntGauge,
+    _high_watermark: ComputedIntGauge,
+    _low_watermark: ComputedIntGauge,
+}
+
+/// Minimum time out of load balancer rotation before the low watermark can bring balancerd back.
+///
+/// Deregistering and re-registering a target takes tens of seconds on AWS, so a quick swing from
+/// the low to the high watermark must not cost a round trip through both.
+const WATERMARK_DWELL: Duration = Duration::from_secs(30);
+
+/// Validated connection watermarks, see [`configured_watermarks`].
+#[derive(Debug, Clone, Copy)]
+struct Watermarks {
+    low: usize,
+    high: usize,
+}
+
+/// The effective watermarks, `Ok(None)` when unset, or `Err` describing why the configured
+/// values are ignored.
+///
+/// The high watermark must be strictly below the hard limit. At the limit the pod would leave
+/// rotation exactly when it is full, which is when a load balancer that closes connections to
+/// unhealthy targets does the most damage.
+fn configured_watermarks(configs: &ConfigSet) -> Result<Option<Watermarks>, String> {
+    let low = CONNECTION_LOW_WATERMARK.get(configs);
+    let high = CONNECTION_HIGH_WATERMARK.get(configs);
+    let max = MAX_CONNECTIONS.get(configs);
+    let reason = match (low, high) {
+        (None, None) => return Ok(None),
+        (Some(0), Some(_)) => "the low watermark must be at least 1",
+        (Some(low), Some(high)) if low >= high => {
+            "the low watermark must be below the high watermark"
+        }
+        (Some(_), Some(_)) if max == 0 => "balancerd_max_connections must be enabled",
+        (Some(_), Some(high)) if high >= usize::cast_from(max) => {
+            "the high watermark must be below balancerd_max_connections"
+        }
+        (Some(low), Some(high)) => return Ok(Some(Watermarks { low, high })),
+        _ => "both watermarks must be set",
+    };
+    Err(format!(
+        "{reason} (low={low:?}, high={high:?}, max_connections={max})"
+    ))
 }
 
 impl ConnectionLimiter {
@@ -679,13 +750,117 @@ impl ConnectionLimiter {
                 move || u64::from(MAX_CONNECTIONS.get(&configs))
             },
         );
+        let watermark_transitions = registry.register(metric!(
+            name: "mz_balancer_connection_watermark_transitions_total",
+            help: "Count of times balancerd left or returned to load balancer rotation because \
+            of the connection watermarks.",
+        ));
+        let accepting = Arc::new(AtomicBool::new(true));
+        let accepting_gauge: ComputedIntGauge = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_accepting",
+                help: "Whether /api/readyz reports ready: 1 in load balancer rotation, 0 out.",
+            ),
+            {
+                let accepting = Arc::clone(&accepting);
+                move || i64::from(accepting.load(Ordering::Relaxed))
+            },
+        );
+        let watermark_gauge = |name, help, pick: fn(Watermarks) -> usize| -> ComputedIntGauge {
+            let configs = configs.clone();
+            registry.register_computed_gauge(metric!(name: name, help: help), move || {
+                configured_watermarks(&configs)
+                    .ok()
+                    .flatten()
+                    .map_or(-1, |w| i64::try_from(pick(w)).unwrap_or(i64::MAX))
+            })
+        };
+        let high_watermark = watermark_gauge(
+            "mz_balancer_connection_high_watermark",
+            "Connections at which balancerd leaves load balancer rotation, -1 if disabled.",
+            |w| w.high,
+        );
+        let low_watermark = watermark_gauge(
+            "mz_balancer_connection_low_watermark",
+            "Connections below which balancerd returns to load balancer rotation, -1 if disabled.",
+            |w| w.low,
+        );
         Arc::new(ConnectionLimiter {
             configs,
             active: AtomicU32::new(0),
             limited: AtomicBool::new(false),
+            accepting,
+            out_of_rotation_since: Mutex::new(None),
+            last_watermark_warning: Mutex::new(None),
             rejected,
+            watermark_transitions,
             _limit: limit,
+            _accepting: accepting_gauge,
+            _high_watermark: high_watermark,
+            _low_watermark: low_watermark,
         })
+    }
+
+    /// Whether `/api/readyz` should report ready.
+    fn accepting(&self) -> bool {
+        self.accepting.load(Ordering::Relaxed)
+    }
+
+    /// Applies the watermark transitions for the current connection count.
+    ///
+    /// Runs on every acquire and release and on a periodic tick. Doing it in the probe handler
+    /// would make the state depend on who polls and how often.
+    fn evaluate_watermarks(&self) {
+        let watermarks = self.watermarks();
+        let mut since = self.out_of_rotation_since.lock().expect("lock poisoned");
+        let active = usize::cast_from(self.active.load(Ordering::SeqCst));
+        let accepting = match (watermarks, *since) {
+            (Some(w), None) if active >= w.high => {
+                warn!(
+                    "leaving load balancer rotation: {active} active connections reached the \
+                    high watermark of {}",
+                    w.high
+                );
+                false
+            }
+            (Some(w), Some(left)) if active < w.low && left.elapsed() >= WATERMARK_DWELL => {
+                info!(
+                    "returning to load balancer rotation: {active} active connections, below \
+                    the low watermark of {}",
+                    w.low
+                );
+                true
+            }
+            // Watermarks unset or invalidated while out of rotation restore readiness without
+            // waiting out the dwell, since off must behave as if they had never been set.
+            (None, Some(_)) => {
+                info!(
+                    "returning to load balancer rotation: connection watermarks no longer in effect"
+                );
+                true
+            }
+            _ => return,
+        };
+        *since = (!accepting).then(tokio::time::Instant::now);
+        self.accepting.store(accepting, Ordering::Relaxed);
+        self.watermark_transitions.inc();
+    }
+
+    fn watermarks(&self) -> Option<Watermarks> {
+        let mut last = self.last_watermark_warning.lock().expect("lock poisoned");
+        match configured_watermarks(&self.configs) {
+            Ok(watermarks) => {
+                *last = None;
+                watermarks
+            }
+            Err(reason) => {
+                if last.as_deref() != Some(&reason) {
+                    warn!("ignoring connection watermarks: {reason}");
+                    *last = Some(reason);
+                }
+                None
+            }
+        }
     }
 
     /// Reserves capacity for one connection, or returns `None` if the limit has been reached, in
@@ -706,6 +881,7 @@ impl ConnectionLimiter {
                         info!("accepting new connections again, limit is {limit}");
                     }
                 }
+                self.evaluate_watermarks();
                 Some(ConnectionGuard(Arc::clone(self)))
             }
             Err(active) => {
@@ -728,6 +904,7 @@ struct ConnectionGuard(Arc<ConnectionLimiter>);
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.0.active.fetch_sub(1, Ordering::SeqCst);
+        self.0.evaluate_watermarks();
     }
 }
 
@@ -2029,6 +2206,77 @@ mod tests {
         // Zero disables the limit.
         set_max(0);
         assert!(limiter.acquire().is_some());
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_connection_watermarks() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set = |low: Option<usize>, high: Option<usize>, max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&CONNECTION_LOW_WATERMARK, low);
+            updates.add(&CONNECTION_HIGH_WATERMARK, high);
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+        let limiter = ConnectionLimiter::new(&MetricsRegistry::new(), configs.clone());
+        let _first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("under the limit");
+        let third = limiter.acquire().expect("under the limit");
+
+        // Anything short of both watermarks, ordered, below an enabled hard limit is off.
+        for (low, high, max) in [
+            (None, None, 5),
+            (Some(1), None, 5),
+            (None, Some(3), 5),
+            (Some(0), Some(3), 5),
+            (Some(3), Some(3), 5),
+            (Some(4), Some(3), 5),
+            (Some(1), Some(5), 5),
+            (Some(1), Some(3), 0),
+        ] {
+            set(low, high, max);
+            limiter.evaluate_watermarks();
+            assert!(
+                limiter.accepting(),
+                "watermarks low={low:?} high={high:?} max={max} must be ignored",
+            );
+        }
+        assert_eq!(limiter.watermark_transitions.get(), 0);
+
+        set(Some(2), Some(3), 5);
+        limiter.evaluate_watermarks();
+        assert!(!limiter.accepting(), "at the high watermark");
+        assert_eq!(limiter.watermark_transitions.get(), 1);
+
+        drop(third);
+        assert!(
+            !limiter.accepting(),
+            "between the watermarks the state is kept"
+        );
+        drop(second);
+        assert!(
+            !limiter.accepting(),
+            "below the low watermark but within the dwell"
+        );
+        tokio::time::advance(WATERMARK_DWELL).await;
+        limiter.evaluate_watermarks();
+        assert!(
+            limiter.accepting(),
+            "below the low watermark after the dwell"
+        );
+        assert_eq!(limiter.watermark_transitions.get(), 2);
+
+        // Disabling the watermarks while out of rotation restores readiness without the dwell.
+        let _fourth = limiter.acquire().expect("under the limit");
+        let _fifth = limiter.acquire().expect("under the limit");
+        assert!(!limiter.accepting(), "at the high watermark again");
+        set(None, None, 5);
+        limiter.evaluate_watermarks();
+        assert!(
+            limiter.accepting(),
+            "disabling the watermarks restores readiness"
+        );
+        assert_eq!(limiter.watermark_transitions.get(), 4);
     }
 
     /// A zero timeout disables the deadline, which is what leaves the phase unbounded.

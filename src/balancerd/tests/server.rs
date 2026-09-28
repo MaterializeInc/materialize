@@ -674,6 +674,75 @@ async fn test_connection_limit_covers_unresolved_connections() {
     );
 }
 
+/// Waits for `/api/readyz` to answer `expected`. The limiter counts a connection once balancerd
+/// accepts it, which can trail the client's connect by a moment.
+async fn assert_readiness(internal_http: SocketAddr, expected: u16) {
+    Retry::default()
+        .clamp_backoff(Duration::from_millis(500))
+        .max_duration(Duration::from_secs(60))
+        .retry_async(|_| async {
+            let status = reqwest::get(format!("http://{internal_http}/api/readyz"))
+                .await
+                .unwrap()
+                .status()
+                .as_u16();
+            if status == expected {
+                Ok(())
+            } else {
+                Err(format!("/api/readyz is {status}, expected {expected}"))
+            }
+        })
+        .await
+        .unwrap();
+}
+
+/// At the high watermark balancerd reports not ready while staying live and keeping its
+/// connections. Readiness returns once connections drop below the low watermark and the dwell
+/// has passed.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_connection_watermarks_drive_readiness() {
+    const ACTIVE: &str = "mz_balancer_pre_resolved_connection_active";
+    let balancer = start_balancer_to(
+        "127.0.0.1:1".to_string(),
+        vec![
+            ("balancerd_max_connections".into(), "4".into()),
+            ("balancerd_connection_high_watermark".into(), "2".into()),
+            ("balancerd_connection_low_watermark".into(), "1".into()),
+        ],
+        None,
+    )
+    .await;
+    assert_metric(
+        balancer.internal_http,
+        "mz_balancer_connection_high_watermark",
+        None,
+        2.0,
+    )
+    .await;
+    assert_readiness(balancer.internal_http, 200).await;
+
+    let mut first = startup_header_only(balancer.pgwire, 1 << 10).await;
+    let second = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert_readiness(balancer.internal_http, 503).await;
+    let livez = reqwest::get(format!("http://{}/api/livez", balancer.internal_http))
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(livez.as_u16(), 200, "liveness is unconditional");
+    assert!(
+        !was_closed(&mut first, Duration::from_millis(500)).await,
+        "established connections are kept while out of rotation",
+    );
+
+    // Below the low watermark readiness returns only once the dwell has passed.
+    drop(first);
+    drop(second);
+    assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 0.0).await;
+    assert_readiness(balancer.internal_http, 503).await;
+    assert_readiness(balancer.internal_http, 200).await;
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_stalled_tls_handshake_is_closed() {
