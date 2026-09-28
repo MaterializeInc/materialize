@@ -288,6 +288,16 @@ pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the unified MCP endpoint at `/api/mcp` is enabled. Separate from the
+/// `/api/mcp/agent` and `/api/mcp/developer` flags, so each route rolls out on
+/// its own.
+pub const ENABLE_MCP_UNIFIED: Config<bool> = Config::new(
+    "enable_mcp_unified",
+    false,
+    "Whether the unified MCP HTTP endpoint is enabled. When false, requests to /api/mcp return 503 Service Unavailable.",
+    ParameterScope::Environment,
+);
+
 /// Whether the external metrics endpoint on environmentd is enabled.
 pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
     "enable_public_metrics_endpoint",
@@ -593,6 +603,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
+        .add(&ENABLE_MCP_UNIFIED)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
