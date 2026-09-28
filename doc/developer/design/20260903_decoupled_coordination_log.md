@@ -30,30 +30,26 @@ output ownership per deployment. No generic per-output fence or all-output
 completion gate is required. Escalate concrete protocol safety gaps, not
 overlapping writes that preserve correctness throughout.
 
-The deployment implementation separates a handle's own generation from the
-active generation in the durable fence. The working tree now includes scoped
-replicas and managed runtime, shared explicit declarations, private realization
-and retirement, and native prewarming startup. Membership does not grant output
-authority. Preserve declaration-backed pins and comments through promotion and
-managed/unmanaged conversion, including peers without a local realization.
+The deployment implementation has scoped replicas and managed runtime, shared
+explicit declarations, and native prewarming. Align its per-realization IDs with
+the design's stable ReplicaId contract before considering replica scoping
+complete: preserve declaration/carryover identity, distinguish runtime by
+deployment, and allocate fresh IDs for independent creates. Equal names are
+not correspondence.
 
-Continue through native warm-promotion runtime integration next. Readiness uses
+Continue native warm-promotion runtime integration. Readiness uses
 local hydration and output progress, with active-deployment reference frontiers,
 rather than compute-controller inventory or shared Persist progress. The
 replica-set owner's policy distinguishes missing capacity from intentional zero,
 including managed ON REFRESH. Keep that boundary and the existing stability,
 cutoff and external-authorization semantics.
 
-Keep shared replica declarations distinct from deployment realization. Explicit
-replica rows on unmanaged clusters are their declaration today. Copying an
-active deployment's inventory into a pending one cannot replace that authority:
-acknowledged replica DDL must survive promotion even if it follows prewarming's
-snapshot. Mirroring only the active deployment's realized inventory would drop
-the design's independently scoped realization requirement and is not approved.
-
-Replica-targeted MVs persist a SQL name and resolve the replica ID in local
-catalog state, not the written plan. This alone does not give controller-created
-replicas a shared logical identity across deployments.
+Shared declarations remain authoritative: acknowledged replica DDL must survive
+promotion even if it follows prewarming's snapshot. Initial carryover cannot
+replace ongoing reconciliation or force deployments to have identical sets.
+Hydration, burst state and reconfiguration progress are deployment-local.
+Preserve declaration-backed pins and comments through promotion and
+managed/unmanaged conversion, including peers without a local realization.
 
 The remaining query-client closure investigation concerns long serving-coordinator
 publication stalls that may exhaust reclamation grace. Establish the actual
@@ -70,7 +66,8 @@ concrete integration repairs without starting another acceptance campaign.
 - M2 excludes native warm handover with replica-targeted MVs on managed
   clusters. Reject before promotion, preserving the active deployment and MVs.
   Keep single-deployment behavior and handover for explicitly declared replicas
-  on unmanaged clusters. Broader pinning/name/ID semantics remain future work.
+  on unmanaged clusters. Broader MV pinning semantics remain future work, not
+  the core replica identity and membership model.
 - For these milestones, `mz_cluster_replicas` shows the catalog's active
   deployment and stays shared and materializable. Own-deployment routing,
   reconciliation and readiness use internal inventory with deployment identity.

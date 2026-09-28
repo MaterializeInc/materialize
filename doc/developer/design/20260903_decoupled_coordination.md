@@ -40,8 +40,8 @@ M2. Reject that combination before promotion, leaving the active deployment
 intact, without retargeting or dropping the MVs. Preserve single-deployment
 behavior and handover support for pins to explicitly declared replicas on
 unmanaged clusters. The broader
-[replica-pinning identity question](#future-work-replica-targeted-mv-identity)
-is deferred.
+[replica-targeted MV semantics](#future-work-replica-targeted-mv-semantics)
+are deferred.
 
 Query-local dataflows that do not go through the catalog, including slow-path
 SELECTs, SUBSCRIBEs, and COPY TO, remain on the fast protocol. Their creation,
@@ -59,12 +59,27 @@ warmed for takeover. An outside signal from the upgrade orchestrator authorizes
 promotion. Neither joining the catalog nor observing hydration grants that
 authority.
 
-User objects, clusters, and declared cluster configuration live once in the
-shared catalog. Actual replicas and deployment-specific hydration, scaling and
-reconfiguration state are scoped to their deployment. Clients route to their
-own deployment's replicas, and observations identify that scope. There is no
-private durable SQL catalog per deployment. Written plans retain their
-[build ownership](#written-plans).
+User objects, clusters, declared configuration and explicit replica declarations
+live once in the shared catalog. There is no private durable SQL catalog per
+deployment. Written plans retain their [build ownership](#written-plans).
+
+`ReplicaId` identifies a logical replica, not a deployment-local process. Shared
+declarations and deliberate carryover preserve that ID across deployments,
+including in public replica IDs. Runtime identity includes the deployment.
+Equal names do not establish correspondence. Independently created replicas and
+DROP/recreate get fresh IDs, even when names match. This does not promise ID
+stability across a logical replica replacement.
+
+Deployments may have different replica sets. For example, both can realize
+`u12`, while only the prewarming deployment creates `u13` for a hydration burst.
+This does not require a shared declaration or a corresponding replica in every
+deployment for each controller-created replica. Actual configuration, hydration,
+burst state and reconfiguration progress are deployment-local. Shared policy
+does not let one deployment's readiness satisfy another's or end its burst.
+Clients route to their own deployment's replicas. Cross-deployment observations
+and cleanup distinguish realizations by deployment and replica ID. Retiring a
+realization must not drop a shared declaration or its dependents. These identity
+and membership contracts are part of M2, independent of deferred MV pinning.
 
 For these milestones, `mz_cluster_replicas` remains a shared, materializable
 relation showing the catalog's active deployment, even through a prewarming
@@ -638,19 +653,13 @@ preparation rejects context-dependent functions in maintained queries. Explicit
 scope for durable queries and request-scoped binding for subscriptions are
 options, not approved changes to existing SQL behavior.
 
-## Future work: replica-targeted MV identity
-
-Explicit replica declarations offer shared logical targets that each deployment
-can realize independently. Declaration identity and deployment-local runtime
-identity are distinct, regardless of their name/ID representation. Retiring a
-realization must not act as a DROP of the shared declaration or its dependents.
-Controller-created replicas on managed clusters need not have corresponding
-logical targets across deployments.
+## Future work: replica-targeted MV semantics
 
 Settle whether MV pins should be restricted to shared replica declarations,
 including how cluster conversions affect them, before extending managed-pinning
-support. The milestone exclusion does not change which pins can be created
-within a single deployment or prescribe a new name/ID model.
+support. Controller-created replicas need not have counterparts across
+deployments. The milestone exclusion does not change which pins can be created
+within a single deployment or defer the core replica identity contract.
 
 Resume from the [current handoff](20260903_decoupled_coordination_log.md) and
 [implementer prompt](20260903_decoupled_coordination_prompt.md). The
