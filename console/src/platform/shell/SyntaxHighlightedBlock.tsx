@@ -47,7 +47,7 @@ function highlightCode(
   let pos = from;
   function writeTo(p: number, classes: string) {
     if (p <= pos) return;
-    for (let text = code.slice(pos, p), i = 0; ; ) {
+    for (let text = code.slice(pos, p), i = 0; ;) {
       const nextBreak = text.indexOf("\n", i);
       const upto = nextBreak < 0 ? text.length : nextBreak;
       if (upto > i) putText(text.slice(i, upto), classes);
