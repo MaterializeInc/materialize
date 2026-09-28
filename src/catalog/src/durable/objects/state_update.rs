@@ -637,9 +637,13 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     unfinalized_shard,
                 ))
             }
+            StateUpdateKind::FenceToken(token) => Some(
+                memory::objects::StateUpdateKind::ActiveDeploymentGeneration(
+                    token.deploy_generation,
+                ),
+            ),
             // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)
-            | StateUpdateKind::FenceToken(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,

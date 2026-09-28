@@ -202,6 +202,7 @@ impl Catalog {
             input.upper,
             input.is_bootstrap_complete,
             false,
+            input.deployment_generation,
         )?;
         let (result, cleanup) =
             Self::initialize_state_from_updates(config, input.updates, txn.transaction_mut(), None)
@@ -397,6 +398,7 @@ impl Catalog {
             written_plans: Default::default(),
             written_plan_importers: Default::default(),
             client_incarnations: Default::default(),
+            active_deployment_generation: None,
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
             maintained_input_requirements: Default::default(),
@@ -530,7 +532,8 @@ impl Catalog {
                     ts,
                     diff: diff.try_into().expect("valid diff"),
                 }),
-                StateUpdateKind::Comment(_)
+                StateUpdateKind::ActiveDeploymentGeneration(_)
+                | StateUpdateKind::Comment(_)
                 | StateUpdateKind::CollectionCompactionBound(_)
                 | StateUpdateKind::MaintainedReadRequirement(_)
                 | StateUpdateKind::WrittenPlan(_)

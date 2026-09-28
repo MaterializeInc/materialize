@@ -120,7 +120,12 @@ pub(crate) enum FenceableToken {
         current_deploy_generation: Option<u64>,
     },
     /// The current token has not been fenced.
-    Unfenced { current_token: FenceToken },
+    Unfenced {
+        /// This handle's identity. Observing promotion must not replace it.
+        current_token: FenceToken,
+        /// Latest durable authority, distinct from a prewarming handle's identity.
+        durable_token: Option<FenceToken>,
+    },
     /// The current token has been fenced.
     Fenced {
         current_token: FenceToken,
@@ -178,6 +183,15 @@ impl FenceableToken {
         }
     }
 
+    fn durable_token(&self) -> Option<&FenceToken> {
+        match self {
+            Self::Initializing { durable_token, .. } | Self::Unfenced { durable_token, .. } => {
+                durable_token.as_ref()
+            }
+            Self::Fenced { fence_token, .. } => Some(fence_token),
+        }
+    }
+
     /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
     fn maybe_fence(&mut self, token: FenceToken, protected: bool) -> Result<(), FenceError> {
         match self {
@@ -207,7 +221,14 @@ impl FenceableToken {
                     }
                 }
             }
-            FenceableToken::Unfenced { current_token } => {
+            FenceableToken::Unfenced {
+                current_token,
+                durable_token,
+            } => {
+                *durable_token = Some(match durable_token.take() {
+                    Some(observed) => max(observed, token.clone()),
+                    None => token.clone(),
+                });
                 if current_token.deploy_generation < token.deploy_generation
                     || (!protected && *current_token < token)
                 {
@@ -233,7 +254,10 @@ impl FenceableToken {
                 let current_token = durable_token
                     .clone()
                     .ok_or(DurableCatalogError::Uninitialized)?;
-                Ok(Some(Self::Unfenced { current_token }))
+                Ok(Some(Self::Unfenced {
+                    durable_token: Some(current_token.clone()),
+                    current_token,
+                }))
             }
             _ => Ok(None),
         }
@@ -246,6 +270,7 @@ impl FenceableToken {
         &self,
         mode: Mode,
         exclusive: bool,
+        promote: bool,
     ) -> Result<Option<(Vec<(StateUpdateKind, Diff)>, FenceableToken)>, DurableCatalogError> {
         let (durable_token, current_deploy_generation) = match self {
             FenceableToken::Initializing {
@@ -287,10 +312,17 @@ impl FenceableToken {
             Diff::ONE,
         ));
 
-        if durable_token.as_ref() == Some(&current_token) {
+        if !promote || durable_token.as_ref() == Some(&current_token) {
             fence_updates.clear();
         }
-        let current_fenceable_token = FenceableToken::Unfenced { current_token };
+        let current_fenceable_token = FenceableToken::Unfenced {
+            durable_token: if mode == Mode::Writable && promote {
+                Some(current_token.clone())
+            } else {
+                durable_token
+            },
+            current_token,
+        };
 
         Ok(Some((fence_updates, current_fenceable_token)))
     }
@@ -373,6 +405,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     pub(crate) mode: Mode,
     /// Joined writers may publish updates but cannot upgrade shared Persist metadata.
     is_join: bool,
+    prewarming_plan_build: Option<String>,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Write handle to persist.
@@ -1131,6 +1164,7 @@ pub(crate) type UnopenedPersistCatalogState =
 enum OpenPurpose<'a> {
     Bootstrap(&'a BootstrapArgs),
     Join,
+    Prewarm(&'a str),
 }
 
 impl UnopenedPersistCatalogState {
@@ -1233,6 +1267,7 @@ impl UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
             mode: Mode::Writable,
             is_join: false,
+            prewarming_plan_build: None,
             since_handle,
             write_handle,
             listen,
@@ -1299,9 +1334,26 @@ impl UnopenedPersistCatalogState {
     ) -> Result<Box<PersistCatalogState>, CatalogError> {
         let bootstrap_args = match purpose {
             OpenPurpose::Bootstrap(args) => Some(args),
-            OpenPurpose::Join => None,
+            OpenPurpose::Join | OpenPurpose::Prewarm(_) => None,
         };
         let join = bootstrap_args.is_none();
+        let prewarming_plan_build = match purpose {
+            OpenPurpose::Prewarm(build) => {
+                let version = build.parse::<semver::Version>().map_err(|_| {
+                    DurableCatalogError::NotWritable("invalid prewarming plan namespace".into())
+                })?;
+                if version.cmp_precedence(&self.catalog_content_version)
+                    != std::cmp::Ordering::Equal
+                {
+                    return Err(DurableCatalogError::NotWritable(
+                        "prewarming plan namespace does not match writer version".into(),
+                    )
+                    .into());
+                }
+                Some(build.to_owned())
+            }
+            _ => None,
+        };
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
         let mut commit_ts = self.upper;
@@ -1348,7 +1400,7 @@ impl UnopenedPersistCatalogState {
                 if !self.is_initialized_inner() {
                     return Err(DurableCatalogError::Uninitialized.into());
                 }
-                if matches!(purpose, OpenPurpose::Join) && !protection_enabled {
+                if !protection_enabled {
                     return Err(DurableCatalogError::NotWritable(
                         "joining requires catalog read protection".into(),
                     )
@@ -1365,7 +1417,11 @@ impl UnopenedPersistCatalogState {
             let durable_generation = self.fenceable_token.token().map(|t| t.deploy_generation);
             let (fence_updates, current_fenceable_token) = self
                 .fenceable_token
-                .generate_unfenced_token(self.mode, !protection_enabled && !join)?
+                .generate_unfenced_token(
+                    self.mode,
+                    !protection_enabled && !join,
+                    prewarming_plan_build.is_none(),
+                )?
                 .ok_or_else(|| {
                     DurableCatalogError::Internal(
                         "catalog should not have fenced before opening".to_string(),
@@ -1375,7 +1431,10 @@ impl UnopenedPersistCatalogState {
                 .token()
                 .expect("admitted token")
                 .deploy_generation;
-            if join && durable_generation != Some(admitted_generation) {
+            if join
+                && prewarming_plan_build.is_none()
+                && durable_generation != Some(admitted_generation)
+            {
                 return Err(DurableCatalogError::NotWritable(
                     "joining cannot promote the deployment generation".into(),
                 )
@@ -1403,8 +1462,8 @@ impl UnopenedPersistCatalogState {
                 }
             }
             protected = protection_enabled;
-            promoted =
-                durable_generation.is_some_and(|generation| generation < admitted_generation);
+            promoted = prewarming_plan_build.is_none()
+                && durable_generation.is_some_and(|generation| generation < admitted_generation);
             self.fenceable_token = current_fenceable_token;
             break;
         }
@@ -1480,6 +1539,7 @@ impl UnopenedPersistCatalogState {
         let mut catalog = PersistCatalogState {
             mode: self.mode,
             is_join: join,
+            prewarming_plan_build,
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -1737,6 +1797,19 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     async fn join(mut self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         Ok(self
             .open_inner(Mode::Writable, Timestamp::minimum(), OpenPurpose::Join)
+            .await?)
+    }
+
+    async fn join_prewarming(
+        self: Box<Self>,
+        plan_build: &str,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                Timestamp::minimum(),
+                OpenPurpose::Prewarm(plan_build),
+            )
             .await?)
     }
 
@@ -2051,12 +2124,36 @@ impl CatalogSnapshotReader {
 }
 
 impl PersistHandle<StateUpdateKind, CatalogStateInner> {
+    fn prewarming_namespace(&self) -> Result<Option<String>, CatalogError> {
+        let own = self.fenceable_token.token().expect("opened identity");
+        let active = self
+            .fenceable_token
+            .durable_token()
+            .expect("opened authority");
+        if self.mode == Mode::Writable && own.deploy_generation > active.deploy_generation {
+            self.prewarming_plan_build.clone().map(Some).ok_or_else(|| {
+                DurableCatalogError::NotWritable(
+                    "pending writer has no prewarming authority".into(),
+                )
+                .into()
+            })
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Creates a transaction without validating pending catalog updates.
     async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         let commit_ts = self.upper;
-        Transaction::new(self, snapshot, commit_ts)
+        let generation = self
+            .fenceable_token
+            .token()
+            .expect("opened catalog has a generation")
+            .deploy_generation;
+        let namespace = self.prewarming_namespace()?;
+        Transaction::new(self, snapshot, commit_ts, generation, namespace)
     }
 }
 
@@ -2242,7 +2339,14 @@ impl DurableCatalogState for PersistCatalogState {
     ) -> Result<DryRunTransaction, CatalogError> {
         self.validate_runtime()?;
         let commit_ts = self.upper;
-        Transaction::new(self, snapshot, commit_ts).map(DryRunTransaction::new)
+        let generation = self
+            .fenceable_token
+            .token()
+            .expect("opened catalog has a generation")
+            .deploy_generation;
+        let namespace = self.prewarming_namespace()?;
+        Transaction::new(self, snapshot, commit_ts, generation, namespace)
+            .map(DryRunTransaction::new)
     }
 
     #[mz_ore::instrument(level = "debug")]

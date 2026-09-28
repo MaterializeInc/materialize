@@ -120,6 +120,263 @@ fn cluster_id() -> ClusterId {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn prewarming_metadata_authority_survives_restart_and_promotion() {
+    use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
+    use mz_catalog_protos::objects::ClientIncarnationKey;
+
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_deploy_generation(7);
+    let bootstrap = test_bootstrap_args();
+    let mut active = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    active.sync_to_current_updates().await.unwrap();
+    let input = GlobalId::User(1000);
+    let index = Owner::Ordinary.id(1001);
+    let mut tx = active.transaction().await.unwrap();
+    tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    tx.insert_collection_metadata(BTreeMap::from([(input, ShardId::new())]))
+        .unwrap();
+    tx.set_collection_compaction_bound(input, Some(10.into()))
+        .unwrap();
+    Owner::Ordinary.insert(&mut tx, 1001);
+    tx.set_collection_compaction_bound(index, Some(20.into()))
+        .unwrap();
+    let active_client = tx.create_client_incarnation(None).unwrap();
+    tx.publish_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
+        .unwrap();
+    commit(tx).await;
+
+    let pending_builder = builder.clone().with_deploy_generation(8);
+    assert!(
+        pending_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .join_prewarming("1.0.0")
+            .await
+            .is_err()
+    );
+    let build = "0.0.0+pending";
+    let mut pending = pending_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming(build)
+        .await
+        .unwrap();
+    let updates = pending.sync_to_current_updates().await.unwrap();
+    assert!(updates.iter().any(|update| matches!(
+        update.kind,
+        StateUpdateKind::ActiveDeploymentGeneration(7)
+    ) && update.diff == StateDiff::Addition));
+    assert_eq!(pending.get_deployment_generation().await.unwrap(), 8);
+    assert_eq!(active.get_deployment_generation().await.unwrap(), 7);
+    let mut tx = pending.transaction().await.unwrap();
+    let warm_client = tx.create_client_incarnation(None).unwrap();
+    tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
+        .unwrap();
+    tx.set_written_plan_with_owner(
+        index,
+        build,
+        Some(uuid::Uuid::new_v4()),
+        None,
+        BTreeSet::from([input]),
+    )
+    .unwrap();
+    commit(tx).await;
+
+    // Rejected shared writes cannot partially publish even permitted metadata.
+    let before = pending.snapshot().await.unwrap();
+    let mut tx = pending.transaction().await.unwrap();
+    tx.publish_client_read_requirements(warm_client, BTreeMap::new())
+        .unwrap();
+    tx.set_config("prewarming_forbidden".into(), Some(1))
+        .unwrap();
+    let ts = tx.upper();
+    let _ = tx.get_and_commit_op_updates();
+    assert!(matches!(
+        tx.commit(ts).await,
+        Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+    ));
+    assert_eq!(pending.snapshot().await.unwrap(), before);
+    let mut tx = pending.transaction().await.unwrap();
+    tx.set_written_plan_with_owner(
+        index,
+        "0.0.0+other",
+        Some(uuid::Uuid::new_v4()),
+        None,
+        BTreeSet::from([input]),
+    )
+    .unwrap();
+    let ts = tx.upper();
+    let _ = tx.get_and_commit_op_updates();
+    assert!(matches!(
+        tx.commit(ts).await,
+        Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+    ));
+    pending.expire().await;
+
+    let mut pending = pending_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming(build)
+        .await
+        .unwrap();
+    pending.sync_to_current_updates().await.unwrap();
+    let mut tx = pending.transaction().await.unwrap();
+    tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
+        .unwrap();
+    commit(tx).await;
+    // Joining and restarting the pending writer did not fence the active writer.
+    active.sync_to_current_updates().await.unwrap();
+    let mut tx = active.transaction().await.unwrap();
+    tx.publish_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
+        .unwrap();
+    commit(tx).await;
+    let protected = pending.snapshot().await.unwrap().client_read_requirements;
+    pending.sync_to_current_updates().await.unwrap();
+    let mut prepared = pending.transaction().await.unwrap();
+    prepared
+        .publish_client_read_requirements(warm_client, BTreeMap::from([(input, 20.into())]))
+        .unwrap();
+
+    // Only the externally authorized ordinary open advances the durable fence.
+    let promoted = pending_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    let ts = prepared.upper();
+    let _ = prepared.get_and_commit_op_updates();
+    assert!(matches!(
+        prepared.commit(ts).await,
+        Err(CatalogError::Durable(
+            DurableCatalogError::CatalogOutOfSync { .. }
+        ))
+    ));
+    let updates = pending.sync_to_current_updates().await.unwrap();
+    assert!(updates.iter().any(|update| matches!(
+        update.kind,
+        StateUpdateKind::ActiveDeploymentGeneration(8)
+    ) && update.diff == StateDiff::Addition));
+    assert_eq!(
+        pending.snapshot().await.unwrap().client_read_requirements,
+        protected
+    );
+    assert!(active.sync_to_current_updates().await.is_err());
+    let mut tx = pending.transaction().await.unwrap();
+    tx.set_collection_compaction_bound(input, Some(11.into()))
+        .unwrap();
+    reject(tx, "readable at 10").await;
+    let mut tx = pending.transaction().await.unwrap();
+    tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
+        .unwrap();
+    tx.set_config("promoted_writer".into(), Some(1)).unwrap();
+    commit(tx).await;
+    assert_eq!(
+        pending.snapshot().await.unwrap().client_incarnations
+            [&ClientIncarnationKey { id: warm_client }]
+            .deployment_generation,
+        8
+    );
+    let successor = pending_builder
+        .with_deploy_generation(9)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    assert!(matches!(
+        pending.sync_to_current_updates().await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(_)))
+    ));
+    successor.expire().await;
+    pending.expire().await;
+    promoted.expire().await;
+    active.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn deployment_cannot_publish_another_deployments_protection() {
+    use mz_catalog_protos::objects::ClientIncarnationKey;
+
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_deploy_generation(7);
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    let id = GlobalId::User(1000);
+    txn.insert_collection_metadata(BTreeMap::from([(id, ShardId::new())]))
+        .unwrap();
+    txn.set_collection_compaction_bound(id, Some(10.into()))
+        .unwrap();
+    let old = txn.create_client_incarnation(None).unwrap();
+    txn.publish_client_read_requirements(old, BTreeMap::from([(id, 20.into())]))
+        .unwrap();
+    commit(txn).await;
+    let before = state.snapshot().await.unwrap();
+    state.expire().await;
+
+    let mut state = builder
+        .with_deploy_generation(8)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let snapshot = state.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.client_read_requirements,
+        before.client_read_requirements
+    );
+    assert_eq!(
+        snapshot.client_incarnations[&ClientIncarnationKey { id: old }].deployment_generation,
+        7
+    );
+    let mut txn = state.transaction().await.unwrap();
+    assert!(matches!(
+        txn.publish_client_read_requirements(old, BTreeMap::new()),
+        Err(CatalogError::Durable(
+            DurableCatalogError::InvalidReadProtection(_)
+        ))
+    ));
+    let own = txn.create_client_incarnation(None).unwrap();
+    txn.publish_client_read_requirements(own, BTreeMap::from([(id, 30.into())]))
+        .unwrap();
+    commit(txn).await;
+    let snapshot = state.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.client_incarnations[&ClientIncarnationKey { id: own }].deployment_generation,
+        8
+    );
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(id, Some(21.into()))
+        .unwrap();
+    reject(txn, "readable at 20").await;
+    state.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn client_publication_reopen_and_reclamation() {
     use mz_catalog_protos::objects::{ClientIncarnationKey, ClientReadRequirementKey};
 

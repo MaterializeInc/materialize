@@ -186,6 +186,15 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Does not initialize, migrate, promote, reclaim sessions, or bootstrap adapter.
     async fn join(self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
+    /// Joins without promoting or migrating, using this writer's provisioned plan namespace.
+    /// Requires an initialized, protected catalog with the current schema version.
+    /// Before promotion, only protection and build-owned plan metadata may be committed.
+    /// Joining does not grant output-write authority.
+    async fn join_prewarming(
+        self: Box<Self>,
+        plan_build: &str,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+
     /// Joins the active durable generation, ignoring the builder's pending generation.
     /// Promotion racing admission or a later write returns a generation fence.
     /// Rebuild and join again to discover the newly active generation.
@@ -289,7 +298,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
-    /// Get the deployment generation of this instance.
+    /// Get the deployment generation of this instance, not its output-write authority.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
     /// Get a snapshot of the catalog.

@@ -2343,8 +2343,14 @@ pub struct ClientIncarnationKey {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClientIncarnationValue {
     pub heartbeat: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub deployment_generation: u64,
     #[serde(default)]
     pub replica_id: Option<ReplicaId>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

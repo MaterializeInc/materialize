@@ -442,6 +442,14 @@ impl CatalogState {
             StateUpdateKind::AuditLog(_audit_log) => {
                 // Audit logs are not stored in-memory.
             }
+            StateUpdateKind::ActiveDeploymentGeneration(generation) => match diff {
+                StateDiff::Addition => {
+                    assert_eq!(self.active_deployment_generation.replace(generation), None);
+                }
+                StateDiff::Retraction => {
+                    assert_eq!(self.active_deployment_generation.take(), Some(generation));
+                }
+            },
             StateUpdateKind::StorageCollectionMetadata(storage_collection_metadata) => {
                 self.apply_storage_collection_metadata_update(
                     storage_collection_metadata,
@@ -519,6 +527,7 @@ impl CatalogState {
                     &incarnation.id,
                     crate::durable::objects::ClientIncarnationValue {
                         heartbeat: incarnation.heartbeat,
+                        deployment_generation: incarnation.deployment_generation,
                         replica_id: incarnation.replica_id,
                     },
                     diff,
@@ -1697,6 +1706,7 @@ impl CatalogState {
             StateUpdateKind::AuditLog(_) => Vec::new(),
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
+            | StateUpdateKind::ActiveDeploymentGeneration(_)
             | StateUpdateKind::NetworkPolicy(_)
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
@@ -2478,7 +2488,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 &mut item_retractions,
                 &mut item_additions,
             ),
-            StateUpdateKind::Comment(_)
+            StateUpdateKind::ActiveDeploymentGeneration(_)
+            | StateUpdateKind::Comment(_)
             | StateUpdateKind::SourceReferences(_)
             | StateUpdateKind::AuditLog(_)
             | StateUpdateKind::CollectionCompactionBound(_)
@@ -2705,7 +2716,8 @@ impl ApplyState {
                 Self::Items(vec![update])
             }
 
-            Role(_)
+            ActiveDeploymentGeneration(_)
+            | Role(_)
             | RoleAuth(_)
             | Database(_)
             | Schema(_)
