@@ -1788,6 +1788,47 @@ SELECT starts_with(NULL, NULL)
 ----
 NULL
 
+# jaro_winkler_similarity. Expected values match Apache Commons Text's JaroWinklerSimilarity.
+
+query TTT rowsort
+SELECT a, b, jaro_winkler_similarity(a, b)::text FROM (VALUES
+    ('martha', 'marhta'),
+    ('dwayne', 'duane'),
+    ('dixon', 'dicksonx'),
+    ('jonathan', 'jon'),
+    ('jon', 'jonathan'),
+    ('crate', 'trace'),
+    ('kitten', 'sitting'),
+    ('josé', 'jose'),
+    ('xyzabc', 'yzxabc'),
+    ('ab', 'ac'),
+    ('abc', 'xyz'),
+    ('identical', 'identical')
+) AS t (a, b)
+----
+ab  ac  0.6666666666666666
+abc  xyz  0
+crate  trace  0.7333333333333334
+dixon  dicksonx  0.8133333333333332
+dwayne  duane  0.8400000000000001
+identical  identical  1
+jon  jonathan  0.8541666666666666
+jonathan  jon  0.8541666666666666
+josé  jose  0.8833333333333334
+kitten  sitting  0.746031746031746
+martha  marhta  0.9611111111111111
+xyzabc  yzxabc  0.9166666666666666
+
+query RR
+SELECT jaro_winkler_similarity('', ''), jaro_winkler_similarity('a', '')
+----
+1  0
+
+query R
+SELECT jaro_winkler_similarity('a', NULL)
+----
+NULL
+
 query T
 SELECT starts_with(NULL, 'ab')
 ----

@@ -4560,6 +4560,10 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 "has_type_privilege(current_user, $1, $2)",
             ) => Bool, 3143;
         },
+        "jaro_winkler_similarity" => Scalar {
+            params!(String, String) => BinaryFunc::from(func::JaroWinklerSimilarity)
+                => Float64, oid::FUNC_JARO_WINKLER_SIMILARITY_OID;
+        },
         "kafka_murmur2" => Scalar {
             params!(String) => UnaryFunc::KafkaMurmur2String(func::KafkaMurmur2String)
                 => Int32, oid::FUNC_KAFKA_MURMUR2_STRING_OID;
