@@ -37,9 +37,6 @@ class Azurite(Service):
                 "10000",
                 "--disableProductStyleUrl",
                 "--loose",
-                # The Azure SDK sends a newer service API version than the
-                # pinned Azurite release knows.
-                "--skipApiVersionCheck",
             ]
 
         if in_memory:

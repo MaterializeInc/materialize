@@ -15,4 +15,4 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # TODO(def-) 3.35.0 might be losing data, see https://buildkite.com/materialize/nightly/builds/14157#019aad0a-ad38-429d-8ef2-e81eb26e0bf2
-RUN npm install -g azurite@3.33.0
+RUN npm install -g azurite@3.37.0
