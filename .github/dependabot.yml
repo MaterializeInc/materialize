@@ -126,6 +126,7 @@ updates:
     - /misc/images/openssh-static
     - /misc/images/tini-static
     - /misc/images/distroless-prod-base
+    - /misc/dbt-materialize
     - /misc/mcp-materialize
     - /misc/mcp-materialize-agents
     - /ci/builder

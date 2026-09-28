@@ -25,7 +25,9 @@
 #   docker cp extract:/output/ssh ./ssh
 #   docker rm extract
 
-FROM debian:13-slim AS builder
+# Pinned by rolling tag + multi-arch index digest, matching materialized-base,
+# so dependabot refreshes the digest for security fixes.
+FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS builder
 
 ARG AWS_LC_VERSION=v1.54.0
 # OpenSSH >= 10.0 is required: it natively stubs BN_set_flags() for AWS-LC,
