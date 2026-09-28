@@ -110,7 +110,7 @@ module "networking" {
 
 # 2. Set up Google Kubernetes Engine (GKE) cluster
 module "gke" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/gke?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/gke?ref=v13.12.1"
 
   depends_on = [module.networking]
 
@@ -127,7 +127,7 @@ module "gke" {
 
 # 2.1 Create generic node pool for system workloads
 module "generic_nodepool" {
-  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=v13.2.1"
+  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=v13.12.1"
   depends_on = [module.gke]
 
   prefix                = "${var.name_prefix}-generic"
@@ -147,7 +147,7 @@ module "generic_nodepool" {
 
 # 2.2 Create Materialize-dedicated node pool with taints
 module "materialize_nodepool" {
-  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=v13.2.1"
+  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=v13.12.1"
   depends_on = [module.gke]
 
   prefix                = "${var.name_prefix}-mz"
