@@ -1239,6 +1239,19 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-upgrade-entire-mz-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
+        label: "Checks upgrade, whole-Mz restart with :azure: blob store"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
+
       - id: checks-self-managed-upgrade
         topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade, whole-Mz restart"
@@ -1251,6 +1264,19 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-self-managed-upgrade-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
+        label: "Checks Self-Managed upgrade, whole-Mz restart with :azure: blob store"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-self-managed-upgrade-previous
         topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
