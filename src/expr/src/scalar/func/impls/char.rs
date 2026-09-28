@@ -7,14 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use mz_expr_derive::sqlfunc;
+use mz_repr::SqlScalarType;
 use mz_repr::adt::char::{Char, CharLength, format_str_pad};
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
-
-use crate::scalar::func::EagerUnaryFunc;
 
 /// All Char data is stored in Datum::String with its blank padding removed
 /// (i.e. trimmed), so this function provides a means of restoring any
@@ -34,26 +30,13 @@ pub struct PadChar {
     pub length: Option<CharLength>,
 }
 
-impl EagerUnaryFunc for PadChar {
-    type Input<'a> = &'a str;
-    type Output<'a> = Char<String>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        Char(format_str_pad(a, self.length))
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Char {
-            length: self.length,
-        }
-        .nullable(input.nullable)
-    }
-}
-
-impl fmt::Display for PadChar {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("padchar")
-    }
+#[sqlfunc(
+    PadChar,
+    sqlname = "padchar",
+    output_type_expr = SqlScalarType::Char { length: self.length }.nullable(input_type.nullable)
+)]
+fn pad_char<'a>(&self, a: &'a str) -> Char<String> {
+    Char(format_str_pad(a, self.length))
 }
 
 // This function simply allows the expression of changing a's type from char to

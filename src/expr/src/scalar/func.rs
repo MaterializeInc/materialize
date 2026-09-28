@@ -185,7 +185,6 @@ func_name! {
     IsRegexpMatch => "is_regexp_match",
     ListLengthMax => "list_length_max",
     MapBuildFromRecordList => "map_build_from_record_list",
-    PadChar => "pad_char",
     RecordGet => "record_get",
     RegexpMatch => "regexp_match",
     RegexpReplace => "regexp_replace",
