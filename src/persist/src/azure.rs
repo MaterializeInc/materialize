@@ -15,16 +15,16 @@ use azure_core::credentials::{AccessToken, Secret, TokenCredential, TokenRequest
 use azure_core::error::ErrorKind;
 use azure_core::http::headers::{HeaderName, Headers};
 use azure_core::http::{
-    ClientMethodOptions, ClientOptions, ExponentialRetryOptions, RequestContent, RetryOptions,
-    StatusCode, Transport,
+    AsyncResponseBody, ClientMethodOptions, ClientOptions, Etag, ExponentialRetryOptions,
+    RequestContent, RetryOptions, StatusCode, Transport,
 };
 use azure_identity::{
     AzureCliCredential, ClientAssertion, ClientAssertionCredential, ClientSecretCredential,
     ManagedIdentityCredential,
 };
 use azure_storage_blob::models::{
-    BlobClientDownloadOptions, BlobClientGetPropertiesResultHeaders, BlobClientUploadOptions,
-    BlobContainerClientListBlobsOptions,
+    BlobClientDownloadOptions, BlobClientDownloadResult, BlobClientGetPropertiesResultHeaders,
+    BlobClientUploadOptions, BlobContainerClientListBlobsOptions, HttpRange,
 };
 use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
 use bytes::Bytes;
@@ -90,6 +90,9 @@ const MANAGED_IDENTITY_TIMEOUT: Duration = Duration::from_secs(1);
 // TODO: We have not tried tuning this, but making this configurable /
 // running some benchmarks could be valuable.
 const GET_PARTITION_SIZE: NonZero<usize> = NonZero::new(1 << 20).unwrap();
+
+/// Maximum number of partitions a blob get fetches at once.
+const GET_CONCURRENCY: usize = 8;
 
 /// Exchanges a client assertion (the projected service account token) for an
 /// AAD access token with the given scopes.
@@ -745,33 +748,90 @@ fn download_total_len(headers: &Headers) -> Option<u64> {
     }
 }
 
+/// Downloads the partition of `blob` that starts at `offset`, or returns
+/// `None` if the blob does not exist.
+///
+/// With `etag`, the download fails if the blob no longer has that etag.
+async fn download_range(
+    blob: &azure_storage_blob::BlobClient,
+    offset: u64,
+    etag: Option<Etag>,
+) -> Result<Option<BlobClientDownloadResult>, ExternalError> {
+    // A range of exactly one partition makes the SDK read the whole
+    // download in its first request, so it spawns no tasks.
+    let options = BlobClientDownloadOptions {
+        range: Some(HttpRange::new(
+            offset,
+            u64::cast_from(GET_PARTITION_SIZE.get()),
+        )),
+        partition_size: Some(GET_PARTITION_SIZE),
+        if_match: etag,
+        ..Default::default()
+    };
+    match blob.download(Some(options)).await {
+        Ok(response) => Ok(Some(response)),
+        Err(e) if e.http_status() == Some(StatusCode::NotFound) => Ok(None),
+        Err(e) => Err(ExternalError::from(e.with_context("azure blob get error"))),
+    }
+}
+
+/// Reads a download's body to its end.
+async fn read_body(mut body: AsyncResponseBody) -> Result<Vec<Bytes>, ExternalError> {
+    let mut parts = Vec::new();
+    while let Some(part) = body.next().await {
+        parts.push(
+            part.map_err(|e| ExternalError::from(e.with_context("azure blob get body error")))?,
+        );
+    }
+    Ok(parts)
+}
+
 #[async_trait]
 impl Blob for AzureBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
         let blob = self.blob_client(&path);
 
-        // The download fetches the blob in concurrent ranged requests,
-        // pinned to the etag of the first response.
-        let options = BlobClientDownloadOptions {
-            partition_size: Some(GET_PARTITION_SIZE),
-            ..Default::default()
+        // NOTE: The SDK's partitioned download reads every range after the
+        // first in spawned tasks that dropping the download does not abort.
+        // `HedgedBlob` cancels a losing get by dropping it, so all requests
+        // must live in this future. Each range is therefore its own download
+        // of at most one partition, which the SDK reads without spawning.
+        let Some(first) = download_range(&blob, 0, None).await? else {
+            return Ok(None);
         };
-        let response = match blob.download(Some(options)).await {
-            Ok(response) => response,
-            Err(e) if e.http_status() == Some(StatusCode::NotFound) => return Ok(None),
-            Err(e) => return Err(ExternalError::from(e.with_context("azure blob get error"))),
-        };
+        let content_length = download_total_len(&first.headers);
+        // Pin the remaining ranges to the version the first range read.
+        let etag = first.properties.etag.clone();
+        let partition_size = u64::cast_from(GET_PARTITION_SIZE.get());
+        let offsets =
+            (partition_size..content_length.unwrap_or(0)).step_by(GET_PARTITION_SIZE.get());
 
-        let content_length = download_total_len(&response.headers);
         let mut segments = SegmentedBytes::new();
         let mut total_len: u64 = 0;
-        let mut body = response.body;
-        while let Some(value) = body.next().await {
-            let value = value
-                .map_err(|e| ExternalError::from(e.with_context("azure blob get body error")))?;
-            total_len += u64::cast_from(value.len());
-            segments.push(value);
+        for part in read_body(first.body).await? {
+            total_len += u64::cast_from(part.len());
+            segments.push(part);
+        }
+        let mut rest = futures_util::stream::iter(offsets)
+            .map(|offset| {
+                let (blob, etag) = (&blob, etag.clone());
+                async move {
+                    match download_range(blob, offset, etag).await? {
+                        Some(response) => read_body(response.body).await.map(Some),
+                        None => Ok(None),
+                    }
+                }
+            })
+            .buffered(GET_CONCURRENCY);
+        while let Some(parts) = rest.next().await {
+            let Some(parts) = parts? else {
+                return Ok(None);
+            };
+            for part in parts {
+                total_len += u64::cast_from(part.len());
+                segments.push(part);
+            }
         }
 
         // Report if the content-length header didn't match the number of
@@ -874,11 +934,104 @@ impl Blob for AzureBlob {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use azure_core::http::{AsyncRawResponse, HttpClient, Request};
     use tracing::info;
 
     use crate::location::tests::blob_impl_test;
 
     use super::*;
+
+    /// Increments its counter when dropped.
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// An [HttpClient] serving a blob of three partitions whose first
+    /// partition downloads and whose other partitions hang until their
+    /// request is dropped.
+    #[derive(Debug)]
+    struct HangingRangesClient {
+        /// Number of hanging requests started.
+        started: Arc<AtomicUsize>,
+        /// Number of hanging requests dropped.
+        dropped: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HttpClient for HangingRangesClient {
+        async fn execute_request(&self, request: &Request) -> azure_core::Result<AsyncRawResponse> {
+            let partition = GET_PARTITION_SIZE.get();
+            let range = request
+                .headers()
+                .get_optional_str(&HeaderName::from_static("range"))
+                .unwrap_or_default();
+            if range.starts_with("bytes=0-") {
+                let mut headers = Headers::new();
+                headers.insert(
+                    "content-range",
+                    format!("bytes 0-{}/{}", partition - 1, 3 * partition),
+                );
+                headers.insert("content-length", partition.to_string());
+                headers.insert("etag", "\"v1\"");
+                return Ok(AsyncRawResponse::from_bytes(
+                    StatusCode::PartialContent,
+                    headers,
+                    vec![0u8; partition],
+                ));
+            }
+            let _dropped = DropCounter(Arc::clone(&self.dropped));
+            self.started.fetch_add(1, Ordering::SeqCst);
+            std::future::pending().await
+        }
+    }
+
+    /// `HedgedBlob` cancels the losing leg of a race by dropping its get, so
+    /// dropping a get must drop every request it has in flight.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn azure_blob_get_drop_cancels_requests() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let http_client = HangingRangesClient {
+            started: Arc::clone(&started),
+            dropped: Arc::clone(&dropped),
+        };
+        let client = BlobContainerClient::new(
+            Url::parse("https://account.blob.core.windows.net/container").expect("valid url"),
+            None,
+            Some(BlobContainerClientOptions {
+                client_options: ClientOptions {
+                    transport: Some(Transport::new(Arc::new(http_client))),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        )
+        .expect("valid client");
+        let blob = AzureBlob {
+            metrics: S3BlobMetrics::new(&MetricsRegistry::new()),
+            client: Arc::new(client),
+            prefix: "prefix".to_string(),
+        };
+
+        // Drive the get until both hanging partitions are requested, then
+        // drop it.
+        tokio::select! {
+            _ = blob.get("key") => panic!("get of a hanging blob completed"),
+            () = async {
+                while started.load(Ordering::SeqCst) < 2 {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    }
 
     /// A [MockExchange] wrapped for sharing with the credential's exchange
     /// closure.
