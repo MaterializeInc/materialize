@@ -388,11 +388,14 @@ Two shapes stay hand-written by design.
   different mechanism from the type-parameter erasure it applies. The
   `impl<E: Eval> LazyUnaryFunc` blocks under `src/expr/src/scalar/func/impls/` are these.
 * Functions that do not evaluate every operand. The macro emits `Eager*`
-  implementations, which evaluate all arguments before dispatch. `And`, `Or`,
-  `Coalesce`, `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` are these.
+  implementations, which evaluate all arguments before dispatch. The
+  `LazyVariadicFunc` implementations `And`, `Or`, `Coalesce`, `Greatest`, `Least`,
+  `ErrorIfNull`, and `CaseLiteral` are these.
 
-`CastStringToInt2Vector`, `RegexpMatch` and `RegexpSplitToArray` in
-`src/expr/src/scalar/func/impls/string.rs` are hand-written `LazyUnaryFunc`
-implementations in neither category, and all three are convertible. Each allocates its
-output into a `RowArena`, which `EagerUnaryFunc::call` supplies, and each checks NULL in
-its body, which a non-nullable parameter type takes over.
+Those two shapes account for every hand-written implementation under
+`src/expr/src/scalar/func/`. Everything else is generated from a `#[sqlfunc]`
+annotation, so a new function belongs under the macro unless it falls into one of the
+two categories above. Two properties of the macro make that reach as far as it does: a
+function that allocates its result gets a `RowArena` from `Eager*Func::call`, and a
+function that would check NULL in its body gets that check from a non-nullable parameter
+type, `ExcludeNull<Datum<'a>>` where the body needs a raw `Datum`.

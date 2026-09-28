@@ -26,14 +26,12 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{Datum, ExcludeNull, Int2Vector, RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::func::{binary, regexp_match_static};
-use crate::scalar::func::{
-    EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
-};
+use crate::func::regexp_match_static;
+use crate::scalar::func::{LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re};
 use crate::{Eval, EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 #[sqlfunc(
@@ -175,33 +173,20 @@ fn reverse<'a>(a: &'a str) -> String {
 )]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
-impl EagerUnaryFunc for CastStringToNumeric {
-    type Input<'a> = &'a str;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let mut d = strconv::parse_numeric(a)?;
-        if let Some(scale) = self.0 {
-            if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
-                return Err(EvalError::NumericFieldOverflow);
-            }
+#[sqlfunc(
+    CastStringToNumeric,
+    sqlname = "text_to_numeric",
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }.nullable(input_type.nullable),
+    inverse = super::CastNumericToString
+)]
+fn cast_string_to_numeric<'a>(&self, a: &'a str) -> Result<Numeric, EvalError> {
+    let mut d = strconv::parse_numeric(a)?;
+    if let Some(scale) = self.0 {
+        if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
         }
-        Ok(d.into_inner())
     }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastNumericToString)
-    }
-}
-
-impl fmt::Display for CastStringToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_numeric")
-    }
+    Ok(d.into_inner())
 }
 
 #[sqlfunc(
@@ -235,29 +220,19 @@ fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
 )]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
 
-impl EagerUnaryFunc for CastStringToTimestamp {
-    type Input<'a> = &'a str;
-    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let out = strconv::parse_timestamp(a)?;
-        let updated = out.round_to_precision(self.0)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampToString)
-    }
-}
-
-impl fmt::Display for CastStringToTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_timestamp")
-    }
+#[sqlfunc(
+    CastStringToTimestamp,
+    sqlname = "text_to_timestamp",
+    output_type_expr = SqlScalarType::Timestamp { precision: self.0 }.nullable(input_type.nullable),
+    inverse = super::CastTimestampToString
+)]
+fn cast_string_to_timestamp<'a>(
+    &self,
+    a: &'a str,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    let out = strconv::parse_timestamp(a)?;
+    let updated = out.round_to_precision(self.0)?;
+    Ok(updated)
 }
 
 #[sqlfunc(sqlname = "try_parse_monotonic_iso8601_timestamp")]
@@ -288,29 +263,20 @@ fn try_parse_monotonic_iso8601_timestamp<'a>(
 )]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
 
-impl EagerUnaryFunc for CastStringToTimestampTz {
-    type Input<'a> = &'a str;
-    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let out = strconv::parse_timestamptz(a)?;
-        let updated = out.round_to_precision(self.0)?;
-        Ok(updated)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampTzToString)
-    }
-}
-
-impl fmt::Display for CastStringToTimestampTz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_timestamp_with_time_zone")
-    }
+#[sqlfunc(
+    CastStringToTimestampTz,
+    sqlname = "text_to_timestamp_with_time_zone",
+    output_type_expr = SqlScalarType::TimestampTz { precision: self.0 }
+        .nullable(input_type.nullable),
+    inverse = super::CastTimestampTzToString
+)]
+fn cast_string_to_timestamp_tz<'a>(
+    &self,
+    a: &'a str,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    let out = strconv::parse_timestamptz(a)?;
+    let updated = out.round_to_precision(self.0)?;
+    Ok(updated)
 }
 
 #[sqlfunc(
@@ -692,41 +658,24 @@ pub struct CastStringToChar {
     pub fail_on_len: bool,
 }
 
-impl EagerUnaryFunc for CastStringToChar {
-    type Input<'a> = &'a str;
-    type Output<'a> = Result<Char<String>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
-            assert!(self.fail_on_len);
-            EvalError::StringValueTooLong {
-                target_type: "character".into(),
-                length: usize::cast_from(self.length.unwrap().into_u32()),
-            }
-        })?;
-
-        Ok(Char(s))
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Char {
-            length: self.length,
+// Not an eliminable cast: even when `length` is `None`, this trims trailing whitespace.
+#[sqlfunc(
+    CastStringToChar,
+    skip_display = true,
+    output_type_expr = SqlScalarType::Char { length: self.length }.nullable(input_type.nullable),
+    could_error = self.fail_on_len && self.length.is_some(),
+    inverse = super::CastCharToString
+)]
+fn cast_string_to_char<'a>(&self, a: &'a str) -> Result<Char<String>, EvalError> {
+    let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
+        assert!(self.fail_on_len);
+        EvalError::StringValueTooLong {
+            target_type: "character".into(),
+            length: usize::cast_from(self.length.unwrap().into_u32()),
         }
-        .nullable(input.nullable)
-    }
+    })?;
 
-    fn could_error(&self) -> bool {
-        self.fail_on_len && self.length.is_some()
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastCharToString)
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        // even when `length` is `None`, we'll trim whitespace at the end
-        false
-    }
+    Ok(Char(s))
 }
 
 impl fmt::Display for CastStringToChar {
@@ -874,45 +823,26 @@ pub struct CastStringToVarChar {
     pub fail_on_len: bool,
 }
 
-impl EagerUnaryFunc for CastStringToVarChar {
-    type Input<'a> = &'a str;
-    type Output<'a> = Result<VarChar<&'a str>, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let s =
-            mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
-                assert!(self.fail_on_len);
-                EvalError::StringValueTooLong {
-                    target_type: "character varying".into(),
-                    length: usize::cast_from(self.length.unwrap().into_u32()),
-                }
-            })?;
-
-        Ok(VarChar(s))
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::VarChar {
-            max_length: self.length,
+#[sqlfunc(
+    CastStringToVarChar,
+    skip_display = true,
+    output_type_expr = SqlScalarType::VarChar { max_length: self.length }
+        .nullable(input_type.nullable),
+    could_error = self.fail_on_len && self.length.is_some(),
+    inverse = super::CastVarCharToString,
+    preserves_uniqueness = self.length.is_none(),
+    is_eliminable_cast = self.length.is_none()
+)]
+fn cast_string_to_var_char<'a>(&self, a: &'a str) -> Result<VarChar<&'a str>, EvalError> {
+    let s = mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
+        assert!(self.fail_on_len);
+        EvalError::StringValueTooLong {
+            target_type: "character varying".into(),
+            length: usize::cast_from(self.length.unwrap().into_u32()),
         }
-        .nullable(input.nullable)
-    }
+    })?;
 
-    fn could_error(&self) -> bool {
-        self.fail_on_len && self.length.is_some()
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        self.length.is_none()
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastVarCharToString)
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        self.length.is_none()
-    }
+    Ok(VarChar(s))
 }
 
 impl fmt::Display for CastStringToVarChar {
@@ -938,78 +868,24 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     expr: Box::new(MirScalarExpr::column(0)),
 });
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash
+#[sqlfunc(
+    sqlname = "strtoint2vector",
+    inverse = super::CastInt2VectorToString
 )]
-pub struct CastStringToInt2Vector;
-
-impl LazyUnaryFunc for CastStringToInt2Vector {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a impl Eval,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-
-        let datums = strconv::parse_legacy_vector(a.unwrap_str(), |elem_text| {
-            let elem_text = match elem_text {
-                Cow::Owned(s) => temp_storage.push_string(s),
-                Cow::Borrowed(s) => s,
-            };
-            INT2VECTOR_CAST_EXPR.eval(&[Datum::String(elem_text)], temp_storage)
-        })?;
-        array_create_scalar(&datums, temp_storage)
-    }
-
-    /// The output SqlColumnType of this function
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int2Vector.nullable(input_type.nullable)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastInt2VectorToString)
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastStringToInt2Vector {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("strtoint2vector")
-    }
+fn cast_string_to_int2_vector<'a>(
+    a: &'a str,
+    temp_storage: &'a RowArena,
+) -> Result<Int2Vector<'a>, EvalError> {
+    let datums = strconv::parse_legacy_vector(a, |elem_text| {
+        let elem_text = match elem_text {
+            Cow::Owned(s) => temp_storage.push_string(s),
+            Cow::Borrowed(s) => s,
+        };
+        INT2VECTOR_CAST_EXPR.eval(&[Datum::String(elem_text)], temp_storage)
+    })?;
+    Ok(Int2Vector(
+        array_create_scalar(&datums, temp_storage)?.unwrap_array(),
+    ))
 }
 
 #[sqlfunc(
@@ -1116,17 +992,9 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
 )]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 
-impl EagerUnaryFunc for IsLikeMatch {
-    type Input<'a> = &'a str;
-    type Output<'a> = bool;
-
-    fn call<'a>(&self, haystack: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        self.0.is_match(haystack)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Bool.nullable(input.nullable)
-    }
+#[sqlfunc(IsLikeMatch, skip_display = true)]
+fn is_like_match<'a>(&self, haystack: &'a str) -> bool {
+    self.0.is_match(haystack)
 }
 
 impl fmt::Display for IsLikeMatch {
@@ -1153,17 +1021,9 @@ impl fmt::Display for IsLikeMatch {
 )]
 pub struct IsRegexpMatch(pub Regex);
 
-impl EagerUnaryFunc for IsRegexpMatch {
-    type Input<'a> = &'a str;
-    type Output<'a> = bool;
-
-    fn call<'a>(&self, haystack: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        self.0.is_match(haystack)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Bool.nullable(input.nullable)
-    }
+#[sqlfunc(IsRegexpMatch, skip_display = true)]
+fn is_regexp_match<'a>(&self, haystack: &'a str) -> bool {
+    self.0.is_match(haystack)
 }
 
 impl fmt::Display for IsRegexpMatch {
@@ -1195,52 +1055,18 @@ impl fmt::Display for IsRegexpMatch {
 #[serde(rename = "RegexpMatchStatic")]
 pub struct RegexpMatch(pub Regex);
 
-impl LazyUnaryFunc for RegexpMatch {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a impl Eval,
-    ) -> Result<Datum<'a>, EvalError> {
-        let haystack = a.eval(datums, temp_storage)?;
-        if haystack.is_null() {
-            return Ok(Datum::Null);
-        }
-        regexp_match_static(haystack, temp_storage, &self.0)
-    }
-
-    /// The output SqlColumnType of this function
-    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        // Returns null if the regex did not match
-        true
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
+#[sqlfunc(
+    RegexpMatch,
+    skip_display = true,
+    // Returns null if the regex did not match.
+    output_type_expr = SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
+)]
+fn regexp_match<'a>(
+    &self,
+    haystack: ExcludeNull<Datum<'a>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    regexp_match_static(*haystack, temp_storage, &self.0)
 }
 
 impl fmt::Display for RegexpMatch {
@@ -1269,51 +1095,19 @@ impl fmt::Display for RegexpMatch {
 #[serde(rename = "RegexpSplitToArrayStatic")]
 pub struct RegexpSplitToArray(pub Regex);
 
-impl LazyUnaryFunc for RegexpSplitToArray {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a impl Eval,
-    ) -> Result<Datum<'a>, EvalError> {
-        let haystack = a.eval(datums, temp_storage)?;
-        if haystack.is_null() {
-            return Ok(Datum::Null);
-        }
-        regexp_split_to_array_re(haystack.unwrap_str(), &self.0, temp_storage)
-    }
-
-    /// The output SqlColumnType of this function
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(input_type.nullable)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
+#[sqlfunc(
+    RegexpSplitToArray,
+    skip_display = true,
+    output_type_expr = SqlScalarType::Array(Box::new(SqlScalarType::String))
+        .nullable(input_type.nullable),
+    introduces_nulls = false
+)]
+fn regexp_split_to_array<'a>(
+    &self,
+    haystack: &'a str,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    regexp_split_to_array_re(haystack, &self.0, temp_storage)
 }
 
 impl fmt::Display for RegexpSplitToArray {
@@ -1360,29 +1154,12 @@ pub struct RegexpReplace {
     pub limit: usize,
 }
 
-impl binary::EagerBinaryFunc for RegexpReplace {
-    type Input<'a> = (&'a str, &'a str);
-    type Output<'a> = Cow<'a, str>;
-
-    fn call<'a>(
-        &self,
-        (source, replacement): Self::Input<'a>,
-        _temp_storage: &'a RowArena,
-    ) -> Self::Output<'a> {
-        // WARNING: This function has potential OOM risk if used with an inflationary
-        // replacement pattern. It is very difficult to calculate the output size ahead
-        // of time because the replacement pattern may depend on capture groups.
-        self.regex.replacen(source, self.limit, replacement)
-    }
-
-    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
-        use mz_repr::AsColumnType;
-        let output = <Self::Output<'_> as AsColumnType>::as_column_type();
-        let propagates_nulls = binary::EagerBinaryFunc::propagates_nulls(self);
-        let nullable = output.nullable;
-        let input_nullable = input_types.iter().any(|t| t.nullable);
-        output.nullable(nullable || (propagates_nulls && input_nullable))
-    }
+#[sqlfunc(RegexpReplace, skip_display = true)]
+fn regexp_replace<'a>(&self, source: &'a str, replacement: &'a str) -> Cow<'a, str> {
+    // WARNING: This function has potential OOM risk if used with an inflationary
+    // replacement pattern. It is very difficult to calculate the output size ahead
+    // of time because the replacement pattern may depend on capture groups.
+    self.regex.replacen(source, self.limit, replacement)
 }
 
 impl fmt::Display for RegexpReplace {
