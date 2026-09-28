@@ -3094,6 +3094,48 @@ metrics:
   - table_name
   source: src/storage/src/metrics/source/postgres.rs
   visibility: internal
+- name: mz_prepared_query_cache_compiled_entries
+  help: Retained compiled prepared programs, including evicted programs still in use.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_cache_estimated_bytes
+  help: Estimated charged bytes in prepared programs, including evicted programs still in use. Not allocator RSS.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_compile_seconds_bucket
+  help: Time spent compiling and admitting a prepared indexed-query template.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_compile_seconds_count
+  help: Time spent compiling and admitting a prepared indexed-query template.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_compile_seconds_sum
+  help: Time spent compiling and admitting a prepared indexed-query template.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_events_total
+  help: Prepared-query analysis, binding, template compilation and execution events.
+  labels:
+  - event
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_instantiate_seconds_bucket
+  help: Time spent binding parameters and dynamic values to a prepared indexed-query template.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_instantiate_seconds_count
+  help: Time spent binding parameters and dynamic values to a prepared indexed-query template.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_prepared_query_instantiate_seconds_sum
+  help: Time spent binding parameters and dynamic values to a prepared indexed-query template.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.
   labels:
@@ -3669,6 +3711,12 @@ metrics:
   - source_id
   - worker_id
   source: src/storage/src/statistics.rs
+  visibility: internal
+- name: mz_sql_compiler_calls_total
+  help: Attempted session SQL parsing and compiler entry-point calls, including nested calls and errors. Excludes sessionless catalog bootstrap.
+  labels:
+  - phase
+  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_sql_server_per_source_deletes
   help: The number of deletes for all tables in this source
