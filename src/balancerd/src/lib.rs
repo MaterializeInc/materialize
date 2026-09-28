@@ -316,6 +316,14 @@ impl BalancerService {
             None => (None, None),
         };
 
+        // Built once and shared by every upstream connection, since building a connector loads
+        // and parses the system CA bundle.
+        let internal_tls = self
+            .cfg
+            .internal_tls
+            .then(internal_tls_connector)
+            .transpose()?;
+
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
         let limiter = ConnectionLimiter::new(&self.cfg.metrics_registry, self.configs.clone());
 
@@ -339,7 +347,7 @@ impl BalancerService {
                 resolver: Arc::new(self.cfg.resolver),
                 cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
                 tls: pgwire_tls,
-                internal_tls: self.cfg.internal_tls,
+                internal_tls: internal_tls.clone(),
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
                 limiter: Arc::clone(&limiter),
                 configs: self.configs.clone(),
@@ -377,7 +385,7 @@ impl BalancerService {
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
                 limiter,
                 configs: self.configs.clone(),
-                internal_tls: self.cfg.internal_tls,
+                internal_tls,
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -482,6 +490,14 @@ impl mz_server_core::Server for InternalHttpServer {
             http.serve_connection(conn, service).err_into().await
         })
     }
+}
+
+/// Builds the connector for TLS to environmentd, shared by every upstream connection.
+fn internal_tls_connector() -> Result<SslConnector, anyhow::Error> {
+    let mut builder = SslConnector::builder(SslMethod::tls())?;
+    // environmentd doesn't yet have a cert we trust, so for now disable verification.
+    builder.set_verify(SslVerifyMode::NONE);
+    Ok(builder.build())
 }
 
 /// Wraps an IntGauge and automatically `inc`s on init and `drop`s on drop. Callers should not call
@@ -784,7 +800,7 @@ struct PgwireBalancer {
     /// Read for [`PRE_RESOLVED_TIMEOUT`] at connection time.
     configs: ConfigSet,
     tls: Option<ReloadingTlsConfig>,
-    internal_tls: bool,
+    internal_tls: Option<SslConnector>,
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
@@ -999,7 +1015,7 @@ impl PgwireBalancer {
         conn: &'a mut FramedConn<A>,
         resolved: ResolvedAddr,
         params: BTreeMap<String, String>,
-        internal_tls: bool,
+        internal_tls: Option<&SslConnector>,
         metrics: &ServerMetrics,
     ) -> Result<(), io::Error>
     where
@@ -1049,7 +1065,7 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-        internal_tls: bool,
+        internal_tls: Option<&SslConnector>,
     ) -> Result<Conn<TcpStream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -1057,7 +1073,7 @@ impl PgwireBalancer {
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
-        let mut mz_stream = if internal_tls {
+        let mut mz_stream = if let Some(internal_tls) = internal_tls {
             FrontendStartupMessage::SslRequest.encode(&mut buf)?;
             mz_stream.write_all(&buf).await?;
             buf.clear();
@@ -1066,14 +1082,7 @@ impl PgwireBalancer {
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
                 // do a TLS handshake
-                let mut builder =
-                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                builder.set_verify(SslVerifyMode::NONE);
-                let mut ssl = builder
-                    .build()
-                    .configure()?
-                    .into_ssl(&envd_addr.to_string())?;
+                let mut ssl = internal_tls.configure()?.into_ssl(&envd_addr.to_string())?;
                 ssl.set_connect_state();
                 Conn::Ssl(SslStream::new(ssl, mz_stream)?)
             } else {
@@ -1151,7 +1160,7 @@ impl mz_server_core::Server for PgwireBalancer {
         _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
-        let internal_tls = self.internal_tls;
+        let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
@@ -1189,8 +1198,14 @@ impl mz_server_core::Server for PgwireBalancer {
                 };
                 drop(pre_resolved);
 
-                PgwireBalancer::proxy(&mut conn, resolved, params, internal_tls, &inner_metrics)
-                    .await?;
+                PgwireBalancer::proxy(
+                    &mut conn,
+                    resolved,
+                    params,
+                    internal_tls.as_ref(),
+                    &inner_metrics,
+                )
+                .await?;
                 conn.flush().await?;
                 Ok(())
             }
@@ -1375,7 +1390,7 @@ struct HttpsBalancer {
     metrics: Arc<ServerMetrics>,
     limiter: Arc<ConnectionLimiter>,
     configs: ConfigSet,
-    internal_tls: bool,
+    internal_tls: Option<SslConnector>,
 }
 
 impl HttpsBalancer {
@@ -1544,14 +1559,9 @@ impl mz_server_core::Server for HttpsBalancer {
                     mz_stream.write_all(&buf[..len]).await?;
                 }
 
-                let mut mz_stream = if internal_tls {
+                let mut mz_stream = if let Some(internal_tls) = &internal_tls {
                     // do a TLS handshake
-                    let mut builder =
-                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                    builder.set_verify(SslVerifyMode::NONE);
-                    let mut ssl = builder
-                        .build()
+                    let mut ssl = internal_tls
                         .configure()?
                         .into_ssl(&resolved.addr.to_string())?;
                     ssl.set_connect_state();
