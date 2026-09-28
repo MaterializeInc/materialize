@@ -58,6 +58,8 @@ pub mod index;
 pub mod materialized_view;
 pub mod metric_sink;
 pub mod peek;
+#[cfg(test)]
+pub mod prepared;
 pub mod subscribe;
 pub mod view;
 
@@ -268,7 +270,7 @@ where
 ///       macro call.
 ///    3. Extend the `let optimizer_feature_overrides = ...` call in
 ///       `plan_create_cluster`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
     pub mode: OptimizeMode,
