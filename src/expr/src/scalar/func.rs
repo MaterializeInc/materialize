@@ -142,7 +142,6 @@ func_name! {
     <E> CastListToJsonb<E> => "cast_list_to_jsonb",
     CastListToString => "cast_list_to_string",
     CastMapToString => "cast_map_to_string",
-    CastRangeToString => "cast_range_to_string",
     <E> CastRecord1ToRecord2<E> => "cast_record1_to_record2",
     CastRecordToString => "cast_record_to_string",
     <E> CastStringToArray<E> => "cast_string_to_array",
