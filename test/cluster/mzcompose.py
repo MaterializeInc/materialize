@@ -3032,22 +3032,11 @@ class Metrics:
             "mz_compute_controller_history_command_count", command_type
         )
 
-    def get_storage_controller_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_storage_controller_history_command_count", command_type
-        )
-
     def get_compute_commands_total(self, command_type: str) -> float:
         return self.get_command_count("mz_compute_commands_total", command_type)
 
     def get_compute_responses_total(self, response_type: str) -> float:
         return self.get_response_count("mz_compute_responses_total", response_type)
-
-    def get_storage_commands_total(self, command_type: str) -> float:
-        return self.get_command_count("mz_storage_commands_total", command_type)
-
-    def get_storage_responses_total(self, response_type: str) -> float:
-        return self.get_response_count("mz_storage_responses_total", response_type)
 
     def get_peeks_total(self, result: str) -> float:
         metrics = self.with_name("mz_compute_peeks_total")
@@ -3489,7 +3478,7 @@ def workflow_test_response_count_survives_replica_replacement(
 
 
 def workflow_test_storage_controller_metrics(c: Composition) -> None:
-    """Test metrics exposed by the storage controller."""
+    """Test storage collection lag observations and metric cleanup."""
 
     c.up(
         "materialized",
@@ -3557,62 +3546,8 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     metrics_u2 = metrics.for_instance("u2")
     metrics_ux = metrics.for_instance("")
 
-    # mz_storage_commands_total
-    count = metrics_u2.get_storage_commands_total("hello")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("initialization_complete")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("allow_writes")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("update_configuration")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("run_ingestion")
-    assert count == 2, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_commands_total("run_sink")
-    assert count == 1, f"got {count}"
-
-    # mz_storage_responses_total
-    count = metrics_u2.get_storage_responses_total("frontier_upper")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_responses_total("status_update")
-    assert count > 0, f"got {count}"
-
-    count = metrics_u2.get_value("mz_storage_command_message_bytes_total")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_value("mz_storage_response_message_bytes_total")
-    assert count > 0, f"got {count}"
-
-    # mz_storage_controller_history_command_count
-    count = metrics_u2.get_storage_controller_history_command_count("hello")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
-    assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("run_ingestion")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("run_sink")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count(
-        "initialization_complete"
-    )
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count(
-        "update_configuration"
-    )
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("allow_writes")
-    assert count == 1, f"got {count}"
-
-    count = metrics_u2.get_value("mz_storage_controller_connected_replica_count")
-    assert count == 1, f"got {count}"
-    count = metrics_u2.get_value("mz_storage_controller_replica_connects_total")
-    assert count == 1, f"got {count}"
-    duration = metrics_u2.get_value(
-        "mz_storage_controller_replica_connect_wait_time_seconds_total"
-    )
-    assert duration > 0, f"got {duration}"
-
+    # Native replicas own lifecycle execution. The controller exposes observed
+    # collection lag, not lifecycle transport or command-history accounting.
     # mz_dataflow_wallclock_lag_seconds_count
     count = metrics_ux.get_wallclock_lag_count(table1_id)
     assert count, f"got {count}"
