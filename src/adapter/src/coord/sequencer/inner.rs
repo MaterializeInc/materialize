@@ -3561,7 +3561,7 @@ impl Coordinator {
         };
         match deferred {
             DeferredDdl::Statement { ctx, stmt, params } => {
-                self.handle_execute_inner(stmt, params, ctx).await;
+                self.handle_execute_inner(stmt, None, params, ctx).await;
             }
             DeferredDdl::Commit(pending) => {
                 Box::pin(self.sequence_ddl_commit(pending)).await;

@@ -59,7 +59,6 @@ pub mod materialized_view;
 pub mod metric_sink;
 pub mod peek;
 pub mod pinned;
-#[cfg(test)]
 pub mod prepared;
 pub mod subscribe;
 pub mod view;
