@@ -217,8 +217,7 @@ With a `&self` receiver the macro does not define the struct, so the name must m
 ```rust
 #[sqlfunc(
     ArrayFill,
-    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)"
 )]
 fn array_fill<'a>(
     &self,
@@ -226,7 +225,7 @@ fn array_fill<'a>(
     dims: Option<Array<'a>>,
     lower_bounds: OptionalArg<Option<Array<'a>>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     // ...
 }
 ```
