@@ -38,6 +38,12 @@ Same-version success is an intermediate proof, not completion of M2. Do not
 design a same-version-only shortcut that needs another ownership model for
 version overlap.
 
+For these milestones, keep mz_cluster_replicas shared and materializable,
+filtered to the catalog's active deployment regardless of the querying adapter.
+Routing, reconciliation and prewarming readiness use their own deployment's
+inventory. Query-relative public catalog views and their maintained-query
+semantics are future work, not a prerequisite or an implementation task here.
+
 Close the known serving-compatibility gaps at their owning boundaries:
 - Establish the index's initial as_of, bound and logical/actual-input protection
   with its definition and selected plan in the DDL transaction. Plan changes

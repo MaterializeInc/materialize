@@ -58,6 +58,13 @@ own deployment's replicas, and observations identify that scope. There is no
 private durable SQL catalog per deployment. Written plans retain their
 [build ownership](#written-plans).
 
+For these milestones, `mz_cluster_replicas` remains a shared, materializable
+relation showing the catalog's active deployment, even through a prewarming
+adapter. Routing, reconciliation and prewarming readiness use their own
+deployment's inventory, not this public filter. Raw catalog access retains all
+deployments. [Query-relative public visibility](#future-work-deployment-relative-catalog-views)
+is deferred.
+
 Catalog participation is distinct from output-write authority. A read-only
 deployment can publish its replicas, plans and protection without gaining the
 right to write shared user data or maintained outputs. Promotion commits write
@@ -605,6 +612,23 @@ No all-replica DDL barrier, unrelated hydration wait or per-query durable
 record is required. Existing asynchronous MV replacement and startup-only
 parameter semantics remain unchanged. Token and wakeup mechanics are
 implementation choices.
+
+## Future work: deployment-relative catalog views
+
+Outside these milestones, public deployment-owned metadata should describe the
+querying adapter's deployment, including during prewarming. Raw catalog access
+and explicitly unfiltered relations should retain all deployments. Scope uses
+immutable launch deployment identity, not binary version or the catalog's active
+generation. Shared SQL objects remain shared.
+
+A materializable all-deployments inventory with ordinary query-time view filters
+is a candidate, following the `pg_catalog` all-databases pattern. Its filter
+must not specialize a shared maintained output to one writer's deployment.
+Before adopting it, settle materialized-view, index and SUBSCRIBE semantics,
+including existing dependents and builtin migration. Current expression
+preparation rejects context-dependent functions in maintained queries. Explicit
+scope for durable queries and request-scoped binding for subscriptions are
+options, not approved changes to existing SQL behavior.
 
 Resume from the [current handoff](20260903_decoupled_coordination_log.md) and
 [implementer prompt](20260903_decoupled_coordination_prompt.md). The
