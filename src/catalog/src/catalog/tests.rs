@@ -1002,6 +1002,7 @@ async fn verify_builtin_descs() {
     };
     Catalog::with_debug_aws_context(aws_context, |catalog| async move {
         let conn_catalog = catalog.for_system_session();
+        let mut mismatches = Vec::new();
 
         for builtin in BUILTINS::iter() {
             let (schema, name, expected_desc) = match builtin {
@@ -1037,12 +1038,14 @@ async fn verify_builtin_descs() {
                     "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type"
                 );
             }
-            assert_eq!(
-                &*actual_desc, expected_desc,
-                "item {schema}.{name} did not match its expected RelationDesc"
-            );
+            if &*actual_desc != expected_desc {
+                mismatches.push(format!(
+                    "item {schema}.{name} did not match its expected RelationDesc:\nactual: {actual_desc:?}\nexpected: {expected_desc:?}"
+                ));
+            }
         }
         catalog.expire().await;
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     })
     .await
 }

@@ -465,6 +465,9 @@ impl Listeners {
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)().into();
 
+        // Open the catalog before accessing other Persist shards. Its initial sync
+        // installs the protected environment's committed format target in this
+        // shared client configuration, including for read-like shard initialization.
         let persist_client = config
             .catalog_config
             .persist_clients

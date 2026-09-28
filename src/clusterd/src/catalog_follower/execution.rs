@@ -870,11 +870,12 @@ impl ReplicaEnactment {
             .send(ComputeCommand::UpdateConfiguration(Box::new(parameters)));
     }
 
-    pub fn configure_storage(&mut self, catalog: &Catalog, cluster: ClusterId, replica: ReplicaId) {
+    pub fn configure_storage(
+        &mut self,
+        parameters: mz_storage_types::parameters::StorageParameters,
+    ) {
         if let Some(storage) = &mut self.io.storage {
-            storage.configure(mz_catalog::storage_config::replica_storage_config(
-                catalog, cluster, replica,
-            ));
+            storage.configure(parameters);
         }
     }
 
@@ -956,7 +957,11 @@ impl ReplicaEnactment {
                 && catalog
                     .state()
                     .written_plan_replica_owner(*id, build)
-                    .is_some_and(|owner| owner.replica_id == self.replica))
+                    .is_some_and(|owner| {
+                        owner.replica_id == self.replica
+                            && owner.deployment_generation
+                                == catalog.state().deployment_generation()
+                    }))
                 || catalog
                     .try_get_entry_by_global_id(id)
                     .is_some_and(|entry| match entry.item() {

@@ -11,8 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ReplicaId;
 use mz_repr::CatalogItemId;
-use mz_sql::catalog::{CatalogItem, ReplicaTarget};
+use mz_sql::catalog::CatalogItem;
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::RoleMetadata;
 
@@ -55,7 +56,7 @@ pub struct PlanValidity {
     /// read-modify-write a dependency's `create_sql`.
     check_dependency_hashes: bool,
     cluster_id: Option<ComputeInstanceId>,
-    replica_target: Option<ReplicaTarget>,
+    replica_target: Option<ReplicaId>,
     role_metadata: RoleMetadata,
 }
 
@@ -64,7 +65,7 @@ impl PlanValidity {
         catalog: &Catalog,
         dependency_ids: BTreeSet<CatalogItemId>,
         cluster_id: Option<ComputeInstanceId>,
-        replica_target: Option<ReplicaTarget>,
+        replica_target: Option<ReplicaId>,
         role_metadata: RoleMetadata,
     ) -> Self {
         PlanValidity {
@@ -123,10 +124,11 @@ impl PlanValidity {
                 });
             };
 
-            if let Some(target) = self.replica_target {
-                if !catalog.state().replica_target_exists(cluster_id, target) {
-                    let (ReplicaTarget::Declaration(replica_id)
-                    | ReplicaTarget::Physical(replica_id)) = target;
+            if let Some(replica_id) = self.replica_target {
+                if !catalog
+                    .state()
+                    .replica_target_exists(cluster_id, replica_id)
+                {
                     return Err(AdapterError::ConcurrentDependencyDrop {
                         dependency_kind: "cluster replica",
                         dependency_id: format!("{replica_id} of cluster {cluster_id}"),
@@ -302,9 +304,7 @@ mod tests {
                 (
                     Box::new(|validity, _catalog| {
                         validity.cluster_id = Some(some_system_cluster.id);
-                        validity.replica_target = Some(mz_sql::catalog::ReplicaTarget::Physical(
-                            mz_cluster_client::ReplicaId::User(4),
-                        ));
+                        validity.replica_target = Some(mz_controller_types::ReplicaId::User(4));
                     }),
                     Box::new(|res| {
                         assert_contains!(

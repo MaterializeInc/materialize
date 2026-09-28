@@ -30,12 +30,24 @@ output ownership per deployment. No generic per-output fence or all-output
 completion gate is required. Escalate concrete protocol safety gaps, not
 overlapping writes that preserve correctness throughout.
 
-The deployment implementation has scoped replicas and managed runtime, shared
-explicit declarations, and native prewarming. Align its per-realization IDs with
-the design's stable ReplicaId contract before considering replica scoping
-complete: preserve declaration/carryover identity, distinguish runtime by
-deployment, and allocate fresh IDs for independent creates. Equal names are
-not correspondence.
+Finish the stable ReplicaId integration. Membership keys, scoped settings and
+plan owners distinguish deployment, while declarations and carried replicas keep
+their logical ID. Complete deployment-qualified persisted observations and their
+writer cleanup. Active reference frontiers must not include the pending
+deployment's rows for the same ID. Controller retirement must preserve peer
+memberships without changing the established single-deployment MV behavior.
+Equal names are not correspondence.
+
+Filter current status to the active deployment, not history. Historical
+observations include prewarming and retiring activity. Sum processes within a
+deployment before applying existing chart aggregates, preserving chart interfaces
+and observations across promotion. No historical serving-deployment timeline is
+needed. Direct consumers must retain compatibility with schemas lacking the
+deployment column.
+
+Keep the serving controller's existing managed-pin cascade even when a prewarmer
+retains that replica ID. Preserve the peer's membership and replica comment.
+Prewarming retirement never cascades shared MVs. No broader pinning redesign.
 
 Continue native warm-promotion runtime integration. Readiness uses
 local hydration and output progress, with active-deployment reference frontiers,
@@ -61,12 +73,14 @@ and warm promotion, then compatible-version writer coexistence and handover.
 The outage, targeted DDL and bounded-throughput proofs remain closed. Continue
 concrete integration repairs without starting another acceptance campaign.
 
-Preserve and finish the local `m2-compatible-version-wip` work. Close the
-initialization race through catalog-governed Persist compatibility, including
-read-only metadata opens. Admission and retirement, not physical liveness,
-determine required versions. Reuse deployment membership, preserve true binary
-identity, and align initialization and upgrade paths with that policy before
-enabling cross-version admission. After durable retirement, zombies may fail on
+Compatible catalog replay, typed durable admission and Persist format-target
+propagation are integrated locally. Finish combined verification and demonstrate
+handover with distinct participating binaries. Admission and retirement, not
+physical liveness, determine required versions. Preserve true binary identity
+separately from the authorized format target, including for read-only shard
+initialization and explicit upgrades. Participants follow committed admission
+changes live. Admission, retirement and format authorization remain atomic without
+a separate membership registry. After durable retirement, zombies may fail on
 newer formats. Do not add pre-publication initialization or orphan-cleanup
 machinery for this race.
 

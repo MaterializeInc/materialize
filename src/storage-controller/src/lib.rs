@@ -2724,7 +2724,8 @@ where
     /// Note that when creating a new storage controller, you must also
     /// reconcile it with the previous state.
     ///
-    /// `replica_owned` selects passive inventory instead of legacy execution.
+    /// `native_deployment` selects passive inventory instead of legacy execution
+    /// and identifies the owner of persisted replica observations.
     /// The caller must enable it only for protected native environments, including
     /// read-only prewarming. Read-only mode restricts adapter-owned writes without
     /// changing execution ownership. Native replicas follow durable output authority.
@@ -2739,7 +2740,7 @@ where
         wallclock_lag: WallclockLagFn<Timestamp>,
         txns_metrics: Arc<TxnMetrics>,
         read_only: bool,
-        replica_owned: bool,
+        native_deployment: Option<u64>,
         metrics_registry: &MetricsRegistry,
         controller_metrics: ControllerMetrics,
         connection_context: ConnectionContext,
@@ -2766,7 +2767,9 @@ where
 
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
-        let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
+        let replica_owned = native_deployment.is_some();
+        let collection_manager =
+            collection_mgmt::CollectionManager::new(read_only, now.clone(), native_deployment);
 
         let introspection_ids = BTreeMap::new();
         let introspection_tokens = Arc::new(Mutex::new(BTreeMap::new()));
@@ -4107,11 +4110,15 @@ enum StatusHistoryRetentionPolicy {
 
 fn source_status_history_desc(
     params: &StorageParameters,
-) -> StatusHistoryDesc<(GlobalId, Option<ReplicaId>)> {
+) -> StatusHistoryDesc<(GlobalId, Option<ReplicaId>, Option<u64>)> {
     let desc = &MZ_SOURCE_STATUS_HISTORY_DESC;
     let (source_id_idx, _) = desc.get_by_name(&"source_id".into()).expect("exists");
     let (replica_id_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    let (generation_idx, _) = desc
+        .get_by_name(&"deployment_generation".into())
+        .expect("exists");
 
     StatusHistoryDesc {
         retention_policy: StatusHistoryRetentionPolicy::LastN(
@@ -4128,6 +4135,7 @@ fn source_status_history_desc(
                             .expect("ReplicaId column"),
                     )
                 },
+                (!datums[generation_idx].is_null()).then(|| datums[generation_idx].unwrap_uint64()),
             )
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
@@ -4136,11 +4144,15 @@ fn source_status_history_desc(
 
 fn sink_status_history_desc(
     params: &StorageParameters,
-) -> StatusHistoryDesc<(GlobalId, Option<ReplicaId>)> {
+) -> StatusHistoryDesc<(GlobalId, Option<ReplicaId>, Option<u64>)> {
     let desc = &MZ_SINK_STATUS_HISTORY_DESC;
     let (sink_id_idx, _) = desc.get_by_name(&"sink_id".into()).expect("exists");
     let (replica_id_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    let (generation_idx, _) = desc
+        .get_by_name(&"deployment_generation".into())
+        .expect("exists");
 
     StatusHistoryDesc {
         retention_policy: StatusHistoryRetentionPolicy::LastN(
@@ -4157,6 +4169,7 @@ fn sink_status_history_desc(
                             .expect("ReplicaId column"),
                     )
                 },
+                (!datums[generation_idx].is_null()).then(|| datums[generation_idx].unwrap_uint64()),
             )
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
@@ -4179,11 +4192,17 @@ fn privatelink_status_history_desc(params: &StorageParameters) -> StatusHistoryD
     }
 }
 
-fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<(GlobalId, u64)> {
+fn replica_status_history_desc(
+    params: &StorageParameters,
+) -> StatusHistoryDesc<(GlobalId, u64, Option<u64>)> {
     let desc = &REPLICA_STATUS_HISTORY_DESC;
     let (replica_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
     let (process_idx, _) = desc.get_by_name(&"process_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    let (generation_idx, _) = desc
+        .get_by_name(&"deployment_generation".into())
+        .expect("exists");
 
     StatusHistoryDesc {
         retention_policy: StatusHistoryRetentionPolicy::TimeWindow(
@@ -4193,6 +4212,7 @@ fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<
             (
                 GlobalId::from_str(datums[replica_idx].unwrap_str()).expect("GlobalId column"),
                 datums[process_idx].unwrap_uint64(),
+                (!datums[generation_idx].is_null()).then(|| datums[generation_idx].unwrap_uint64()),
             )
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
@@ -4327,7 +4347,7 @@ mod tests {
             WallclockLagFn::new(SYSTEM_TIME.clone()),
             txns_metrics,
             read_only,
-            replica_owned,
+            replica_owned.then_some(0),
             &registry,
             ControllerMetrics::new(&registry),
             context,

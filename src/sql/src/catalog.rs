@@ -58,25 +58,6 @@ use crate::plan::{
 };
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
-/// A maintained object's replica binding, independent of physical installation.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize
-)]
-pub enum ReplicaTarget {
-    /// An explicitly declared replica, realized independently by each deployment.
-    Declaration(ReplicaId),
-    /// A controller-created replica in a single deployment.
-    Physical(ReplicaId),
-}
-
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
 ///
@@ -243,12 +224,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         &self,
         cluster_id: ClusterId,
         name: &str,
-    ) -> Result<ReplicaTarget, CatalogError> {
+    ) -> Result<ReplicaId, CatalogError> {
         self.get_cluster(cluster_id)
             .replica_ids()
             .get(name)
             .copied()
-            .map(ReplicaTarget::Physical)
             .ok_or_else(|| CatalogError::UnknownClusterReplica(name.to_string()))
     }
 

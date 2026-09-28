@@ -497,7 +497,6 @@ mod tests {
             cluster_id,
             replica_id,
             deployment_generation: 0,
-            declaration_id: Some(replica_id),
             config: ReplicaConfig {
                 location: ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                     storagectl_addrs: Vec::new(),
@@ -678,7 +677,6 @@ mod tests {
             cluster_id: ClusterId::user(7).expect("valid id"),
             replica_id: ReplicaId::User(3),
             deployment_generation: 0,
-            declaration_id: Some(ReplicaId::User(3)),
             config: ReplicaConfig {
                 location: ReplicaLocation::Managed(ManagedReplicaLocation {
                     allocation,

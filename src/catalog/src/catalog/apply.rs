@@ -395,13 +395,15 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::ReplicaSystemConfiguration(cfg) => {
-                Self::apply_scoped_system_configuration_update(
-                    &mut self.scoped_system_parameters.replica,
-                    cfg.replica_id,
-                    cfg.name,
-                    cfg.value,
-                    diff,
-                );
+                if cfg.deployment_generation == self.deployment_generation {
+                    Self::apply_scoped_system_configuration_update(
+                        &mut self.scoped_system_parameters.replica,
+                        cfg.replica_id,
+                        cfg.name,
+                        cfg.value,
+                        diff,
+                    );
+                }
             }
             StateUpdateKind::Cluster(cluster) => {
                 self.apply_cluster_update(cluster, diff, retractions);
@@ -417,16 +419,12 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::ClusterReplicaDeclaration(declaration) => {
-                let cluster_id = declaration.cluster_id;
                 apply_inverted_lookup(
                     &mut self.cluster_replica_declarations,
                     &declaration.replica_id,
                     declaration.clone(),
                     diff,
                 );
-                if diff == StateDiff::Addition {
-                    self.refresh_mv_replica_targets(cluster_id);
-                }
             }
             StateUpdateKind::ClusterRuntime(runtime) => {
                 apply_inverted_lookup(
@@ -804,7 +802,6 @@ impl CatalogState {
             }
         }
         apply_inverted_lookup(&mut self.clusters_by_name, &cluster.name, cluster.id, diff);
-        let cluster_id = cluster.id;
         apply_with_update(
             &mut self.clusters_by_id,
             cluster,
@@ -812,9 +809,6 @@ impl CatalogState {
             diff,
             &mut retractions.clusters,
         );
-        if diff == StateDiff::Addition {
-            self.refresh_mv_replica_targets(cluster_id);
-        }
     }
 
     #[instrument(level = "debug")]
@@ -907,11 +901,11 @@ impl CatalogState {
         // Output admission needs shared membership even when SQL routing is local.
         apply_inverted_lookup(
             &mut self.replica_membership,
-            &cluster_replica.replica_id,
-            (
-                cluster_replica.cluster_id,
+            &(
                 cluster_replica.deployment_generation,
+                cluster_replica.replica_id,
             ),
+            cluster_replica.cluster_id,
             diff,
         );
         // Public visibility is derived independently from the raw catalog.
@@ -994,7 +988,6 @@ impl CatalogState {
                     config,
                     owner_id: cluster_replica.owner_id,
                     deployment_generation: cluster_replica.deployment_generation,
-                    declaration_id: cluster_replica.declaration_id,
                 };
                 let prev = cluster
                     .replicas_by_id_
@@ -1004,63 +997,6 @@ impl CatalogState {
                     "values must be explicitly retracted before inserting a new value: {:?}",
                     cluster_replica.replica_id
                 );
-            }
-        }
-        if diff == StateDiff::Addition {
-            self.refresh_mv_replica_targets(cluster_replica.cluster_id);
-        }
-    }
-
-    /// A mode conversion changes the binding domain, not the stored target name.
-    /// Keep explicit bindings while a local managed realization is unavailable.
-    fn refresh_mv_replica_targets(&mut self, cluster_id: ClusterId) {
-        use mz_sql::catalog::ReplicaTarget;
-        let cluster = self.get_cluster(cluster_id);
-        let managed = cluster.is_managed();
-        let items: Vec<_> = cluster
-            .bound_objects
-            .iter()
-            .filter_map(|id| {
-                let CatalogItem::MaterializedView(mv) = self.get_entry(id).item() else {
-                    return None;
-                };
-                match (managed, mv.target_replica) {
-                    (true, Some(ReplicaTarget::Declaration(_)))
-                    | (false, Some(ReplicaTarget::Physical(_))) => {
-                        Some((*id, mv.create_sql.clone()))
-                    }
-                    (false, Some(ReplicaTarget::Declaration(declaration_id)))
-                        if !self
-                            .cluster_replica_declarations
-                            .contains_key(&declaration_id) =>
-                    {
-                        // A mode round trip can replace the declaration while
-                        // this deployment lacks the intermediate physical target.
-                        // Surviving declarations retain their identity. SQL DROP
-                        // removes their pinned MVs instead of rebinding them.
-                        Some((*id, mv.create_sql.clone()))
-                    }
-                    _ => None,
-                }
-            })
-            .collect();
-        for (id, sql) in items {
-            let statement = mz_sql::parse::parse(&sql)
-                .expect("valid persisted MV SQL")
-                .into_element()
-                .ast;
-            let mz_sql_parser::ast::Statement::CreateMaterializedView(definition) = statement
-            else {
-                unreachable!("MV definition is CREATE MATERIALIZED VIEW");
-            };
-            let Some(name) = definition.in_cluster_replica else {
-                continue;
-            };
-            if let Ok(target) = self.resolve_materialized_view_replica(cluster_id, name.as_str()) {
-                let CatalogItem::MaterializedView(mv) = self.get_entry_mut(&id).item_mut() else {
-                    unreachable!("bound MV");
-                };
-                mv.target_replica = Some(target);
             }
         }
     }

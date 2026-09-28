@@ -399,8 +399,8 @@ impl CatalogState {
                         .is_some_and(|declaration| declaration.cluster_id == cluster_id);
                     let physical = self
                         .replica_membership
-                        .get(&replica_id)
-                        .is_some_and(|(cluster, _)| *cluster == cluster_id);
+                        .iter()
+                        .any(|((_, id), cluster)| *id == replica_id && *cluster == cluster_id);
                     if !declared && !physical {
                         comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id));

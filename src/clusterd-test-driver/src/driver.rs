@@ -92,6 +92,7 @@ impl Driver {
     ) -> anyhow::Result<()> {
         initial_config.add(&ENABLE_PEEK_RESPONSE_STASH, false);
         self.send(ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            persist_state_version: None,
             logging: Default::default(),
             expiration_offset,
             peek_stash_persist_location: self.host.location().clone(),

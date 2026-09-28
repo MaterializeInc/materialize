@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod deployments;
 #[cfg(test)]
 mod tests;
 
@@ -59,7 +60,9 @@ use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, FenceToken, ReadProtectionIndex, Snapshot};
+use crate::durable::objects::{
+    AuditLogKey, DeploymentAdmission, FenceToken, ReadProtectionIndex, Snapshot,
+};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -371,6 +374,9 @@ impl From<UpperMismatch<Timestamp>> for CompareAndAppendError {
 }
 
 pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
+    /// Format authorization from the applied catalog prefix, when protected.
+    fn persist_target(&self) -> Option<&semver::Version>;
+
     /// Validate runtime identity after consuming a complete durable prefix.
     fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
         Ok(())
@@ -448,7 +454,13 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
         self.fenceable_token.validate()?;
-        self.update_applier.validate_runtime()
+        self.update_applier.validate_runtime()?;
+        if let Some(target) = self.update_applier.persist_target() {
+            self.persist_client
+                .set_state_version_target(target.clone())
+                .map_err(|error| DurableCatalogError::NotWritable(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Fetch the current upper of the catalog state.
@@ -983,8 +995,8 @@ impl PersistCatalogState {
                     StateUpdateKind::DefaultPrivilege(key, value) => {
                         apply(&mut snapshot.default_privileges, key, value, diff);
                     }
-                    StateUpdateKind::FenceToken(_token) => {
-                        // Ignore for snapshots.
+                    StateUpdateKind::FenceToken(_) | StateUpdateKind::DeploymentAdmission(_) => {
+                        // Admission authority is not mutable through catalog transactions.
                     }
                     StateUpdateKind::IdAllocator(key, value) => {
                         apply(&mut snapshot.id_allocator, key, value, diff);
@@ -1093,6 +1105,7 @@ pub(crate) struct UnopenedCatalogStateInner {
     configs: BTreeMap<String, u64>,
     /// A cache of the settings collection of the catalog.
     settings: BTreeMap<String, String>,
+    deployment_admission: Option<DeploymentAdmission>,
 }
 
 impl UnopenedCatalogStateInner {
@@ -1100,11 +1113,21 @@ impl UnopenedCatalogStateInner {
         UnopenedCatalogStateInner {
             configs: BTreeMap::new(),
             settings: BTreeMap::new(),
+            deployment_admission: None,
         }
     }
 }
 
 impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
+    fn persist_target(&self) -> Option<&semver::Version> {
+        self.configs
+            .get(READ_PROTECTION_CONFIG)
+            .is_some_and(|value| *value != 0)
+            .then_some(self.deployment_admission.as_ref())
+            .flatten()
+            .map(|admission| &admission.persist_target)
+    }
+
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKindJson>,
@@ -1114,6 +1137,12 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         if !update.kind.is_audit_log() && update.kind.is_always_deserializable() {
             let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
+                (StateUpdateKind::DeploymentAdmission(admission), Diff::ONE) => {
+                    assert!(self.deployment_admission.replace(admission).is_none());
+                }
+                (StateUpdateKind::DeploymentAdmission(admission), Diff::MINUS_ONE) => {
+                    assert_eq!(self.deployment_admission.take(), Some(admission));
+                }
                 (StateUpdateKind::Config(key, value), Diff::ONE) => {
                     let prev = self.configs.insert(key.key, value.value);
                     assert_eq!(
@@ -1193,7 +1222,7 @@ impl UnopenedPersistCatalogState {
         metrics: Arc<Metrics>,
         timestamp_oracle: Option<crate::durable::CatalogTimestampOracle>,
     ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
-        let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
+        let catalog_shard_id = catalog_shard_id(organization_id);
         debug!(?catalog_shard_id, "new persist backed catalog state");
 
         // Check the catalog shard version to ensure that we are compatible with the persist
@@ -1427,7 +1456,7 @@ impl UnopenedPersistCatalogState {
                 }
             }
             let durable_generation = self.fenceable_token.token().map(|t| t.deploy_generation);
-            let (fence_updates, current_fenceable_token) = self
+            let (mut fence_updates, current_fenceable_token) = self
                 .fenceable_token
                 .generate_unfenced_token(
                     self.mode,
@@ -1470,6 +1499,42 @@ impl UnopenedPersistCatalogState {
             );
             let promoting = prewarming_plan_build.is_none()
                 && durable_generation.is_some_and(|generation| generation < admitted_generation);
+            let admission = if matches!(self.mode, Mode::Writable) {
+                let previous = self.update_applier.deployment_admission.as_ref();
+                let mut admission = match previous {
+                    Some(value) => value.clone(),
+                    None if protection_enabled => {
+                        return Err(DurableCatalogError::NotWritable(
+                            "protected catalog is missing deployment admission metadata".into(),
+                        )
+                        .into());
+                    }
+                    None => {
+                        DeploymentAdmission::initial(self.persist_client.build_version().clone())
+                    }
+                };
+                admission.admit(
+                    admitted_generation,
+                    self.persist_client.build_version(),
+                    !protection_enabled && !join,
+                    promoting.then_some(admitted_generation),
+                )?;
+                if previous != Some(&admission) {
+                    if let Some(previous) = previous {
+                        fence_updates.push((
+                            StateUpdateKind::DeploymentAdmission(previous.clone()),
+                            Diff::MINUS_ONE,
+                        ));
+                    }
+                    fence_updates.push((
+                        StateUpdateKind::DeploymentAdmission(admission.clone()),
+                        Diff::ONE,
+                    ));
+                }
+                Some(admission)
+            } else {
+                None
+            };
             // Recollect on every CAS attempt. Only the successful attempt's
             // snapshot grants cleanup authority, not subsequent publications.
             let owners = if protection_enabled && promoting {
@@ -1495,6 +1560,15 @@ impl UnopenedPersistCatalogState {
                 }
             }
             protected = protection_enabled;
+            if protection_enabled {
+                if let Some(admission) = admission {
+                    // Only the successful admission CAS authorizes this target.
+                    // Retried attempts must not expose speculative advancement.
+                    self.persist_client
+                        .set_state_version_target(admission.persist_target)
+                        .map_err(|error| DurableCatalogError::NotWritable(error.to_string()))?;
+                }
+            }
             promoted = promoting;
             cleanup_owners = owners;
             self.fenceable_token = current_fenceable_token;
@@ -1992,6 +2066,7 @@ struct CatalogStateInner {
     /// Follow the durable latch, rather than freezing the mode at open: adapter
     /// latches protection after initializing a fresh catalog.
     protected: bool,
+    deployment_admission: Option<DeploymentAdmission>,
     runtime_identity: RuntimeIdentity,
     bootstrap_identity: Option<RuntimeIdentity>,
 }
@@ -2013,6 +2088,7 @@ impl CatalogStateInner {
             updates: VecDeque::new(),
             read_protection_index: ReadProtectionIndex::default(),
             protected: false,
+            deployment_admission: None,
             runtime_identity: RuntimeIdentity::default(),
             bootstrap_identity: None,
         }
@@ -2020,6 +2096,13 @@ impl CatalogStateInner {
 }
 
 impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
+    fn persist_target(&self) -> Option<&semver::Version> {
+        self.protected
+            .then_some(self.deployment_admission.as_ref())
+            .flatten()
+            .map(|admission| &admission.persist_target)
+    }
+
     fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
         if let Some(identity) = &self.bootstrap_identity {
             let field =
@@ -2045,6 +2128,17 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
         current_fence_token: &mut FenceableToken,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKind>>, FenceError> {
+        if let StateUpdateKind::DeploymentAdmission(admission) = &update.kind {
+            if update.diff == Diff::ONE {
+                assert!(
+                    self.deployment_admission
+                        .replace(admission.clone())
+                        .is_none()
+                );
+            } else {
+                assert_eq!(self.deployment_admission.take(), Some(admission.clone()));
+            }
+        }
         if let StateUpdateKind::Config(key, value) = &update.kind {
             if key.key == READ_PROTECTION_CONFIG {
                 self.protected = update.diff == Diff::ONE && value.value != 0;
@@ -2055,7 +2149,14 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             self.runtime_identity.txn_wal_shard =
                 (update.diff == Diff::ONE).then(|| value.shard.clone());
         }
-        if let StateUpdateKind::Setting(key, value) = &update.kind {
+        if let StateUpdateKind::Setting(key, value) = &update.kind
+            && !matches!(
+                key.name.as_str(),
+                CATALOG_CONTENT_VERSION_KEY | "migration_version"
+            )
+        {
+            // Version markers describe catalog writers and completed migrations,
+            // not resources captured by a running replica's bootstrap.
             if update.diff == Diff::ONE {
                 self.runtime_identity
                     .settings
@@ -2569,6 +2670,11 @@ impl DurableCatalogState for PersistCatalogState {
     }
 }
 
+/// The catalog shard that bootstraps an organization's durable admission authority.
+pub fn catalog_shard_id(organization_id: Uuid) -> ShardId {
+    shard_id(organization_id, CATALOG_SEED)
+}
+
 /// Deterministically generate a shard ID for the given `organization_id` and `seed`.
 pub fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
@@ -2695,8 +2801,8 @@ impl Trace {
                 StateUpdateKind::DefaultPrivilege(k, v) => {
                     trace.default_privileges.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::FenceToken(_) => {
-                    // Fence token not included in trace.
+                StateUpdateKind::FenceToken(_) | StateUpdateKind::DeploymentAdmission(_) => {
+                    // Admission authority is not a transactional collection.
                 }
                 StateUpdateKind::IdAllocator(k, v) => {
                     trace.id_allocator.values.push(((k, v), ts, diff))

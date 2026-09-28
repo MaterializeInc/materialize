@@ -266,7 +266,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         cluster_id: ClusterId,
         name: &str,
-    ) -> Result<mz_sql::catalog::ReplicaTarget, SqlCatalogError> {
+    ) -> Result<ReplicaId, SqlCatalogError> {
         self.view
             .resolve_materialized_view_replica(cluster_id, name)
     }

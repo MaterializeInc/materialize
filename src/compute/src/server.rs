@@ -1276,7 +1276,13 @@ impl<'w> Worker<'w> {
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
-        if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
+        if let ComputeCommand::CreateInstance(config) = &cmd {
+            if let Some(target) = &config.persist_state_version {
+                self.persist_clients
+                    .cfg()
+                    .set_state_version_target(target.clone())
+                    .expect("invalid authorized Persist state-format target");
+            }
             assert!(
                 !self.command_rx.replica_owned || self.compute_state.is_none(),
                 "replica instance must not be reinitialized",

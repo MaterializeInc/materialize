@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crate::SYSTEM_CONN_ID;
 use crate::builtin::BuiltinLog;
-use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+use crate::durable::objects::{CollectionCompactionBound, DurableType, MaintainedReadRequirement};
 use crate::durable::{
     CatalogError as DurableError, DryRunTransaction, DurableCatalogError, NetworkPolicy, Snapshot,
     Transaction,
@@ -214,18 +214,13 @@ pub enum Op {
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
-        declaration_id: Option<ReplicaId>,
+        /// Explicit source membership for deliberate managed carryover.
+        carryover_from: Option<u64>,
     },
     /// Retires a local execution, not its shared declaration or bound objects.
     DropClusterReplicaRealization {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    },
-    /// Retains a compatible execution when shared configuration declares its identity.
-    AssociateReplicaDeclaration {
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        declaration_id: ReplicaId,
     },
     /// Guards unmanaged realization against acknowledged declaration changes.
     CheckClusterDeclarations {
@@ -398,7 +393,6 @@ impl Op {
             | Self::UpdateClusterRuntime { .. }
             | Self::CreateClusterReplicaRealization { .. }
             | Self::DropClusterReplicaRealization { .. }
-            | Self::AssociateReplicaDeclaration { .. }
             | Self::CheckClusterDeclarations { .. }
             | Self::CreateClientIncarnation { .. }
             | Self::PublishClientReadRequirements { .. }
@@ -1225,6 +1219,7 @@ impl Catalog {
                     // Replica-local observers read only this cluster's logs. Their
                     // selection, rather than a SQL item or connection, owns them.
                     id.is_transient()
+                        && owner.deployment_generation == preliminary_state.deployment_generation()
                         && !owner.name.is_empty()
                         && preliminary_state.try_get_entry_by_global_id(&id).is_none()
                         && preliminary_state.clusters_by_id.values().any(|cluster| {
@@ -2026,8 +2021,7 @@ impl Catalog {
                 // The replica id is allocated out-of-band by the durable
                 // allocator before the transaction, mirroring cluster and item
                 // ids. Nothing allocates a replica id in-apply.
-                let declaration_id = (!cluster.is_managed()).then_some(replica_id);
-                if declaration_id.is_some() {
+                if !cluster.is_managed() {
                     tx.set_cluster_replica_declaration(
                         crate::durable::ClusterReplicaDeclaration {
                             cluster_id,
@@ -2044,7 +2038,6 @@ impl Catalog {
                     &name,
                     config.clone().into(),
                     owner_id,
-                    declaration_id,
                 )?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
@@ -2095,44 +2088,18 @@ impl Catalog {
                     return Err(CatalogError::DDLTransactionRace);
                 }
             }
-            Op::AssociateReplicaDeclaration {
-                cluster_id,
-                replica_id,
-                declaration_id,
-            } => {
-                let declaration = tx
-                    .get_cluster_replica_declaration(declaration_id)
-                    .ok_or(CatalogError::DDLTransactionRace)?;
-                let mut replica: crate::durable::ClusterReplica = state
-                    .get_cluster(cluster_id)
-                    .replica(replica_id)
-                    .ok_or(CatalogError::DDLTransactionRace)?
-                    .clone()
-                    .into();
-                if replica.deployment_generation != tx.deployment_generation()
-                    || replica.declaration_id.is_some()
-                    || declaration.cluster_id != cluster_id
-                    || declaration.name != replica.name
-                    || declaration.owner_id != replica.owner_id
-                    || declaration.config != replica.config
-                {
-                    return Err(CatalogError::DDLTransactionRace);
-                }
-                replica.declaration_id = Some(declaration_id);
-                tx.update_cluster_replica(replica_id, replica)?;
-            }
             Op::CreateClusterReplicaRealization {
                 cluster_id,
                 replica_id,
                 name,
                 config,
                 owner_id,
-                declaration_id,
+                carryover_from,
             } => {
                 let config: crate::durable::ReplicaConfig = config.into();
-                if let Some(id) = declaration_id {
+                if !state.get_cluster(cluster_id).is_managed() {
                     let declaration = tx
-                        .get_cluster_replica_declaration(id)
+                        .get_cluster_replica_declaration(replica_id)
                         .ok_or(CatalogError::DDLTransactionRace)?;
                     if declaration.cluster_id != cluster_id
                         || declaration.name != name
@@ -2141,17 +2108,24 @@ impl Catalog {
                     {
                         return Err(CatalogError::DDLTransactionRace);
                     }
-                } else if !state.get_cluster(cluster_id).is_managed() {
+                } else if let Some(generation) = carryover_from {
+                    if generation == tx.deployment_generation()
+                        || !tx.get_cluster_replicas().any(|replica| {
+                            replica.replica_id == replica_id
+                                && replica.deployment_generation == generation
+                                && replica.cluster_id == cluster_id
+                        })
+                    {
+                        return Err(CatalogError::DDLTransactionRace);
+                    }
+                } else if tx
+                    .get_cluster_replicas()
+                    .any(|replica| replica.replica_id == replica_id)
+                {
+                    // A managed independent create cannot claim a peer's identity.
                     return Err(CatalogError::DDLTransactionRace);
                 }
-                tx.insert_cluster_replica_with_id(
-                    cluster_id,
-                    replica_id,
-                    &name,
-                    config,
-                    owner_id,
-                    declaration_id,
-                )?;
+                tx.insert_cluster_replica_with_id(cluster_id, replica_id, &name, config, owner_id)?;
             }
             Op::DropClusterReplicaRealization {
                 cluster_id,
@@ -2172,32 +2146,34 @@ impl Catalog {
                     .get_written_plans()
                     .filter(|plan| {
                         plan.build_version == build
-                            && plan
-                                .replica_owner
-                                .as_ref()
-                                .is_some_and(|owner| owner.replica_id == replica_id)
+                            && plan.replica_owner.as_ref().is_some_and(|owner| {
+                                owner.replica_id == replica_id
+                                    && owner.deployment_generation == tx.deployment_generation()
+                            })
                     })
                     .map(|plan| plan.id)
                     .collect();
                 for id in plans {
                     tx.set_written_plan(id, &build, None)?;
                 }
-                let configs: Vec<_> = tx
-                    .get_replica_system_configurations()
-                    .filter(|config| config.replica_id == replica_id)
-                    .map(|config| config.name)
-                    .collect();
-                for name in configs {
-                    tx.remove_replica_system_config(replica_id, &name);
-                }
-                // Declaration comments outlive individual realizations. A
-                // physical-only comment must retire with its physical owner.
-                if replica.declaration_id.is_none() {
+                tx.remove_replica_system_configs(&BTreeSet::from([
+                    crate::durable::objects::ClusterReplicaKey {
+                        id: replica_id,
+                        deployment_generation: tx.deployment_generation(),
+                    },
+                ]));
+                tx.remove_cluster_replica(replica_id)?;
+                // Logical annotations survive while a declaration or another
+                // deployment still retains this replica identity.
+                if tx.get_cluster_replica_declaration(replica_id).is_none()
+                    && !tx
+                        .get_cluster_replicas()
+                        .any(|replica| replica.replica_id == replica_id)
+                {
                     tx.drop_comments(
                         &[CommentObjectId::ClusterReplica((cluster_id, replica_id))].into(),
                     )?;
                 }
-                tx.remove_cluster_replica(replica_id)?;
             }
             Op::CreateItem {
                 id,
@@ -2572,11 +2548,7 @@ impl Catalog {
                 sub_component,
                 comment,
             } => {
-                tx.update_comment(
-                    state.canonical_comment_id(object_id),
-                    sub_component,
-                    comment,
-                )?;
+                tx.update_comment(object_id, sub_component, comment)?;
                 let entry = state.get_comment_id_entry(&object_id);
                 let should_log = entry
                     .map(|entry| Self::should_audit_log_item(entry.item()))
@@ -2786,51 +2758,34 @@ impl Catalog {
                     info!("drop network policy {}", policy.name.clone());
                 }
 
-                // Shared DROP removes a declaration and all its realizations.
-                // Private runtime retirement uses the physical removal API, not
-                // this SQL cascade path.
-                let mut declarations: BTreeSet<_> = delta
-                    .replicas
-                    .iter()
-                    .filter_map(|(replica_id, (cluster_id, _))| {
-                        state
-                            .get_cluster(*cluster_id)
-                            .replica(*replica_id)
-                            .and_then(|replica| replica.declaration_id)
-                    })
-                    .collect();
-                declarations.extend(
+                // SQL DROP removes the logical replica across deployments.
+                // Controller retirement reflects only its own replica policy.
+                let declarations: BTreeSet<_> =
                     tx.get_cluster_replica_declarations()
-                        .filter(|declaration| delta.clusters.contains(&declaration.cluster_id))
-                        .map(|declaration| declaration.replica_id),
-                );
+                        .filter(|declaration| {
+                            delta.replicas.get(&declaration.replica_id).is_some_and(
+                                |(_, reason)| !matches!(reason, ReplicaCreateDropReason::Retired),
+                            ) || delta.clusters.contains(&declaration.cluster_id)
+                        })
+                        .map(|declaration| declaration.replica_id)
+                        .collect();
                 let removed_realizations: Vec<_> = tx
                     .get_cluster_replicas()
                     .filter(|replica| {
-                        delta.replicas.contains_key(&replica.replica_id)
+                        delta
+                            .replicas
+                            .get(&replica.replica_id)
+                            .is_some_and(|(_, reason)| {
+                                !matches!(reason, ReplicaCreateDropReason::Retired)
+                                    || replica.deployment_generation == tx.deployment_generation()
+                            })
                             || delta.clusters.contains(&replica.cluster_id)
-                            || replica
-                                .declaration_id
-                                .is_some_and(|id| declarations.contains(&id))
                     })
                     .collect();
-                let replicas: BTreeSet<_> = delta
-                    .replicas
-                    .keys()
-                    .copied()
-                    .chain(
-                        removed_realizations
-                            .iter()
-                            .map(|replica| replica.replica_id),
-                    )
-                    .collect();
-                let replica_comments = removed_realizations
+                let replicas: BTreeSet<_> = removed_realizations
                     .iter()
-                    .map(|replica| {
-                        CommentObjectId::ClusterReplica((replica.cluster_id, replica.replica_id))
-                    })
+                    .map(|replica| replica.key())
                     .collect();
-                tx.drop_comments(&replica_comments)?;
                 for declaration_id in declarations {
                     let declaration = tx
                         .remove_cluster_replica_declaration(declaration_id)
@@ -2850,10 +2805,12 @@ impl Catalog {
                         .get_written_plans()
                         .filter(|plan| {
                             plan.build_version == build
-                                && plan
-                                    .replica_owner
-                                    .as_ref()
-                                    .is_some_and(|owner| replicas.contains(&owner.replica_id))
+                                && plan.replica_owner.as_ref().is_some_and(|owner| {
+                                    replicas.contains(&crate::durable::objects::ClusterReplicaKey {
+                                        id: owner.replica_id,
+                                        deployment_generation: owner.deployment_generation,
+                                    })
+                                })
                         })
                         .map(|plan| plan.id)
                         .collect();
@@ -2862,6 +2819,23 @@ impl Catalog {
                     }
                 }
                 tx.remove_cluster_replicas(&replicas)?;
+                tx.remove_replica_system_configs(&replicas);
+                let remaining_replica_ids: BTreeSet<_> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+                let replica_comments = removed_realizations
+                    .iter()
+                    .filter(|replica| {
+                        tx.get_cluster_replica_declaration(replica.replica_id)
+                            .is_none()
+                            && !remaining_replica_ids.contains(&replica.replica_id)
+                    })
+                    .map(|replica| {
+                        CommentObjectId::ClusterReplica((replica.cluster_id, replica.replica_id))
+                    })
+                    .collect();
+                tx.drop_comments(&replica_comments)?;
 
                 for (replica_id, (cluster_id, reason)) in delta.replicas {
                     let cluster = state.get_cluster(cluster_id);
@@ -3167,25 +3141,23 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                let replica = cluster.replica(replica_id).expect("catalog out of sync");
-                if let Some(declaration_id) = replica.declaration_id {
-                    let mut declaration = tx
-                        .get_cluster_replica_declaration(declaration_id)
-                        .expect("physical replica refers to a declaration");
+                let declaration = tx.get_cluster_replica_declaration(replica_id);
+                if declaration.is_none() && cluster.replica(replica_id).is_none() {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
+                if let Some(mut declaration) = declaration {
                     declaration.name.clone_from(&to_name);
                     tx.set_cluster_replica_declaration(declaration)?;
-                    let realizations = tx
-                        .get_cluster_replicas()
-                        .filter(|replica| replica.declaration_id == Some(declaration_id))
-                        .map(|mut replica| {
-                            replica.name.clone_from(&to_name);
-                            replica
-                        })
-                        .collect();
-                    tx.set_replicas(realizations)?;
-                } else {
-                    tx.rename_cluster_replica(replica_id, &name, &to_name)?;
                 }
+                let realizations = tx
+                    .get_cluster_replicas()
+                    .filter(|replica| replica.replica_id == replica_id)
+                    .map(|mut replica| {
+                        replica.name.clone_from(&to_name);
+                        replica
+                    })
+                    .collect();
+                tx.set_replicas(realizations)?;
                 // The durable MV definition names its target. Rename that reference
                 // in the same transaction so every deployment can reconstruct it.
                 for item_id in &cluster.bound_objects {
@@ -3471,7 +3443,7 @@ impl Catalog {
                     }
                     ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                         let cluster = state.get_cluster(*cluster_id);
-                        let mut replica = cluster
+                        let replica = cluster
                             .replica(*replica_id)
                             .expect("catalog out of sync")
                             .clone();
@@ -3480,24 +3452,21 @@ impl Catalog {
                                 ErrorKind::ReadOnlyClusterReplica(replica.name),
                             )));
                         }
-                        replica.owner_id = new_owner;
-                        if let Some(declaration_id) = replica.declaration_id {
-                            let mut declaration = tx
-                                .get_cluster_replica_declaration(declaration_id)
-                                .expect("physical replica refers to a declaration");
+                        if let Some(mut declaration) =
+                            tx.get_cluster_replica_declaration(*replica_id)
+                        {
                             declaration.owner_id = new_owner;
                             tx.set_cluster_replica_declaration(declaration)?;
-                            let realizations = tx
-                                .get_cluster_replicas()
-                                .filter(|replica| replica.declaration_id == Some(declaration_id))
-                                .map(|mut replica| {
-                                    replica.owner_id = new_owner;
-                                    replica
-                                })
-                                .collect();
-                            tx.set_replicas(realizations)?;
                         }
-                        tx.update_cluster_replica(*replica_id, replica.into())?;
+                        let realizations = tx
+                            .get_cluster_replicas()
+                            .filter(|replica| replica.replica_id == *replica_id)
+                            .map(|mut replica| {
+                                replica.owner_id = new_owner;
+                                replica
+                            })
+                            .collect();
+                        tx.set_replicas(realizations)?;
                     }
                     ObjectId::Database(id) => {
                         let mut database = state.get_database(id).clone();
@@ -3698,7 +3667,7 @@ impl Catalog {
                     if matches!(config.variant, ClusterVariant::Unmanaged) {
                         // The serving deployment's existing replicas become the
                         // shared declaration. Peers realize it independently.
-                        for mut replica in replicas.into_iter().filter(|replica| {
+                        for replica in replicas.into_iter().filter(|replica| {
                             replica.deployment_generation == state.deployment_generation()
                         }) {
                             tx.set_cluster_replica_declaration(
@@ -3710,8 +3679,6 @@ impl Catalog {
                                     owner_id: replica.owner_id,
                                 },
                             )?;
-                            replica.declaration_id = Some(replica.replica_id);
-                            tx.update_cluster_replica(replica.replica_id, replica)?;
                         }
                     } else {
                         let declarations: Vec<_> = tx
@@ -3720,39 +3687,8 @@ impl Catalog {
                             .map(|declaration| declaration.replica_id)
                             .collect();
                         for declaration in declarations {
-                            let old_id = CommentObjectId::ClusterReplica((id, declaration));
-                            let comments = tx.get_object_comments(old_id);
-                            if !comments.is_empty() {
-                                // Only the serving realization inherits the comment.
-                                // A peer's physical identity is not the shared object.
-                                let replica = replicas
-                                    .iter()
-                                    .find(|replica| {
-                                        replica.declaration_id == Some(declaration)
-                                            && replica.deployment_generation
-                                                == state.deployment_generation()
-                                    })
-                                    .ok_or(CatalogError::DDLTransactionRace)?;
-                                let new_id =
-                                    CommentObjectId::ClusterReplica((id, replica.replica_id));
-                                if old_id != new_id {
-                                    tx.drop_comments(&[old_id].into())?;
-                                    for (sub_component, comment) in comments {
-                                        tx.update_comment(new_id, sub_component, Some(comment))?;
-                                    }
-                                }
-                            }
                             tx.remove_cluster_replica_declaration(declaration);
                         }
-                        tx.set_replicas(
-                            replicas
-                                .into_iter()
-                                .map(|mut replica| {
-                                    replica.declaration_id = None;
-                                    replica
-                                })
-                                .collect(),
-                        )?;
                     }
                     let runtimes: Vec<_> = tx
                         .get_cluster_runtimes()
@@ -3976,14 +3912,10 @@ impl Catalog {
                     tx.get_clusters().map(|cluster| cluster.id).collect();
                 let live_replicas: BTreeSet<ReplicaId> = tx
                     .get_cluster_replicas()
-                    .map(|replica| replica.replica_id)
-                    .collect();
-                let pending = tx.is_prewarming();
-                let own_replicas: BTreeSet<_> = tx
-                    .get_cluster_replicas()
                     .filter(|replica| replica.deployment_generation == tx.deployment_generation())
                     .map(|replica| replica.replica_id)
                     .collect();
+                let pending = tx.is_prewarming();
 
                 // Cluster-coherent scope.
                 let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
@@ -4015,7 +3947,7 @@ impl Catalog {
                 // Replica-local scope.
                 let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
                     .get_replica_system_configurations()
-                    .filter(|config| !pending || own_replicas.contains(&config.replica_id))
+                    .filter(|config| config.deployment_generation == tx.deployment_generation())
                     .map(|r| ((r.replica_id, r.name), r.value))
                     .collect();
                 let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
@@ -4552,8 +4484,12 @@ impl ObjectsToDrop {
         state: &CatalogState,
         session: Option<&TransactionContext<'_>>,
     ) -> Result<(), CatalogError> {
-        self.comments
-            .insert(state.get_comment_id(drop_object_info.to_object_id()));
+        // Replica annotations belong to the logical identity. Their lifetime
+        // is decided after the transaction removes qualified memberships.
+        if !matches!(drop_object_info, DropObjectInfo::ClusterReplica(_)) {
+            self.comments
+                .insert(state.get_comment_id(drop_object_info.to_object_id()));
+        }
 
         match drop_object_info {
             DropObjectInfo::Database(database_id) => {

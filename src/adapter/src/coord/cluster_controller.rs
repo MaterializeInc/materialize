@@ -457,19 +457,11 @@ impl Coordinator {
             let mut missing = Vec::new();
             for declaration in &expected {
                 let matching = replicas.iter().find(|replica| {
-                    (replica.declaration_id == Some(declaration.replica_id)
-                        || replica.declaration_id.is_none())
+                    replica.replica_id == declaration.replica_id
                         && matches_declaration_config(replica, declaration)
                 });
                 if let Some(replica) = matching {
                     retained.insert(replica.replica_id);
-                    if replica.declaration_id.is_none() {
-                        ops.push(Op::AssociateReplicaDeclaration {
-                            cluster_id,
-                            replica_id: replica.replica_id,
-                            declaration_id: declaration.replica_id,
-                        });
-                    }
                 } else {
                     missing.push(declaration.clone());
                 }
@@ -489,20 +481,12 @@ impl Coordinator {
                     None,
                     true,
                 )?;
-                let ts = self.get_catalog_write_ts().await;
-                let replica_id = self
-                    .catalog()
-                    .allocate_replica_ids(cluster_id, 1, ts)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .expect("allocated one replica");
                 ops.push(Op::CreateClusterReplicaRealization {
                     cluster_id,
-                    replica_id,
+                    replica_id: declaration.replica_id,
                     name: declaration.name,
                     owner_id: declaration.owner_id,
-                    declaration_id: Some(declaration.replica_id),
+                    carryover_from: None,
                     config: mz_controller::clusters::ReplicaConfig {
                         location,
                         compute: ComputeReplicaConfig {
@@ -548,7 +532,7 @@ impl Coordinator {
                 .filter(|declaration| declaration.cluster_id == cluster_id)
                 .all(|declaration| {
                     cluster.replicas().any(|replica| {
-                        replica.declaration_id == Some(declaration.replica_id)
+                        replica.replica_id == declaration.replica_id
                             && matches_declaration_config(replica, declaration)
                     })
                 });
@@ -878,6 +862,13 @@ impl Coordinator {
     /// recomputes next tick.
     async fn apply_cluster_decisions(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         let checks = Self::partition_checks(&decisions);
+        let carryover = match self.initial_replica_carryover(&decisions).await {
+            Ok(ops) => ops,
+            Err(error) => {
+                warn!(%error, "unable to prepare initial replica carryover");
+                return ApplyOutcome::Rejected;
+            }
+        };
 
         // Pre-allocate replica ids before the apply transaction (each allocation
         // is its own durable commit, so it cannot happen inside the transaction).
@@ -885,9 +876,10 @@ impl Coordinator {
             return ApplyOutcome::Rejected;
         };
 
-        let Some(mutations) = self.build_mutation_ops(decisions, replica_ids) else {
+        let Some(mut mutations) = self.build_mutation_ops(decisions, replica_ids) else {
             return ApplyOutcome::Rejected;
         };
+        mutations.extend(carryover);
         if mutations.is_empty() {
             // Nothing to apply, so the checks guard nothing. Skip the transaction
             // rather than commit a check-only batch, which would still cost a
@@ -896,6 +888,71 @@ impl Coordinator {
         }
 
         self.commit_with_checks(checks, mutations).await
+    }
+
+    /// Enrolls an initial predecessor set by explicit identity, not by name.
+    /// The runtime initialization and these memberships commit together under
+    /// the controller's witness. Later policy creates allocate independent IDs.
+    async fn initial_replica_carryover(
+        &self,
+        decisions: &[Decision],
+    ) -> Result<Vec<Op>, AdapterError> {
+        let clusters: BTreeSet<_> = decisions
+            .iter()
+            .filter_map(|decision| {
+                let Decision::UpdateClusterState {
+                    cluster_id,
+                    expected,
+                    ..
+                } = decision
+                else {
+                    return None;
+                };
+                expected
+                    .intent
+                    .as_ref()
+                    .filter(|intent| !intent.runtime_initialized && !intent.may_settle)?;
+                self.catalog()
+                    .try_get_cluster(*cluster_id)
+                    .filter(|cluster| cluster.replicas().next().is_none())?;
+                Some(*cluster_id)
+            })
+            .collect();
+        if clusters.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(source_generation) = self.catalog().state().active_deployment_generation() else {
+            return Ok(Vec::new());
+        };
+        let mut ops = Vec::new();
+        for replica in self.catalog().committed_replica_memberships().await? {
+            if replica.deployment_generation != source_generation
+                || !clusters.contains(&replica.cluster_id)
+            {
+                continue;
+            }
+            let location = self.catalog().concretize_replica_location(
+                replica.config.location,
+                &Vec::new(),
+                None,
+                true,
+            )?;
+            ops.push(Op::CreateClusterReplicaRealization {
+                cluster_id: replica.cluster_id,
+                replica_id: replica.replica_id,
+                name: replica.name,
+                owner_id: replica.owner_id,
+                carryover_from: Some(source_generation),
+                config: mz_controller::clusters::ReplicaConfig {
+                    location,
+                    compute: ComputeReplicaConfig {
+                        logging: replica.config.logging,
+                        arrangement_compression: replica.config.arrangement_compression,
+                    },
+                },
+            });
+        }
+        Ok(ops)
     }
 
     /// The compare-and-append guards for a decision batch: one
@@ -1283,7 +1340,7 @@ impl Coordinator {
                 name,
                 config,
                 owner_id,
-                declaration_id: None,
+                carryover_from: None,
             }));
         }
         Ok(Some(Op::CreateClusterReplica {

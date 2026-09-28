@@ -48,7 +48,7 @@ use tracing::error;
 
 use crate::durable::debug::CollectionType;
 use crate::durable::objects::serialization::{ProtoType, RustType, proto};
-use crate::durable::objects::{DurableType, FenceToken};
+use crate::durable::objects::{DeploymentAdmission, DurableType, FenceToken};
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{DurableCatalogError, Epoch};
@@ -278,6 +278,7 @@ pub enum StateUpdateKind {
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
     DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
+    DeploymentAdmission(DeploymentAdmission),
     FenceToken(FenceToken),
     IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
     IntrospectionSourceIndex(
@@ -341,7 +342,7 @@ impl StateUpdateKind {
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
             StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
-            StateUpdateKind::FenceToken(_) => None,
+            StateUpdateKind::DeploymentAdmission(_) | StateUpdateKind::FenceToken(_) => None,
             StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
             StateUpdateKind::IntrospectionSourceIndex(_, _) => {
                 Some(CollectionType::ComputeIntrospectionSourceIndex)
@@ -419,6 +420,10 @@ impl StateUpdateKindJson {
         // serialize as.
         static DESERIALIZABLE_KINDS: LazyLock<HashSet<String>> = LazyLock::new(|| {
             [
+                StateUpdateKind::DeploymentAdmission(DeploymentAdmission {
+                    members: Default::default(),
+                    persist_target: semver::Version::new(0, 0, 0),
+                }),
                 StateUpdateKind::FenceToken(FenceToken {
                     deploy_generation: 1,
                     epoch: Epoch::new(1).expect("non-zero"),
@@ -669,7 +674,8 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 ),
             ),
             // Not exposed to higher layers.
-            StateUpdateKind::Config(_, _)
+            StateUpdateKind::DeploymentAdmission(_)
+            | StateUpdateKind::Config(_, _)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,
@@ -753,6 +759,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             StateUpdateKind::DefaultPrivilege(key, value) => {
                 proto::StateUpdateKind::DefaultPrivileges(proto::DefaultPrivileges { key, value })
+            }
+            StateUpdateKind::DeploymentAdmission(admission) => {
+                proto::StateUpdateKind::DeploymentAdmission(admission.into_proto_owned())
             }
             StateUpdateKind::FenceToken(fence_token) => {
                 proto::StateUpdateKind::FenceToken(proto::FenceToken {
@@ -876,6 +885,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::DefaultPrivileges(proto::DefaultPrivileges { key, value }) => {
                 StateUpdateKind::DefaultPrivilege(key, value)
             }
+            proto::StateUpdateKind::DeploymentAdmission(admission) => {
+                StateUpdateKind::DeploymentAdmission(DeploymentAdmission::from_proto(admission)?)
+            }
             proto::StateUpdateKind::FenceToken(proto::FenceToken {
                 deploy_generation,
                 epoch,
@@ -995,6 +1007,50 @@ mod tests {
     use crate::durable::objects::FenceToken;
     use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
+
+    #[mz_ore::test]
+    fn deployment_admission_serialization() {
+        let json = serde_json::json!({
+            "kind": "DeploymentAdmission",
+            "members": [{"deployment_generation": 42, "build_version": "1.2.3-dev.4+build.5"}],
+            "persist_target": "1.2.0"
+        });
+        let raw = StateUpdateKindJson::from_serde(&json);
+        assert!(raw.is_always_deserializable());
+        let decoded = StateUpdateKind::try_from(raw).expect("valid admission");
+        assert_eq!(decoded.collection_type(), None);
+        let memory: Option<crate::memory::objects::StateUpdateKind> =
+            (&decoded).try_into().expect("singleton routing");
+        assert_eq!(memory, None);
+        let encoded: serde_json::Value = StateUpdateKindJson::from(decoded).to_serde();
+        assert_eq!(encoded, json);
+
+        for (field, invalid) in [
+            (
+                "members[42]",
+                serde_json::json!({
+                    "kind": "DeploymentAdmission",
+                    "members": [{"deployment_generation": 42, "build_version": "not-a-version"}],
+                    "persist_target": "1.2.0"
+                }),
+            ),
+            (
+                "persist_target",
+                serde_json::json!({
+                    "kind": "DeploymentAdmission",
+                    "members": [],
+                    "persist_target": "1.2"
+                }),
+            ),
+        ] {
+            let err = StateUpdateKind::try_from(StateUpdateKindJson::from_serde(invalid))
+                .expect_err("invalid semver must be rejected");
+            assert!(
+                err.contains(&format!("DeploymentAdmission.{field}:")),
+                "{err}"
+            );
+        }
+    }
 
     #[mz_ore::test]
     fn written_plan_serialization() {

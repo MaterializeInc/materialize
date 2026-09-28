@@ -62,6 +62,7 @@ async fn run_metric_replacement() {
     let build = fixture.config.reconstruction.plan_build.clone();
     let owner = ReplicaPlanOwner {
         replica_id: fixture.config.replica_id,
+        deployment_generation: fixture.writer.state().deployment_generation(),
         name: LABEL.into(),
     };
     let old = GlobalId::Transient(90_000);

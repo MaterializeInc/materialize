@@ -82,6 +82,7 @@ pub fn project_deployment_expected(
         },
         reconfiguration: expected.reconfiguration.clone(),
         may_settle: state.active_deployment_generation() == Some(state.deployment_generation),
+        runtime_initialized: state.cluster_runtime(cluster_id).is_some(),
     });
     // A newly joining deployment starts from accepted intent, not from another
     // deployment's hydration or terminal local outcome.

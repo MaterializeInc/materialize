@@ -128,7 +128,9 @@ impl ReplicaEffects {
             if let CatalogItemId::Transient(value) = item_id {
                 let id = GlobalId::Transient(*value);
                 if let Some(owner) = catalog.state().written_plan_replica_owner(id, build) {
-                    if owner.replica_id != replica {
+                    if owner.replica_id != replica
+                        || owner.deployment_generation != catalog.state().deployment_generation()
+                    {
                         return false;
                     }
                     if let Some(revision) = catalog.state().written_plan(id, build) {
@@ -345,6 +347,7 @@ pub(crate) async fn run(
             config.cluster_id,
             config.replica_id,
             config.persist_location.clone(),
+            persist_clients.cfg().state_version_target(),
         );
         Some(execution::ReplicaEnactment::new(
             endpoint,
@@ -359,6 +362,8 @@ pub(crate) async fn run(
     } else {
         None
     };
+    // None forces initial configuration in both lanes, even without catalog effects.
+    let mut configured_persist_state_version = None;
     let mut last_report = tokio::time::Instant::now();
     let mut last_error = None;
     let mut delay = Duration::from_secs(1);
@@ -411,19 +416,32 @@ pub(crate) async fn run(
                 &storage_metadata::Resolution::default(),
                 false,
             );
-            if effects.configuration_changed {
+            // Catalog admission updates the shared PersistConfig even when there are
+            // no system or replica configuration effects. Previously authorized targets
+            // remain valid while this ordered configuration delivery catches up.
+            let persist_state_version = persist_clients.cfg().state_version_target();
+            if effects.configuration_changed
+                || configured_persist_state_version.as_ref() != Some(&persist_state_version)
+            {
                 anyhow::ensure!(
                     catalog
                         .try_get_cluster_replica(config.cluster_id, config.replica_id)
                         .is_some(),
                     ReplicaRemoved
                 );
-                execution.configure_storage(&catalog, config.cluster_id, config.replica_id);
+                execution.configure_storage(mz_catalog::storage_config::replica_storage_config(
+                    &catalog,
+                    config.cluster_id,
+                    config.replica_id,
+                    persist_state_version.clone(),
+                ));
                 execution.configure(mz_catalog::compute_config::replica_compute_config(
                     &catalog,
                     config.cluster_id,
                     config.replica_id,
+                    persist_state_version.clone(),
                 ));
+                configured_persist_state_version = Some(persist_state_version);
                 effects.configuration_changed = false;
             }
             execution.retire_storage(&catalog, config.cluster_id, config.replica_id);

@@ -956,6 +956,21 @@ async fn test_bootstrap_setting_change_requires_recovery() {
     state.sync_to_current_updates().await.unwrap();
     state.mark_bootstrap_complete().await;
     let epoch = state.epoch();
+    for marker in ["catalog_content_version", "migration_version"] {
+        admin
+            .edit::<SettingCollection>(
+                proto::SettingKey {
+                    name: marker.into(),
+                },
+                proto::SettingValue {
+                    value: "26.44.1".into(),
+                },
+                true,
+            )
+            .await
+            .unwrap();
+        state.sync_to_current_updates().await.unwrap();
+    }
     admin
         .edit::<SettingCollection>(key.clone(), value, true)
         .await

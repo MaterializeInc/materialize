@@ -12,6 +12,8 @@ import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
+import { fetchObjectColumns } from "~/api/materialize/object-explorer/objectColumns";
+import { NULL_DATABASE_NAME } from "~/platform/object-explorer/constants";
 
 import { fetchClusterDeploymentLineage } from "./clusterDeploymentLineage";
 import {
@@ -45,13 +47,16 @@ export type ReplicaUtilizationHistoryParameters = {
 };
 // We have an equivalent query in `builtin.rs` in MaterializeInc/materialize.
 // This query should be kept in sync with `mz_console_cluster_utilization_overview`.
-export function buildReplicaUtilizationHistoryQuery({
-  clusterIds,
-  replicaId,
-  startDate,
-  endDate,
-  bucketSizeMs,
-}: ReplicaUtilizationHistoryParameters) {
+export function buildReplicaUtilizationHistoryQuery(
+  {
+    clusterIds,
+    replicaId,
+    startDate,
+    endDate,
+    bucketSizeMs,
+  }: ReplicaUtilizationHistoryParameters,
+  hasDeploymentGeneration = false,
+) {
   const bucketSizeMsSqlStr = sql.raw(`${bucketSizeMs}`);
   const startDateLit = sql.lit(startDate);
   const endDateLit = sql.lit(startDate);
@@ -147,6 +152,9 @@ export function buildReplicaUtilizationHistoryQuery({
           "s.memory_bytes",
           "s.disk_bytes",
           "s.processes",
+          // Sum processes within each realization before taking logical-replica
+          // bucket maxima. NULL-generation history remains a separate group.
+          ...(hasDeploymentGeneration ? [sql`m.deployment_generation`] : []),
         ]),
     )
     .with("replica_utilization_history_binned", (qb) => {
@@ -803,10 +811,24 @@ export async function fetchReplicaUtilizationHistory({
         startDate: params.startDate,
       }).compile();
     } else {
-      utilizationQuery = buildReplicaUtilizationHistoryQuery({
-        ...params,
-        clusterIds: clusterIdsFilter,
-      }).compile();
+      // Probe per raw fetch so an upgrade cannot leave a cached schema decision.
+      // Metadata errors propagate rather than selecting legacy SQL on failure.
+      const columns = await fetchObjectColumns({
+        parameters: {
+          databaseName: NULL_DATABASE_NAME,
+          schemaName: "mz_internal",
+          name: "mz_cluster_replica_metrics_history",
+        },
+        queryKey,
+        requestOptions,
+      });
+      utilizationQuery = buildReplicaUtilizationHistoryQuery(
+        {
+          ...params,
+          clusterIds: clusterIdsFilter,
+        },
+        columns.rows.some((column) => column.name === "deployment_generation"),
+      ).compile();
     }
 
     const utilizationRes = await executeSqlV2({

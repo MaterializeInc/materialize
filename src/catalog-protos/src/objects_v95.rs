@@ -156,6 +156,7 @@ pub struct ClusterIntrospectionSourceIndexValue {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterReplicaKey {
     pub id: ReplicaId,
+    pub deployment_generation: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -197,10 +198,6 @@ pub struct ClusterReplicaValue {
     pub name: String,
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub deployment_generation: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub declaration_id: Option<ReplicaId>,
 }
 
 #[derive(
@@ -411,6 +408,7 @@ pub struct ClusterSystemConfigurationValue {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ReplicaSystemConfigurationKey {
     pub replica_id: ReplicaId,
+    pub deployment_generation: u64,
     pub name: String,
 }
 
@@ -2067,6 +2065,7 @@ pub enum StateUpdateKind {
     Config(Config),
     Database(Database),
     DefaultPrivileges(DefaultPrivileges),
+    DeploymentAdmission(DeploymentAdmission),
     FenceToken(FenceToken),
     GidMapping(GidMapping),
     IdAlloc(IdAlloc),
@@ -2178,6 +2177,61 @@ pub struct DefaultPrivileges {
 pub struct FenceToken {
     pub deploy_generation: u64,
     pub epoch: i64,
+}
+
+/// Deployment membership and the authorized persist format in one singleton record.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct DeploymentAdmission {
+    // Keep numeric generations in fields rather than JSON object keys so the
+    // catalog's Jsonb deserializer receives numbers, not strings.
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "any_deployment_members()")
+    )]
+    pub members: Vec<DeploymentMember>,
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "any_semver_string()")
+    )]
+    pub persist_target: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct DeploymentMember {
+    pub deployment_generation: u64,
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "any_semver_string()")
+    )]
+    pub build_version: String,
+}
+
+#[cfg(any(test, feature = "proptest"))]
+fn any_deployment_members() -> impl proptest::strategy::Strategy<Value = Vec<DeploymentMember>> {
+    use proptest::prelude::*;
+    proptest::collection::btree_map(any::<u64>(), any_semver_string(), 0..10).prop_map(|members| {
+        members
+            .into_iter()
+            .map(|(deployment_generation, build_version)| DeploymentMember {
+                deployment_generation,
+                build_version,
+            })
+            .collect()
+    })
+}
+
+#[cfg(any(test, feature = "proptest"))]
+fn any_semver_string() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    (
+        any::<u64>(),
+        any::<u64>(),
+        any::<u64>(),
+        "(-[a-z][a-z0-9]{0,8})?(\\+[a-z0-9]{1,8})?",
+    )
+        .prop_map(|(major, minor, patch, suffix)| format!("{major}.{minor}.{patch}{suffix}"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2454,6 +2508,7 @@ pub struct WrittenPlanValue {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ReplicaPlanOwner {
     pub replica_id: ReplicaId,
+    pub deployment_generation: u64,
     pub name: String,
 }
 

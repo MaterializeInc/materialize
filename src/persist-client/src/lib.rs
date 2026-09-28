@@ -249,6 +249,17 @@ impl PersistClient {
         &self.cfg.configs
     }
 
+    /// Returns the actual binary version, independent of its state-format target.
+    pub fn build_version(&self) -> &semver::Version {
+        &self.cfg.build_version
+    }
+
+    /// Installs a durably authorized format target for this client's shared config.
+    /// See [`PersistConfig::set_state_version_target`] for authorization requirements.
+    pub fn set_state_version_target(&self, target: semver::Version) -> anyhow::Result<()> {
+        self.cfg.set_state_version_target(target)
+    }
+
     async fn make_machine<K, V, T, D>(
         &self,
         shard_id: ShardId,

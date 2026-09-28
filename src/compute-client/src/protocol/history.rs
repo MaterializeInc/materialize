@@ -320,6 +320,35 @@ mod tests {
     use mz_repr::{GlobalId, Timestamp};
 
     #[mz_ore::test]
+    fn reduction_preserves_persist_target_through_sparse_updates() {
+        let mut history = ComputeCommandHistory::new(HistoryMetrics {
+            command_counts: CommandMetrics::build(|name| UIntGauge::new(name, name).unwrap()),
+            dataflow_count: UIntGauge::new("dataflows", "dataflows").unwrap(),
+        });
+        for target in [
+            Some(semver::Version::new(0, 100, 0)),
+            Some(semver::Version::new(0, 101, 0)),
+            None,
+        ] {
+            history.push(ComputeCommand::UpdateConfiguration(Box::new(
+                ComputeParameters {
+                    persist_state_version: target,
+                    ..Default::default()
+                },
+            )));
+        }
+        history.reduce();
+        let expected = ComputeCommand::UpdateConfiguration(Box::new(ComputeParameters {
+            persist_state_version: Some(semver::Version::new(0, 101, 0)),
+            ..Default::default()
+        }));
+        assert_eq!(history.iter().collect::<Vec<_>>(), vec![&expected]);
+        let encoded = bincode::serialize(&expected).unwrap();
+        let decoded: ComputeCommand = bincode::deserialize(&encoded).unwrap();
+        assert_eq!(decoded, expected);
+    }
+
+    #[mz_ore::test]
     fn reduction_keeps_latest_catalog_marker_after_lifecycle_effects() {
         let command_counts = CommandMetrics::build(|name| UIntGauge::new(name, name).unwrap());
         let marker_count = command_counts.apply_catalog_position.clone();

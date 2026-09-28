@@ -826,11 +826,26 @@ impl Catalog {
         self.storage().await.current_upper().await
     }
 
-    /// Read authoritative replica membership for cleanup after listing services.
+    /// Read authoritative own-deployment membership for cleanup after listing services.
     /// Does not substitute the caller's potentially older installed inventory.
     pub async fn committed_cluster_replicas(
         &self,
     ) -> Result<BTreeSet<(ClusterId, ReplicaId)>, CatalogError> {
+        let generation = self.state.deployment_generation();
+        Ok(self
+            .committed_replica_memberships()
+            .await?
+            .into_iter()
+            .filter(|replica| replica.deployment_generation == generation)
+            .map(|replica| (replica.cluster_id, replica.replica_id))
+            .collect())
+    }
+
+    /// Reads committed realizations across deployments for explicit carryover.
+    /// These records are not a replacement for local routing inventory.
+    pub async fn committed_replica_memberships(
+        &self,
+    ) -> Result<Vec<crate::durable::ClusterReplica>, CatalogError> {
         use crate::durable::objects::{ClusterReplica, DurableType};
         use mz_proto::RustType;
         let snapshot = self.storage().await.snapshot().await?;
@@ -842,7 +857,7 @@ impl Catalog {
                     RustType::from_proto(key)?,
                     RustType::from_proto(value)?,
                 );
-                Ok((replica.cluster_id, replica.replica_id))
+                Ok(replica)
             })
             .collect::<Result<_, mz_proto::TryFromProtoError>>()
             .map_err(|error| CatalogError::Unstructured(error.into()))
@@ -2532,7 +2547,7 @@ impl SessionCatalog for CatalogStateView<'_> {
         &self,
         cluster_id: ClusterId,
         name: &str,
-    ) -> Result<mz_sql::catalog::ReplicaTarget, SqlCatalogError> {
+    ) -> Result<ReplicaId, SqlCatalogError> {
         self.state
             .resolve_materialized_view_replica(cluster_id, name)
     }

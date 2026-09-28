@@ -5244,24 +5244,19 @@ impl Coordinator {
         Ok(ComputeInstanceSnapshot::new_from_parts(id, indexes))
     }
 
-    /// Translate an MV pin for legacy controller installation. An explicit pin
+    /// Validate an MV pin for legacy controller installation. An explicit pin
     /// without a local realization is an error, never an untargeted dataflow.
     fn materialized_view_physical_target(
         &self,
         cluster: ComputeInstanceId,
-        target: Option<mz_sql::catalog::ReplicaTarget>,
+        target: Option<ReplicaId>,
     ) -> Result<Option<ReplicaId>, DataflowCreationError> {
-        use mz_sql::catalog::ReplicaTarget;
-
         target
             .map(|target| {
                 self.catalog()
                     .state()
                     .physical_replica_for_target(cluster, target)
-                    .ok_or_else(|| {
-                        let (ReplicaTarget::Declaration(id) | ReplicaTarget::Physical(id)) = target;
-                        DataflowCreationError::ReplicaMissing(id)
-                    })
+                    .ok_or(DataflowCreationError::ReplicaMissing(target))
             })
             .transpose()
     }
@@ -6902,14 +6897,13 @@ mod id_pool_tests {
 
 #[cfg(test)]
 mod arrangement_sizes_pruner_tests {
+    use itertools::Itertools;
     use mz_repr::catalog_item_id::CatalogItemId;
     use mz_repr::{Datum, Row};
 
     use super::arrangement_sizes_expired_retractions;
 
-    // Pack a row shaped like `mz_object_arrangement_size_history`: the pruner
-    // only cares about column 3 (`collection_timestamp`), but we stuff the
-    // other three columns with realistic values so shape changes would fail.
+    // History cleanup must preserve the full stored row, including provenance.
     fn history_row(ts_ms: i64) -> Row {
         let dt = mz_ore::now::to_datetime(ts_ms.try_into().expect("non-negative"));
         Row::pack_slice(&[
@@ -6917,6 +6911,8 @@ mod arrangement_sizes_pruner_tests {
             Datum::String("u1"),
             Datum::Int64(123),
             Datum::TimestampTz(dt.try_into().expect("fits in TimestampTz")),
+            Datum::True,
+            Datum::UInt64(8),
         ])
     }
 
@@ -6943,6 +6939,15 @@ mod arrangement_sizes_pruner_tests {
         ];
         let out = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
         assert_eq!(out.len(), 2);
+        for (update, timestamp) in out.into_iter().zip_eq([100, 500]) {
+            let mz_storage_client::client::TableData::Rows(rows) = update.data else {
+                panic!("history cleanup must retract stored rows");
+            };
+            assert_eq!(
+                rows,
+                vec![(history_row(timestamp), mz_repr::Diff::MINUS_ONE)]
+            );
+        }
     }
 
     #[mz_ore::test]

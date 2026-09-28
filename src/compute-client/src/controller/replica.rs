@@ -383,6 +383,7 @@ mod tests {
         let mut initial_config = ConfigUpdates::default();
         initial_config.add(&HYDRATION_CONCURRENCY, 2);
         let create = ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            persist_state_version: None,
             logging: Default::default(),
             expiration_offset: None,
             peek_stash_persist_location: mz_persist_client::PersistLocation::new_in_mem(),

@@ -592,18 +592,22 @@ impl Coordinator {
         }
 
         let live_item_id = self.catalog().resolve_builtin_storage_collection(
-            &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
+            &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_RAW,
         );
         let live_global_id = self.catalog.get_entry(&live_item_id).latest_global_id();
-        let hydration_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_COMPUTE_HYDRATION_TIMES);
+        let hydration_item_id = self.catalog().resolve_builtin_storage_collection(
+            &mz_catalog::builtin::MZ_COMPUTE_HYDRATION_TIMES_RAW,
+        );
         let hydration_global_id = self
             .catalog
             .get_entry(&hydration_item_id)
             .latest_global_id();
 
         let oracle = self.get_local_timestamp_oracle();
+        let deployment_generation = self
+            .controller
+            .replica_owned_compute()
+            .then(|| self.catalog().state().deployment_generation());
         let storage_collections = Arc::clone(&self.controller.storage_collections);
         let collection_metric = self
             .metrics
@@ -648,6 +652,7 @@ impl Coordinator {
                 hydration_snapshot,
                 &fresh_size_replicas,
                 &fresh_hydration_replicas,
+                deployment_generation,
             );
             collection_metric_timer.observe_duration();
 
@@ -696,6 +701,11 @@ impl Coordinator {
         let history_item_id = self
             .catalog()
             .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
+        let generation = self
+            .controller
+            .replica_owned_compute()
+            .then(|| self.catalog().state().deployment_generation())
+            .map_or(Datum::Null, Datum::UInt64);
 
         let updates: Vec<_> = records
             .into_iter()
@@ -706,6 +716,7 @@ impl Coordinator {
                     Datum::Int64(record.size),
                     collection_datum,
                     Datum::from(record.hydration_complete),
+                    generation,
                 ]);
                 BuiltinTableUpdate::row(history_item_id, row, Diff::ONE)
             })
@@ -1302,8 +1313,8 @@ impl Coordinator {
     }
 }
 
-/// Builds history records from snapshots of `mz_object_arrangement_sizes` and
-/// `mz_compute_hydration_times`.
+/// Builds history records from deployment-qualified raw arrangement size and
+/// hydration snapshots. Peer observations cannot establish local freshness.
 ///
 /// Each `(replica_id, object_id)` pair is recorded with a
 /// `hydration_complete` flag: `true` once the pair's initial hydration on that
@@ -1322,17 +1333,20 @@ fn arrangement_sizes_records(
     mut hydration_snapshot: Vec<(Row, StorageDiff)>,
     fresh_size_replicas: &BTreeSet<String>,
     fresh_hydration_replicas: &BTreeSet<String>,
+    deployment_generation: Option<u64>,
 ) -> Vec<ArrangementSizeRecord> {
     differential_dataflow::consolidation::consolidate(&mut live_snapshot);
     differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
 
     let mut datum_vec = mz_repr::DatumVec::new();
+    let generation = deployment_generation.map_or(Datum::Null, Datum::UInt64);
 
-    // Column positions in `mz_compute_hydration_times`.
+    // Column positions in `mz_compute_hydration_times_raw`.
     const HYDRATION_COL_REPLICA_ID: usize = 0;
     const HYDRATION_COL_OBJECT_ID: usize = 1;
     const HYDRATION_COL_TIME_NS: usize = 2;
-    const HYDRATION_COL_COUNT: usize = 3;
+    const HYDRATION_COL_GENERATION: usize = 3;
+    const HYDRATION_COL_COUNT: usize = 4;
 
     let mut hydrated: BTreeSet<(String, String)> = BTreeSet::new();
     for (row, diff) in &hydration_snapshot {
@@ -1340,7 +1354,7 @@ fn arrangement_sizes_records(
             continue;
         }
         let datums = datum_vec.borrow_with(row);
-        if datums.len() < HYDRATION_COL_COUNT {
+        if datums.len() != HYDRATION_COL_COUNT || datums[HYDRATION_COL_GENERATION] != generation {
             continue;
         }
         if datums[HYDRATION_COL_TIME_NS].is_null() {
@@ -1356,11 +1370,12 @@ fn arrangement_sizes_records(
         ));
     }
 
-    // Column positions in `mz_object_arrangement_sizes`.
+    // Column positions in `mz_object_arrangement_sizes_raw`.
     const LIVE_COL_REPLICA_ID: usize = 0;
     const LIVE_COL_OBJECT_ID: usize = 1;
     const LIVE_COL_SIZE: usize = 2;
-    const LIVE_COL_COUNT: usize = 3;
+    const LIVE_COL_GENERATION: usize = 3;
+    const LIVE_COL_COUNT: usize = 4;
 
     let mut skipped_malformed: u64 = 0;
     let mut skipped_null_size: u64 = 0;
@@ -1376,6 +1391,9 @@ fn arrangement_sizes_records(
         // skipping entire snapshots.
         if datums.len() != LIVE_COL_COUNT {
             skipped_malformed += 1;
+            continue;
+        }
+        if datums[LIVE_COL_GENERATION] != generation {
             continue;
         }
         let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
@@ -1441,6 +1459,7 @@ mod arrangement_sizes_records_tests {
             Datum::String(replica_id),
             Datum::String(object_id),
             size.map_or(Datum::Null, Datum::Int64),
+            Datum::Null,
         ])
     }
 
@@ -1453,6 +1472,7 @@ mod arrangement_sizes_records_tests {
             } else {
                 Datum::Null
             },
+            Datum::Null,
         ])
     }
 
@@ -1471,7 +1491,7 @@ mod arrangement_sizes_records_tests {
             (hydration_row("u1", "u200", false), 1),
         ];
         let fresh = replicas(&["u1"]);
-        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh, None);
         assert_eq!(records.len(), 2);
         assert!(
             records
@@ -1498,7 +1518,7 @@ mod arrangement_sizes_records_tests {
             (live_row("u1", "u300", Some(30)), 1),
         ];
         let fresh = replicas(&["u1"]);
-        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh);
+        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh, None);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].object_id, "u300");
         assert_eq!(records[0].size, 30);
@@ -1514,7 +1534,7 @@ mod arrangement_sizes_records_tests {
             (live_row("u1", "u200", Some(10485760)), 1),
         ];
         let fresh = replicas(&["u1"]);
-        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh);
+        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh, None);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].object_id, "u200");
     }
@@ -1531,7 +1551,7 @@ mod arrangement_sizes_records_tests {
             (hydration_row("u2", "u100", true), 1),
         ];
         let fresh = replicas(&["u1"]);
-        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh, None);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].replica_id, "u1");
         assert!(records[0].hydration_complete);
@@ -1544,8 +1564,34 @@ mod arrangement_sizes_records_tests {
         let live = vec![(live_row("u1", "u100", Some(10)), 1)];
         let hydration = vec![(hydration_row("u1", "u100", true), 1)];
         let records =
-            arrangement_sizes_records(live, hydration, &replicas(&["u1"]), &replicas(&[]));
+            arrangement_sizes_records(live, hydration, &replicas(&["u1"]), &replicas(&[]), None);
         assert_eq!(records.len(), 1);
+        assert!(!records[0].hydration_complete);
+    }
+
+    #[mz_ore::test]
+    fn peer_observations_do_not_establish_local_history() {
+        let qualified = |row: Row, generation| {
+            let mut datums = row.unpack();
+            *datums
+                .last_mut()
+                .expect("observation has generation column") = Datum::UInt64(generation);
+            Row::pack(datums)
+        };
+        let live = vec![
+            (qualified(live_row("u1", "u100", Some(10)), 8), 1),
+            (qualified(live_row("u1", "u100", Some(99)), 7), 1),
+            (live_row("u1", "u100", Some(99)), 1),
+        ];
+        let hydration = vec![
+            (qualified(hydration_row("u1", "u100", false), 8), 1),
+            (qualified(hydration_row("u1", "u100", true), 7), 1),
+            (hydration_row("u1", "u100", true), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh, Some(8));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].size, 10);
         assert!(!records[0].hydration_complete);
     }
 }

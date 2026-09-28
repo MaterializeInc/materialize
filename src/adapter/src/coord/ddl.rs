@@ -1730,7 +1730,6 @@ impl Coordinator {
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::CheckClusterDeclarations { .. }
-                | Op::AssociateReplicaDeclaration { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
         }

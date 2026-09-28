@@ -277,6 +277,10 @@ impl Coordinator {
             client,
             object_history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
             replica_history_id: catalog.resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
+            deployment_generation: self
+                .controller
+                .replica_owned_compute()
+                .then(|| catalog.state().deployment_generation()),
             catalog,
             metrics: self.metrics.clone(),
             wall_time: self.now_datetime(),
@@ -348,7 +352,13 @@ fn next_replica(replicas: &[ReplicaTarget], cursor: Option<ReplicaId>) -> Option
 /// not-yet-recorded dataflow, and the OCC path rejects a result that exceeds
 /// `max_result_size` or `max_query_result_size`. At their 1 GiB defaults that
 /// ceiling only matters at millions of dataflows per replica.
-fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> String {
+fn object_collection_sql(
+    cluster_id: ClusterId,
+    replica_id: ReplicaId,
+    cutoff: &str,
+    deployment_generation: Option<u64>,
+) -> String {
+    let generation = deployment_generation.map_or_else(|| "NULL".into(), |g| g.to_string());
     // Interpolating into SQL is safe here: the ids are catalog-internal and the
     // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this
     // query comes from a user.
@@ -371,7 +381,8 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
             e.installed_at,
             e.started_at,
             e.hydrated_at,
-            'hydrated'::text AS status
+            'hydrated'::text AS status,
+            {generation}::uint8 AS deployment_generation
         FROM (
             SELECT
                 t.export_id AS object_id,
@@ -391,6 +402,7 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
               WHERE h.object_id = e.object_id
                 AND h.replica_id = '{replica_id}'::text
                 AND h.installed_at = e.installed_at
+                AND h.deployment_generation IS NOT DISTINCT FROM {generation}::uint8
           )"
     )
 }
@@ -412,7 +424,12 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
 ///
 /// Collection also waits until every configured replica process has reported
 /// resource usage. The query itself narrates how each step works.
-fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
+fn replica_collection_sql(
+    target: ReplicaTarget,
+    cutoff: &str,
+    deployment_generation: Option<u64>,
+) -> String {
+    let generation = deployment_generation.map_or_else(|| "NULL".into(), |g| g.to_string());
     let ReplicaTarget {
         cluster_id,
         replica_id,
@@ -533,7 +550,8 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 r.peak_memory_bytes,
                 r.peak_disk_bytes,
                 'hydrated'::text AS status,
-                r.process_id
+                r.process_id,
+                {generation}::uint8 AS deployment_generation
             FROM episode AS e
             CROSS JOIN resources AS r
             WHERE (SELECT count(*) FROM resources) = {process_count}::uint8
@@ -548,6 +566,7 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             SELECT 1
             FROM mz_internal.mz_replica_hydration_history AS h
             WHERE h.replica_id = c.replica_id
+              AND h.deployment_generation IS NOT DISTINCT FROM c.deployment_generation
               AND h.finished_at >= c.started_at
         )"
     )
@@ -566,7 +585,7 @@ fn object_retention_sql(cutoff: &str) -> String {
         "SELECT * FROM (
             SELECT
                 object_id, cluster_id, replica_id, installed_at, started_at,
-                hydrated_at, status
+                hydrated_at, status, deployment_generation
             FROM mz_internal.mz_object_hydration_history
             WHERE hydrated_at < TIMESTAMPTZ '{cutoff}'
             ORDER BY hydrated_at
@@ -581,7 +600,8 @@ fn replica_retention_sql(cutoff: &str) -> String {
         "SELECT * FROM (
             SELECT
                 replica_id, cluster_id, started_at, finished_at, object_count,
-                peak_memory_bytes, peak_disk_bytes, status, process_id
+                peak_memory_bytes, peak_disk_bytes, status, process_id,
+                deployment_generation
             FROM mz_internal.mz_replica_hydration_history
             WHERE finished_at < TIMESTAMPTZ '{cutoff}'
             ORDER BY finished_at
@@ -596,6 +616,9 @@ struct Sweep {
     catalog: Arc<Catalog>,
     object_history_id: CatalogItemId,
     replica_history_id: CatalogItemId,
+    /// Native replicas share stable IDs across deployments, but not episodes.
+    /// Legacy episodes use NULL and only deduplicate against other legacy rows.
+    deployment_generation: Option<u64>,
     metrics: Metrics,
     wall_time: chrono::DateTime<chrono::Utc>,
     /// Rows finishing before their table's cutoff have aged out. Collection and
@@ -614,7 +637,12 @@ impl Sweep {
             replica_id,
             ..
         } = target;
-        let sql = object_collection_sql(cluster_id, replica_id, &self.object_cutoff);
+        let sql = object_collection_sql(
+            cluster_id,
+            replica_id,
+            &self.object_cutoff,
+            self.deployment_generation,
+        );
         let _ = self
             .run(
                 "collection",
@@ -626,7 +654,7 @@ impl Sweep {
             )
             .await;
 
-        let sql = replica_collection_sql(target, &self.replica_cutoff);
+        let sql = replica_collection_sql(target, &self.replica_cutoff, self.deployment_generation);
         let _ = self
             .run(
                 "replica_collection",
@@ -925,6 +953,12 @@ mod tests {
             ClusterId::user(1).expect("valid cluster ID"),
             ReplicaId::User(2),
             cutoff,
+            Some(7),
+        );
+        assert!(sql.contains("7::uint8 AS deployment_generation"), "{sql}");
+        assert!(
+            sql.contains("h.deployment_generation IS NOT DISTINCT FROM 7::uint8"),
+            "{sql}"
         );
         assert!(
             sql.contains("HAVING count(*) = count(t.hydrated_at)"),
@@ -958,8 +992,17 @@ mod tests {
                 process_count: 3,
             },
             "1970-01-01T00:00:00+00:00",
+            None,
         );
         let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            sql.contains("NULL::uint8 AS deployment_generation"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("h.deployment_generation IS NOT DISTINCT FROM c.deployment_generation"),
+            "{sql}"
+        );
 
         // The gaps-and-islands scaffolding: running coverage horizon, gap
         // detection against the previous row's horizon, episode labels, and

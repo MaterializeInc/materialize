@@ -23,7 +23,7 @@ use crate::builtin::{
 };
 use crate::config::StateConfig;
 use crate::durable::objects::{
-    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
+    DurableType, SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use crate::durable::{
     ClusterReplica, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -126,6 +126,11 @@ pub struct OpenCatalogResult {
 }
 
 impl Catalog {
+    #[cfg(test)]
+    pub(super) fn latest_builtin_schema_migration_version() -> Version {
+        builtin_schema_migration::latest_migration_version()
+    }
+
     pub(super) fn diagnostic_state_config(config: &StateConfig) -> StateConfig {
         StateConfig {
             unsafe_mode: config.unsafe_mode,
@@ -501,10 +506,9 @@ impl Catalog {
                 };
                 mappings.remove(&description).as_ref() == Some(&fingerprint)
             });
-            if !compatible
-                || !mappings.is_empty()
-                || get_migration_version(txn).as_ref() != Some(&config.build_info.semver_version())
-            {
+            // Replay requires compatible builtins, not ownership of the last
+            // migration. The provisioner must pair semantically compatible code.
+            if !compatible || !mappings.is_empty() {
                 return Err(CatalogError::Internal(
                     "catalog reconstruction requires a builtin schema migration".into(),
                 ));
@@ -839,8 +843,11 @@ impl Catalog {
         builtin_table_updates.extend(table_updates);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
-        // Bump the migration version immediately before committing.
-        set_migration_version(txn, config.build_info.semver_version())?;
+        // Committed replay preserves the source marker. Only bootstrap owns
+        // migrations and advances the marker after applying their steps.
+        if deploy_generation.is_some() {
+            set_migration_version(txn, config.build_info.semver_version())?;
+        }
 
         Ok((
             InitializeStateResult {
@@ -1684,7 +1691,6 @@ fn reconcile_builtin_cluster_replicas(
                 // stamping `mz_system` here would stop those roles from altering
                 // a replica of a cluster they own.
                 cluster.owner_id,
-                None,
             )?;
             info!(
                 cluster = %cluster.name, replica = %replica_name, %replica_id,
@@ -1728,7 +1734,7 @@ fn reconcile_builtin_cluster_replicas(
     // count, so it must not be called in a loop.
     let drop_ids = to_drop
         .iter()
-        .map(|(_cluster_name, replica)| replica.replica_id)
+        .map(|(_cluster_name, replica)| replica.key())
         .collect();
     txn.remove_cluster_replicas(&drop_ids)?;
 

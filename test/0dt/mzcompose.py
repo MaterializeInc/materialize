@@ -8,13 +8,16 @@
 # by the Apache License, Version 2.0.
 
 """
-Explicit deterministic tests for read-only mode and zero downtime deploys (same
-version, no upgrade).
+Explicit deterministic tests for read-only mode and zero downtime deploys.
+Deployments use the same version unless a workflow selects a compatible image.
 """
 
 import json
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from textwrap import dedent
 from threading import Thread
 
@@ -46,7 +49,7 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.ui import CommandFailureCausedUIError
+from materialize.ui import CommandFailureCausedUIError, env_is_truthy
 
 DEFAULT_TIMEOUT = "300s"
 
@@ -1316,8 +1319,48 @@ def workflow_index_read_protection(
         assert frozen_bounds() == frozen
 
 
-def workflow_kafka_source_rehydration(c: Composition) -> None:
+def workflow_kafka_source_rehydration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Verify Kafka source rehydration in 0dt deployment"""
+    parser.add_argument(
+        "--ci-compatible-image-artifact",
+        help="Use a build-native-compatible artifact in ordinary CI, retaining same-version instrumented runs",
+    )
+    args = parser.parse_args()
+    artifact = None
+    new_image = None
+    if args.ci_compatible_image_artifact and (
+        sanitizer_enabled() or env_is_truthy("CI_COVERAGE_ENABLED")
+    ):
+        print("Instrumented native warm promotion uses the current same-version images")
+    elif args.ci_compatible_image_artifact:
+        with TemporaryDirectory() as directory:
+            subprocess.run(
+                [
+                    "buildkite-agent",
+                    "artifact",
+                    "download",
+                    args.ci_compatible_image_artifact,
+                    directory,
+                    "--step",
+                    "build-native-compatible",
+                ],
+                check=True,
+            )
+            artifact = json.loads(
+                (Path(directory) / args.ci_compatible_image_artifact).read_text()
+            )
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+        assert artifact["source_revision"] == revision, artifact
+        assert artifact["old_version"] != artifact["new_version"], artifact
+        new_image = artifact["image"]
+        assert isinstance(new_image, str) and new_image, artifact
+        print(f"Compatible-version image: {new_image}, source: {revision}")
+
+    print(f"mz_old image: {c.compose['services']['mz_old']['image']}")
     c.down(destroy_volumes=True)
     c.up(
         "kafka",
@@ -1325,6 +1368,10 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         "mz_old",
         Service("testdrive", idle=True),
     )
+    old_version = c.query_mz_version(service="mz_old")
+    print(f"mz_old SQL binary version: {old_version}")
+    if artifact:
+        assert old_version.split()[0] == f"v{artifact['old_version']}", artifact
     setup(c)
 
     count = 1000000
@@ -1368,6 +1415,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            image=new_image,
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1416,6 +1464,12 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
         assert result[0][0] == 1, f"Wrong result: {result}"
+
+        new_version = c.query_mz_version(service="mz_new")
+        print(f"mz_new SQL binary version: {new_version}")
+        if artifact:
+            assert new_version.split()[0] == f"v{artifact['new_version']}", artifact
+            assert new_version.split()[0] != old_version.split()[0]
 
         print("Ingesting again")
         for i in range(repeats, repeats * 2):

@@ -783,12 +783,21 @@ impl<'a> ActiveComputeState<'a> {
         debug!("Applying configuration update: {params:?}");
 
         let ComputeParameters {
+            persist_state_version,
             workload_class,
             max_result_size,
             tracing,
             grpc_client: _grpc_client,
             dyncfg_updates,
         } = params;
+
+        if let Some(target) = persist_state_version {
+            self.compute_state
+                .persist_clients
+                .cfg()
+                .set_state_version_target(target)
+                .expect("invalid authorized Persist state-format target");
+        }
 
         if let Some(v) = workload_class {
             self.compute_state.metrics.set_workload_class(v);

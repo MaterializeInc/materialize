@@ -2062,6 +2062,13 @@ impl StorageState {
                 self.persist_clients.cfg().enable_compaction();
             }
             StorageCommand::UpdateConfiguration(params) => {
+                // Install at ingress, before RunIngestion can submit async shard opens.
+                if let Some(target) = &params.persist_state_version {
+                    self.persist_clients
+                        .cfg()
+                        .set_state_version_target(target.clone())
+                        .expect("invalid authorized Persist state-format target");
+                }
                 // These can be done from all workers safely.
                 debug!("Applying configuration update: {params:?}");
 

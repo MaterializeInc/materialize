@@ -508,6 +508,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
     ]
 });
 
+#[cfg(test)]
+pub(super) fn latest_migration_version() -> Version {
+    MIGRATIONS
+        .iter()
+        .map(|step| &step.version)
+        .max()
+        .expect("registered builtin schema migrations")
+        .clone()
+}
+
 /// A migration required to upgrade past a specific version.
 #[derive(Clone, Debug)]
 struct MigrationStep {
@@ -899,13 +909,13 @@ impl Migration {
                 "mz_catalog_raw cannot be migrated"
             );
 
-            // The 0dt caught-up gate reads the leader's `mz_cluster_replica_frontiers` shard for
+            // The 0dt caught-up gate reads the leader's `mz_cluster_replica_frontiers_raw` shard for
             // the live frontiers it checks every collection against. Migrating it via `Replacement`
             // hands us a fresh shard we write ourselves, so the gate would compare us against
             // ourselves instead of against the leader.
             assert_ne!(
                 &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
-                "mz_cluster_replica_frontiers cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
+                "mz_cluster_replica_frontiers_raw cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
             );
 
             let Some(object_info) = self.system_objects.get(object) else {

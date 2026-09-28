@@ -116,6 +116,10 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new
         .with_column("error", SqlScalarType::String.nullable(true))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
         .with_column("replica_id", SqlScalarType::String.nullable(true))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish()
 });
 
@@ -130,6 +134,10 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         .with_column("error", SqlScalarType::String.nullable(true))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
         .with_column("replica_id", SqlScalarType::String.nullable(true))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish()
 });
 
@@ -155,6 +163,10 @@ pub static REPLICA_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish()
 });
 
@@ -175,6 +187,10 @@ pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(
         .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
         .with_column("swap_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish()
 });
 
@@ -186,6 +202,10 @@ pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(||
         .with_column(
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
         )
         .finish()
 });

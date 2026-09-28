@@ -1978,7 +1978,7 @@ pub struct MaterializedView {
     pub cluster_id: ClusterId,
     /// If set, install only on replicas matching this binding. Missing realization
     /// does not make a bound materialized view untargeted.
-    pub target_replica: Option<crate::catalog::ReplicaTarget>,
+    pub target_replica: Option<ReplicaId>,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,

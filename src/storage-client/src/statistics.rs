@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_repr::{GlobalId, RelationDesc, Row, SqlScalarType};
 
+/// Persisted schema. Producers pack only the statistics fields, without provenance.
 pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         // Id of the source (or subsource).
@@ -100,9 +101,14 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
         .with_column("offset_committed", SqlScalarType::UInt64.nullable(true))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish()
 });
 
+/// Persisted schema. Producers pack only the statistics fields, without provenance.
 pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         // Id of the sink.
@@ -124,6 +130,10 @@ pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         // A counter of the bytes we have committed.
         // Never resets.
         .with_column("bytes_committed", SqlScalarType::UInt64.nullable(false))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish()
 });
 

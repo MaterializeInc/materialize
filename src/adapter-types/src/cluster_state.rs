@@ -113,6 +113,8 @@ pub struct ClusterIntent {
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// Whether this deployment is active and may settle the shared request.
     pub may_settle: bool,
+    /// Whether this deployment has recorded its initial realized state.
+    pub runtime_initialized: bool,
 }
 
 /// The status of the latest graceful reconfiguration record.

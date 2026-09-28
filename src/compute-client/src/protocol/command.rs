@@ -292,11 +292,13 @@ pub enum ComputeCommand {
     },
 }
 
-/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
-/// if the controller attempt to reconcile them with different values
-/// for anything in this struct.
+/// Configuration for a replica, passed with `CreateInstance`.
+/// Reconciliation requires compatibility as defined by [`InstanceConfig::compatible_with`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstanceConfig {
+    /// Authorized Persist state-format target, installed before instance setup.
+    /// `None` leaves the process target unchanged.
+    pub persist_state_version: Option<semver::Version>,
     /// Specification of introspection logging.
     pub logging: LoggingConfig,
     /// The offset relative to the replica startup at which it should expire. None disables feature.
@@ -336,10 +338,12 @@ impl InstanceConfig {
     ///
     /// The initial config snapshot is likewise excluded: it carries dyncfg values that apply
     /// globally and are kept current through `UpdateConfiguration`, so a difference across
-    /// reconnects is expected and does not require a restart.
+    /// reconnects is expected and does not require a restart. The Persist target is
+    /// also live configuration and does not constrain compatibility.
     pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
         // Destructure to protect against adding fields in the future.
         let InstanceConfig {
+            persist_state_version: _,
             logging: self_logging,
             expiration_offset: self_offset,
             peek_stash_persist_location: self_peek_stash_persist_location,
@@ -349,6 +353,7 @@ impl InstanceConfig {
             initial_config: _,
         } = self;
         let InstanceConfig {
+            persist_state_version: _,
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
@@ -378,6 +383,8 @@ impl InstanceConfig {
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ComputeParameters {
+    /// Authorized Persist state-format target. `None` leaves the target unchanged.
+    pub persist_state_version: Option<semver::Version>,
     /// An optional arbitrary string that describes the class of the workload
     /// this compute instance is running (e.g., `production` or `staging`).
     ///
@@ -408,6 +415,7 @@ impl ComputeParameters {
     /// Update the parameter values with the set ones from `other`.
     pub fn update(&mut self, other: ComputeParameters) {
         let ComputeParameters {
+            persist_state_version,
             workload_class,
             max_result_size,
             tracing,
@@ -415,6 +423,9 @@ impl ComputeParameters {
             dyncfg_updates,
         } = other;
 
+        if persist_state_version.is_some() {
+            self.persist_state_version = persist_state_version;
+        }
         if workload_class.is_some() {
             self.workload_class = workload_class;
         }
@@ -516,6 +527,25 @@ impl TryIntoProtocolNonce for ComputeCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn persist_target_is_live_instance_configuration() {
+        let initial = InstanceConfig {
+            persist_state_version: Some(semver::Version::new(0, 100, 0)),
+            logging: Default::default(),
+            expiration_offset: None,
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
+            arrangement_dictionary_compression: false,
+            initial_config: Default::default(),
+        };
+        let encoded = bincode::serialize(&initial).unwrap();
+        let decoded: InstanceConfig = bincode::deserialize(&encoded).unwrap();
+        assert_eq!(decoded, initial);
+
+        let mut advanced = initial.clone();
+        advanced.persist_state_version = Some(semver::Version::new(0, 101, 0));
+        assert!(initial.compatible_with(&advanced));
+    }
 
     /// Test to ensure the size of the `ComputeCommand` enum doesn't regress.
     #[mz_ore::test]

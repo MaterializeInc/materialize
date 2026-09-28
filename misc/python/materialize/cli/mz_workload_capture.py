@@ -180,8 +180,9 @@ def attach_source_statistics_internal(
     subscribe_start = time.time()
     with conn.cursor() as cur:
         cur.execute("SET CLUSTER = mz_catalog_server")
-        # mz_source_statistics_with_history has one row per (id, replica_id).
-        # Aggregate across replicas with max() so the counters don't interleave.
+        # History distinguishes (id, replica_id, deployment_generation).
+        # Take max() across retained realizations, including retired deployments,
+        # so historical capture does not discard observations at promotion.
         # Replicas ingest redundantly, so the furthest-along value is the
         # source's progress (summing would multiply it by the replica count).
         sql = SQL("""

@@ -141,6 +141,7 @@ fn required_replicas_present_waits_for_intent_normalization() {
         accepted: record("100cc", 1, 5000).target,
         reconfiguration: None,
         may_settle: false,
+        runtime_initialized: true,
     });
     assert!(!controller.required_replicas_present(&s, None, now));
     s.replication_factor = 1;
@@ -436,6 +437,9 @@ impl FakeCtx {
                 let Some(state) = self.states.get_mut(cluster_id) else {
                     return;
                 };
+                if let Some(intent) = &mut state.intent {
+                    intent.runtime_initialized = true;
+                }
                 // Exhaustive destructure (no `..`): keeps this fake mirror of the
                 // adapter's `build_update_cluster_config_op` from silently
                 // forgetting a field added to `StateWrite`.
@@ -1378,6 +1382,30 @@ fn written_reconfiguration_audit(write: &StateWrite) -> Option<ReconfigurationAu
 }
 
 #[mz_ore::test(tokio::test)]
+async fn zero_replica_runtime_is_initialized_once() {
+    let c = cluster(1);
+    let mut s = state(c, "100cc", 0, vec![]);
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 0, 5000).target,
+        reconfiguration: None,
+        may_settle: false,
+        runtime_initialized: false,
+    });
+    let mut ctx = FakeCtx::new(vec![s]);
+    ctx.witness_check = true;
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.states[&c].intent.as_ref().unwrap().runtime_initialized);
+    assert!(ctx.states[&c].replicas.is_empty());
+    ctx.applied.clear();
+    controller.reconcile(&mut ctx).await;
+    assert!(
+        ctx.applied.is_empty(),
+        "an empty roster is not fresh enrollment"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
 async fn shared_request_contract_is_normalized_and_cas_guarded() {
     let c = cluster(1);
     let request = record_on_timeout("200cc", 1, 5000, OnTimeout::Commit);
@@ -1391,6 +1419,7 @@ async fn shared_request_contract_is_normalized_and_cas_guarded() {
         accepted: record("100cc", 1, 5000).target,
         reconfiguration: Some(request.clone()),
         may_settle: false,
+        runtime_initialized: true,
     });
     let mut ctx = FakeCtx::new(vec![s]);
     ctx.witness_check = true;
@@ -1449,6 +1478,7 @@ async fn shared_rollback_overrides_pending_success() {
         accepted: record("100cc", 1, 5000).target,
         reconfiguration: Some(request),
         may_settle: false,
+        runtime_initialized: true,
     });
     let mut ctx = FakeCtx::new(vec![s]);
     ctx.witness_check = true;
@@ -1508,6 +1538,7 @@ async fn promotion_rechecks_private_success_with_original_deadline() {
         accepted: record("100cc", 1, 5000).target,
         reconfiguration: Some(request.clone()),
         may_settle: false,
+        runtime_initialized: true,
     });
     let mut ctx = FakeCtx::new(vec![s]);
     ctx.witness_check = true;
@@ -1591,6 +1622,7 @@ async fn shared_success_converges_after_private_failure() {
         accepted: record("100cc", 1, 5000).target,
         reconfiguration: Some(request.clone()),
         may_settle: false,
+        runtime_initialized: true,
     });
     let mut ctx = FakeCtx::new(vec![s]);
     ctx.witness_check = true;

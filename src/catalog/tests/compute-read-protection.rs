@@ -264,6 +264,16 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         .find(|replica| replica.name == "r1")
         .expect("bootstrap has replica r1");
     assert_eq!(active_replica.deployment_generation, 7);
+    let mut active_only_replica = active_replica.clone();
+    active_only_replica.replica_id = ReplicaId::User(1001);
+    active_only_replica.name = "active_only_replica".into();
+    tx.set_replicas(vec![active_only_replica.clone()]).unwrap();
+    tx.upsert_replica_system_config(
+        active_replica.replica_id,
+        "enable_arrangement_size_logging",
+        "false".into(),
+    )
+    .unwrap();
     let cluster = tx
         .get_clusters()
         .find(|cluster| cluster.id == active_replica.cluster_id)
@@ -334,14 +344,13 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         BTreeSet::from([input]),
     )
     .unwrap();
-    let own_replica_id = ReplicaId::User(1001);
+    let own_replica_id = active_replica.replica_id;
     tx.insert_cluster_replica_with_id(
         cluster.id,
         own_replica_id,
         &active_replica.name,
         active_replica.config.clone(),
         active_replica.owner_id,
-        None,
     )
     .unwrap();
     let mut own_runtime = active_runtime.clone();
@@ -360,6 +369,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         Some(uuid::Uuid::new_v4()),
         Some(ReplicaPlanOwner {
             replica_id: own_replica_id,
+            deployment_generation: 8,
             name: "replica_local_index".into(),
         }),
         BTreeSet::new(),
@@ -370,11 +380,11 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     let mut tx = pending.transaction().await.unwrap();
     let mut own_replica = tx
         .get_cluster_replicas()
-        .find(|replica| replica.replica_id == own_replica_id)
+        .find(|replica| replica.replica_id == own_replica_id && replica.deployment_generation == 8)
         .unwrap();
     assert_eq!(own_replica.name, active_replica.name);
     assert_eq!(own_replica.cluster_id, active_replica.cluster_id);
-    assert_ne!(own_replica.replica_id, active_replica.replica_id);
+    assert_eq!(own_replica.replica_id, active_replica.replica_id);
     assert_eq!(own_replica.deployment_generation, 8);
     own_replica.config.arrangement_compression = !own_replica.config.arrangement_compression;
     tx.update_cluster_replica(own_replica_id, own_replica.clone())
@@ -383,6 +393,39 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         !own_runtime.realized_config.arrangement_compression;
     tx.set_cluster_runtime(own_runtime.clone()).unwrap();
     commit(tx).await;
+
+    let tx = pending.transaction().await.unwrap();
+    assert_eq!(
+        tx.get_cluster_replicas()
+            .filter(|replica| replica.replica_id == own_replica_id)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([active_replica.clone(), own_replica.clone()])
+    );
+    assert_eq!(
+        tx.get_cluster_replicas()
+            .filter(|replica| replica.replica_id == active_only_replica.replica_id)
+            .collect::<Vec<_>>(),
+        vec![active_only_replica.clone()]
+    );
+    assert_eq!(
+        tx.get_cluster_runtime(cluster.id, 7),
+        Some(active_runtime.clone())
+    );
+    assert_eq!(
+        tx.get_cluster_runtime(cluster.id, 8),
+        Some(own_runtime.clone())
+    );
+    assert_eq!(
+        tx.get_replica_system_configurations()
+            .filter(|config| {
+                config.replica_id == own_replica_id
+                    && config.name == "enable_arrangement_size_logging"
+            })
+            .map(|config| (config.deployment_generation, config.value))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([(7, "false".into()), (8, "true".into())])
+    );
+    drop(tx);
 
     // Each denied write is paired with a real, permitted lifecycle change. The
     // durable snapshot must remain unchanged, including that own-generation row.
@@ -405,7 +448,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         tx.set_cluster_runtime(changed).unwrap();
         match forbidden {
             "foreign physical deletion" => {
-                tx.remove_cluster_replica(active_replica.replica_id)
+                tx.remove_cluster_replicas(&BTreeSet::from([active_replica.key()]))
                     .unwrap();
             }
             "foreign physical update" => {
@@ -415,15 +458,14 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
                     .unwrap();
             }
             "foreign physical adoption" => {
-                tx.remove_cluster_replica(active_replica.replica_id)
+                tx.remove_cluster_replicas(&BTreeSet::from([active_only_replica.key()]))
                     .unwrap();
                 tx.insert_cluster_replica_with_id(
                     cluster.id,
-                    active_replica.replica_id,
+                    active_only_replica.replica_id,
                     "adopted_replica",
-                    active_replica.config.clone(),
-                    active_replica.owner_id,
-                    None,
+                    active_only_replica.config.clone(),
+                    active_only_replica.owner_id,
                 )
                 .unwrap();
             }
@@ -451,7 +493,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
             }
             "foreign replica configuration" => {
                 tx.upsert_replica_system_config(
-                    active_replica.replica_id,
+                    active_only_replica.replica_id,
                     "enable_arrangement_size_logging",
                     "true".into(),
                 )
@@ -464,6 +506,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
                     Some(uuid::Uuid::new_v4()),
                     Some(ReplicaPlanOwner {
                         replica_id: active_replica.replica_id,
+                        deployment_generation: 7,
                         name: "foreign_replica_index".into(),
                     }),
                     BTreeSet::new(),

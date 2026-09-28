@@ -34,6 +34,17 @@ steps:
         agents:
           queue: l-builder-linux-x86_64
 
+      - id: build-native-compatible
+        label: Build compatible-version materialized x86_64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build_native_compatible
+        inputs: [ci/test/build_native_compatible.py]
+        depends_on: []
+        timeout_in_minutes: 60
+        coverage: skip
+        sanitizer: skip
+        agents:
+          queue: l-builder-linux-x86_64
+
       - id: build-aarch64
         label: ":rust: Build aarch64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -613,13 +624,14 @@ steps:
 
   - id: native-warm-promotion
     topics: [0dt-migration, kafka, kafka-sink, mysql, postgres, sql-server]
-    label: Native same-version warm promotion
-    depends_on: build-x86_64
+    label: Native warm promotion
+    depends_on: [build-x86_64, build-native-compatible]
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
           run: kafka-source-rehydration
+          args: [--ci-compatible-image-artifact=native-compatible-image.json]
     agents:
       queue: hetzner-x86-64-dedi-16cpu-64gb
 

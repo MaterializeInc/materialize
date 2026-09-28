@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use mz_persist_client::PersistClient;
 use mz_sql::DEFAULT_SCHEMA;
-use mz_sql::catalog::{CatalogDatabase, ReplicaTarget};
+use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::DEFAULT_DATABASE_NAME;
@@ -78,12 +78,10 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
         .await
         .expect("allocate cluster");
     let ids = original
-        .allocate_user_replica_ids(2, original.current_upper().await)
+        .allocate_user_replica_ids(1, original.current_upper().await)
         .await
-        .expect("allocate declaration and promoted realization");
-    let declaration_id = ids[0];
-    let promoted_id = ids[1];
-    assert_ne!(declaration_id, promoted_id);
+        .expect("allocate logical replica identity");
+    let replica_id = ids[0];
     commit(
         &mut original,
         vec![
@@ -96,7 +94,7 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
             },
             Op::CreateClusterReplica {
                 cluster_id,
-                replica_id: declaration_id,
+                replica_id,
                 name: "r1".into(),
                 config: replica_config.clone(),
                 owner_id: MZ_SYSTEM_ROLE_ID,
@@ -156,8 +154,7 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
     .await;
     let mv_shard = original.state().storage_metadata().collection_metadata[&mv_global_id];
 
-    // Promotion occurs while the pin is declaration-based. The serving physical
-    // identity differs from the declaration that the follower will first bind.
+    // Promotion realizes the same logical identity in a different deployment.
     let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
         .with_organization_id(organization)
         .with_deploy_generation(1)
@@ -187,14 +184,30 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
         &mut active,
         vec![Op::CreateClusterReplicaRealization {
             cluster_id,
-            replica_id: promoted_id,
+            replica_id,
             name: "r1".into(),
             config: replica_config,
             owner_id: MZ_SYSTEM_ROLE_ID,
-            declaration_id: Some(declaration_id),
+            carryover_from: None,
         }],
     )
     .await;
+    assert_eq!(
+        original
+            .get_cluster(cluster_id)
+            .replica(replica_id)
+            .expect("original membership")
+            .deployment_generation,
+        0
+    );
+    assert_eq!(
+        active
+            .get_cluster(cluster_id)
+            .replica(replica_id)
+            .expect("promoted membership")
+            .deployment_generation,
+        1
+    );
     let mut follower = open_follower(&active, persist.clone(), organization).await;
     assert_eq!(follower.state().deployment_generation(), 2);
     assert_eq!(follower.get_cluster(cluster_id).replica_id("r1"), None);
@@ -204,15 +217,12 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
         };
         mv.target_replica
     };
-    assert_eq!(
-        target(&follower),
-        Some(ReplicaTarget::Declaration(declaration_id))
-    );
+    assert_eq!(target(&follower), Some(replica_id));
     assert_eq!(
         active
             .state()
-            .physical_replica_for_target(cluster_id, ReplicaTarget::Declaration(declaration_id),),
-        Some(promoted_id)
+            .physical_replica_for_target(cluster_id, replica_id),
+        Some(replica_id)
     );
     let configure = |config| Op::UpdateClusterConfig {
         id: cluster_id,
@@ -227,15 +237,17 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
         .await
         .expect("replay managed conversion without a local realization");
     assert!(follower.get_cluster(cluster_id).is_managed());
-    assert_eq!(follower.get_cluster(cluster_id).replica_id("r1"), None);
-    assert_eq!(target(&active), Some(ReplicaTarget::Physical(promoted_id)));
-    assert_eq!(
-        target(&follower),
-        Some(ReplicaTarget::Declaration(declaration_id))
+    assert!(
+        !follower
+            .state()
+            .replica_declarations()
+            .any(|declaration| declaration.replica_id == replica_id)
     );
+    assert_eq!(follower.get_cluster(cluster_id).replica_id("r1"), None);
+    assert_eq!(target(&active), Some(replica_id));
+    assert_eq!(target(&follower), Some(replica_id));
 
-    // No managed promotion or local realization intervenes. Incremental replay
-    // must repair the unresolved pin when shared intent returns under a new ID.
+    // Conversion preserves the pin even in a deployment with no realization.
     commit(&mut active, vec![configure(unmanaged)]).await;
     follower
         .sync_to_current_updates()
@@ -246,19 +258,22 @@ async fn unrealized_mv_pin_survives_replica_conversion_round_trip() {
         follower.observed_position(),
         reconstructed.observed_position()
     );
-    assert_eq!(
-        target(&reconstructed),
-        Some(ReplicaTarget::Declaration(promoted_id))
-    );
+    assert_eq!(target(&reconstructed), Some(replica_id));
     assert_eq!(target(&follower), target(&reconstructed));
     for catalog in [&follower, &reconstructed] {
         let state = catalog.state();
         assert!(!catalog.get_cluster(cluster_id).is_managed());
         assert_eq!(catalog.get_cluster(cluster_id).replica_id("r1"), None);
+        assert!(state.replica_target_exists(cluster_id, replica_id));
         assert!(
-            !state.replica_target_exists(cluster_id, ReplicaTarget::Declaration(declaration_id))
+            state
+                .replica_declarations()
+                .any(|declaration| declaration.replica_id == replica_id)
         );
-        assert!(state.replica_target_exists(cluster_id, ReplicaTarget::Declaration(promoted_id)));
+        assert_eq!(
+            state.physical_replica_for_target(cluster_id, replica_id),
+            None
+        );
         assert_eq!(
             state.storage_metadata().collection_metadata[&mv_global_id],
             mv_shard

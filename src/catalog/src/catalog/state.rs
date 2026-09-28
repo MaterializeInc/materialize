@@ -127,8 +127,8 @@ pub struct CatalogState {
     pub(super) clusters_by_id: imbl::OrdMap<ClusterId, Cluster>,
     /// Unfiltered durable membership for cross-deployment ownership admission.
     /// Cluster replica routing maps contain only this deployment's realizations.
-    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) replica_membership: imbl::OrdMap<ReplicaId, (ClusterId, u64)>,
+    #[serde(serialize_with = "serialize_replica_membership")]
+    pub(super) replica_membership: imbl::OrdMap<(u64, ReplicaId), ClusterId>,
     #[serde(serialize_with = "serialize_replica_declarations")]
     pub(super) cluster_replica_declarations:
         imbl::OrdMap<ReplicaId, crate::durable::ClusterReplicaDeclaration>,
@@ -818,18 +818,17 @@ impl CatalogState {
         &self,
         cluster_id: ClusterId,
         name: &str,
-    ) -> Result<mz_sql::catalog::ReplicaTarget, SqlCatalogError> {
-        use mz_sql::catalog::ReplicaTarget;
+    ) -> Result<ReplicaId, SqlCatalogError> {
         let cluster = self.get_cluster(cluster_id);
         if cluster.is_managed() {
-            cluster.replica_id(name).map(ReplicaTarget::Physical)
+            cluster.replica_id(name)
         } else {
             self.cluster_replica_declarations
                 .values()
                 .find(|declaration| {
                     declaration.cluster_id == cluster_id && declaration.name == name
                 })
-                .map(|declaration| ReplicaTarget::Declaration(declaration.replica_id))
+                .map(|declaration| declaration.replica_id)
         }
         .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(name.to_string()))
     }
@@ -872,7 +871,7 @@ impl CatalogState {
         let active = self.active_deployment_generation();
         self.replica_membership
             .iter()
-            .filter_map(move |(id, (_, generation))| (Some(*generation) == active).then_some(*id))
+            .filter_map(move |((generation, id), _)| (Some(*generation) == active).then_some(*id))
     }
 
     /// The oldest unreclaimed replica incarnation in the shared cluster roster.
@@ -883,8 +882,8 @@ impl CatalogState {
             .filter(|(_, client)| {
                 client.replica_id.is_some_and(|id| {
                     self.replica_membership
-                        .get(&id)
-                        .is_some_and(|(cluster, _)| *cluster == cluster_id)
+                        .get(&(client.deployment_generation, id))
+                        .is_some_and(|cluster| *cluster == cluster_id)
                 })
             })
             .map(|(id, _)| *id)
@@ -909,22 +908,14 @@ impl CatalogState {
 
     /// Tests whether a target's catalog identity still exists in the given cluster.
     /// Declaration validity does not depend on a physical realization.
-    pub fn replica_target_exists(
-        &self,
-        cluster_id: ClusterId,
-        target: mz_sql::catalog::ReplicaTarget,
-    ) -> bool {
-        use mz_sql::catalog::ReplicaTarget;
-        match target {
-            ReplicaTarget::Declaration(id) => self
-                .cluster_replica_declarations
-                .get(&id)
-                .is_some_and(|declaration| declaration.cluster_id == cluster_id),
-            ReplicaTarget::Physical(id) => self
-                .clusters_by_id
-                .get(&cluster_id)
-                .is_some_and(|cluster| cluster.replica(id).is_some()),
-        }
+    pub fn replica_target_exists(&self, cluster_id: ClusterId, target: ReplicaId) -> bool {
+        self.cluster_replica_declarations
+            .get(&target)
+            .is_some_and(|declaration| declaration.cluster_id == cluster_id)
+            || self
+                .replica_membership
+                .iter()
+                .any(|((_, replica_id), cluster)| *replica_id == target && *cluster == cluster_id)
     }
 
     /// Tests a concrete local replica against an optional maintained-object pin.
@@ -933,32 +924,24 @@ impl CatalogState {
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        target: Option<mz_sql::catalog::ReplicaTarget>,
+        target: Option<ReplicaId>,
     ) -> bool {
-        use mz_sql::catalog::ReplicaTarget;
         self.clusters_by_id
             .get(&cluster_id)
             .and_then(|cluster| cluster.replica(replica_id))
-            .is_some_and(|replica| match target {
-                None => true,
-                Some(ReplicaTarget::Physical(id)) => replica.replica_id == id,
-                Some(ReplicaTarget::Declaration(id)) => replica.declaration_id == Some(id),
-            })
+            .is_some_and(|replica| target.is_none_or(|id| replica.replica_id == id))
     }
 
-    /// Returns a physical realization of an explicit target in this deployment.
+    /// Returns the target ID if this deployment realizes it.
     /// `None` means unavailable, not untargeted.
     pub fn physical_replica_for_target(
         &self,
         cluster_id: ClusterId,
-        target: mz_sql::catalog::ReplicaTarget,
+        target: ReplicaId,
     ) -> Option<ReplicaId> {
         self.clusters_by_id
             .get(&cluster_id)?
-            .replicas()
-            .find(|replica| {
-                self.replica_matches_target(cluster_id, replica.replica_id, Some(target))
-            })
+            .replica(target)
             .map(|replica| replica.replica_id)
     }
 
@@ -2731,26 +2714,11 @@ impl CatalogState {
             ObjectId::Schema((database, schema)) => CommentObjectId::Schema((database, schema)),
             ObjectId::Cluster(cluster_id) => CommentObjectId::Cluster(cluster_id),
             ObjectId::ClusterReplica(cluster_replica_id) => {
-                self.canonical_comment_id(CommentObjectId::ClusterReplica(cluster_replica_id))
+                CommentObjectId::ClusterReplica(cluster_replica_id)
             }
             ObjectId::NetworkPolicy(network_policy_id) => {
                 CommentObjectId::NetworkPolicy(network_policy_id)
             }
-        }
-    }
-
-    /// Resolve a SQL-visible physical replica to its durable comment identity.
-    /// Explicit replicas share comments across deployment realizations.
-    pub(super) fn canonical_comment_id(&self, object_id: CommentObjectId) -> CommentObjectId {
-        match object_id {
-            CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                let declaration_id = self
-                    .get_cluster(cluster_id)
-                    .replica(replica_id)
-                    .and_then(|replica| replica.declaration_id);
-                CommentObjectId::ClusterReplica((cluster_id, declaration_id.unwrap_or(replica_id)))
-            }
-            _ => object_id,
         }
     }
 
@@ -3404,6 +3372,13 @@ fn serialize_replica_declarations<S: serde::Serializer>(
     }))
 }
 
+fn serialize_replica_membership<S: serde::Serializer>(
+    membership: &imbl::OrdMap<(u64, ReplicaId), ClusterId>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(membership.iter())
+}
+
 fn serialize_cluster_runtimes<S: serde::Serializer>(
     runtimes: &imbl::OrdMap<(ClusterId, u64), crate::durable::ClusterRuntime>,
     serializer: S,
@@ -3467,7 +3442,7 @@ mod tests {
         };
         let replica = |generation| crate::durable::ClusterReplica {
             cluster_id,
-            replica_id: ReplicaId::User(generation),
+            replica_id: ReplicaId::User(1),
             name: "r1".into(),
             owner_id,
             config: crate::durable::ReplicaConfig {
@@ -3482,7 +3457,6 @@ mod tests {
                 arrangement_compression: false,
             },
             deployment_generation: generation,
-            declaration_id: Some(ReplicaId::User(1)),
         };
         let update = |kind, diff, ts| StateUpdate {
             kind,
@@ -3515,14 +3489,11 @@ mod tests {
         let target = state
             .resolve_materialized_view_replica(cluster_id, "r1")
             .expect("declaration resolves before physical realization");
-        assert_eq!(
-            target,
-            mz_sql::catalog::ReplicaTarget::Declaration(ReplicaId::User(1))
-        );
+        assert_eq!(target, ReplicaId::User(1));
         assert!(state.replica_target_exists(cluster_id, target));
         assert_eq!(state.physical_replica_for_target(cluster_id, target), None);
         assert_eq!(state.get_cluster(cluster_id).replica_id("r1"), None);
-        assert!(!state.replica_matches_target(cluster_id, ReplicaId::User(8), Some(target)));
+        assert!(!state.replica_matches_target(cluster_id, ReplicaId::User(1), Some(target)));
         let (_, implications) = state
             .apply_updates(
                 vec![
@@ -3546,7 +3517,7 @@ mod tests {
                             id: 70,
                             heartbeat: 1,
                             deployment_generation: 7,
-                            replica_id: Some(ReplicaId::User(7)),
+                            replica_id: Some(ReplicaId::User(1)),
                         }),
                         StateDiff::Addition,
                         1,
@@ -3556,7 +3527,7 @@ mod tests {
                             id: 80,
                             heartbeat: 1,
                             deployment_generation: 8,
-                            replica_id: Some(ReplicaId::User(8)),
+                            replica_id: Some(ReplicaId::User(1)),
                         }),
                         StateDiff::Addition,
                         1,
@@ -3575,17 +3546,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(physical_updates, [ReplicaId::User(8)]);
+        assert_eq!(physical_updates, [ReplicaId::User(1)]);
         assert_eq!(
             state.physical_replica_for_target(cluster_id, target),
-            Some(ReplicaId::User(8))
+            Some(ReplicaId::User(1))
         );
-        assert!(state.replica_matches_target(cluster_id, ReplicaId::User(8), Some(target)));
-        assert!(!state.replica_matches_target(cluster_id, ReplicaId::User(7), Some(target)));
+        assert!(state.replica_matches_target(cluster_id, ReplicaId::User(1), Some(target)));
+        assert!(!state.replica_matches_target(cluster_id, ReplicaId::User(2), Some(target)));
         assert!(!state.replica_matches_target(
             cluster_id,
-            ReplicaId::User(8),
-            Some(mz_sql::catalog::ReplicaTarget::Physical(ReplicaId::User(1)))
+            ReplicaId::User(1),
+            Some(ReplicaId::User(2))
         ));
         assert_eq!(
             state
@@ -3593,12 +3564,12 @@ mod tests {
                 .replicas()
                 .map(|r| r.replica_id)
                 .collect::<Vec<_>>(),
-            [ReplicaId::User(8)]
+            [ReplicaId::User(1)]
         );
         assert_eq!(state.active_deployment_generation(), Some(7));
         assert_eq!(
             state.active_replica_ids().collect::<Vec<_>>(),
-            [ReplicaId::User(7)]
+            [ReplicaId::User(1)]
         );
         assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(70));
 
@@ -3629,12 +3600,12 @@ mod tests {
                 .replicas()
                 .map(|r| r.replica_id)
                 .collect::<Vec<_>>(),
-            [ReplicaId::User(8)]
+            [ReplicaId::User(1)]
         );
         assert_eq!(state.active_deployment_generation(), Some(8));
         assert_eq!(
             state.active_replica_ids().collect::<Vec<_>>(),
-            [ReplicaId::User(8)]
+            [ReplicaId::User(1)]
         );
         // Promotion changes output authority, not shared producer membership.
         assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(70));

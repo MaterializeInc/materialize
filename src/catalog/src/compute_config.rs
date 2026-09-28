@@ -30,6 +30,7 @@ use crate::catalog::Catalog;
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
+        persist_state_version: None,
         workload_class: None,
         max_result_size: Some(config.max_result_size()),
         tracing: tracing_config(config),
@@ -107,16 +108,19 @@ pub(crate) fn replica_dyncfg_override(catalog: &Catalog, replica_id: ReplicaId) 
 /// Every dyncfg has an environment value beneath the replica override, so
 /// removing an override resets it on the next configuration update. An absent
 /// workload class likewise explicitly clears the replica's workload class.
+/// The caller supplies the Persist target installed by catalog admission.
 ///
 /// Panics if the cluster or replica does not exist in this catalog.
 pub fn replica_compute_config(
     catalog: &Catalog,
     cluster_id: ClusterId,
     replica_id: ReplicaId,
+    persist_state_version: semver::Version,
 ) -> ComputeParameters {
     catalog.get_cluster_replica(cluster_id, replica_id);
     let cluster = catalog.get_cluster(cluster_id);
     let mut config = compute_config(catalog.system_config());
+    config.persist_state_version = Some(persist_state_version);
     config.workload_class = Some(cluster.config.workload_class.clone());
     config
         .dyncfg_updates
@@ -129,6 +133,7 @@ pub fn replica_compute_config(
 /// Call once when initializing a replica incarnation, not for live configuration
 /// updates. Logging, compression, and expiration are fixed at creation. The peek
 /// stash location is supplied by the environment, rather than stored in the catalog.
+/// The caller supplies the Persist target installed by catalog admission.
 ///
 /// Panics if the cluster or replica does not exist in this catalog.
 pub fn replica_instance_config(
@@ -136,6 +141,7 @@ pub fn replica_instance_config(
     cluster_id: ClusterId,
     replica_id: ReplicaId,
     peek_stash_persist_location: PersistLocation,
+    persist_state_version: semver::Version,
 ) -> InstanceConfig {
     let cluster = catalog.get_cluster(cluster_id);
     let replica = catalog.get_cluster_replica(cluster_id, replica_id);
@@ -160,6 +166,7 @@ pub fn replica_instance_config(
         && compute.arrangement_compression;
 
     InstanceConfig {
+        persist_state_version: Some(persist_state_version),
         logging: LoggingConfig {
             interval,
             enable_logging,

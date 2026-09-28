@@ -518,7 +518,7 @@ describe("console cluster utilization indexed views", () => {
   // (buildReplicaOfflineEventsQuery) and merged into the client-binned buckets
   // (attachOfflineEvents). The ad-hoc path joins status history in SQL, so
   // both paths must surface the same OOM.
-  it("surfaces OOM/offline events in the <=3h unbinned path", async () => {
+  it("keeps generations separate and preserves OOM/offline events", async () => {
     const client = await getMaterializeClient();
 
     await testdrive(`
@@ -534,7 +534,8 @@ describe("console cluster utilization indexed views", () => {
         > DROP TABLE IF EXISTS internal_test.mz_console_cluster_utilization_overview_3h;
         > CREATE TABLE mz_cluster_replica_metrics_history (
             occurred_at TIMESTAMP NOT NULL, replica_id TEXT NOT NULL, process_id uint8 NOT NULL,
-            cpu_nano_cores double, memory_bytes double, disk_bytes double, heap_bytes double, heap_limit double);
+            cpu_nano_cores double, memory_bytes double, disk_bytes double, heap_bytes double, heap_limit double,
+            deployment_generation uint8);
         > CREATE TABLE mz_cluster_replica_status_history (
             replica_id TEXT NOT NULL, process_id uint8 NOT NULL, occurred_at TIMESTAMP NOT NULL,
             status TEXT NOT NULL, reason TEXT);
@@ -565,7 +566,11 @@ describe("console cluster utilization indexed views", () => {
 
     // A utilization sample and a coincident OOM for the same replica and bucket.
     await client.query(`INSERT INTO internal_test.mz_cluster_replica_metrics_history VALUES
-      (TIMESTAMP '${ts}', '${replica.id}', 0, 5789441, 46788608, 937984, NULL, NULL)`);
+      (TIMESTAMP '${ts}', '${replica.id}', 0, 5789441, 46788608, 937984, NULL, NULL, NULL),
+      (TIMESTAMP '${ts}', '${replica.id}', 0, 100000000, 100, 100, NULL, NULL, 1),
+      (TIMESTAMP '${ts}', '${replica.id}', 1, 200000000, 100, 100, NULL, NULL, 1),
+      (TIMESTAMP '${ts}', '${replica.id}', 0, 200000000, 100, 100, NULL, NULL, 2),
+      (TIMESTAMP '2030-01-01 00:01:30', '${replica.id}', 0, 400000000, 100, 100, NULL, NULL, NULL)`);
     await client.query(`INSERT INTO internal_test.mz_cluster_replica_status_history VALUES
       ('${replica.id}', 0, TIMESTAMP '${ts}', 'offline', 'oom-killed')`);
     await client.query(`INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
@@ -574,13 +579,19 @@ describe("console cluster utilization indexed views", () => {
     // The ad-hoc path surfaces the OOM in SQL.
     const adHoc = (
       await run(
-        buildReplicaUtilizationHistoryQuery({
-          startDate: startTime,
-          bucketSizeMs: 60_000,
-          clusterIds: [cluster.id],
-        }).compile(),
+        buildReplicaUtilizationHistoryQuery(
+          {
+            startDate: startTime,
+            bucketSizeMs: 60_000,
+            clusterIds: [cluster.id],
+          },
+          true,
+        ).compile(),
       )
     ).rows;
+    // Processes sum within a generation, not across overlapping generations.
+    // Legacy NULL-generation samples still produce their own historical bucket.
+    expect(adHoc.map((row) => row.maxCpuPercent)).toEqual([0.6, 0.8]);
     expect(adHoc.find((r) => r.offlineEvents)?.offlineEvents).toEqual([
       {
         replicaId: replica.id,

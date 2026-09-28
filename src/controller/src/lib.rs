@@ -741,7 +741,7 @@ impl Controller {
             wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
             read_only,
-            replica_owned,
+            replica_owned.then_some(config.deploy_generation),
             &config.metrics_registry,
             controller_metrics.clone(),
             config.connection_context,

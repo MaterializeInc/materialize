@@ -125,6 +125,7 @@ async fn replica_progress_outlives_query_factory() {
 
     let log_id = GlobalId::System(1);
     replica.send(ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+        persist_state_version: None,
         logging: LoggingConfig {
             interval: Duration::from_millis(10),
             enable_logging: true,

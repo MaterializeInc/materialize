@@ -42,7 +42,7 @@ pub use crate::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, WrittenPlan,
     managed_cluster_replica_name,
 };
-pub use crate::durable::persist::{CatalogSnapshotReader, shard_id};
+pub use crate::durable::persist::{CatalogSnapshotReader, catalog_shard_id, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::transaction::{DryRunTransaction, Transaction};

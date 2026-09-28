@@ -55,9 +55,9 @@ pub fn parse_state_update(
         StateUpdateKind::IntrospectionSourceIndex(isi) => {
             Some(parse_introspection_source_index_update(isi))
         }
-        StateUpdateKind::ReplicaSystemConfiguration(durable) => {
-            Some(ParsedStateUpdateKind::ReplicaSystemConfiguration { durable })
-        }
+        StateUpdateKind::ReplicaSystemConfiguration(durable) => (durable.deployment_generation
+            == catalog.deployment_generation)
+            .then_some(ParsedStateUpdateKind::ReplicaSystemConfiguration { durable }),
         StateUpdateKind::SystemConfiguration(durable) => {
             Some(ParsedStateUpdateKind::SystemConfiguration { durable })
         }
@@ -178,18 +178,26 @@ mod tests {
 
     use super::{ParsedStateUpdateKind, parse_state_update};
 
-    /// A replica-scoped system-parameter change must produce a parsed update so
-    /// the controller push fires. It was previously dropped as a change the
-    /// controllers were not interested in.
+    /// Only this deployment's replica parameters may reach its controller.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
     async fn replica_system_configuration_is_parsed() {
         Catalog::with_debug(|catalog| async move {
             let durable = ReplicaSystemConfiguration {
                 replica_id: ReplicaId::User(1),
+                deployment_generation: catalog.state().deployment_generation(),
                 name: "persist_pager".to_string(),
                 value: "on".to_string(),
             };
+            let foreign = StateUpdate {
+                kind: StateUpdateKind::ReplicaSystemConfiguration(ReplicaSystemConfiguration {
+                    deployment_generation: durable.deployment_generation + 1,
+                    ..durable.clone()
+                }),
+                ts: Timestamp::MIN,
+                diff: StateDiff::Addition,
+            };
+            assert!(parse_state_update(catalog.state(), foreign).is_none());
             let update = StateUpdate {
                 kind: StateUpdateKind::ReplicaSystemConfiguration(durable),
                 ts: Timestamp::MIN,

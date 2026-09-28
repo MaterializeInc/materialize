@@ -671,7 +671,6 @@ pub(crate) async fn initialize(
             &replica_name,
             default_replica_config(options)?,
             MZ_SYSTEM_ROLE_ID,
-            None,
         )?;
         audit_events.push((
             mz_audit_log::EventType::Create,

@@ -30,8 +30,18 @@ async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
 }
 
 async fn open_protected_catalog(persist: PersistClient, organization: Uuid) -> Catalog {
+    open_protected_catalog_with_version(persist, organization, &mz_build_info::DUMMY_BUILD_INFO)
+        .await
+}
+
+async fn open_protected_catalog_with_version(
+    persist: PersistClient,
+    organization: Uuid,
+    build_info: &'static mz_build_info::BuildInfo,
+) -> Catalog {
     let bootstrap = crate::catalog::test_bootstrap_args();
     let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_version(build_info.semver_version())
         .with_organization_id(organization)
         .with_default_deploy_generation()
         .unwrap_build()
@@ -39,13 +49,14 @@ async fn open_protected_catalog(persist: PersistClient, organization: Uuid) -> C
         .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
         .expect("open durable catalog");
-    open_protected_catalog_with_storage(persist, organization, storage).await
+    open_protected_catalog_with_storage(persist, organization, storage, build_info).await
 }
 
 async fn open_protected_catalog_with_storage(
     persist: PersistClient,
     organization: Uuid,
     storage: Box<dyn crate::durable::DurableCatalogState>,
+    build_info: &'static mz_build_info::BuildInfo,
 ) -> Catalog {
     let bootstrap = crate::catalog::test_bootstrap_args();
     Catalog::open_debug_catalog_inner(
@@ -57,7 +68,7 @@ async fn open_protected_catalog_with_storage(
                 .parse()
                 .expect("environment ID"),
         ),
-        &mz_build_info::DUMMY_BUILD_INFO,
+        build_info,
         BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
         &bootstrap,
         None,
@@ -122,8 +133,13 @@ async fn catalog_positions_use_actual_commit_upper() {
         .await
         .expect("open oracle-backed catalog");
     let shard_id = storage.shard_id();
-    let mut catalog =
-        open_protected_catalog_with_storage(persist.clone(), organization, storage).await;
+    let mut catalog = open_protected_catalog_with_storage(
+        persist.clone(),
+        organization,
+        storage,
+        &mz_build_info::DUMMY_BUILD_INFO,
+    )
+    .await;
     let initial = catalog.observed_position().expect("durable bootstrap");
     assert_eq!(initial.shard_id, shard_id);
     assert_eq!(initial.deployment_generation, 0);
@@ -261,12 +277,46 @@ async fn catalog_positions_use_actual_commit_upper() {
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn joined_prewarming_serving_open_replays_without_shared_writes() {
-    for cache_override in [None, Some(false)] {
-        let (active, persist, organization) = protected_catalog().await;
+    // These configured versions share this binary's schema and builtins. Semantic
+    // compatibility of real images is the provisioner's contract, not this test's.
+    let source_version = Catalog::latest_builtin_schema_migration_version();
+    let mut patch_version = source_version.clone();
+    patch_version.patch += 1;
+    patch_version.pre = semver::Prerelease::EMPTY;
+    let mut prerelease_version = patch_version.clone();
+    prerelease_version.pre = semver::Prerelease::new("dev.1").expect("valid prerelease");
+    // Catalog configuration requires static build info. Only these three test
+    // fixtures are retained for the process lifetime.
+    let build_info = |version: semver::Version| -> &'static mz_build_info::BuildInfo {
+        Box::leak(Box::new(mz_build_info::BuildInfo {
+            version: Box::leak(version.to_string().into_boxed_str()),
+            ..mz_build_info::DUMMY_BUILD_INFO
+        }))
+    };
+    let source_build = build_info(source_version.clone());
+    let patch_build = build_info(patch_version);
+    let prerelease_build = build_info(prerelease_version);
+    for (build_info, cache_override) in [
+        (source_build, None),
+        (source_build, Some(false)),
+        (patch_build, None),
+        (prerelease_build, Some(false)),
+    ] {
+        let mut cache = mz_persist_client::cache::PersistClientCache::new_no_metrics();
+        cache.cfg.build_version = source_version.clone();
+        let persist = cache
+            .open(mz_persist_client::PersistLocation::new_in_mem())
+            .await
+            .expect("open source-version Persist client");
+        let organization = Uuid::new_v4();
+        let active =
+            open_protected_catalog_with_version(persist.clone(), organization, source_build).await;
+        let bootstrap = crate::catalog::test_bootstrap_args();
         let active_generation = active.state().deployment_generation();
         let pending_generation = active_generation + 1;
-        let build = Catalog::expression_build_version(&mz_build_info::DUMMY_BUILD_INFO).to_string();
-        let storage = crate::durable::TestCatalogStateBuilder::new(persist)
+        let build = Catalog::expression_build_version(build_info).to_string();
+        let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+            .with_version(build_info.semver_version())
             .with_organization_id(organization)
             .with_deploy_generation(pending_generation)
             .unwrap_build()
@@ -280,7 +330,44 @@ async fn joined_prewarming_serving_open_replays_without_shared_writes() {
         // Leave the joined handle's initial updates for the serving entrypoint.
         let before = active.storage().await.snapshot().await.expect("snapshot");
         let upper = active.current_upper().await;
+        {
+            let mut storage = active.storage().await;
+            storage
+                .sync_to_current_updates()
+                .await
+                .expect("refresh active");
+            let tx = storage.transaction().await.expect("read migration marker");
+            assert_eq!(
+                crate::catalog::migrate::get_migration_version(&tx),
+                Some(source_version.clone())
+            );
+        }
+        let replica_storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+            .with_version(build_info.semver_version())
+            .with_organization_id(organization)
+            .unwrap_build()
+            .await
+            .open_read_only(&bootstrap)
+            .await
+            .expect("open committed replica reader");
+        let mut replica_state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+        replica_state.build_info = build_info;
+        let replica = Catalog::open_committed(replica_state, replica_storage)
+            .await
+            .expect("reconstruct committed replica with compatible builtins")
+            .catalog;
+        assert_eq!(
+            replica.observed_position().expect("replica position").upper,
+            upper
+        );
+        assert_eq!(
+            active.storage().await.snapshot().await.expect("snapshot"),
+            before
+        );
+        assert_eq!(active.current_upper().await, upper);
+        replica.expire().await;
         let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+        state.build_info = build_info;
         state.read_only = true;
         // The serving entrypoint must choose safe replay, not the caller.
         state.skip_migrations = false;
@@ -345,8 +432,102 @@ async fn joined_prewarming_serving_open_replays_without_shared_writes() {
                 .is_empty()
         );
         pending.expire().await;
+        {
+            let mut storage = active.storage().await;
+            let tx = storage
+                .transaction()
+                .await
+                .expect("read migration marker after replay");
+            assert_eq!(
+                crate::catalog::migrate::get_migration_version(&tx),
+                Some(source_version.clone())
+            );
+        }
+        let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+        state.build_info = build_info;
+        state.read_only = false;
+        state.skip_migrations = false;
+        state.builtin_item_migration_config.read_only = false;
         active.expire().await;
+        let storage = crate::durable::TestCatalogStateBuilder::new(persist)
+            .with_version(build_info.semver_version())
+            .with_organization_id(organization)
+            .with_deploy_generation(pending_generation)
+            .unwrap_build()
+            .await
+            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("authorize writable bootstrap");
+        let bootstrapped = Catalog::open(crate::config::Config {
+            storage,
+            metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
+            state,
+        })
+        .await
+        .expect("bootstrap with target version")
+        .catalog;
+        {
+            let mut storage = bootstrapped.storage().await;
+            let tx = storage
+                .transaction()
+                .await
+                .expect("read bootstrap migration marker");
+            assert_eq!(
+                crate::catalog::migrate::get_migration_version(&tx),
+                Some(build_info.semver_version())
+            );
+        }
+        assert!(bootstrapped.current_upper().await > upper);
+        bootstrapped.expire().await;
     }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn committed_replay_rejects_builtin_fingerprint_mismatch() {
+    let (catalog, persist, organization) = protected_catalog().await;
+    {
+        let mut storage = catalog.storage().await;
+        let mut tx = storage
+            .transaction()
+            .await
+            .expect("change builtin fingerprint");
+        let mut mapping = tx
+            .get_system_object_mappings()
+            .next()
+            .expect("builtin mapping");
+        mapping
+            .unique_identifier
+            .fingerprint
+            .push_str("-incompatible");
+        tx.set_system_object_mappings(vec![mapping])
+            .expect("update fingerprint");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("commit mismatched fingerprint");
+    }
+    let before = catalog.storage().await.snapshot().await.expect("snapshot");
+    let upper = catalog.current_upper().await;
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist)
+        .with_organization_id(organization)
+        .unwrap_build()
+        .await
+        .open_read_only(&crate::catalog::test_bootstrap_args())
+        .await
+        .expect("open committed reader");
+    let result = Catalog::open_committed(
+        Catalog::diagnostic_state_config(&catalog.diagnostic_config),
+        storage,
+    )
+    .await;
+    assert!(matches!(result, Err(CatalogError::Internal(message))
+        if message == "catalog reconstruction requires a builtin schema migration"));
+    assert_eq!(
+        catalog.storage().await.snapshot().await.expect("snapshot"),
+        before
+    );
+    assert_eq!(catalog.current_upper().await, upper);
+    catalog.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -649,6 +830,7 @@ async fn exercise_dry_run_contention() {
         Uuid::new_v4(),
         Some(ReplicaPlanOwner {
             replica_id: replica,
+            deployment_generation: catalog.state().deployment_generation(),
             name: "contention_metric".into(),
         }),
         cluster.log_indexes.values().copied().collect(),
@@ -744,7 +926,7 @@ fn select(
 #[cfg_attr(miri, ignore)]
 async fn staged_materialized_view_rejects_renamed_replica_binding() {
     use mz_sql::DEFAULT_SCHEMA;
-    use mz_sql::catalog::{CatalogDatabase, ReplicaTarget};
+    use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::DEFAULT_DATABASE_NAME;
@@ -784,7 +966,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
         .await
         .expect("create unmanaged cluster");
     let replica_ids = catalog
-        .allocate_user_replica_ids(3, catalog.current_upper().await)
+        .allocate_user_replica_ids(2, catalog.current_upper().await)
         .await
         .expect("allocate replica identities");
     let create_replica = |replica_id| Op::CreateClusterReplica {
@@ -804,7 +986,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
         )
         .await
         .expect("create original declaration");
-    let target = ReplicaTarget::Declaration(replica_ids[0]);
+    let target = replica_ids[0];
     let database = catalog
         .resolve_database(DEFAULT_DATABASE_NAME)
         .expect("default database");
@@ -893,11 +1075,11 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
             None,
             vec![Op::CreateClusterReplicaRealization {
                 cluster_id,
-                replica_id: replica_ids[2],
+                replica_id: replica_ids[0],
                 name: "r1".into(),
                 config: replica_config.clone(),
                 owner_id: MZ_SYSTEM_ROLE_ID,
-                declaration_id: Some(replica_ids[0]),
+                carryover_from: None,
             }],
         )
         .await
@@ -906,7 +1088,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
         catalog
             .state()
             .physical_replica_for_target(cluster_id, target),
-        Some(replica_ids[2])
+        Some(replica_ids[0])
     );
     let (stale_id, stale_gid) = catalog
         .allocate_user_id_for_test()
@@ -922,7 +1104,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
             None,
             vec![Op::RenameClusterReplica {
                 cluster_id,
-                replica_id: replica_ids[2],
+                replica_id: replica_ids[0],
                 name: QualifiedReplica {
                     cluster: Ident::new_unchecked("pin_race"),
                     replica: Ident::new_unchecked("r1"),
@@ -948,7 +1130,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
                 catalog
                     .state()
                     .resolve_materialized_view_replica(cluster_id, "r1"),
-                Ok(ReplicaTarget::Declaration(replica_ids[1]))
+                Ok(replica_ids[1])
             );
         }
         let result = catalog
@@ -1045,6 +1227,7 @@ async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
         assert!(!imports.is_empty(), "exercise real cluster log imports");
         let owner = ReplicaPlanOwner {
             replica_id,
+            deployment_generation: catalog.state().deployment_generation(),
             name: "observer".into(),
         };
         let other_cluster = catalog
@@ -1057,6 +1240,7 @@ async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
                 .next()
                 .expect("another replica")
                 .replica_id,
+            deployment_generation: owner.deployment_generation,
             name: owner.name.clone(),
         };
         let other_imports = other_cluster.log_indexes.values().copied().collect();
@@ -1176,6 +1360,7 @@ async fn replica_plan_selection_rejects_invalid_scope() {
             .next()
             .expect("bootstrap replica")
             .replica_id,
+        deployment_generation: catalog.state().deployment_generation(),
         name: "observer".into(),
     };
     let imports: BTreeSet<_> = cluster.log_indexes.values().copied().collect();
@@ -1201,6 +1386,10 @@ async fn replica_plan_selection_rejects_invalid_scope() {
         replica_id: ReplicaId::User(u64::MAX),
         ..owner.clone()
     };
+    let foreign_generation = ReplicaPlanOwner {
+        deployment_generation: owner.deployment_generation + 1,
+        ..owner.clone()
+    };
     let empty_name = ReplicaPlanOwner {
         name: String::new(),
         ..owner.clone()
@@ -1214,6 +1403,12 @@ async fn replica_plan_selection_rejects_invalid_scope() {
         ),
         ("storage import", id, Some(owner.clone()), storage_imports),
         ("missing replica", id, Some(missing_owner), imports.clone()),
+        (
+            "foreign deployment",
+            id,
+            Some(foreign_generation),
+            imports.clone(),
+        ),
         ("empty name", id, Some(empty_name), imports.clone()),
         (
             "nontransient ID",
@@ -1261,6 +1456,7 @@ async fn replica_plan_selection_cas_uniqueness_and_immutable_owner() {
             .next()
             .expect("bootstrap replica")
             .replica_id,
+        deployment_generation: catalog.state().deployment_generation(),
         name: "observer".into(),
     };
     let imports: BTreeSet<_> = cluster.log_indexes.values().copied().collect();
@@ -1319,6 +1515,10 @@ async fn replica_plan_selection_cas_uniqueness_and_immutable_owner() {
         replica_id: other_replica,
         ..owner.clone()
     };
+    let redeployed = ReplicaPlanOwner {
+        deployment_generation: owner.deployment_generation + 1,
+        ..owner.clone()
+    };
     for (label, next_id, expected, next_owner) in [
         (
             "competing export for same owner",
@@ -1332,6 +1532,12 @@ async fn replica_plan_selection_cas_uniqueness_and_immutable_owner() {
             id,
             Some(revision),
             Some(reassigned),
+        ),
+        (
+            "change owner deployment",
+            id,
+            Some(revision),
+            Some(redeployed),
         ),
         ("erase selected owner", id, Some(revision), None),
     ] {

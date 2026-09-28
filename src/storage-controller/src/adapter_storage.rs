@@ -55,7 +55,7 @@ impl AdapterStorageWriter {
     /// Creates a writer with a fixed read-only mode and the supplied clock.
     pub fn new(read_only: bool, now: NowFn) -> Self {
         Self {
-            collections: CollectionManager::new(read_only, now),
+            collections: CollectionManager::new(read_only, now, None),
             history_ids: Mutex::new(BTreeMap::new()),
             statistics: Arc::new(Mutex::new(WebhookStatisticsState {
                 source_statistics: BTreeMap::new(),
@@ -224,6 +224,8 @@ impl AdapterStorageWriter {
         let collections = self.collections.clone();
         let interval = *self.statistics_interval.borrow();
         let updates = self.statistics_interval.subscribe();
+        // Webhook counters are shared across deployments, not replica observations.
+        let row_scope = crate::collection_mgmt::RowScope::Deployment(None);
         let initialize = async move {
             let mut reader = initial_read.await;
             let upper = reader.shared_upper();
@@ -239,11 +241,13 @@ impl AdapterStorageWriter {
                 let mut state = state.lock().expect("poisoned");
                 for ((row, ()), _, diff) in rows {
                     let row = row.0.expect("statistics contain no error rows");
-                    if !owns_statistics(&row) {
+                    if !row_scope.owns(&row) || !owns_statistics(&row) {
                         continue;
                     }
                     assert_eq!(diff, 1, "statistics have unit multiplicity");
-                    let (source, replica, stats) = ControllerSourceStatistics::from_row(row);
+                    let (source, replica, stats) = ControllerSourceStatistics::from_row(
+                        row_scope.producer_row(&row).into_owned(),
+                    );
                     assert!(replica.is_none());
                     if state.webhook_statistics.contains_key(&source) {
                         state.source_statistics.insert((source, None), stats);
@@ -272,6 +276,7 @@ impl AdapterStorageWriter {
             read_handle,
             force_writable,
             owns_statistics,
+            row_scope,
             initialize,
         );
     }
@@ -335,21 +340,29 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn statistics_restore_counters_and_reconcile_only_webhooks() {
         use mz_cluster_client::ReplicaId;
+        use mz_repr::Datum;
         use mz_storage_client::statistics::{MZ_SOURCE_STATISTICS_RAW_DESC, PackableStats};
 
-        fn row(id: GlobalId, replica: Option<ReplicaId>, count: u64) -> Row {
+        fn row(
+            id: GlobalId,
+            replica: Option<ReplicaId>,
+            count: u64,
+            generation: Option<u64>,
+        ) -> Row {
             let counters = WebhookStatistics::default();
             counters.messages_received.store(count, Ordering::SeqCst);
             let mut stats = ControllerSourceStatistics::new(id, replica);
             stats.incorporate(counters.drain_into_update(id));
             let mut row = Row::default();
             stats.pack(row.packer());
-            row
+            Row::pack(row.iter().chain(std::iter::once(
+                generation.map_or(Datum::Null, Datum::UInt64),
+            )))
         }
 
         async fn expect_rows(
             reader: &mut ReadHandle<SourceData, (), Timestamp, StorageDiff>,
-            expected: Vec<(String, bool, u64)>,
+            expected: Vec<(String, bool, u64, Option<u64>)>,
         ) {
             tokio::time::timeout(Duration::from_secs(20), async {
                 loop {
@@ -367,6 +380,10 @@ mod tests {
                             fields.next().unwrap().unwrap_str().to_owned(),
                             fields.next().unwrap().is_null(),
                             fields.next().unwrap().unwrap_uint64(),
+                            match fields.last().unwrap() {
+                                Datum::Null => None,
+                                generation => Some(generation.unwrap_uint64()),
+                            },
                         ));
                     }
                     actual.sort();
@@ -398,9 +415,11 @@ mod tests {
             .await
             .unwrap();
         let rows = [
-            row(live, None, 7),
-            row(replica, Some(ReplicaId::User(1)), 19),
-            row(orphan, None, 11),
+            row(live, None, 7, None),
+            row(replica, Some(ReplicaId::User(1)), 19, None),
+            row(replica, Some(ReplicaId::User(1)), 23, Some(0)),
+            row(replica, Some(ReplicaId::User(1)), 29, Some(1)),
+            row(orphan, None, 11, None),
         ];
         let updates = rows
             .into_iter()
@@ -472,9 +491,13 @@ mod tests {
                     false,
                 )
                 .await;
-            let mut expected = vec![(replica.to_string(), false, 19)];
+            let mut expected = vec![
+                (replica.to_string(), false, 19, None),
+                (replica.to_string(), false, 23, Some(0)),
+                (replica.to_string(), false, 29, Some(1)),
+            ];
             if increment.is_some() {
-                expected.push((live.to_string(), true, total));
+                expected.push((live.to_string(), true, total, None));
             }
             expected.sort();
             expect_rows(&mut reader, expected).await;

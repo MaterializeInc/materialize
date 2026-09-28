@@ -28,6 +28,7 @@ use crate::memory::objects::{DataSourceDesc, Sink};
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
+        persist_state_version: None,
         pg_source_connect_timeout: Some(config.pg_source_connect_timeout()),
         pg_source_tcp_keepalives_retries: Some(config.pg_source_tcp_keepalives_retries()),
         pg_source_tcp_keepalives_idle: Some(config.pg_source_tcp_keepalives_idle()),
@@ -144,15 +145,18 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
 /// Every dyncfg has its committed environment value beneath the replica override,
 /// so removing an override resets it on the next configuration update. This does
 /// not mutate the process's shared dyncfg ConfigSet.
+/// The caller supplies the Persist target installed by catalog admission.
 ///
 /// Panics if the cluster or replica does not exist in this catalog.
 pub fn replica_storage_config(
     catalog: &Catalog,
     cluster_id: ClusterId,
     replica_id: ReplicaId,
+    persist_state_version: semver::Version,
 ) -> StorageParameters {
     catalog.get_cluster_replica(cluster_id, replica_id);
     let mut config = storage_config(catalog.system_config());
+    config.persist_state_version = Some(persist_state_version);
     config
         .dyncfg_updates
         .extend(crate::compute_config::replica_dyncfg_override(

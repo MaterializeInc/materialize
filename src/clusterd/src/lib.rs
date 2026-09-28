@@ -446,6 +446,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
+    if args.catalog_cluster_id.is_some() {
+        let environment_id: mz_sql::catalog::EnvironmentId =
+            connection_context.environment_id.parse()?;
+        persist_clients.cfg().require_state_version_target(Some(
+            mz_catalog::durable::catalog_shard_id(environment_id.organization_id()),
+        ));
+    }
+
     // Catalog following is replica-wide, not independently sampled per process.
     let follower_config = if args.process == 0
         && let Some(cluster_id) = args.catalog_cluster_id

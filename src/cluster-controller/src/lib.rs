@@ -183,8 +183,8 @@ impl ClusterController {
                 expected: state.expected(),
                 write,
             };
-            // A phase-1 batch carries no creates, so it cannot exhaust the
-            // resource budget. Treat any non-applied outcome as a rejection.
+            // Initial deployment enrollment may also realize carried-over IDs.
+            // On any rejection, reobserve rather than diffing an unapplied state.
             if ctx.apply(vec![decision]).await != ApplyOutcome::Applied {
                 rejected.insert(state.cluster_id);
             }
@@ -242,6 +242,24 @@ impl ClusterController {
     /// Normal strategies own readiness, resource checks and lifecycle audits.
     fn normalize_intent(state: &ClusterState) -> Option<StateWrite> {
         let intent = state.intent.as_ref()?;
+        if !intent.runtime_initialized {
+            let accepted = &intent.accepted;
+            return Some(StateWrite {
+                new_size: Some(accepted.size.clone()),
+                new_replication_factor: Some(accepted.replication_factor),
+                new_availability_zones: Some(accepted.availability_zones.0.clone()),
+                new_logging: Some(accepted.logging.clone()),
+                new_arrangement_compression: Some(accepted.arrangement_compression),
+                reconfiguration: Some(ReconfigurationWrite {
+                    record: intent
+                        .reconfiguration
+                        .clone()
+                        .filter(|r| r.is_in_progress()),
+                    audit: None,
+                }),
+                ..Default::default()
+            });
+        }
         let record = match intent
             .reconfiguration
             .as_ref()

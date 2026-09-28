@@ -37,7 +37,7 @@ use mz_audit_log::VersionedEvent;
 use mz_controller_types::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
-use mz_proto::RustType;
+use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
@@ -597,10 +597,8 @@ pub struct ClusterReplica {
     pub name: String,
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
-    /// Immutable deployment ownership of this physical replica.
+    /// Immutable deployment ownership of this replica realization.
     pub deployment_generation: u64,
-    /// Shared explicit intent, absent for controller-created managed replicas.
-    pub declaration_id: Option<ReplicaId>,
 }
 
 impl DurableType for ClusterReplica {
@@ -611,14 +609,13 @@ impl DurableType for ClusterReplica {
         (
             ClusterReplicaKey {
                 id: self.replica_id,
+                deployment_generation: self.deployment_generation,
             },
             ClusterReplicaValue {
                 cluster_id: self.cluster_id,
                 name: self.name,
                 config: self.config,
                 owner_id: self.owner_id,
-                deployment_generation: self.deployment_generation,
-                declaration_id: self.declaration_id,
             },
         )
     }
@@ -630,14 +627,14 @@ impl DurableType for ClusterReplica {
             name: value.name,
             config: value.config,
             owner_id: value.owner_id,
-            deployment_generation: value.deployment_generation,
-            declaration_id: value.declaration_id,
+            deployment_generation: key.deployment_generation,
         }
     }
 
     fn key(&self) -> Self::Key {
         ClusterReplicaKey {
             id: self.replica_id,
+            deployment_generation: self.deployment_generation,
         }
     }
 }
@@ -1270,17 +1267,18 @@ impl DurableType for ClusterSystemConfiguration {
 }
 
 /// A single replica-local scoped system-parameter override: parameter `name`
-/// has value `value` on the replica `replica_id`.
+/// has value `value` on the realization of `replica_id` in `deployment_generation`.
 ///
 /// This is the in-memory shape of the durable `replica_system_configurations`
-/// collection that backs replica-local scoped feature flags. The collection —
-/// keyed by `(ReplicaId, name)` — is the analog of `system_configurations`
-/// (`ALTER SYSTEM`), but for per-replica values; it is written solely by the
-/// system-parameter sync loop, and the coordinator's in-memory working copy is
-/// maintained from it on every catalog update.
+/// collection that backs replica-local scoped feature flags. The collection is
+/// keyed by `(ReplicaId, deployment_generation, name)` and is the analog of
+/// `system_configurations` (`ALTER SYSTEM`) for per-realization values. It is
+/// written solely by the system-parameter sync loop, and the coordinator's
+/// in-memory working copy is maintained from it on every catalog update.
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct ReplicaSystemConfiguration {
     pub replica_id: ReplicaId,
+    pub deployment_generation: u64,
     pub name: String,
     pub value: String,
 }
@@ -1293,6 +1291,7 @@ impl DurableType for ReplicaSystemConfiguration {
         (
             ReplicaSystemConfigurationKey {
                 replica_id: self.replica_id,
+                deployment_generation: self.deployment_generation,
                 name: self.name,
             },
             ReplicaSystemConfigurationValue { value: self.value },
@@ -1302,6 +1301,7 @@ impl DurableType for ReplicaSystemConfiguration {
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             replica_id: key.replica_id,
+            deployment_generation: key.deployment_generation,
             name: key.name,
             value: value.value,
         }
@@ -1310,6 +1310,7 @@ impl DurableType for ReplicaSystemConfiguration {
     fn key(&self) -> Self::Key {
         ReplicaSystemConfigurationKey {
             replica_id: self.replica_id,
+            deployment_generation: self.deployment_generation,
             name: self.name.clone(),
         }
     }
@@ -1767,6 +1768,68 @@ impl Snapshot {
     }
 }
 
+/// Deployment membership and the authorized persist format in one singleton record.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DeploymentAdmission {
+    pub members: BTreeMap<u64, semver::Version>,
+    pub persist_target: semver::Version,
+}
+
+#[cfg(test)]
+impl proptest::arbitrary::Arbitrary for DeploymentAdmission {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        use proptest::strategy::Strategy;
+        proptest::arbitrary::any::<proto::DeploymentAdmission>()
+            .prop_map(|proto| Self::from_proto(proto).expect("generated versions are valid"))
+            .boxed()
+    }
+}
+
+impl RustType<proto::DeploymentAdmission> for DeploymentAdmission {
+    fn into_proto(&self) -> proto::DeploymentAdmission {
+        proto::DeploymentAdmission {
+            members: self
+                .members
+                .iter()
+                .map(|(generation, version)| proto::DeploymentMember {
+                    deployment_generation: *generation,
+                    build_version: version.to_string(),
+                })
+                .collect(),
+            persist_target: self.persist_target.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::DeploymentAdmission) -> Result<Self, TryFromProtoError> {
+        let mut members = BTreeMap::new();
+        for member in proto.members {
+            let generation = member.deployment_generation;
+            let version = semver::Version::parse(&member.build_version).map_err(|err| {
+                TryFromProtoError::InvalidFieldError(format!(
+                    "DeploymentAdmission.members[{generation}]: {err}"
+                ))
+            })?;
+            if members.insert(generation, version).is_some() {
+                return Err(TryFromProtoError::InvalidFieldError(format!(
+                    "DeploymentAdmission.members[{generation}]: duplicate generation"
+                )));
+            }
+        }
+        let persist_target = semver::Version::parse(&proto.persist_target).map_err(|err| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "DeploymentAdmission.persist_target: {err}"
+            ))
+        })?;
+        Ok(Self {
+            members,
+            persist_target,
+        })
+    }
+}
+
 /// Token used to fence out other processes.
 ///
 /// Protected catalogs fence generations below the active generation. Pending
@@ -1883,6 +1946,7 @@ pub struct ClusterRuntimeValue {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
     pub(crate) id: ReplicaId,
+    pub(crate) deployment_generation: u64,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
@@ -1891,8 +1955,6 @@ pub struct ClusterReplicaValue {
     pub(crate) name: String,
     pub(crate) config: ReplicaConfig,
     pub(crate) owner_id: RoleId,
-    pub(crate) deployment_generation: u64,
-    pub(crate) declaration_id: Option<ReplicaId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -2127,6 +2189,7 @@ pub struct ClusterSystemConfigurationValue {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ReplicaSystemConfigurationKey {
     pub(crate) replica_id: ReplicaId,
+    pub(crate) deployment_generation: u64,
     pub(crate) name: String,
 }
 
@@ -2285,6 +2348,7 @@ pub struct WrittenPlan {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
 pub struct ReplicaPlanOwner {
     pub replica_id: ReplicaId,
+    pub deployment_generation: u64,
     pub name: String,
 }
 

@@ -539,7 +539,6 @@ pub struct ClusterReplica {
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
     pub deployment_generation: u64,
-    pub declaration_id: Option<ReplicaId>,
 }
 
 impl From<ClusterReplica> for durable::ClusterReplica {
@@ -551,7 +550,6 @@ impl From<ClusterReplica> for durable::ClusterReplica {
             config: replica.config.into(),
             owner_id: replica.owner_id,
             deployment_generation: replica.deployment_generation,
-            declaration_id: replica.declaration_id,
         }
     }
 }
@@ -1440,7 +1438,7 @@ pub struct MaterializedView {
     pub cluster_id: ClusterId,
     /// If set, install only on replicas matching this binding, including when a
     /// declared target has no physical realization in this deployment yet.
-    pub target_replica: Option<mz_sql::catalog::ReplicaTarget>,
+    pub target_replica: Option<ReplicaId>,
     /// Column indexes that we assert are not `NULL`.
     ///
     /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.

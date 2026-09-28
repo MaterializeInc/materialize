@@ -71,25 +71,22 @@ async fn replica_comments_survive_promotion_retirement_and_conversion() {
         .await
         .expect("allocate cluster");
     let ids = catalog
-        .allocate_user_replica_ids(5, catalog.current_upper().await)
+        .allocate_user_replica_ids(2, catalog.current_upper().await)
         .await
         .expect("allocate replicas");
-    let declaration_id = ids[0];
-    let promoted_id = ids[1];
-    let replacement_id = ids[2];
-    let final_id = ids[3];
+    let replica_id = ids[0];
     let comment = |replica_id, text: Option<&str>| Op::Comment {
         object_id: CommentObjectId::ClusterReplica((cluster_id, replica_id)),
         sub_component: None,
         comment: text.map(str::to_owned),
     };
-    let realize = |replica_id, declaration_id| Op::CreateClusterReplicaRealization {
+    let realize = || Op::CreateClusterReplicaRealization {
         cluster_id,
         replica_id,
         name: "r1".into(),
         config: replica_config.clone(),
         owner_id: MZ_SYSTEM_ROLE_ID,
-        declaration_id: Some(declaration_id),
+        carryover_from: None,
     };
     let configure = |config| Op::UpdateClusterConfig {
         id: cluster_id,
@@ -110,13 +107,13 @@ async fn replica_comments_survive_promotion_retirement_and_conversion() {
             },
             Op::CreateClusterReplica {
                 cluster_id,
-                replica_id: declaration_id,
+                replica_id,
                 name: "r1".into(),
                 config: replica_config.clone(),
                 owner_id: MZ_SYSTEM_ROLE_ID,
                 reason: ReplicaCreateDropReason::Manual,
             },
-            comment(declaration_id, Some("acknowledged")),
+            comment(replica_id, Some("acknowledged")),
         ],
     )
     .await;
@@ -146,92 +143,129 @@ async fn replica_comments_survive_promotion_retirement_and_conversion() {
     )
     .await
     .expect("open promoted catalog");
-    assert_comment(
-        &promoted,
-        cluster_id,
-        Some((declaration_id, "acknowledged")),
-    );
-    commit(&mut promoted, vec![realize(promoted_id, declaration_id)]).await;
+    assert_comment(&promoted, cluster_id, Some((replica_id, "acknowledged")));
+    commit(&mut promoted, vec![realize()]).await;
     assert_eq!(
         promoted.get_cluster(cluster_id).replica_id("r1"),
-        Some(promoted_id)
+        Some(replica_id)
     );
     assert_eq!(
         promoted.state().comment_id_to_audit_log_name(
-            CommentObjectId::ClusterReplica((cluster_id, promoted_id)),
+            CommentObjectId::ClusterReplica((cluster_id, replica_id)),
             &crate::SYSTEM_CONN_ID,
         ),
         "commented.r1"
     );
-    commit(&mut promoted, vec![comment(promoted_id, None)]).await;
+    commit(&mut promoted, vec![comment(replica_id, None)]).await;
     assert_comment(&promoted, cluster_id, None);
-    commit(&mut promoted, vec![comment(promoted_id, Some("shared"))]).await;
-    assert_comment(&promoted, cluster_id, Some((declaration_id, "shared")));
+    commit(&mut promoted, vec![comment(replica_id, Some("shared"))]).await;
+    assert_comment(&promoted, cluster_id, Some((replica_id, "shared")));
 
     // A declaration comment remains valid with no local realization.
     commit(
         &mut promoted,
         vec![Op::DropClusterReplicaRealization {
             cluster_id,
-            replica_id: promoted_id,
+            replica_id,
         }],
     )
     .await;
-    assert_comment(&promoted, cluster_id, Some((declaration_id, "shared")));
-    commit(&mut promoted, vec![realize(replacement_id, declaration_id)]).await;
+    assert_comment(&promoted, cluster_id, Some((replica_id, "shared")));
+    commit(&mut promoted, vec![realize()]).await;
 
     // Conversion must see a comment written earlier in the same transaction.
     commit(
         &mut promoted,
         vec![
-            comment(replacement_id, Some("managed")),
+            comment(replica_id, Some("managed")),
             configure(managed.clone()),
         ],
     )
     .await;
-    assert_comment(&promoted, cluster_id, Some((replacement_id, "managed")));
-    assert_eq!(
-        promoted
-            .get_cluster(cluster_id)
-            .replica(replacement_id)
-            .expect("managed realization")
-            .declaration_id,
-        None
+    assert_comment(&promoted, cluster_id, Some((replica_id, "managed")));
+    assert!(
+        !promoted
+            .state()
+            .replica_declarations()
+            .any(|declaration| declaration.replica_id == replica_id)
     );
-    commit(&mut promoted, vec![configure(unmanaged)]).await;
-    assert_comment(&promoted, cluster_id, Some((replacement_id, "managed")));
     assert_eq!(
-        promoted
-            .get_cluster(cluster_id)
-            .replica(replacement_id)
-            .expect("explicit realization")
-            .declaration_id,
-        Some(replacement_id)
+        promoted.get_cluster(cluster_id).replica_id("r1"),
+        Some(replica_id)
     );
-
-    // DROP resolves the public physical ID but removes the canonical comment.
-    commit(
-        &mut promoted,
-        vec![Op::DropClusterReplicaRealization {
-            cluster_id,
-            replica_id: replacement_id,
-        }],
-    )
-    .await;
-    commit(&mut promoted, vec![realize(final_id, replacement_id)]).await;
+    // Controller retirement ends only its deployment's membership, even when
+    // it is the active deployment. The peer still owns this logical identity.
     commit(
         &mut promoted,
         vec![Op::DropObjects(vec![DropObjectInfo::ClusterReplica((
             cluster_id,
-            final_id,
+            replica_id,
+            ReplicaCreateDropReason::Retired,
+        ))])],
+    )
+    .await;
+    assert_eq!(promoted.get_cluster(cluster_id).replica_id("r1"), None);
+    assert_comment(&promoted, cluster_id, Some((replica_id, "managed")));
+    assert!(
+        promoted
+            .state()
+            .replica_target_exists(cluster_id, replica_id)
+    );
+    commit(
+        &mut promoted,
+        vec![Op::CreateClusterReplicaRealization {
+            cluster_id,
+            replica_id,
+            name: "r1".into(),
+            config: replica_config.clone(),
+            owner_id: MZ_SYSTEM_ROLE_ID,
+            carryover_from: Some(0),
+        }],
+    )
+    .await;
+    commit(&mut promoted, vec![configure(unmanaged)]).await;
+    assert_comment(&promoted, cluster_id, Some((replica_id, "managed")));
+    assert!(
+        promoted
+            .state()
+            .replica_declarations()
+            .any(|declaration| declaration.replica_id == replica_id)
+    );
+    assert_eq!(
+        promoted.get_cluster(cluster_id).replica_id("r1"),
+        Some(replica_id)
+    );
+
+    // Shared DROP removes the logical identity and its comment.
+    commit(
+        &mut promoted,
+        vec![Op::DropClusterReplicaRealization {
+            cluster_id,
+            replica_id,
+        }],
+    )
+    .await;
+    commit(&mut promoted, vec![realize()]).await;
+    commit(
+        &mut promoted,
+        vec![Op::DropObjects(vec![DropObjectInfo::ClusterReplica((
+            cluster_id,
+            replica_id,
             ReplicaCreateDropReason::Manual,
         ))])],
     )
     .await;
     assert_comment(&promoted, cluster_id, None);
 
-    // A physical comment has no lifetime beyond its managed realization.
-    let managed_id = ids[4];
+    assert!(
+        !promoted
+            .state()
+            .replica_target_exists(cluster_id, replica_id)
+    );
+
+    // A private replica comment has no lifetime beyond its last realization.
+    let managed_id = ids[1];
+    assert_ne!(managed_id, replica_id);
     commit(
         &mut promoted,
         vec![
@@ -242,7 +276,7 @@ async fn replica_comments_survive_promotion_retirement_and_conversion() {
                 name: "r1".into(),
                 config: replica_config,
                 owner_id: MZ_SYSTEM_ROLE_ID,
-                declaration_id: None,
+                carryover_from: None,
             },
             comment(managed_id, Some("physical")),
         ],

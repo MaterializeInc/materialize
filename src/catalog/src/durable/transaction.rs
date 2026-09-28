@@ -266,11 +266,7 @@ impl<'a> Transaction<'a> {
         let network_policy_unique_fn: fn(&NetworkPolicyValue, &NetworkPolicyValue) -> bool =
             |a, b| a.name == b.name;
         let cluster_replica_unique_fn: fn(&ClusterReplicaValue, &ClusterReplicaValue) -> bool =
-            |a, b| {
-                a.cluster_id == b.cluster_id
-                    && a.deployment_generation == b.deployment_generation
-                    && a.name == b.name
-            };
+            |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
         let declaration_unique_fn: fn(
             &ClusterReplicaDeclarationValue,
             &ClusterReplicaDeclarationValue,
@@ -337,7 +333,8 @@ impl<'a> Transaction<'a> {
                 cluster_replicas,
                 cluster_replica_unique_fn,
                 cluster_replica_unique_fn,
-            )?,
+            )?
+            .with_uniqueness_partition(|a, b| a.deployment_generation == b.deployment_generation),
             cluster_replica_declarations: TableTransaction::new_with_uniqueness_fn(
                 cluster_replica_declarations,
                 declaration_unique_fn,
@@ -782,7 +779,10 @@ impl<'a> Transaction<'a> {
         replica_name: &QualifiedReplica,
         replica_to_name: &str,
     ) -> Result<(), CatalogError> {
-        let key = ClusterReplicaKey { id: replica_id };
+        let key = ClusterReplicaKey {
+            id: replica_id,
+            deployment_generation: self.deployment_generation,
+        };
 
         match self.cluster_replicas.update(
             |k, v| {
@@ -811,7 +811,7 @@ impl<'a> Transaction<'a> {
         self.deployment_generation
     }
 
-    /// Inserts a physical replica owned by this transaction's deployment.
+    /// Inserts this deployment's realization of a logical replica.
     pub fn insert_cluster_replica_with_id(
         &mut self,
         cluster_id: ClusterId,
@@ -819,17 +819,17 @@ impl<'a> Transaction<'a> {
         replica_name: &str,
         config: ReplicaConfig,
         owner_id: RoleId,
-        declaration_id: Option<ReplicaId>,
     ) -> Result<(), CatalogError> {
         if let Err(_) = self.cluster_replicas.insert(
-            ClusterReplicaKey { id: replica_id },
+            ClusterReplicaKey {
+                id: replica_id,
+                deployment_generation: self.deployment_generation,
+            },
             ClusterReplicaValue {
                 cluster_id,
                 name: replica_name.into(),
                 config,
                 owner_id,
-                deployment_generation: self.deployment_generation,
-                declaration_id,
             },
             self.op_id,
         ) {
@@ -1645,7 +1645,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Removes the cluster replica `id` from the transaction.
+    /// Removes this deployment's realization of cluster replica `id`.
     ///
     /// Returns an error if `id` is not found.
     ///
@@ -1654,7 +1654,13 @@ impl<'a> Transaction<'a> {
     pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
         let deleted = self
             .cluster_replicas
-            .delete_by_key(ClusterReplicaKey { id }, self.op_id)
+            .delete_by_key(
+                ClusterReplicaKey {
+                    id,
+                    deployment_generation: self.deployment_generation,
+                },
+                self.op_id,
+            )
             .is_some();
         if deleted {
             Ok(())
@@ -1663,7 +1669,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Removes all cluster replicas in `replicas` from the transaction.
+    /// Removes the explicitly qualified cluster realizations from the transaction.
     ///
     /// Returns an error if any id in `replicas` is not found.
     ///
@@ -1671,16 +1677,13 @@ impl<'a> Transaction<'a> {
     /// is up to the caller to either abort the transaction or commit.
     pub fn remove_cluster_replicas(
         &mut self,
-        replicas: &BTreeSet<ReplicaId>,
+        replicas: &BTreeSet<ClusterReplicaKey>,
     ) -> Result<(), CatalogError> {
         if replicas.is_empty() {
             return Ok(());
         }
 
-        let to_remove = replicas
-            .iter()
-            .map(|replica_id| (ClusterReplicaKey { id: *replica_id }, None))
-            .collect();
+        let to_remove = replicas.iter().map(|key| (key.clone(), None)).collect();
         let mut prev = self.cluster_replicas.set_many(to_remove, self.op_id)?;
 
         prev.retain(|_k, v| v.is_none());
@@ -2013,7 +2016,7 @@ impl<'a> Transaction<'a> {
 
     /// Updates cluster replica `replica_id` in the transaction to `replica`.
     ///
-    /// Returns an error if `replica_id` is not found or its deployment generation changes.
+    /// Returns an error if the identified realization does not exist.
     ///
     /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
     /// DO NOT call this function in a loop.
@@ -2022,18 +2025,13 @@ impl<'a> Transaction<'a> {
         replica_id: ReplicaId,
         replica: ClusterReplica,
     ) -> Result<(), CatalogError> {
-        if self
-            .cluster_replicas
-            .get(&ClusterReplicaKey { id: replica_id })
-            .is_some_and(|previous| previous.deployment_generation != replica.deployment_generation)
-        {
+        if replica.replica_id != replica_id {
             return Err(DurableCatalogError::UniquenessViolation.into());
         }
-        let updated = self.cluster_replicas.update_by_key(
-            ClusterReplicaKey { id: replica_id },
-            replica.into_key_value().1,
-            self.op_id,
-        )?;
+        let (key, value) = replica.into_key_value();
+        let updated = self
+            .cluster_replicas
+            .update_by_key(key, value, self.op_id)?;
         if updated {
             Ok(())
         } else {
@@ -2294,17 +2292,6 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        for replica in &replicas {
-            if self
-                .cluster_replicas
-                .get(&replica.key())
-                .is_some_and(|previous| {
-                    previous.deployment_generation != replica.deployment_generation
-                })
-            {
-                return Err(DurableCatalogError::UniquenessViolation.into());
-            }
-        }
         let replicas = replicas
             .into_iter()
             .map(DurableType::into_key_value)
@@ -2454,16 +2441,6 @@ impl<'a> Transaction<'a> {
         self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), Some(1))
     }
 
-    /// Returns comments for an object, including pending transaction writes.
-    pub fn get_object_comments(&self, object_id: CommentObjectId) -> Vec<(Option<usize>, String)> {
-        self.comments
-            .items()
-            .into_iter()
-            .filter(|(key, _)| key.object_id == object_id)
-            .map(|(key, value)| (key.sub_component, value.comment.clone()))
-            .collect()
-    }
-
     pub fn update_comment(
         &mut self,
         object_id: CommentObjectId,
@@ -2594,6 +2571,7 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), CatalogError> {
         let key = ReplicaSystemConfigurationKey {
             replica_id,
+            deployment_generation: self.deployment_generation,
             name: name.to_string(),
         };
         let value = ReplicaSystemConfigurationValue { value };
@@ -2607,11 +2585,25 @@ impl<'a> Transaction<'a> {
     pub fn remove_replica_system_config(&mut self, replica_id: ReplicaId, name: &str) {
         let key = ReplicaSystemConfigurationKey {
             replica_id,
+            deployment_generation: self.deployment_generation,
             name: name.to_string(),
         };
         self.replica_system_configurations
             .set(key, None, self.op_id)
             .expect("cannot have uniqueness violation");
+    }
+
+    /// Removes settings belonging to the explicitly qualified realizations.
+    pub fn remove_replica_system_configs(&mut self, replicas: &BTreeSet<ClusterReplicaKey>) {
+        self.replica_system_configurations.delete(
+            |key, _| {
+                replicas.contains(&ClusterReplicaKey {
+                    id: key.replica_id,
+                    deployment_generation: key.deployment_generation,
+                })
+            },
+            self.op_id,
+        );
     }
 
     pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
@@ -2663,9 +2655,24 @@ impl<'a> Transaction<'a> {
         &mut self,
         declaration: ClusterReplicaDeclaration,
     ) -> Result<(), CatalogError> {
+        let cluster_id = declaration.cluster_id;
+        let replica_name = declaration.name.clone();
         let (key, value) = declaration.into_key_value();
         self.cluster_replica_declarations
-            .set(key, Some(value), self.op_id)?;
+            .set(key, Some(value), self.op_id)
+            .map_err(|error| match error {
+                DurableCatalogError::UniquenessViolation => {
+                    let cluster = self
+                        .clusters
+                        .get(&ClusterKey { id: cluster_id })
+                        .expect("cluster exists");
+                    CatalogError::from(SqlCatalogError::DuplicateReplica(
+                        replica_name,
+                        cluster.name.clone(),
+                    ))
+                }
+                error => error.into(),
+            })?;
         Ok(())
     }
 
@@ -3080,7 +3087,10 @@ impl<'a> Transaction<'a> {
         if let Some(id) = replica_id {
             if self
                 .cluster_replicas
-                .get(&ClusterReplicaKey { id })
+                .get(&ClusterReplicaKey {
+                    id,
+                    deployment_generation: self.deployment_generation,
+                })
                 .is_none()
             {
                 return Err(DurableCatalogError::InvalidReadProtection(format!(
@@ -3727,7 +3737,6 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             items,
-            comments,
             roles,
             role_auth,
             clusters,
@@ -3750,15 +3759,9 @@ impl<'a> Transaction<'a> {
             return Err(denied("audit log"));
         }
         // Private membership does not authorize another deployment's lifecycle.
-        // Check both sides so deletion followed by replacement cannot transfer it.
+        // Deployment is part of the key, including for deletions.
         for key in cluster_replicas.changed_keys() {
-            if cluster_replicas
-                .initial
-                .get(key)
-                .into_iter()
-                .chain(cluster_replicas.get(key))
-                .any(|replica| replica.deployment_generation != *deployment_generation)
-            {
+            if key.deployment_generation != *deployment_generation {
                 return Err(denied("another deployment's physical replica"));
             }
         }
@@ -3767,15 +3770,42 @@ impl<'a> Transaction<'a> {
                 return Err(denied("another deployment's cluster runtime"));
             }
         }
+        // Private retirement may remove an annotation only when this handle
+        // held the final realization and no shared declaration survives.
+        for key in comments.changed_keys() {
+            let CommentObjectId::ClusterReplica((cluster_id, id)) = key.object_id else {
+                return Err(denied("shared comments"));
+            };
+            let own_key = ClusterReplicaKey {
+                id,
+                deployment_generation: *deployment_generation,
+            };
+            if comments.get(key).is_some()
+                || !cluster_replicas
+                    .initial
+                    .get(&own_key)
+                    .is_some_and(|replica| replica.cluster_id == cluster_id)
+                || cluster_replicas.items().keys().any(|key| key.id == id)
+                || cluster_replica_declarations
+                    .get(&ClusterReplicaDeclarationKey { id })
+                    .is_some()
+            {
+                return Err(denied("shared comments"));
+            }
+        }
         let owns_replica = |id| {
-            let key = ClusterReplicaKey { id };
+            let key = ClusterReplicaKey {
+                id,
+                deployment_generation: *deployment_generation,
+            };
             cluster_replicas
                 .get(&key)
                 .or_else(|| cluster_replicas.initial.get(&key))
-                .is_some_and(|replica| replica.deployment_generation == *deployment_generation)
+                .is_some()
         };
         for key in replica_system_configurations.changed_keys() {
-            if !owns_replica(key.replica_id) {
+            if key.deployment_generation != *deployment_generation || !owns_replica(key.replica_id)
+            {
                 return Err(denied("another deployment's replica configuration"));
             }
         }
@@ -3807,9 +3837,10 @@ impl<'a> Transaction<'a> {
                     .into_iter()
                     .chain(written_plans.get(key))
                     .any(|plan| {
-                        plan.replica_owner
-                            .as_ref()
-                            .is_some_and(|owner| !owns_replica(owner.replica_id))
+                        plan.replica_owner.as_ref().is_some_and(|owner| {
+                            owner.deployment_generation != *deployment_generation
+                                || !owns_replica(owner.replica_id)
+                        })
                     })
             {
                 return Err(denied("foreign or unscoped replica plan selection"));
@@ -3847,31 +3878,37 @@ impl<'a> Transaction<'a> {
     ) -> Result<(TransactionBatch, &'a mut dyn DurableCatalogState), CatalogError> {
         for key in self.cluster_replicas.changed_keys() {
             if let Some(next) = self.cluster_replicas.get(key) {
-                let generation = self
-                    .cluster_replicas
-                    .initial
-                    .get(key)
-                    .map_or(self.deployment_generation, |previous| {
-                        previous.deployment_generation
-                    });
-                if next.deployment_generation != generation {
+                if !self.cluster_replicas.initial.contains_key(key)
+                    && key.deployment_generation != self.deployment_generation
+                {
                     return Err(DurableCatalogError::NotWritable(
                         "physical replica ownership cannot be transferred".into(),
                     )
                     .into());
                 }
-                if let Some(id) = next.declaration_id {
-                    let declaration = self
-                        .cluster_replica_declarations
-                        .get(&ClusterReplicaDeclarationKey { id });
-                    if !declaration
-                        .is_some_and(|declaration| declaration.cluster_id == next.cluster_id)
-                    {
-                        return Err(DurableCatalogError::NotWritable(
-                            "physical replica must reference a declaration in its cluster".into(),
-                        )
-                        .into());
-                    }
+                let declaration = self
+                    .cluster_replica_declarations
+                    .get(&ClusterReplicaDeclarationKey { id: key.id });
+                let conflicting_member = self
+                    .cluster_replicas
+                    .items()
+                    .into_iter()
+                    .any(|(peer, value)| peer.id == key.id && value.cluster_id != next.cluster_id)
+                    || self.cluster_replicas.initial.iter().any(|(peer, value)| {
+                        peer.id == key.id && value.cluster_id != next.cluster_id
+                    });
+                if declaration.is_some_and(|declaration| declaration.cluster_id != next.cluster_id)
+                    || conflicting_member
+                    || self
+                        .cluster_replicas
+                        .initial
+                        .get(key)
+                        .is_some_and(|previous| previous.cluster_id != next.cluster_id)
+                {
+                    return Err(DurableCatalogError::NotWritable(
+                        "logical replica cannot belong to different clusters".into(),
+                    )
+                    .into());
                 }
             }
         }
@@ -4504,7 +4541,8 @@ mod unique_name {
 /// unchanged every field `violation` reads. It is used as an optimization
 /// since `violation` is an expensive operation to run.
 #[derive(Debug)]
-struct UniquenessCheck<V> {
+struct UniquenessCheck<K, V> {
+    same_partition: fn(a: &K, b: &K) -> bool,
     violation: fn(a: &V, b: &V) -> bool,
     is_unique_key_unchanged_after_update: fn(prev: &V, next: &V) -> bool,
 }
@@ -4525,7 +4563,7 @@ struct TableTransaction<K, V> {
     // Invariant: Value is sorted by `ts`.
     pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
     // `None` for collections with no uniqueness constraint.
-    uniqueness_check: Option<UniquenessCheck<V>>,
+    uniqueness_check: Option<UniquenessCheck<K, V>>,
 }
 
 impl<K, V> TableTransaction<K, V>
@@ -4582,10 +4620,20 @@ where
             initial,
             pending: BTreeMap::new(),
             uniqueness_check: Some(UniquenessCheck {
+                same_partition: |_, _| true,
                 violation: uniqueness_violation,
                 is_unique_key_unchanged_after_update,
             }),
         })
+    }
+
+    /// Restricts value uniqueness to entries in the same primary-key partition.
+    fn with_uniqueness_partition(mut self, same_partition: fn(&K, &K) -> bool) -> Self {
+        self.uniqueness_check
+            .as_mut()
+            .expect("a partition requires a uniqueness constraint")
+            .same_partition = same_partition;
+        self
     }
 
     /// Consumes and returns the pending changes and their diffs. `Diff` is
@@ -4619,24 +4667,24 @@ where
     fn verify(&self) -> Result<(), DurableCatalogError> {
         if let Some(check) = &self.uniqueness_check {
             // Compare each value to each other value and ensure they are unique.
-            let items = self.values();
+            let items = self.items();
             if V::HAS_UNIQUE_NAME {
-                let by_name: BTreeMap<_, _> = items
-                    .iter()
-                    .enumerate()
-                    .map(|(v, vi)| (vi.unique_name(), (v, vi)))
-                    .collect();
-                for (i, vi) in items.iter().enumerate() {
-                    if let Some((j, vj)) = by_name.get(vi.unique_name()) {
-                        if i != *j && (check.violation)(vi, *vj) {
+                let mut by_name: BTreeMap<_, Vec<(&K, &V)>> = BTreeMap::new();
+                for (key, value) in &items {
+                    let peers = by_name.entry(value.unique_name()).or_default();
+                    for (other_key, other_value) in peers.iter() {
+                        if (check.same_partition)(key, other_key)
+                            && (check.violation)(value, other_value)
+                        {
                             return Err(DurableCatalogError::UniquenessViolation);
                         }
                     }
+                    peers.push((*key, *value));
                 }
             } else {
-                for (i, vi) in items.iter().enumerate() {
-                    for (j, vj) in items.iter().enumerate() {
-                        if i != j && (check.violation)(vi, vj) {
+                for (ki, vi) in &items {
+                    for (kj, vj) in &items {
+                        if ki != kj && (check.same_partition)(ki, kj) && (check.violation)(vi, vj) {
                             return Err(DurableCatalogError::UniquenessViolation);
                         }
                     }
@@ -4672,7 +4720,7 @@ where
             // Compare each value in `entries` to each value in `self` and ensure they are unique.
             for (ki, vi) in self.items() {
                 for (kj, vj) in &entries {
-                    if ki != *kj && (check.violation)(vi, vj) {
+                    if ki != *kj && (check.same_partition)(ki, kj) && (check.violation)(vi, vj) {
                         return Err(DurableCatalogError::UniquenessViolation);
                     }
                 }
@@ -4797,13 +4845,13 @@ where
     /// Returns an error if the uniqueness check failed or the key already exists.
     fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
         let mut violation = None;
-        let uniqueness_violation = self.uniqueness_check.as_ref().map(|check| check.violation);
+        let uniqueness_check = self.uniqueness_check.as_ref();
         self.for_values(|for_k, for_v| {
             if &k == for_k {
                 violation = Some(DurableCatalogError::DuplicateKey);
             }
-            if let Some(uniqueness_violation) = uniqueness_violation {
-                if uniqueness_violation(for_v, &v) {
+            if let Some(check) = uniqueness_check {
+                if (check.same_partition)(for_k, &k) && (check.violation)(for_v, &v) {
                     violation = Some(DurableCatalogError::UniquenessViolation);
                 }
             }
@@ -5110,6 +5158,55 @@ mod tests {
         ReplicaConfig, ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args,
     };
     use crate::memory;
+
+    #[mz_ore::test]
+    fn replica_names_are_unique_within_deployment() {
+        let key = |id, deployment_generation| ClusterReplicaKey {
+            id: ReplicaId::User(id),
+            deployment_generation,
+        };
+        let value = |name: &str| ClusterReplicaValue {
+            cluster_id: ClusterId::User(1),
+            name: name.into(),
+            owner_id: RoleId::User(1),
+            config: ReplicaConfig {
+                location: ReplicaLocation::Unmanaged {
+                    storagectl_addrs: Vec::new(),
+                    computectl_addrs: Vec::new(),
+                },
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+            },
+        };
+        let mut table =
+            TableTransaction::<ClusterReplicaKey, ClusterReplicaValue>::new_with_uniqueness_fn(
+                BTreeMap::from([
+                    (key(1, 0).into_proto(), value("r1").into_proto()),
+                    (key(1, 1).into_proto(), value("r1").into_proto()),
+                ]),
+                |a, b| a.cluster_id == b.cluster_id && a.name == b.name,
+                |a, b| a.cluster_id == b.cluster_id && a.name == b.name,
+            )
+            .unwrap()
+            .with_uniqueness_partition(|a, b| a.deployment_generation == b.deployment_generation);
+        assert_ok!(table.verify());
+        assert!(matches!(
+            table.insert(key(2, 0), value("r1"), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        assert_ok!(table.insert(key(2, 0), value("private"), 0));
+        assert!(matches!(
+            table.update_by_key(key(2, 0), value("r1"), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        assert_eq!(table.delete(|k, _| *k == key(1, 0), 0).len(), 1);
+        assert!(table.update_by_key(key(2, 0), value("r1"), 0).unwrap());
+        assert_ok!(table.verify());
+        assert_eq!(table.items().get(&key(1, 1)), Some(&&value("r1")));
+    }
 
     #[mz_ore::test]
     fn test_table_transaction_simple() {
@@ -5971,7 +6068,7 @@ mod tests {
 
         // Step 2: insert a replica with that explicit id and commit.
         let mut txn = state.transaction().await.unwrap();
-        txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id, None)
+        txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id)
             .unwrap();
         let commit_ts = txn.upper();
         txn.commit_internal(commit_ts).await.unwrap();

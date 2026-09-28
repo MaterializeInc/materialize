@@ -187,6 +187,7 @@ def is_image_tag_of_release_version(image_tag: str) -> bool:
     return (
         IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR not in image_tag
         and not image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
+        and not image_tag.startswith("mzbuild-")
         and image_tag != LATEST_IMAGE_TAG
     )
 

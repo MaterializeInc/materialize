@@ -132,6 +132,7 @@ async fn exercise_liveness() {
         cluster,
         replica,
         config.persist_location.clone(),
+        fixture.clients.cfg().state_version_target(),
     );
     let mut driver = ReplicaEnactment::new(
         endpoint,
@@ -144,7 +145,10 @@ async fn exercise_liveness() {
         None,
     );
     driver.configure(mz_catalog::compute_config::replica_compute_config(
-        &catalog, cluster, replica,
+        &catalog,
+        cluster,
+        replica,
+        fixture.clients.cfg().state_version_target(),
     ));
     let catalog_position = catalog
         .planning_position()

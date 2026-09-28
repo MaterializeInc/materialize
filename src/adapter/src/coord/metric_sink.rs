@@ -304,7 +304,7 @@ impl Coordinator {
             &self.catalog,
             planned.dependencies.clone(),
             Some(cluster_id),
-            Some(mz_sql::catalog::ReplicaTarget::Physical(replica_id)),
+            Some(replica_id),
             RoleMetadata::new(MZ_SYSTEM_ROLE_ID),
         );
         let stage = MetricSinkStage::Optimize(MetricSinkOptimize {

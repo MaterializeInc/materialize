@@ -59,7 +59,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
-use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
+use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS_RAW, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
 use mz_catalog::memory::objects::{CatalogItem, Cluster};
 use mz_compute_client::controller::CollectionReadiness;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
@@ -69,7 +69,7 @@ use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
-use mz_repr::{GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
@@ -448,19 +448,19 @@ impl Coordinator {
 
         let replica_frontier_item_id = self
             .catalog()
-            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
+            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS_RAW);
         let replica_frontier_gid = self
             .catalog()
             .get_entry(&replica_frontier_item_id)
             .latest_global_id();
 
         // `snapshot_latest` requires that the collection consolidates to a
-        // set. `mz_cluster_replica_frontiers` is a controller-managed builtin
+        // set. `mz_cluster_replica_frontiers_raw` is a controller-managed builtin
         // written with ±1 diffs, so it satisfies that invariant.
         //
         // Legacy deployments read the leader's shard. Native deployments share
         // the shard and must filter its rows to active deployment membership below.
-        // `validate_migration_steps` forbids migrating `mz_cluster_replica_frontiers` for this
+        // `validate_migration_steps` forbids migrating `mz_cluster_replica_frontiers_raw` for this
         // reason, so a declared migration can't reach here. A test forcing replacement across all
         // builtins bypasses that guard, hands us a shard we write ourselves, and the lag check
         // below then compares this deployment against itself.
@@ -469,13 +469,16 @@ impl Coordinator {
             .storage_collections
             .snapshot_latest(replica_frontier_gid)
             .await
-            .expect("can't read mz_cluster_replica_frontiers");
+            .expect("can't read mz_cluster_replica_frontiers_raw");
 
         let active_replicas = self.controller.replica_owned_compute().then(|| {
-            self.catalog()
-                .state()
-                .active_replica_ids()
-                .collect::<BTreeSet<_>>()
+            let state = self.catalog().state();
+            (
+                state
+                    .active_deployment_generation()
+                    .expect("native catalog has an active deployment"),
+                state.active_replica_ids().collect::<BTreeSet<_>>(),
+            )
         });
         let live_frontiers = live_frontiers
             .into_iter()
@@ -495,6 +498,12 @@ impl Coordinator {
                     .parse()
                     .expect("cannot parse replica id");
                 let maybe_upper_ts = iter.next().expect("missing upper_ts");
+                let generation = iter.next().expect("missing deployment generation");
+                let generation = if generation.is_null() {
+                    None
+                } else {
+                    Some(generation.unwrap_uint64())
+                };
                 // The timestamp has a total order, so there can be at
                 // most one entry in the upper frontier, which is this
                 // timestamp here. And NULL encodes the empty upper
@@ -506,13 +515,17 @@ impl Coordinator {
                     Antichain::from_elem(upper_ts)
                 };
 
-                (id, replica_id, upper_frontier)
+                (id, replica_id, upper_frontier, generation)
             })
-            .filter(|(_, replica, _)| {
-                active_replicas
-                    .as_ref()
-                    .is_none_or(|active| active.contains(replica))
-            })
+            .filter(
+                |(_, replica, _, generation)| match active_replicas.as_ref() {
+                    Some((active_generation, active)) => {
+                        *generation == Some(*active_generation) && active.contains(replica)
+                    }
+                    None => generation.is_none(),
+                },
+            )
+            .map(|(id, replica, frontier, _)| (id, replica, frontier))
             .collect_vec();
 
         // The classification only requires each collection to be hydrated on
@@ -837,7 +850,7 @@ impl Coordinator {
                 None => {
                     // No live frontier to compare against, either because the collection didn't
                     // exist on the leader or because the leader hosts it as something
-                    // `mz_cluster_replica_frontiers` doesn't track. A table→MV conversion is the
+                    // `mz_cluster_replica_frontiers_raw` doesn't track. A table→MV conversion is the
                     // latter: it keeps the table's `GlobalId`, still a table on the leader, so the
                     // new MV lands here instead of the strong path below.
                     //
@@ -1093,6 +1106,17 @@ impl Coordinator {
                 .next()
                 .expect("missing occurred_at")
                 .unwrap_timestamptz();
+
+            // Local readiness must not count a peer deployment's events for a stable ID.
+            let generation = iter.next().expect("missing deployment_generation");
+            let own_generation = if self.controller.replica_owned_compute() {
+                Datum::UInt64(self.query_deploy_generation)
+            } else {
+                Datum::Null
+            };
+            if generation != own_generation {
+                continue;
+            }
 
             // Only consider events within the time window and that are problematic
             if occurred_at.naive_utc() >= min_timestamp_dt.naive_utc() {

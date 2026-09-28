@@ -131,6 +131,7 @@ async fn prepare_selections(
         }
     }
     let build = Catalog::expression_build_version(candidate.config().build_info).to_string();
+    let deployment_generation = candidate.deployment_generation();
     let enabled = ENABLE_METRIC_SINK.enabled(candidate.system_config());
     let denylist_changed = candidate.system_config().disabled_metric_sinks()
         != catalog.system_config().disabled_metric_sinks();
@@ -145,10 +146,10 @@ async fn prepare_selections(
         .iter()
         .filter(|((_, version), selection)| {
             version == &build
-                && selection
-                    .replica_owner
-                    .as_ref()
-                    .is_some_and(|owner| local_replicas.contains(&owner.replica_id))
+                && selection.replica_owner.as_ref().is_some_and(|owner| {
+                    owner.deployment_generation == deployment_generation
+                        && local_replicas.contains(&owner.replica_id)
+                })
         })
         .map(|((id, _), selection)| (*id, selection))
         .collect();
@@ -246,6 +247,7 @@ async fn prepare_selections(
                     export,
                     ReplicaPlanOwner {
                         replica_id: replica,
+                        deployment_generation,
                         name: definition.name.into(),
                     },
                 );

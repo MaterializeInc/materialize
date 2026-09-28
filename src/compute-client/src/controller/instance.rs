@@ -1013,6 +1013,7 @@ impl Instance {
         });
 
         let instance_config = InstanceConfig {
+            persist_state_version: None,
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             // The remaining fields are replica-specific and will be set in
             // `ReplicaTask::specialize_command` (logging, expiration, dictionary compression) and
@@ -3752,6 +3753,7 @@ mod tests {
 
     fn create_instance_command() -> ComputeCommand {
         ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            persist_state_version: None,
             logging: Default::default(),
             expiration_offset: None,
             peek_stash_persist_location: PersistLocation::new_in_mem(),

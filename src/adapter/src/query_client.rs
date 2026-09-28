@@ -183,7 +183,7 @@ impl QueryClient {
         catalog: &Catalog,
         cluster: ComputeInstanceId,
         id: GlobalId,
-        target: Option<mz_sql::catalog::ReplicaTarget>,
+        target: Option<ReplicaId>,
     ) -> Option<Antichain<Timestamp>> {
         catalog
             .try_get_cluster(cluster)?
@@ -238,7 +238,7 @@ impl QueryClient {
         &self,
         catalog: &CatalogState,
         cluster: ComputeInstanceId,
-        target: Option<mz_sql::catalog::ReplicaTarget>,
+        target: Option<ReplicaId>,
         read_ts: Timestamp,
     ) -> BTreeSet<GlobalId> {
         let replicas: Vec<_> = self

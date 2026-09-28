@@ -506,12 +506,14 @@ impl RustType<proto::ClusterReplicaKey> for ClusterReplicaKey {
     fn into_proto(&self) -> proto::ClusterReplicaKey {
         proto::ClusterReplicaKey {
             id: self.id.into_proto(),
+            deployment_generation: self.deployment_generation,
         }
     }
 
     fn from_proto(proto: proto::ClusterReplicaKey) -> Result<Self, TryFromProtoError> {
         Ok(ClusterReplicaKey {
             id: proto.id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
         })
     }
 }
@@ -523,8 +525,6 @@ impl RustType<proto::ClusterReplicaValue> for ClusterReplicaValue {
             name: self.name.to_string(),
             config: self.config.into_proto(),
             owner_id: self.owner_id.into_proto(),
-            deployment_generation: self.deployment_generation,
-            declaration_id: self.declaration_id.into_proto(),
         }
     }
 
@@ -534,8 +534,6 @@ impl RustType<proto::ClusterReplicaValue> for ClusterReplicaValue {
             name: proto.name,
             config: proto.config.into_rust()?,
             owner_id: proto.owner_id.into_rust()?,
-            deployment_generation: proto.deployment_generation,
-            declaration_id: proto.declaration_id.into_rust()?,
         })
     }
 }
@@ -1082,6 +1080,7 @@ impl RustType<proto::ReplicaSystemConfigurationKey> for ReplicaSystemConfigurati
     fn into_proto(&self) -> proto::ReplicaSystemConfigurationKey {
         proto::ReplicaSystemConfigurationKey {
             replica_id: self.replica_id.into_proto(),
+            deployment_generation: self.deployment_generation,
             name: self.name.clone(),
         }
     }
@@ -1089,6 +1088,7 @@ impl RustType<proto::ReplicaSystemConfigurationKey> for ReplicaSystemConfigurati
     fn from_proto(proto: proto::ReplicaSystemConfigurationKey) -> Result<Self, TryFromProtoError> {
         Ok(ReplicaSystemConfigurationKey {
             replica_id: proto.replica_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
             name: proto.name,
         })
     }
@@ -1312,6 +1312,7 @@ impl RustType<proto::ReplicaPlanOwner> for super::ReplicaPlanOwner {
     fn into_proto(&self) -> proto::ReplicaPlanOwner {
         proto::ReplicaPlanOwner {
             replica_id: self.replica_id.into_proto(),
+            deployment_generation: self.deployment_generation,
             name: self.name.clone(),
         }
     }
@@ -1319,6 +1320,7 @@ impl RustType<proto::ReplicaPlanOwner> for super::ReplicaPlanOwner {
     fn from_proto(proto: proto::ReplicaPlanOwner) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             replica_id: proto.replica_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
             name: proto.name,
         })
     }
