@@ -10,13 +10,15 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import React from "react";
 
+import { notNullOrUndefined } from "~/util";
+
 import {
   ThresholdLineGraph,
   ThresholdLineGraphProps,
 } from "./ThresholdLineGraph";
 import { ThresholdLineSeries } from "./types";
 
-/** One sampled instant: every object's freshness reading at that time. */
+/** One sampled instant across every object. */
 interface Reading {
   time: number;
   values: Record<string, number | null>;
@@ -38,11 +40,7 @@ const STEP_MS = 5 * 60 * 1000;
 const POINT_COUNT = 72;
 const END_TIME = START_TIME + (POINT_COUNT - 1) * STEP_MS;
 
-/**
- * Seeded PRNG. Stories are visual fixtures, so the same story must draw the
- * same picture on every render, in every browser, forever. `Math.random` would
- * make each screenshot differ from the last and turn visual review into noise.
- */
+/** Seeded, so a story draws the same picture on every render. */
 function mulberry32(seed: number) {
   let state = seed >>> 0;
   return () => {
@@ -55,7 +53,7 @@ function mulberry32(seed: number) {
 
 function buildReadings(specs: ObjectSpec[]): Reading[] {
   const random = mulberry32(0x5eed);
-  // Each object gets its own phase so the lines don't rise and fall in unison.
+  // A phase per object, so the lines don't rise and fall in unison.
   const phases = new Map(
     specs.map((spec) => [spec.key, random() * Math.PI * 2]),
   );
@@ -77,11 +75,11 @@ function buildReadings(specs: ObjectSpec[]): Reading[] {
   }));
 }
 
-/** The peak reading, which is what the threshold judges each line against. */
+/** The peak reading, which the threshold judges each line against. */
 function peakOf(readings: Reading[], key: string): number | null {
   const values = readings
     .map((reading) => reading.values[key])
-    .filter((value): value is number => value !== null && value !== undefined);
+    .filter(notNullOrUndefined);
   return values.length === 0 ? null : Math.max(...values);
 }
 
@@ -146,10 +144,8 @@ function formatSeconds(value: number) {
 }
 
 /**
- * The graph is controlled, so a story that let the arg drive `threshold`
- * directly would render a handle that cannot be dragged. This holds the value
- * the way a real caller does, while still following the arg when the Controls
- * panel changes it.
+ * The graph is controlled, so the arg alone would render an undraggable
+ * handle. This holds the value as a real caller would, still following the arg.
  */
 const ThresholdLineGraphHarness = (props: ThresholdLineGraphProps<Reading>) => {
   const [threshold, setThreshold] = React.useState(props.threshold);
@@ -196,7 +192,7 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-/** Two of six objects sit above the threshold and get a color of their own. */
+/** Two of six sit above the threshold. */
 export const Default: Story = {};
 
 /** No line breaches, so the whole set stays grey. */
@@ -209,10 +205,7 @@ export const EverythingBreaching: Story = {
   args: { threshold: 0 },
 };
 
-/**
- * Twenty-four lines over the threshold at once. The palette is generated to
- * fit however many breach, so no line is dropped and no two share a color.
- */
+/** Twenty-four lines over at once: the palette sizes itself, dropping none. */
 export const ManyBreachingLines: Story = {
   args: {
     data: MANY_READINGS,
@@ -222,10 +215,7 @@ export const ManyBreachingLines: Story = {
   },
 };
 
-/**
- * A null reading breaks its line rather than bridging the gap, so an object
- * that was down reads as absent instead of flat.
- */
+/** A null reading breaks the line, so a down object reads as absent, not flat. */
 export const GapsInData: Story = {
   args: {
     data: GAPPY_READINGS,
@@ -234,10 +224,7 @@ export const GapsInData: Story = {
   },
 };
 
-/**
- * `selectedKeys` unions with whatever breaches, so a hand-picked object keeps
- * its color as the threshold moves past it.
- */
+/** `selectedKeys` unions with whatever breaches. */
 export const HandPickedSelection: Story = {
   args: {
     threshold: 6,
@@ -245,7 +232,7 @@ export const HandPickedSelection: Story = {
   },
 };
 
-/** No objects on the cluster yet: axes only, with the handle still draggable. */
+/** No objects yet: axes only, handle still draggable. */
 export const NoData: Story = {
   args: {
     data: [],
