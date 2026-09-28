@@ -167,7 +167,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
-    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
+    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
 };
 use crate::render::columnar::{
     ColCollection, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
@@ -1278,7 +1278,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 None
             };
 
-            let mut bundle = self.render_plan_expr(node.expr, &collections);
+            let bundle = self.render_plan_expr(node.expr, &collections);
 
             if let Some((operator, operator_id_start)) = metadata {
                 let operator_id_end = self.scope.worker().peek_identifier();
@@ -1291,8 +1291,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     ))
                 }
             }
-
-            self.log_operator_hydration(&mut bundle, lir_id);
 
             collections.insert(lir_id, bundle);
         }
@@ -1565,115 +1563,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         if let Some(logger) = &self.compute_logger {
             logger.log(&ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
         }
-    }
-
-    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<'scope, T>, lir_id: LirId) {
-        // A `CollectionBundle` can contain more than one collection, which makes it not obvious to
-        // which we should attach the logging operator.
-        //
-        // We could attach to each collection and track the lower bound of output frontiers.
-        // However, that would be of limited use because we expect all collections to hydrate at
-        // roughly the same time: The `ArrangeBy` operator is not fueled, so as soon as it sees the
-        // frontier of the unarranged collection advance, it will perform all work necessary to
-        // also advance its own frontier. We don't expect significant delays between frontier
-        // advancements of the unarranged and arranged collections, so attaching the logging
-        // operator to any one of them should produce accurate results.
-        //
-        // If the `CollectionBundle` contains both unarranged and arranged representations it is
-        // beneficial to attach the logging operator to one of the arranged representation to avoid
-        // unnecessary cloning of data. The unarranged collection feeds into the arrangements, so
-        // if we attached the logging operator to it, we would introduce a fork in its output
-        // stream, which would necessitate that all output data is cloned. In contrast, we can hope
-        // that the output streams of the arrangements don't yet feed into anything else, so
-        // attaching a (pass-through) logging operator does not introduce a fork.
-
-        match bundle.arranged.values_mut().next() {
-            Some(arrangement) => {
-                use ArrangementFlavor::*;
-
-                match arrangement {
-                    Local(a, _) => {
-                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
-                    }
-                    Trace(_, a, _) => {
-                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
-                    }
-                }
-            }
-            None => {
-                let (oks, _) = bundle
-                    .collection
-                    .as_mut()
-                    .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
-                *oks = stream.as_collection();
-            }
-        }
-    }
-
-    fn log_operator_hydration_inner<D>(
-        &self,
-        stream: Stream<'scope, T, D>,
-        lir_id: LirId,
-    ) -> Stream<'scope, T, D>
-    where
-        D: timely::Container + Clone + 'static,
-    {
-        let Some(logger) = self.compute_logger.clone() else {
-            return stream.clone(); // hydration logging disabled
-        };
-
-        let export_ids = self.export_ids.clone();
-
-        // Convert the dataflow as-of into a frontier we can compare with input frontiers.
-        //
-        // We (somewhat arbitrarily) define operators in iterative scopes to be hydrated when their
-        // frontier advances to an outer time that's greater than the `as_of`. Comparing
-        // `refine(as_of) < input_frontier` would find the moment when the first iteration was
-        // complete, which is not what we want. We want `refine(as_of + 1) <= input_frontier`
-        // instead.
-        let mut hydration_frontier = Antichain::new();
-        for time in self.as_of_frontier.iter() {
-            if let Some(time) = time.try_step_forward() {
-                hydration_frontier.insert(Refines::to_inner(time));
-            }
-        }
-
-        let name = format!("LogOperatorHydration ({lir_id})");
-        stream.unary_frontier(Pipeline, &name, |_cap, _info| {
-            let mut hydrated = false;
-
-            for &export_id in &export_ids {
-                logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
-                    export_id,
-                    lir_id,
-                    hydrated,
-                }));
-            }
-
-            move |(input, frontier), output| {
-                // Pass through inputs.
-                input.for_each(|cap, data| {
-                    output.session(&cap).give_container(data);
-                });
-
-                if hydrated {
-                    return;
-                }
-
-                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier.frontier()) {
-                    hydrated = true;
-
-                    for &export_id in &export_ids {
-                        logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
-                            export_id,
-                            lir_id,
-                            hydrated,
-                        }));
-                    }
-                }
-            }
-        })
     }
 }
 

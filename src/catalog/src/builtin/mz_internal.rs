@@ -5430,50 +5430,6 @@ SELECT * FROM complete_mvs",
     }),
 });
 
-pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
-        name: "mz_compute_operator_hydration_statuses",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
-        desc: RelationDesc::builder()
-            .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_column(
-                "physical_plan_node_id",
-                SqlScalarType::UInt64.nullable(false),
-            )
-            .with_column("hydrated", SqlScalarType::Bool.nullable(false))
-            .with_key(vec![0, 1, 2])
-            .finish(),
-        data_source: IntrospectionType::ComputeOperatorHydrationStatus.into(),
-        column_comments: BTreeMap::from_iter([
-            ("replica_id", "The ID of a cluster replica."),
-            (
-                "object_id",
-                "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`.",
-            ),
-            (
-                "physical_plan_node_id",
-                "The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`.",
-            ),
-            ("hydrated", "Whether the node is hydrated on the replica."),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "compute_hydration_status",
-            description: "Hydration status per compute operator",
-            links: &const { [] },
-            column_semantic_types: &const {
-                [
-                    ("replica_id", SemanticType::ReplicaId),
-                    ("object_id", SemanticType::CatalogItemId),
-                ]
-            },
-        }),
-    }
-});
-
 pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_utilization",
     schema: MZ_INTERNAL_SCHEMA,

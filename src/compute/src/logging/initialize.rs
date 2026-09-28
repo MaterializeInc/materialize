@@ -25,10 +25,13 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::logging::{TimelyEvent, TimelyEventBuilder};
+use timely::logging::{
+    OperatesSummaryEvent, TimelyEvent, TimelyEventBuilder, TimelySummaryEventBuilder,
+};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
+use timely::progress::timestamp::Refines;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
@@ -239,10 +242,62 @@ impl LoggingContext<'_> {
         self.register_reachability_logger::<Timestamp>(&mut register, 0);
         self.register_reachability_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
+        // Nothing claims pending summaries without the logging dataflow's demux, so they would
+        // accumulate forever.
+        if self.config.enable_logging {
+            self.register_summary_logger::<Timestamp>(&mut register);
+            self.register_summary_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register);
+            self.register_summary_logger::<(Timestamp, Subtime)>(&mut register);
+        }
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
 
         self.shared_state.borrow_mut().compute_logger = Some(c_logger);
+    }
+
+    /// Register an operator summary logger for scopes with timestamp type `T`.
+    ///
+    /// Timely looks up the logger by the name `timely/summary/{type_name::<T>()}` when it builds a
+    /// scope's children. The logger reduces each summary to its outer timestamp and hands it to the
+    /// timely demux through [`SharedLoggingState::pending_summaries`].
+    fn register_summary_logger<T>(&self, registry: &mut Registry)
+    where
+        T: timely::progress::Timestamp + Refines<Timestamp>,
+    {
+        let shared_state = Rc::clone(&self.shared_state);
+        let logger = Logger::<TimelySummaryEventBuilder<T::Summary>>::new(
+            self.now,
+            self.start_offset,
+            move |_time, data: &mut Option<Vec<(Duration, OperatesSummaryEvent<T::Summary>)>>| {
+                let Some(data) = data else { return };
+                // NOTE: This borrow cannot conflict with the timely demux's, because timely only
+                // flushes this logger while building operators or at the end of a worker step,
+                // never while the logging dataflow runs.
+                let mut shared_state = shared_state.borrow_mut();
+                for (_time, event) in data.drain(..) {
+                    let mut rows = Vec::new();
+                    for (input, connectivity) in event.summary.iter().enumerate() {
+                        let before = rows.len();
+                        for (output, summaries) in connectivity.iter_ports() {
+                            // Summaries in an antichain are incomparable, so the smallest outer
+                            // delay is the delay the outer timestamp is guaranteed to incur.
+                            let delay = summaries
+                                .elements()
+                                .iter()
+                                .map(|s| u64::from(<T as Refines<Timestamp>>::summarize(s.clone())))
+                                .min();
+                            rows.push((input, Some(output), delay));
+                        }
+                        if rows.len() == before {
+                            rows.push((input, None, None));
+                        }
+                    }
+                    shared_state.pending_summaries.insert(event.id, rows);
+                }
+            },
+        );
+        let type_name = std::any::type_name::<T>();
+        registry.insert_logger(&format!("timely/summary/{type_name}"), logger);
     }
 
     fn simple_logger<CB: ContainerBuilder>(

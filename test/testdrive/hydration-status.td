@@ -10,7 +10,7 @@
 # Test reporting of dataflow hydration status through
 # `mz_internal.mz_compute_hydration_statuses`,
 # `mz_internal.mz_hydration_statuses`, and
-# `mz_internal.mz_compute_operator_hydration_statuses`.
+# `mz_introspection.mz_compute_operator_hydration_statuses`.
 #
 # Note that all of the below tests only assert that the `hydrated` flag
 # eventually becomes `true`, not that it starts off as `false`. That's because
@@ -56,11 +56,11 @@ si true
   WHERE r.name LIKE 'hydrated_test%';
 si true
 
-# No operator-level hydration status logging for introspection dataflows.
-> SELECT DISTINCT left(h.object_id, 1), h.hydrated
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  WHERE r.name LIKE 'hydrated_test%';
+# No operator-level hydration status for introspection dataflows, whose operators are not
+# logged.
+> SELECT DISTINCT left(h.export_id, 1), h.hydrated
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  WHERE h.export_id LIKE 's%';
 
 # A system-only replica hydration episode has no objects eligible for object
 # history. Its existence also proves the collector excludes its own transient
@@ -276,16 +276,35 @@ mv_const hydrated_test_1 true
 # `mv_const` doesn't show up because the dataflow advanced to the empty
 # frontier and its replica state was cleaned up, including introspection
 # logging.
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
-idx      hydrated_test_1 true
-mv       hydrated_test_1 true
+> SET cluster_replica = hydrated_test_1
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+idx true
+mv true
+
+# Operator frontiers are reconstructed from reachability logging and operator summaries. They
+# exist only for operators, and no operator of an LIR node trails its export's frontier.
+> SELECT count(*) > 0
+  FROM mz_introspection.mz_dataflow_operator_summaries_per_worker
+true
+
+> SELECT count(*)
+  FROM mz_introspection.mz_dataflow_operator_frontiers f
+  WHERE f.id NOT IN (SELECT id FROM mz_introspection.mz_dataflow_operators)
+0
+
+> SELECT o.name, count(*)
+  FROM mz_introspection.mz_lir_mapping m
+  JOIN mz_introspection.mz_dataflow_operator_frontiers f
+    ON f.id >= m.operator_id_start AND f.id < m.operator_id_end AND f.port_type = 'output'
+  JOIN mz_introspection.mz_compute_frontiers cf ON cf.export_id = m.global_id
+  JOIN mz_objects o ON o.id = m.global_id
+  WHERE f.time < cf.time
+  GROUP BY o.name
+> RESET cluster_replica
 
 # Test adding new replicas.
 
@@ -331,18 +350,24 @@ mv       hydrated_test_2 true
 mv_const hydrated_test_1 true
 mv_const hydrated_test_2 true
 
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
-idx      hydrated_test_1 true
-idx      hydrated_test_2 true
-mv       hydrated_test_1 true
-mv       hydrated_test_2 true
+> SET cluster_replica = hydrated_test_1
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+idx true
+mv true
+> RESET cluster_replica
+> SET cluster_replica = hydrated_test_2
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+idx true
+mv true
+> RESET cluster_replica
 
 # Test dropping replicas.
 
@@ -379,16 +404,15 @@ idx      hydrated_test_2 true
 mv       hydrated_test_2 true
 mv_const hydrated_test_2 true
 
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
-idx      hydrated_test_2 true
-mv       hydrated_test_2 true
+> SET cluster_replica = hydrated_test_2
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+idx true
+mv true
+> RESET cluster_replica
 
 > DROP CLUSTER REPLICA test.hydrated_test_2
 
@@ -407,15 +431,6 @@ mv       hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
 
 # Test dropping dataflows.
 
@@ -443,16 +458,15 @@ idx      hydrated_test_3 true
 mv       hydrated_test_3 true
 mv_const hydrated_test_3 true
 
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
-idx      hydrated_test_3 true
-mv       hydrated_test_3 true
+> SET cluster_replica = hydrated_test_3
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+idx true
+mv true
+> RESET cluster_replica
 
 > DROP INDEX idx;
 > DROP MATERIALIZED VIEW mv_const;
@@ -475,15 +489,14 @@ mv  hydrated_test_3 true true
       o.id NOT LIKE 's%';
 mv  hydrated_test_3 true
 
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
-mv  hydrated_test_3 true
+> SET cluster_replica = hydrated_test_3
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+mv true
+> RESET cluster_replica
 
 # Test adding new storage dataflows.
 
@@ -665,16 +678,15 @@ mv_wmr       hydrated_test_4 true
 mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
 
-> SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
-  WHERE
-      r.name LIKE 'hydrated_test%' AND
-      o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
-mv_wmr       hydrated_test_4 true
-mv_wmr_stuck hydrated_test_4 false
+> SET cluster_replica = hydrated_test_4
+> SELECT o.name, bool_and(h.hydrated)
+  FROM mz_introspection.mz_compute_operator_hydration_statuses h
+  JOIN mz_objects o ON (o.id = h.export_id)
+  WHERE o.id NOT LIKE 's%'
+  GROUP BY o.name;
+mv_wmr true
+mv_wmr_stuck false
+> RESET cluster_replica
 
 > DROP MATERIALIZED VIEW mv_wmr
 > DROP MATERIALIZED VIEW mv_wmr_const

@@ -74,8 +74,6 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
     pub dataflow_id: usize,
-    /// The collection IDs of exports of the dataflow associated with this context.
-    pub export_ids: Vec<GlobalId>,
     /// Frontier before which updates should not be emitted.
     ///
     /// We *must* apply it to sinks, to ensure correct outputs.
@@ -113,8 +111,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             .clone()
             .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
 
-        let export_ids = dataflow.export_ids().collect();
-
         // Skip compute event logging for transient dataflows. We do this to avoid overhead for
         // slow-path peeks, but it also affects subscribes. For now that seems fine, but we may
         // want to reconsider in the future.
@@ -128,7 +124,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             scope,
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
-            export_ids,
             as_of_frontier,
             until,
             bindings: BTreeMap::new(),
@@ -203,7 +198,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             scope: region,
             debug_name: self.debug_name.clone(),
             dataflow_id: self.dataflow_id.clone(),
-            export_ids: self.export_ids.clone(),
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
             compute_logger: self.compute_logger.clone(),

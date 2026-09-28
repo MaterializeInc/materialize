@@ -3839,7 +3839,6 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::StorageSourceStatistics
             | IntrospectionType::StorageSinkStatistics
             | IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
             | IntrospectionType::ComputeHydrationTimes

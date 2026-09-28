@@ -57,6 +57,8 @@ pub struct Export {
     pub export_id: GlobalId,
     /// Timely worker index of the exporting dataflow.
     pub dataflow_index: usize,
+    /// The as-of of the exporting dataflow, or `None` if it is the empty frontier.
+    pub as_of: Option<Timestamp>,
 }
 
 /// The export for a global id was dropped.
@@ -172,17 +174,6 @@ pub struct Hydration {
     pub export_id: GlobalId,
 }
 
-/// An operator's hydration status changed.
-#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
-pub struct OperatorHydration {
-    /// Identifier of the export.
-    pub export_id: GlobalId,
-    /// Identifier of the operator's LIR node.
-    pub lir_id: LirId,
-    /// Whether the operator is hydrated.
-    pub hydrated: bool,
-}
-
 /// Announce a mapping of an LIR operator to a dataflow operator for a global ID.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct LirMapping {
@@ -238,8 +229,6 @@ pub enum ComputeEvent {
     HydrationStart(HydrationStart),
     /// A dataflow export was hydrated.
     Hydration(Hydration),
-    /// A dataflow operator's hydration status changed.
-    OperatorHydration(OperatorHydration),
     /// An LIR operator was mapped to some particular dataflow operator.
     ///
     /// Cf. `ComputeLog::LirMaping`
@@ -360,8 +349,6 @@ pub(super) fn construct<'scope>(
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
         let mut hydration_time_out = OutputBuilder::from(hydration_time_out);
-        let (operator_hydration_status_out, operator_hydration_status) = demux.new_output();
-        let mut operator_hydration_status_out = OutputBuilder::from(operator_hydration_status_out);
         let (lir_mapping_out, lir_mapping) = demux.new_output();
         let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
@@ -380,7 +367,6 @@ pub(super) fn construct<'scope>(
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
-                let mut operator_hydration_status = operator_hydration_status_out.activate();
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
@@ -398,8 +384,6 @@ pub(super) fn construct<'scope>(
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
-                        operator_hydration_status: operator_hydration_status
-                            .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
@@ -431,7 +415,6 @@ pub(super) fn construct<'scope>(
             (HydrationTime, hydration_time),
             (ImportFrontierCurrent, import_frontier),
             (LirMapping, lir_mapping),
-            (OperatorHydrationStatus, operator_hydration_status),
             (PeekCurrent, peek),
             (PeekDuration, peek_duration),
         ];
@@ -532,8 +515,6 @@ struct DemuxState {
     import_frontier_packer: PermutedRowPacker,
     /// A row packer for the LIR mapping output.
     lir_mapping_packer: PermutedRowPacker,
-    /// A row packer for the operator hydration status output.
-    operator_hydration_status_packer: PermutedRowPacker,
     /// A row packer for the peek durations output.
     peek_duration_packer: PermutedRowPacker,
     /// A row packer for the peek output.
@@ -568,9 +549,6 @@ impl DemuxState {
             hydration_time_packer: PermutedRowPacker::new(ComputeLog::HydrationTime),
             import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
             lir_mapping_packer: PermutedRowPacker::new(ComputeLog::LirMapping),
-            operator_hydration_status_packer: PermutedRowPacker::new(
-                ComputeLog::OperatorHydrationStatus,
-            ),
             peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
@@ -633,11 +611,13 @@ impl DemuxState {
         &mut self,
         export_id: GlobalId,
         dataflow_index: usize,
+        as_of: Option<Timestamp>,
     ) -> (&RowRef, &RowRef) {
         self.export_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::UInt64(u64::cast_from(dataflow_index)),
+            as_of.map_or(Datum::Null, Datum::MzTimestamp),
         ])
     }
 
@@ -697,22 +677,6 @@ impl DemuxState {
             Datum::UInt16(u16::cast_from(nesting)),
             Datum::UInt64(u64::cast_from(operator_span.0)),
             Datum::UInt64(u64::cast_from(operator_span.1)),
-        ])
-    }
-
-    /// Pack an operator hydration status update key-value for the given export ID, LIR ID, and
-    /// hydration status.
-    fn pack_operator_hydration_status_update(
-        &mut self,
-        export_id: GlobalId,
-        lir_id: LirId,
-        hydrated: bool,
-    ) -> (&RowRef, &RowRef) {
-        self.operator_hydration_status_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(lir_id.into()),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-            Datum::from(hydrated),
         ])
     }
 
@@ -782,6 +746,8 @@ struct HydrationTimestamps {
 struct ExportState {
     /// The ID of the dataflow maintaining this export.
     dataflow_index: usize,
+    /// The as-of of the dataflow maintaining this export.
+    as_of: Option<Timestamp>,
     /// Number of errors in this export.
     ///
     /// This must be a signed integer, since per-worker error counts can be negative, only the
@@ -797,14 +763,13 @@ struct ExportState {
     /// duration at nanosecond precision. These instants exist to identify and bound hydration
     /// episodes, which a duration cannot do.
     hydration_timestamps: HydrationTimestamps,
-    /// Hydration status of operators feeding this export.
-    operator_hydration: BTreeMap<LirId, bool>,
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize, installed_at: Duration) -> Self {
+    fn new(dataflow_index: usize, as_of: Option<Timestamp>, installed_at: Duration) -> Self {
         Self {
             dataflow_index,
+            as_of,
             error_count: Diff::ZERO,
             created_at: Instant::now(),
             hydration_time_ns: None,
@@ -813,7 +778,6 @@ impl ExportState {
                 started_at: None,
                 hydrated_at: None,
             },
-            operator_hydration: BTreeMap::new(),
         }
     }
 }
@@ -837,7 +801,6 @@ struct DemuxOutput<'a, 'b> {
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
-    operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
@@ -888,7 +851,6 @@ impl DemuxHandler<'_, '_, '_> {
             ErrorCount(error_count) => self.handle_error_count(error_count),
             HydrationStart(hydration) => self.handle_hydration_start(hydration),
             Hydration(hydration) => self.handle_hydration(hydration),
-            OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
             DataflowGlobal(global) => self.handle_dataflow_global(global),
         }
@@ -899,21 +861,25 @@ impl DemuxHandler<'_, '_, '_> {
         ExportReference {
             export_id,
             dataflow_index,
+            as_of,
         }: Ref<'_, Export>,
     ) {
         let export_id = Columnar::into_owned(export_id);
+        let as_of: Option<Timestamp> = Columnar::into_owned(as_of);
         let ts = self.ts();
-        let datum = self.state.pack_export_update(export_id, dataflow_index);
+        let datum = self
+            .state
+            .pack_export_update(export_id, dataflow_index, as_of);
         self.output.export.give((datum, ts, Diff::ONE));
 
         // Stamp the event time, not `ts`, which is rounded up to the logging interval. The rounding
         // then only delays when an update becomes visible, rather than skewing recorded instants.
         let installed_at = self.time;
 
-        let existing = self
-            .state
-            .exports
-            .insert(export_id, ExportState::new(dataflow_index, installed_at));
+        let existing = self.state.exports.insert(
+            export_id,
+            ExportState::new(dataflow_index, as_of, installed_at),
+        );
         if existing.is_some() {
             error!(%export_id, "export already registered");
         }
@@ -943,7 +909,9 @@ impl DemuxHandler<'_, '_, '_> {
         let ts = self.ts();
         let dataflow_index = export.dataflow_index;
 
-        let datum = self.state.pack_export_update(export_id, dataflow_index);
+        let datum = self
+            .state
+            .pack_export_update(export_id, dataflow_index, export.as_of);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         // Remove error count logging for this export.
@@ -963,16 +931,6 @@ impl DemuxHandler<'_, '_, '_> {
         self.output
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
-
-        // Remove operator hydration logging for this export.
-        for (lir_id, hydrated) in export.operator_hydration {
-            let datum = self
-                .state
-                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
-            self.output
-                .operator_hydration_status
-                .give((datum, ts, Diff::MINUS_ONE));
-        }
     }
 
     fn handle_dataflow_shutdown(
@@ -1126,45 +1084,6 @@ impl DemuxHandler<'_, '_, '_> {
             self.state
                 .pack_hydration_time_update(export_id, Some(nanos), &new_timestamps);
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
-    }
-
-    fn handle_operator_hydration(
-        &mut self,
-        OperatorHydrationReference {
-            export_id,
-            lir_id,
-            hydrated,
-        }: Ref<'_, OperatorHydration>,
-    ) {
-        let ts = self.ts();
-        let export_id = Columnar::into_owned(export_id);
-        let lir_id = Columnar::into_owned(lir_id);
-        let hydrated = Columnar::into_owned(hydrated);
-
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
-            // The export might have already been dropped, in which case we are no longer
-            // interested in its operator hydration events.
-            return;
-        };
-
-        let old_status = export.operator_hydration.get(&lir_id).copied();
-        export.operator_hydration.insert(lir_id, hydrated);
-
-        if let Some(hydrated) = old_status {
-            let retraction = self
-                .state
-                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
-            self.output
-                .operator_hydration_status
-                .give((retraction, ts, Diff::MINUS_ONE));
-        }
-
-        let insertion = self
-            .state
-            .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
-        self.output
-            .operator_hydration_status
-            .give((insertion, ts, Diff::ONE));
     }
 
     fn handle_peek_install(
@@ -1454,11 +1373,13 @@ impl CollectionLogging {
         export_id: GlobalId,
         logger: Logger,
         dataflow_index: usize,
+        as_of: Option<Timestamp>,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
         logger.log(&ComputeEvent::Export(Export {
             export_id,
             dataflow_index,
+            as_of,
         }));
 
         let mut self_ = Self {

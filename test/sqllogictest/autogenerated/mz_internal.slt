@@ -258,14 +258,6 @@ hydrated  boolean  Whether␠the␠compute␠object␠is␠hydrated␠on␠the�
 hydration_time  interval  The␠amount␠of␠time␠it␠took␠for␠the␠replica␠to␠hydrate␠the␠compute␠object.
 
 query TTT
-SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
-----
-replica_id  text  The␠ID␠of␠a␠cluster␠replica.
-object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`␠or␠`mz_catalog.mz_materialized_views.id`.
-physical_plan_node_id  uint8  The␠ID␠of␠a␠node␠in␠the␠physical␠plan␠of␠the␠compute␠object.␠Corresponds␠to␠a␠`node_id`␠displayed␠in␠the␠output␠of␠`EXPLAIN␠PHYSICAL␠PLAN␠WITH␠(node␠identifiers)`.
-hydrated  boolean  Whether␠the␠node␠is␠hydrated␠on␠the␠replica.
-
-query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠the␠source,␠sink,␠table,␠index,␠materialized␠view,␠or␠subscription.
@@ -837,7 +829,6 @@ mz_compute_dependencies
 mz_compute_error_counts_raw_unified
 mz_compute_hydration_statuses
 mz_compute_hydration_times
-mz_compute_operator_hydration_statuses
 mz_console_cluster_utilization_overview
 mz_console_cluster_utilization_overview_24h
 mz_console_cluster_utilization_overview_3h

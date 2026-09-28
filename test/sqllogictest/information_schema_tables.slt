@@ -389,10 +389,6 @@ mz_compute_hydration_times
 SOURCE
 materialize
 mz_internal
-mz_compute_operator_hydration_statuses
-SOURCE
-materialize
-mz_internal
 mz_console_cluster_utilization_overview
 VIEW
 materialize
@@ -1017,8 +1013,8 @@ mz_compute_operator_durations_histogram_raw
 SOURCE
 materialize
 mz_introspection
-mz_compute_operator_hydration_statuses_per_worker
-SOURCE
+mz_compute_operator_hydration_statuses
+VIEW
 materialize
 mz_introspection
 mz_dataflow_addresses
@@ -1061,6 +1057,10 @@ mz_dataflow_operator_dataflows_per_worker
 VIEW
 materialize
 mz_introspection
+mz_dataflow_operator_frontiers
+VIEW
+materialize
+mz_introspection
 mz_dataflow_operator_parents
 VIEW
 materialize
@@ -1078,6 +1078,10 @@ VIEW
 materialize
 mz_introspection
 mz_dataflow_operator_reachability_raw
+SOURCE
+materialize
+mz_introspection
+mz_dataflow_operator_summaries_per_worker
 SOURCE
 materialize
 mz_introspection

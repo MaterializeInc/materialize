@@ -855,7 +855,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16698  mz_object_dependencies
 16699  mz_compute_dependencies
 16700  mz_compute_hydration_statuses
-16701  mz_compute_operator_hydration_statuses_per_worker
 16702  mz_databases
 16703  mz_schemas
 16704  mz_columns
@@ -980,7 +979,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16826  mz_scheduling_parks_histogram
 16829  mz_compute_error_counts_per_worker
 16830  mz_compute_error_counts
-16831  mz_compute_operator_hydration_statuses
 16832  mz_message_counts_per_worker
 16833  mz_message_counts
 16834  mz_active_peeks
@@ -1256,3 +1254,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17124  mz_replica_hydration_history
 17125  parse_catalog_item_references
 17126  mz_object_dependencies_raw
+17127  mz_dataflow_operator_summaries_per_worker
+17128  mz_dataflow_operator_frontiers
+17129  mz_compute_operator_hydration_statuses
