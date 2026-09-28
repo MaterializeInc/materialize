@@ -76,6 +76,10 @@ def test_cargo_build_args_single_package_no_features() -> None:
         "bench",
         "--no-run",
         "--message-format=json",
+        "--config",
+        "target.'cfg(all())'.rustflags=["
+        "'-Cllvm-args=-align-all-functions=6',"
+        "'-Cllvm-args=-align-all-nofallthru-blocks=5']",
         "--package",
         "mz-ore",
         "--bench",
@@ -102,6 +106,10 @@ def test_cargo_build_args_multi_package_features() -> None:
         "bench",
         "--no-run",
         "--message-format=json",
+        "--config",
+        "target.'cfg(all())'.rustflags=["
+        "'-Cllvm-args=-align-all-functions=6',"
+        "'-Cllvm-args=-align-all-nofallthru-blocks=5']",
         "--package",
         "mz-compute",
         "--package",

@@ -17,6 +17,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Where a hot loop lands relative to 64-byte boundaries can decide how fast a
+# sub-nanosecond benchmark runs, and that placement shifts whenever unrelated
+# code or a dependency changes size. An identical 68-byte loop in
+# `mz-repr`'s `AclItem/encode` measured 1.37 ns at one offset and 1.17 ns at
+# another, which fails the 10% threshold in either direction without any
+# source change. Aligning every function to 64 bytes gives each loop the same
+# offset in the ancestor and current builds, which collapsed that difference
+# to 1%.
+ALIGNMENT_RUSTFLAGS = (
+    "-Cllvm-args=-align-all-functions=6",
+    "-Cllvm-args=-align-all-nofallthru-blocks=5",
+)
+
 
 @dataclass(frozen=True, order=True)
 class BenchTarget:
@@ -108,6 +121,9 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     Callers must select whole packages. A partial selection within a package
     would build targets absent from the caller's target list, because
     `--bench` names are matched across every selected package.
+
+    Every function and every block without a fallthrough predecessor is
+    aligned, see `ALIGNMENT_RUSTFLAGS`.
     """
     if not targets:
         raise ValueError("no bench targets to build")
@@ -116,7 +132,18 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     features = sorted(
         {f"{t.package}/{feature}" for t in targets for feature in t.required_features}
     )
-    args = ["cargo", "bench", "--no-run", "--message-format=json"]
+    rustflags = ",".join(f"'{flag}'" for flag in ALIGNMENT_RUSTFLAGS)
+    args = [
+        "cargo",
+        "bench",
+        "--no-run",
+        "--message-format=json",
+        # A `target.<cfg>` entry is joined with the workspace's
+        # `target.<triple>.rustflags`, where `RUSTFLAGS` or `build.rustflags`
+        # would replace them and drop the target CPU.
+        "--config",
+        f"target.'cfg(all())'.rustflags=[{rustflags}]",
+    ]
     for package in packages:
         args += ["--package", package]
     for name in names:
