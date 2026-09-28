@@ -112,6 +112,8 @@ skip = [
     { name = "tungstenite", version = "0.29.0" },
     # libduckdb-sys still pulls 6.
     { name = "zip", version = "6.0.0" },
+    # aws-sdk-s3 is on 0.18, while launchdarkly-server-sdk, mysql_async, and mz-frontegg-auth still use 0.16.
+    { name = "lru", version = "0.16.3" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
