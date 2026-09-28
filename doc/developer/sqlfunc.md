@@ -391,7 +391,8 @@ Two shapes stay hand-written by design.
   implementations, which evaluate all arguments before dispatch. `And`, `Or`,
   `Coalesce`, `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` are these.
 
-Hand-written `LazyUnaryFunc` implementations under `src/expr/src/scalar/func/impls/`
-outside both categories are convertible. One that allocates its output gets a
-`RowArena` from `EagerUnaryFunc::call`, and `RecordGet`, which returns a field borrowed
-from its input, needs only an `output_type_expr` reading `input_type`.
+`CastStringToInt2Vector`, `RegexpMatch` and `RegexpSplitToArray` in
+`src/expr/src/scalar/func/impls/string.rs` are hand-written `LazyUnaryFunc`
+implementations in neither category, and all three are convertible. Each allocates its
+output into a `RowArena`, which `EagerUnaryFunc::call` supplies, and each checks NULL in
+its body, which a non-nullable parameter type takes over.
