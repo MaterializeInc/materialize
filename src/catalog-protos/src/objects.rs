@@ -271,6 +271,79 @@ pub struct ItemVersion {
     pub version: Version,
 }
 
+/// Identifies a column of a relation item by its 0-based position.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumnKey {
+    pub id: CatalogItemId,
+    pub position: u64,
+}
+
+/// A column of a relation item, as planning resolved it, by the identity
+/// its type presents as: the OID and type modifier of its
+/// PostgreSQL-compatible type, and the `CREATE TYPE` item of a list, map or
+/// record type that one defines. Written with every change to the item's
+/// definition and refreshed at bootstrap, so that catalog views can report
+/// columns without planning.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumnValue {
+    pub name: String,
+    pub nullable: bool,
+    pub type_oid: u32,
+    pub type_mod: i32,
+    pub custom_type: Option<CatalogItemId>,
+}
+
+/// Identifies a key of an index item by its 0-based position in the index.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumnKey {
+    pub id: CatalogItemId,
+    pub position: u64,
+}
+
+/// A key of an index, as planning resolved it. Maintained like
+/// `ItemColumnValue`.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumnValue {
+    /// The 0-based column of the indexed relation when the key is a bare
+    /// column reference, `None` for any other expression.
+    pub column: Option<u64>,
+    pub nullable: bool,
+}
+
 #[derive(
     Clone,
     Copy,
@@ -2007,7 +2080,9 @@ pub enum StateUpdateKind {
     FenceToken(FenceToken),
     GidMapping(GidMapping),
     IdAlloc(IdAlloc),
+    IndexColumn(IndexColumn),
     Item(Item),
+    ItemColumn(ItemColumn),
     NetworkPolicy(NetworkPolicy),
     Role(Role),
     RoleAuth(RoleAuth),
@@ -2114,9 +2189,23 @@ pub struct ClusterIntrospectionSourceIndex {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumn {
+    pub key: IndexColumnKey,
+    pub value: IndexColumnValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Item {
     pub key: ItemKey,
     pub value: ItemValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumn {
+    pub key: ItemColumnKey,
+    pub value: ItemColumnValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

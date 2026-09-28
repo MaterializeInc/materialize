@@ -11,6 +11,7 @@
 
 use mz_ore::cast::CastFrom;
 use mz_proto::TryFromProtoError;
+use mz_repr::ColumnName;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
@@ -18,12 +19,12 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
     ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, IndexColumnKey, IndexColumnValue,
+    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemColumnKey,
+    ItemColumnValue, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -596,6 +597,76 @@ impl RustType<proto::ItemValue> for ItemValue {
             global_id: proto.global_id.into_rust()?,
             extra_versions,
             ephemeral_owner_session: proto.ephemeral_owner_session,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumnKey> for ItemColumnKey {
+    fn into_proto(&self) -> proto::ItemColumnKey {
+        proto::ItemColumnKey {
+            id: self.id.into_proto(),
+            position: u64::cast_from(self.position),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnKey) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnKey {
+            id: proto.id.into_rust()?,
+            position: usize::cast_from(proto.position),
+        })
+    }
+}
+
+impl RustType<proto::ItemColumnValue> for ItemColumnValue {
+    fn into_proto(&self) -> proto::ItemColumnValue {
+        proto::ItemColumnValue {
+            name: self.name.to_string(),
+            nullable: self.nullable,
+            type_oid: self.type_oid,
+            type_mod: self.type_mod,
+            custom_type: self.custom_type.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnValue) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnValue {
+            name: ColumnName::from(proto.name),
+            nullable: proto.nullable,
+            type_oid: proto.type_oid,
+            type_mod: proto.type_mod,
+            custom_type: proto.custom_type.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumnKey> for IndexColumnKey {
+    fn into_proto(&self) -> proto::IndexColumnKey {
+        proto::IndexColumnKey {
+            id: self.id.into_proto(),
+            position: u64::cast_from(self.position),
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnKey) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnKey {
+            id: proto.id.into_rust()?,
+            position: usize::cast_from(proto.position),
+        })
+    }
+}
+
+impl RustType<proto::IndexColumnValue> for IndexColumnValue {
+    fn into_proto(&self) -> proto::IndexColumnValue {
+        proto::IndexColumnValue {
+            column: self.column.map(u64::cast_from),
+            nullable: self.nullable,
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnValue) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnValue {
+            column: proto.column.map(usize::cast_from),
+            nullable: proto.nullable,
         })
     }
 }

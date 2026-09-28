@@ -806,6 +806,12 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::Comment(key, value) => {
                         apply(&mut snapshot.comments, key, value, diff);
                     }
+                    StateUpdateKind::IndexColumn(key, value) => {
+                        apply(&mut snapshot.index_columns, key, value, diff);
+                    }
+                    StateUpdateKind::ItemColumn(key, value) => {
+                        apply(&mut snapshot.item_columns, key, value, diff);
+                    }
                     StateUpdateKind::Config(key, value) => {
                         apply(&mut snapshot.configs, key, value, diff);
                     }
@@ -2112,6 +2118,12 @@ impl Trace {
                     trace.cluster_replicas.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
+                StateUpdateKind::IndexColumn(k, v) => {
+                    trace.index_columns.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::ItemColumn(k, v) => {
+                    trace.item_columns.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Database(k, v) => trace.databases.values.push(((k, v), ts, diff)),
                 StateUpdateKind::DefaultPrivilege(k, v) => {
