@@ -25,10 +25,10 @@ const DEFAULT_LIGHTNESS = 50;
  *   index   0     1     2     3     4     5     6     7
  *   hue     0   180    90   270    45   225   135   315
  *
- * The count is deliberately not an input. A line's hue depends only on its own
- * position, so adding or removing lines never recolors the ones already there,
- * and the color beside an object in a table keeps its meaning as the set it
- * belongs to changes.
+ * The count is deliberately not an input, so a longer palette extends a
+ * shorter one rather than replacing it. Note this is a property of the
+ * sequence, not of any particular line: a line's color is only as stable as
+ * the index it is handed. See `assignLineColors`.
  */
 function hueAtIndex(index: number): number {
   let remaining = index;
@@ -99,6 +99,12 @@ export function isBreaching<Datum>(
  * colors whatever order they arrive in. A caller can label a row or a legend
  * entry with the color its line was drawn in by calling this with the same
  * lines.
+ *
+ * NOTE: a line's color is its rank, not its identity, so it holds only while
+ * the `breachValue` ordering does. Adding a line that outranks others, or two
+ * lines crossing, recolors everything from that rank down. Stable against the
+ * threshold, which is what the graph varies continuously; not stable against
+ * the data, which on a live page changes as it refreshes.
  *
  * Up to 360 lines the colors are all distinct, beyond which
  * `generateRainbowPalette` repeats.

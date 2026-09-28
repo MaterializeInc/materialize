@@ -201,6 +201,7 @@ const ThresholdLineGraphInner = <Datum,>(
   );
 
   // Keyed off the data alone, so dragging the threshold never recolors a line.
+  // New data can: see `assignLineColors`.
   const lineColors = React.useMemo(() => assignLineColors(lines), [lines]);
 
   const isHighlighted = React.useCallback(
