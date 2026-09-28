@@ -58,6 +58,19 @@ use crate::plan::{
 };
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
+/// Compiler entry points counted independently of prepared-cache outcomes.
+#[derive(Clone, Copy, Debug)]
+pub enum PlanOperation {
+    /// Resolve names in an AST.
+    Resolve,
+    /// Describe a statement, with or without retained analysis.
+    Describe,
+    /// Construct a statement plan from its AST.
+    Plan,
+    /// Lower a root SQL query to HIR, including parameter canonicalization passes.
+    RootQuery,
+}
+
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
 ///
@@ -87,6 +100,9 @@ use crate::session::vars::{OwnedVarInput, SystemVars};
 /// [`get_item`]: SessionCatalog::get_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
+    /// Records an attempted compiler operation for catalogs with instrumentation.
+    fn record_plan_operation(&self, _operation: PlanOperation) {}
+
     /// Returns the id of the role that is issuing the query.
     fn active_role_id(&self) -> &RoleId;
 
