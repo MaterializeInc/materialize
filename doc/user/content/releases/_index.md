@@ -35,6 +35,17 @@ Syncing identity provider groups to Materialize via SCIM is now generally availa
 
 As team members join, leave, or change teams, updating their group membership in your IdP keeps their access in Materialize aligned. Set it up in the [Materialize Console](/developer-tools/console/) or with Terraform. For more information, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 
+### Operational dashboards for Self-Managed {#v26.44-operational-dashboards}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting with v13.1.2 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the monitoring stack installs new Grafana dashboards for operating Materialize day to day:
+
+- **Environment dashboards**: Follow an upgrade as it rolls out with **Materialize Upgrade**, which shows Kubernetes events, blue/green generation progress, and the operator's reconciliation loop. It requires Materialize v26.41.0 or later for full coverage. View logs and Kubernetes events from your Materialize workloads with **Materialize Logs and Events**.
+- **Infrastructure dashboards**: View logs and events from the monitoring stack, Kubernetes system components, and the node journal with **Infrastructure Logs and Events**. Inspect a single node's CPU, memory, network, storage, pods, and conditions with **Infrastructure Node Detail**.
+
+For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
+
 ### Improvements {#v26.44-improvements}
 - **Hedged reads from object storage**: A read from object storage that is still outstanding after 2 seconds is now retried on a second, independent connection with the first response winning, which reduced reads slower than 4 seconds by about 70% in Materialize Cloud, at a cost of roughly 1% extra reads; set `persist_blob_hedged_get_enabled` to `false` to turn it off.
 - **Dynamic balancerd configuration for Self-Managed**: Pointing `spec.balancerdConfigmapName` on a `Materialize` resource, or `spec.configmapName` on a standalone `Balancer`, at a ConfigMap you own containing `config.json` lets you change balancerd settings such as `balancerd_max_connections` without restarting balancer pods, with balancerd rereading the file about once a second after Kubernetes propagates an update.
