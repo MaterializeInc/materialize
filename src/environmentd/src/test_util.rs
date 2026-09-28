@@ -1075,22 +1075,31 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    /// Open the same timestamp namespace for an independent fixture catalog writer.
-    pub async fn catalog_timestamp_oracle(&self) -> mz_catalog::durable::CatalogTimestampOracle {
+    /// Open an independent handle to the fixture's shared timestamp namespace.
+    pub async fn timestamp_oracle(
+        &self,
+    ) -> Arc<dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync> {
         let config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
             &self.timestamp_oracle_url,
             &MetricsRegistry::new(),
         )
         .expect("test oracle URL");
-        let oracle = config
+        config
             .open(
                 mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
                 mz_repr::Timestamp::MIN,
                 self.timestamp_oracle_now.clone(),
                 false,
             )
-            .await;
-        mz_catalog::durable::CatalogTimestampOracle::new(oracle, self.timestamp_oracle_now.clone())
+            .await
+    }
+
+    /// Open the same timestamp namespace for an independent fixture catalog writer.
+    pub async fn catalog_timestamp_oracle(&self) -> mz_catalog::durable::CatalogTimestampOracle {
+        mz_catalog::durable::CatalogTimestampOracle::new(
+            self.timestamp_oracle().await,
+            self.timestamp_oracle_now.clone(),
+        )
     }
 
     pub fn connect(&self) -> ConnectBuilder<'_, postgres::NoTls, NoHandle> {

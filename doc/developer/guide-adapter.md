@@ -314,6 +314,11 @@ catalog fence -> set up and register tables -> txns write advances table uppers
               -> snapshot and reset system tables -> start serving
 ```
 
+Bootstrap snapshots use the table-fence timestamp, not a subsequent oracle read.
+Catalog publishers can advance the shared oracle without advancing the table WAL.
+Waiting for that newer timestamp can deadlock bootstrap before normal table
+progress starts.
+
 The snapshots cannot complete until the txns write has advanced the table uppers. Therefore:
 
 ```text
