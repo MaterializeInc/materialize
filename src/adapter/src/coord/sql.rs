@@ -230,7 +230,9 @@ impl Coordinator {
         let reuse_select = catalog.system_config().enable_prepared_query_reuse()
             && matches!(stmt, Some(Statement::Select(_)));
         let valid = if reuse_select {
-            old_query.is_some_and(|query| {
+            // A SELECT can be describable without reusable typed analysis.
+            // Absence of that optional artifact does not invalidate its descriptor.
+            old_query.map_or(old_state_revision == current_state_revision, |query| {
                 let metrics = &session.metrics().prepared;
                 match query.invalidation_reason(catalog, session) {
                     None => return true,
