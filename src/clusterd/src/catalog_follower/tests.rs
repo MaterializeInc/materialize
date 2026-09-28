@@ -216,22 +216,27 @@ async fn native_bootstrap_updates_and_selection_retry() {
             .resolve_builtin_object(&Builtin::<mz_sql::catalog::IdReference>::Index(
                 &MZ_TABLES_IND,
             ));
-    let CatalogItem::Index(mut index) = writer.get_entry(&builtin).item().clone() else {
+    let CatalogItem::Index(builtin_index) = writer.get_entry(&builtin).item().clone() else {
         panic!("builtin index");
     };
-    let builtin_cluster = index.cluster_id;
-    let on = index.on;
+    let builtin_cluster = builtin_index.cluster_id;
+    // Creating the input through the catalog admits its fresh storage shard.
+    // Merely loading builtin SQL does not initialize its storage collections.
+    let (_, on) = create_table(&mut writer, "follower_input").await;
     let (id, global_id) = writer.allocate_user_id_for_test().await.expect("IDs");
-    index.global_id = global_id;
-    index.cluster_id = cluster;
-    index.create_sql = format!(
-        "CREATE INDEX follower_index IN CLUSTER [{cluster}] ON mz_catalog.mz_tables (schema_id)"
+    let sql = format!(
+        "CREATE DEFAULT INDEX follower_index IN CLUSTER [{cluster}] ON materialize.public.follower_input"
     );
-    let input = writer.get_entry_by_global_id(&on);
-    let CatalogItem::MaterializedView(view) = input.item() else {
-        panic!("builtin materialized view");
+    let CatalogItem::Index(index) = mz_catalog::catalog::test_support::parse_item(
+        &mut writer.state().clone(),
+        global_id,
+        &sql,
+        &BTreeMap::new(),
+    )
+    .expect("parse fixture index") else {
+        panic!("fixture index");
     };
-    let desc = view.desc_for(&on);
+    let desc = RelationDesc::empty();
     let mut mir = DataflowDescription::new("follower index".into());
     mir.import_source(on, desc.typ().clone(), false);
     mir.export_index(

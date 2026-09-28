@@ -58,15 +58,17 @@ use tracing::{debug, info};
 #[path = "sql/prepared_rewrites.rs"]
 mod prepared_rewrites;
 
-/// A missing peer selection must not block unrelated compute installation or SQL,
-/// and dropping the pending index must release the publication barrier.
+/// Unavailable peer plan bytes must not block unrelated compute installation or
+/// SQL. Both indexes are admitted at birth, and retention advances after DROP.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_peer_index_pending_installation() {
+    use mz_catalog::durable::objects::{CollectionCompactionBound, DurableType};
     use mz_catalog::durable::{
         CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
     };
     use mz_catalog::expr_cache::ExpressionCacheHandle;
     use mz_postgres_util::{batch_execute, query, query_one, sql};
+    use mz_proto::{ProtoType, RustType};
 
     let test_case = async {
         let server = test_util::TestHarness::default().start().await;
@@ -176,13 +178,18 @@ async fn test_peer_index_pending_installation() {
         }
         rename_export!(plan.global_mir);
         rename_export!(plan.physical_plan);
+        assert_eq!(selection.imports, [input.global_id].into());
+        assert!(selection.replica_owner.is_none());
         let revision = uuid::Uuid::new_v4();
         store
             .write_plans(vec![(selected_id, revision, plan)])
             .await
             .unwrap();
 
-        loop {
+        // Select an immutable revision whose bytes are unavailable, as opposed to
+        // creating an index without an admitted selection.
+        let pending_revision = uuid::Uuid::new_v4();
+        let initial_bound = loop {
             peer.sync_to_current_updates().await.unwrap();
             let mut txn = match peer.transaction().await {
                 Ok(txn) => txn,
@@ -191,9 +198,40 @@ async fn test_peer_index_pending_installation() {
                 }
                 Err(error) => panic!("peer transaction: {error}"),
             };
-            for (item_id, global_id, name) in [
-                (pending_item, pending_id, "peer_pending"),
-                (selected_item, selected_id, "peer_selected"),
+            assert_eq!(txn.get_item(&template.id).unwrap(), template);
+            assert_eq!(txn.get_item(&input.id).unwrap(), input);
+            assert_eq!(
+                txn.get_written_plans()
+                    .find(|plan| plan.id == template.global_id)
+                    .unwrap(),
+                selection
+            );
+            let bounds: BTreeMap<_, _> = txn
+                .current_snapshot()
+                .collection_compaction_bounds
+                .into_iter()
+                .map(|(key, value)| {
+                    let bound = CollectionCompactionBound::from_key_value(
+                        key.into_rust().unwrap(),
+                        value.into_rust().unwrap(),
+                    );
+                    (bound.id, bound.frontier)
+                })
+                .collect();
+            let initial_bound = bounds[&template.global_id].expect("live template bound");
+            let input_bound = bounds[&input.global_id].expect("live input bound");
+            assert!(input_bound <= initial_bound);
+            // The SQL template protects this table at its current bound. The
+            // asserted source-only plans have exactly that logical and actual
+            // input. Copying the bound and imports in this snapshot preserves
+            // that protection: set_collection_compaction_bound establishes each
+            // index frontier, and set_written_plan_with_owner records imports
+            // for Catalog::transact's constrain_plan_inputs. Commit's catalog
+            // CAS prevents racing input compaction. No fixed maintained read
+            // requirement is needed for an index's advancing retention.
+            for (item_id, global_id, name, revision) in [
+                (pending_item, pending_id, "peer_pending", pending_revision),
+                (selected_item, selected_id, "peer_selected", revision),
             ] {
                 let oid = txn.allocate_oid(&Default::default()).unwrap();
                 txn.insert_item(
@@ -209,19 +247,27 @@ async fn test_peer_index_pending_installation() {
                     None,
                 )
                 .unwrap();
-            }
-            txn.set_written_plan(selected_id, &build.to_string(), Some(revision))
+                txn.set_written_plan_with_owner(
+                    global_id,
+                    &selection.build_version,
+                    Some(revision),
+                    None,
+                    selection.imports.clone(),
+                )
                 .unwrap();
+                txn.set_collection_compaction_bound(global_id, Some(initial_bound))
+                    .unwrap();
+            }
             let ts = txn.upper();
             let _ = txn.get_and_commit_op_updates();
             match txn.commit(ts).await {
-                Ok(()) => break,
+                Ok(()) => break initial_bound,
                 Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                     continue;
                 }
                 Err(error) => panic!("peer commit: {error}"),
             }
-        }
+        };
 
         // Name resolution must see acknowledged peer definitions without a
         // refresh-triggering DDL, including one that has no installable plan.
@@ -273,7 +319,10 @@ async fn test_peer_index_pending_installation() {
         .await
         .unwrap()
         .get(0);
-        assert!(absent, "index without a selection must not enter compute");
+        assert!(
+            absent,
+            "index without selected plan bytes must not enter compute"
+        );
         let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
             .await
             .unwrap()
@@ -288,24 +337,42 @@ async fn test_peer_index_pending_installation() {
                          THEN mz_internal.parse_catalog_id(data->'key'->'id') = $1 \
                          ELSE false END)"
         );
-        let published: bool = query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])
-            .await
-            .unwrap()
-            .get(0);
-        assert!(
-            !published,
-            "pending installation must hold back bound publication"
-        );
+        for id in [pending_id, selected_id] {
+            let admitted: bool = query_one(&internal, bound_sql.clone(), &[&id.to_string()])
+                .await
+                .unwrap()
+                .get(0);
+            assert!(admitted, "both indexes must have creation-time bounds");
+        }
         batch_execute(&client, sql!("DROP INDEX peer_pending"))
             .await
             .unwrap();
+        let pending_bound: bool = query_one(&internal, bound_sql, &[&pending_id.to_string()])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!pending_bound, "DROP must remove the pending index's bound");
         loop {
-            let published: bool =
-                query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])
-                    .await
-                    .unwrap()
-                    .get(0);
-            if published {
+            peer.sync_to_current_updates().await.unwrap();
+            let snapshot = peer.snapshot().await.unwrap();
+            assert!(
+                snapshot
+                    .written_plans
+                    .keys()
+                    .all(|key| key.id != pending_id.into_proto())
+            );
+            let bound = snapshot
+                .collection_compaction_bounds
+                .into_iter()
+                .map(|(key, value)| {
+                    CollectionCompactionBound::from_key_value(
+                        key.into_rust().unwrap(),
+                        value.into_rust().unwrap(),
+                    )
+                })
+                .find(|bound| bound.id == selected_id)
+                .expect("selected index retains its bound");
+            if bound.frontier.expect("live selected index bound") > initial_bound {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
