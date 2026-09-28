@@ -522,15 +522,15 @@ class BulkPrivilegeGrant(Scenario):
                     duration=60,
                     actions=[
                         # A single background thread issues the bulk grant/revoke back to back, so
-                        # at most one large catalog transaction runs at a time.
+                        # at most one large catalog transaction runs at a time. Its own latency is
+                        # stable across runs and catches a slowdown in only one of GRANT or
+                        # REVOKE, which the `SELECT 1` p50 can miss.
                         ClosedLoop(
                             action=GrantRevokeAllTables(
                                 schema=schema,
                                 roles=roles,
                                 conn_info=conn_infos["mz_system"],
                             ),
-                            # We don't care whether the grant/revoke itself gets slower.
-                            report_regressions=False,
                         ),
                     ]
                     + [
@@ -545,6 +545,16 @@ class BulkPrivilegeGrant(Scenario):
                     ],
                 ),
             ],
+            regression_thresholds={
+                # A `SELECT 1` waits out the GRANT or REVOKE statement in flight.
+                # p50 is stable at about one statement's duration, so it tracks
+                # the per-statement coordinator stall and keeps the default
+                # threshold. p95 lands between one and two statements depending
+                # on where queries fall relative to the statements, so it can
+                # double from placement alone. avg and qps inherit part of that
+                # swing.
+                "SELECT 1 (reuse connection)": {"p95": 2.5, "avg": 2.0, "qps": 2.0},
+            },
             guarantees={
                 # Before the fix a single bulk grant blocked the coordinator for
                 # minutes. This bound catches that regression while leaving headroom
