@@ -483,6 +483,7 @@ mod tests {
         )
         .unwrap();
         let commit_ts = tx.upper();
+        let _ = tx.get_and_commit_op_updates();
         tx.commit(commit_ts).await.unwrap();
 
         assert_eq!(get_next_ids(catalog.as_mut()).await.unwrap(), initial_ids);
