@@ -106,6 +106,8 @@ skip = [
     { name = "nix", version = "0.26.4" },
     # Held back by mysql_async `v0.36.1`
     { name = "socket2", version = "0.5.10" },
+    # kube-client and reqwest still pull 0.6.
+    { name = "tower-http", version = "0.6.11" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
