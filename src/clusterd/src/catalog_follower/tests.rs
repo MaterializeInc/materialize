@@ -14,9 +14,10 @@ use mz_catalog::catalog::{DropObjectInfo, Op};
 use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
 use mz_catalog::memory::objects::{Table, TableDataSource};
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::plan::LirRelationExpr;
 use mz_persist_client::{PersistClient, ShardId};
 use mz_repr::role_id::RoleId;
-use mz_repr::{RelationDesc, ReprRelationType, VersionedRelationDesc};
+use mz_repr::{RelationDesc, VersionedRelationDesc};
 use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds};
 use mz_storage_client::controller::StorageTxn;
 
@@ -202,27 +203,6 @@ pub(super) async fn store(persist: &PersistClient) -> ExpressionCacheHandle {
         .await
 }
 
-fn index_plan(id: GlobalId, on: GlobalId) -> GlobalExpressions {
-    let mut plan = GlobalExpressions {
-        global_mir: DataflowDescription::new("index".into()),
-        physical_plan: DataflowDescription::new("index".into()),
-        dataflow_metainfos: Default::default(),
-        optimizer_features: Default::default(),
-        item_version: RelationVersion::root(),
-    };
-    plan.physical_plan.index_exports.insert(
-        id,
-        (
-            IndexDesc {
-                on_id: on,
-                key: vec![],
-            },
-            ReprRelationType::empty(),
-        ),
-    );
-    plan
-}
-
 #[mz_ore::test(tokio::test)]
 async fn native_bootstrap_updates_and_selection_retry() {
     let persist = PersistClient::new_for_tests().await;
@@ -236,24 +216,71 @@ async fn native_bootstrap_updates_and_selection_retry() {
             .resolve_builtin_object(&Builtin::<mz_sql::catalog::IdReference>::Index(
                 &MZ_TABLES_IND,
             ));
-    let CatalogItem::Index(mut index) = writer.get_entry(&builtin).item().clone() else {
+    let CatalogItem::Index(builtin_index) = writer.get_entry(&builtin).item().clone() else {
         panic!("builtin index");
     };
-    let builtin_cluster = index.cluster_id;
-    let on = index.on;
+    let builtin_cluster = builtin_index.cluster_id;
+    // Creating the input through the catalog admits its fresh storage shard.
+    // Merely loading builtin SQL does not initialize its storage collections.
+    let (_, on) = create_table(&mut writer, "follower_input").await;
     let (id, global_id) = writer.allocate_user_id_for_test().await.expect("IDs");
-    index.global_id = global_id;
-    index.cluster_id = cluster;
-    index.create_sql = format!(
-        "CREATE INDEX follower_index IN CLUSTER [{cluster}] ON mz_catalog.mz_tables (schema_id)"
+    let sql = format!(
+        "CREATE DEFAULT INDEX follower_index IN CLUSTER [{cluster}] ON materialize.public.follower_input"
     );
+    let CatalogItem::Index(index) = mz_catalog::catalog::test_support::parse_item(
+        &mut writer.state().clone(),
+        global_id,
+        &sql,
+        &BTreeMap::new(),
+    )
+    .expect("parse fixture index") else {
+        panic!("fixture index");
+    };
+    let desc = RelationDesc::empty();
+    let mut mir = DataflowDescription::new("follower index".into());
+    mir.import_source(on, desc.typ().clone(), false);
+    mir.export_index(
+        global_id,
+        IndexDesc {
+            on_id: on,
+            key: index.keys.to_vec(),
+        },
+        desc.typ().into(),
+    );
+    let features = Default::default();
+    let physical_plan =
+        LirRelationExpr::finalize_dataflow(mir.clone(), &features, None).expect("index plan");
+    let plan = GlobalExpressions {
+        global_mir: mir,
+        physical_plan,
+        dataflow_metainfos: Default::default(),
+        optimizer_features: features,
+        item_version: RelationVersion::root(),
+    };
     let op = Op::CreateItem {
         id,
         name: name(&writer, "follower_index"),
         item: CatalogItem::Index(index),
         owner_id: RoleId::System(1),
     };
-    transact(&mut writer, vec![op]).await;
+    let revision = Uuid::new_v4();
+    // Admission commits the definition, selection, and input protection together.
+    // Delay blob publication so bootstrap must retry the selected plan.
+    transact(
+        &mut writer,
+        vec![
+            op,
+            Op::SetWrittenPlan {
+                id: global_id,
+                build_version: BUILD.into(),
+                expected_revision: None,
+                revision: Some(revision),
+                imports: BTreeSet::from([on]),
+                replica_owner: None,
+            },
+        ],
+    )
+    .await;
     let (mut follower, initial) = committed(&writer, &persist).await;
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &follower, cluster, BUILD, initial.clone());
@@ -274,33 +301,6 @@ async fn native_bootstrap_updates_and_selection_retry() {
     assert!(builtins.pending.contains(&builtin));
     assert!(!builtins.pending.contains(&id));
 
-    let revision = Uuid::new_v4();
-    transact(
-        &mut writer,
-        vec![Op::SetWrittenPlan {
-            id: global_id,
-            build_version: BUILD.into(),
-            expected_revision: None,
-            revision: Some(revision),
-            imports: BTreeSet::new(),
-            replica_owner: None,
-        }],
-    )
-    .await;
-    let (_, updates) = follower
-        .sync_to_current_updates()
-        .await
-        .expect("native sync");
-    assert!(!updates.is_empty());
-    absorb_updates(&mut effects, &follower, cluster, BUILD, updates);
-    effects
-        .observe_plans(&follower, cluster, replica, &store, BUILD)
-        .await
-        .expect("wait for bytes");
-    assert_eq!(effects.pending, BTreeSet::from([id]));
-    assert!(effects.selected.is_empty());
-
-    let plan = index_plan(global_id, on);
     store
         .write_plans(vec![(global_id, revision, plan.clone())])
         .await
@@ -311,7 +311,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
         .await
         .expect("retry");
     assert!(effects.pending.is_empty());
-    assert_eq!(effects.selected[&id], (global_id, revision, plan));
+    assert_eq!(effects.selected[&id], (global_id, revision, plan.clone()));
 
     let replacement = Uuid::new_v4();
     transact(
@@ -321,7 +321,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
             build_version: BUILD.into(),
             expected_revision: Some(revision),
             revision: Some(replacement),
-            imports: BTreeSet::new(),
+            imports: BTreeSet::from([on]),
             replica_owner: None,
         }],
     )
@@ -341,7 +341,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
     );
     assert_eq!(effects.pending, BTreeSet::from([id]));
     store
-        .write_plans(vec![(global_id, replacement, index_plan(global_id, on))])
+        .write_plans(vec![(global_id, replacement, plan)])
         .await
         .expect("replacement bytes");
     effects

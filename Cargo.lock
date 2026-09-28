@@ -7248,6 +7248,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-prof-http",
  "mz-prometheus-protobuf",
+ "mz-proto",
  "mz-repr",
  "mz-secrets",
  "mz-secrets-cli",
