@@ -22,9 +22,15 @@ The next end-to-end outcome is same-version native prewarming and warm
 promotion: a second deployment uses its own catalog-described replicas and
 durable read-only/output-write authority, warms while the first serves, then
 retains that execution through externally authorized promotion. Catalog
-membership must not imply output-write authority. Preserve protection and
-fencing across the transition. No borrowed deployment identity or
+membership must not imply output-write authority. Preserve read protection,
+catalog fencing and external-sink safety. No borrowed deployment identity or
 controller-to-native cold bridge.
+
+Use the existing concurrent-writer protocols for compatible Persist outputs,
+including late writes from retired deployments. Correctness must hold
+throughout, not just after convergence. No generic deployment fence on Persist
+appends or all-output fencing barrier is required. Bring a concrete unsafe
+interleaving before adding stronger fencing, not merely overlapping writers.
 
 Use that outcome to establish the deployment model, then complete
 catalog/Persist writer coexistence and handover between compatible versions.
@@ -64,8 +70,8 @@ Existing-environment conversion, pre-feature binary compatibility and arbitrary
 concurrent serving adapters remain outside M2. Independent query-client
 isolation remains M3. Add durable records only for required information that
 cannot be derived. Production test-only APIs need approval. Do not tune grace
-periods or leases, weaken read/output fencing, or invent scheduling guarantees
-to turn an unexplained failure green.
+periods or leases, weaken required safety checks, or invent scheduling
+guarantees to turn an unexplained failure green.
 
 Follow repository instructions and skills. Use regular draft-PR CI as the
 default integration loop, including mzcompose and performance workloads. Run

@@ -60,11 +60,18 @@ private durable SQL catalog per deployment. Written plans retain their
 
 Catalog participation is distinct from output-write authority. A read-only
 deployment can publish its replicas, plans and protection without gaining the
-right to write shared user data or maintained outputs. Promotion transfers
-output authority and fences the retired deployment at the catalog and output
-commit boundaries. Delayed followers must not permit both generations to write
-the same output. Restart recovers the committed authority rather than inferring
-it from process startup or connection order.
+right to write shared user data or maintained outputs. Promotion commits write
+enablement in the catalog. Restart recovers that state rather than inferring it
+from process startup or connection order.
+
+Compatible deployments may write the same Persist output concurrently, including
+late writes from a retired deployment. Persist compare-and-append and each
+collection's write protocol must preserve correctness at every readable
+timestamp, not merely converge eventually. Promotion need not wait for old
+Persist writers to stop or for every output to complete a handover.
+
+Catalog fencing, read protection and external-sink transaction/version checks
+remain required.
 
 Protection accounts for all live deployments. Promotion preserves the warmed
 deployment's requirements. Retirement or abandonment releases only that
@@ -73,10 +80,11 @@ or shared user objects.
 
 While versions coexist, shared catalog and Persist state must remain readable
 and writable by every live participant. Writers preserve each other's state and
-invariants, not merely accept each other's encodings. Incompatible records,
-builtin schema changes and migrations wait until the affected older generations
-are fenced. This is a contract for participating versions, not a requirement
-that unmodified pre-feature binaries understand the deployment model.
+invariants, including shared collection semantics, not merely accept each
+other's encodings. Incompatible records, builtin schema changes and migrations
+wait until the affected older generations are fenced. This is a contract for
+participating versions, not a requirement that unmodified pre-feature binaries
+understand the deployment model.
 
 ## Approach
 
@@ -389,7 +397,7 @@ including their existing migration behavior.
 Catalog writes validate deployment membership and the operation's authority at
 commit. Active and prewarming generations participate under their own
 identities without fencing one another by joining. Promotion revokes the
-retired generation's write authority without invalidating the warmed
+retired generation's catalog-write authority without invalidating the warmed
 generation's protection. Persist compare-and-append is the commit authority:
 metadata-only writes such as protection and heartbeats retry on contention,
 while DDL refreshes and revalidates and reports a planning conflict when
@@ -510,10 +518,11 @@ reclamation and subsequent reconstruction.
 
 Native deployment handover is also part of this milestone. Prewarm a second
 deployment on its catalog-owned replicas and show that externally authorized
-promotion retains warmed execution while transferring write authority safely.
-Compatible participating versions must coexist as catalog writers without
-premature shared-state migration. This requires active/prewarming overlap, not
-arbitrary concurrently serving adapters or a general upgrade-version matrix.
+promotion retains warmed execution and enables writes safely under the existing
+concurrent-writer protocols. Compatible participating versions must coexist as
+catalog writers without premature shared-state migration. This requires
+active/prewarming overlap, not arbitrary concurrently serving adapters or a
+general upgrade-version matrix.
 
 #### 3. Independent query clients
 
