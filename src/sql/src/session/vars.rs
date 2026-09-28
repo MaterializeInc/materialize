@@ -432,7 +432,35 @@ pub struct SessionVars {
     user: User,
 }
 
+/// A shared snapshot for detecting changes to stored session variables.
+///
+/// This excludes computed user metadata, role membership, and system variables.
+/// Those require independent validation by a planning cache.
+#[derive(Debug, Clone)]
+pub struct SessionVarsSnapshot {
+    vars: OrdMap<&'static UncasedStr, SessionVar>,
+}
+
+impl SessionVarsSnapshot {
+    /// Proves that stored variables have not changed since this snapshot.
+    ///
+    /// A false result does not imply different effective values: a SET followed
+    /// by rollback can restore values without restoring the original map root.
+    pub fn matches(&self, vars: &SessionVars) -> bool {
+        self.vars.ptr_eq(&vars.vars)
+    }
+}
+
 impl SessionVars {
+    /// Snapshots stored variables without formatting or hashing their values.
+    pub fn snapshot(&self) -> SessionVarsSnapshot {
+        // Retaining the root makes every later mutation copy-on-write, including
+        // SET LOCAL rollback and setters that bypass SessionVars::set.
+        SessionVarsSnapshot {
+            vars: self.vars.clone(),
+        }
+    }
+
     /// Creates a new [`SessionVars`] without considering the System or Role defaults.
     pub fn new_unchecked(
         build_info: &'static BuildInfo,
@@ -2679,6 +2707,62 @@ mod reset_all_tests {
 
     fn test_vars() -> SessionVars {
         SessionVars::new_unchecked(&mz_build_info::DUMMY_BUILD_INFO, SYSTEM_USER.clone(), None)
+    }
+
+    #[mz_ore::test]
+    fn variable_snapshot_tracks_mutation_and_rollback() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+        let initial = vars.snapshot();
+        assert!(initial.matches(&vars));
+        assert!(initial.matches(&vars.clone()));
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert!(
+            initial.matches(&vars),
+            "empty transactions must not invalidate"
+        );
+
+        vars.set(
+            &system_vars,
+            "search_path",
+            VarInput::Flat("pg_catalog"),
+            true,
+        )
+        .unwrap();
+        assert!(!initial.matches(&vars));
+        let local = vars.snapshot();
+        vars.end_transaction(EndTransactionAction::Rollback);
+        assert!(
+            !local.matches(&vars),
+            "rollback must invalidate SET LOCAL analysis"
+        );
+
+        let before = vars.snapshot();
+        vars.set_cluster("another_cluster".into());
+        assert!(!before.matches(&vars));
+        let before = vars.snapshot();
+        vars.set_local_transaction_isolation(IsolationLevel::Serializable);
+        assert!(!before.matches(&vars));
+        let before = vars.snapshot();
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert!(
+            !before.matches(&vars),
+            "commit must invalidate expired LOCAL values"
+        );
+
+        let before = vars.snapshot();
+        vars.set_default("search_path", VarInput::Flat("mz_catalog"))
+            .unwrap();
+        assert!(!before.matches(&vars));
+        let before = vars.snapshot();
+        vars.reset(&system_vars, "search_path", false).unwrap();
+        assert!(!before.matches(&vars));
+        let before = vars.snapshot();
+        vars.reset_all();
+        assert!(!before.matches(&vars));
+        let stable = vars.snapshot();
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert!(stable.matches(&vars));
     }
 
     // `reset_all` (used by `DISCARD ALL`) must clear a committed session
