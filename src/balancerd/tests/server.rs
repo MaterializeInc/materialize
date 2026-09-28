@@ -318,10 +318,24 @@ async fn test_balancer() {
         let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
         let server_x509 = X509::from_pem(&std::fs::read(&server_cert).unwrap()).unwrap();
         assert_eq!(resp_x509, server_x509);
-        // The default client negotiates HTTP/2 with balancerd via ALPN; the
-        // HTTP/2 stream is byte-proxied through to environmentd.
-        assert_eq!(resp.version(), reqwest::Version::HTTP_2);
+        assert_eq!(resp.version(), reqwest::Version::HTTP_11);
         assert_contains!(resp.text().await.unwrap(), "12234");
+
+        // With `balancerd_https_enable_http2_alpn` set, balancerd offers h2 to
+        // clients that ask for it. reqwest's native-tls backend does not, hence
+        // the HTTP/1.1 responses either side of this.
+        assert_eq!(
+            alpn_selected(balancer_https_listen, b"\x02h2\x08http/1.1")
+                .await
+                .as_deref(),
+            Some(&b"h2"[..])
+        );
+        assert_eq!(
+            alpn_selected(balancer_https_listen, b"\x08http/1.1")
+                .await
+                .as_deref(),
+            Some(&b"http/1.1"[..])
+        );
 
         // HTTP/1.1-only clients are still served.
         let http1_client = reqwest::Client::builder()
@@ -1103,4 +1117,28 @@ async fn test_startup_rejection_reaches_the_client() {
         "expected an ErrorResponse, got {read} bytes; a rejection that is not flushed reaches \
          the client as a bare close",
     );
+}
+
+/// Returns the protocol the TLS server at `addr` selects for a client offering
+/// `alpn`, in OpenSSL wire format (length-prefixed protocol names).
+async fn alpn_selected(addr: SocketAddr, alpn: &'static [u8]) -> Option<Vec<u8>> {
+    // The handshake is blocking, and the server shares this runtime.
+    mz_ore::task::spawn_blocking(
+        || "alpn_probe",
+        move || {
+            let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+            connector.set_verify(SslVerifyMode::NONE);
+            connector.set_alpn_protos(alpn).unwrap();
+            let stream = connector
+                .build()
+                .configure()
+                .unwrap()
+                .verify_hostname(false)
+                .use_server_name_indication(false)
+                .connect("", std::net::TcpStream::connect(addr).unwrap())
+                .unwrap();
+            stream.ssl().selected_alpn_protocol().map(<[u8]>::to_vec)
+        },
+    )
+    .await
 }
