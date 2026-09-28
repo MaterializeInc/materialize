@@ -18,9 +18,8 @@ import {
 } from "@chakra-ui/react";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { GridRows } from "@visx/grid";
-import ParentSize, {
-  ParentSizeProvidedProps,
-} from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize } from "@visx/responsive";
+import type { ParentSizeProvidedProps } from "@visx/responsive/lib/components/ParentSize";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { Line, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
