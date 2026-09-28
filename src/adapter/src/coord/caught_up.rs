@@ -60,7 +60,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
-use mz_catalog::memory::objects::Cluster;
+use mz_catalog::memory::objects::{CatalogItem, Cluster};
 use mz_compute_client::controller::CollectionReadiness;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
 use mz_controller::clusters::ClusterStatus;
@@ -125,6 +125,7 @@ pub struct CaughtUpCheckContext {
 #[derive(Debug)]
 pub struct CaughtUpCheckRequest {
     exclude_collections: Arc<BTreeSet<GlobalId>>,
+    policy_read_ts: Option<Timestamp>,
     tx: oneshot::Sender<CaughtUpSnapshot>,
 }
 
@@ -392,15 +393,26 @@ impl Coordinator {
         let gate = StabilityGate {
             client: self.background_peek_client(&self.owned_catalog()),
         };
+        let policy_oracle = self
+            .controller
+            .replica_owned_compute()
+            .then(|| self.get_local_timestamp_oracle());
 
         task::spawn(|| "caught_up_check", async move {
             let mut interval = tokio::time::interval(period);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
+                // Scheduling requires a fresh observation for each check. Await
+                // it off the coordinator loop so provisioning can keep moving.
+                let policy_read_ts = match &policy_oracle {
+                    Some(oracle) => Some(oracle.read_ts().await),
+                    None => None,
+                };
                 let (tx, rx) = oneshot::channel();
                 let request = CaughtUpCheckRequest {
                     exclude_collections: Arc::clone(&exclude_collections),
+                    policy_read_ts,
                     tx,
                 };
                 // A failed send or a dropped reply means the coordinator is
@@ -430,6 +442,7 @@ impl Coordinator {
     pub(crate) async fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
         let CaughtUpCheckRequest {
             exclude_collections,
+            policy_read_ts,
             tx,
         } = request;
 
@@ -445,7 +458,8 @@ impl Coordinator {
         // set. `mz_cluster_replica_frontiers` is a controller-managed builtin
         // written with ±1 diffs, so it satisfies that invariant.
         //
-        // NOTE: these are the leader's frontiers only because we read the leader's shard.
+        // Legacy deployments read the leader's shard. Native deployments share
+        // the shard and must filter its rows to active deployment membership below.
         // `validate_migration_steps` forbids migrating `mz_cluster_replica_frontiers` for this
         // reason, so a declared migration can't reach here. A test forcing replacement across all
         // builtins bypasses that guard, hands us a shard we write ourselves, and the lag check
@@ -457,6 +471,12 @@ impl Coordinator {
             .await
             .expect("can't read mz_cluster_replica_frontiers");
 
+        let active_replicas = self.controller.replica_owned_compute().then(|| {
+            self.catalog()
+                .state()
+                .active_replica_ids()
+                .collect::<BTreeSet<_>>()
+        });
         let live_frontiers = live_frontiers
             .into_iter()
             .map(|row| {
@@ -468,11 +488,12 @@ impl Coordinator {
                     .unwrap_str()
                     .parse()
                     .expect("cannot parse id");
-                let replica_id = iter
+                let replica_id: ReplicaId = iter
                     .next()
                     .expect("missing replica id")
                     .unwrap_str()
-                    .to_string();
+                    .parse()
+                    .expect("cannot parse replica id");
                 let maybe_upper_ts = iter.next().expect("missing upper_ts");
                 // The timestamp has a total order, so there can be at
                 // most one entry in the upper frontier, which is this
@@ -486,6 +507,11 @@ impl Coordinator {
                 };
 
                 (id, replica_id, upper_frontier)
+            })
+            .filter(|(_, replica, _)| {
+                active_replicas
+                    .as_ref()
+                    .is_none_or(|active| active.contains(replica))
             })
             .collect_vec();
 
@@ -550,6 +576,7 @@ impl Coordinator {
                 &live_collection_frontiers,
                 &exclude_collections,
                 &problematic_replicas,
+                policy_read_ts,
             )
             .await;
 
@@ -622,11 +649,13 @@ impl Coordinator {
     /// Informally, a cluster is considered caught-up if it is at least as healthy as its
     /// counterpart in the leader environment. To determine that, we use the following rules:
     ///
-    ///  (1) A cluster is caught-up if all non-transient, non-excluded collections installed on it
+    ///  (1) A cluster is caught-up if all non-transient, non-excluded collections expected on it
     ///      are either caught-up or ignored.
-    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its write frontier is within
+    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its progress frontier is within
     ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
     ///      environment.
+    ///      Native compute uses local output progress, not shared Persist write progress.
+    ///      Storage retains status-based hydration plus shared output lag, not replay lag.
     ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
     ///      Such a collection is unhealthy in the leader environment, so we don't care about its
     ///      health in the read-only environment either.
@@ -645,6 +674,7 @@ impl Coordinator {
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
+        policy_read_ts: Option<Timestamp>,
     ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
         let mut result = BTreeMap::new();
         for cluster in self.catalog().clusters() {
@@ -657,6 +687,7 @@ impl Coordinator {
                     live_frontiers,
                     exclude_collections,
                     problematic_replicas,
+                    policy_read_ts,
                 )
                 .await
                 .unwrap_or_else(|e| {
@@ -690,7 +721,13 @@ impl Coordinator {
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
+        policy_read_ts: Option<Timestamp>,
     ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
+        if self.controller.replica_owned_compute()
+            && !self.cluster_has_required_realizations(cluster.id, policy_read_ts, now)
+        {
+            return Ok(ClusterCaughtUpStatus::NotCaughtUp);
+        }
         if cluster.replicas().next().is_none() {
             return Ok(ClusterCaughtUpStatus::Ignored);
         }
@@ -704,6 +741,7 @@ impl Coordinator {
         enum CollectionType {
             Storage,
             Compute,
+            NativeCompute { hydrated: bool },
         }
 
         let mut all_caught_up = true;
@@ -726,20 +764,71 @@ impl Coordinator {
                 Ok::<_, anyhow::Error>((id, write_frontier, CollectionType::Storage))
             });
 
-        let compute_frontiers = self
-            .controller
-            .compute
-            .collection_ids(cluster.id)?
-            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
-            .map(|id| {
-                let write_frontier = self
-                    .controller
+        let compute_frontiers = if self.controller.replica_owned_compute() {
+            // Match start_readiness_checks: catalog definitions include exports
+            // not yet installed and builtin objects absent from bound_objects.
+            // Catalog introspection indexes participate through their reported
+            // output and hydration, rather than the raw replica-local log IDs.
+            itertools::Either::Left(self.catalog().entries().filter_map(|entry| {
+                if entry.item().cluster_id() != Some(cluster.id) {
+                    return None;
+                }
+                let (id, target) = match entry.item() {
+                    CatalogItem::Index(index) => (index.global_id(), None),
+                    CatalogItem::MaterializedView(mv) => {
+                        // Completed finite-refresh writers need no runtime.
+                        // A replacement cannot borrow its target's completion.
+                        let complete = mv.replacement_target.is_none()
+                            && mv
+                                .refresh_schedule
+                                .as_ref()
+                                .and_then(|s| s.last_refresh())
+                                .is_some_and(|last| {
+                                    self.controller
+                                        .storage_collections
+                                        .collection_frontiers(mv.global_id_writes())
+                                        .is_ok_and(|f| !f.write_frontier.less_equal(&last))
+                                });
+                        if complete {
+                            return None;
+                        }
+                        (mv.global_id_writes(), mv.target_replica)
+                    }
+                    CatalogItem::MetricSink(sink) => (sink.global_id, None),
+                    _ => return None,
+                };
+                if id.is_transient() || exclude_collections.contains(&id) {
+                    return None;
+                }
+                let output = self.query_client.as_ref().and_then(|client| {
+                    client.hydrated_output_frontier(self.catalog(), cluster.id, id, target)
+                });
+                let hydrated = output.is_some();
+                // Unknown observations must fail readiness, but only after the
+                // policy's live cutoff and completed-live exceptions are applied.
+                Some(Ok((
+                    id,
+                    output.unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
+                    CollectionType::NativeCompute { hydrated },
+                )))
+            }))
+        } else {
+            itertools::Either::Right(
+                self.controller
                     .compute
-                    .collection_frontiers(id, Some(cluster.id))?
-                    .write_frontier
-                    .to_owned();
-                Ok((id, write_frontier, CollectionType::Compute))
-            });
+                    .collection_ids(cluster.id)?
+                    .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+                    .map(|id| {
+                        let write_frontier = self
+                            .controller
+                            .compute
+                            .collection_frontiers(id, Some(cluster.id))?
+                            .write_frontier
+                            .to_owned();
+                        Ok((id, write_frontier, CollectionType::Compute))
+                    }),
+            )
+        };
 
         for res in itertools::chain(storage_frontiers, compute_frontiers) {
             let (id, write_frontier, collection_type) = res?;
@@ -756,6 +845,7 @@ impl Coordinator {
                     // sink reaches frontier 1 after one batch, which would otherwise look caught
                     // up mid-hydration and bring back the cut-over spike this gate prevents.
                     let collection_hydrated = match collection_type {
+                        CollectionType::NativeCompute { hydrated } => hydrated,
                         CollectionType::Compute => {
                             self.controller
                                 .compute
@@ -842,6 +932,7 @@ impl Coordinator {
             // okay because we only do these hydration checks when in read-only
             // mode, and only rarely.
             let collection_hydrated = match collection_type {
+                CollectionType::NativeCompute { hydrated } => hydrated,
                 CollectionType::Compute => {
                     self.controller
                         .compute

@@ -345,11 +345,16 @@ async fn single_replica_source_hydration_follows_lowest_member() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn read_only_prewarming_retains_legacy_execution() {
-    let (mut controller, _, _) = test_controller(false, true).await;
-    let cluster = StorageInstanceId::system(1).unwrap();
-    controller.create_instance(cluster, None);
-    assert!(controller.instances[&cluster].legacy.is_some());
+async fn read_only_prewarming_preserves_execution_ownership() {
+    for replica_owned in [false, true] {
+        let (mut controller, _, _) = test_controller(replica_owned, true).await;
+        let cluster = StorageInstanceId::system(1).unwrap();
+        controller.create_instance(cluster, None);
+        assert_eq!(
+            controller.instances[&cluster].legacy.is_none(),
+            replica_owned
+        );
+    }
 }
 
 #[mz_ore::test(tokio::test)]

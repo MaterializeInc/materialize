@@ -140,6 +140,8 @@ impl StateUpdate {
             role_auth,
             clusters,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -172,6 +174,11 @@ impl StateUpdate {
         let role_auth = from_batch(role_auth, StateUpdateKind::RoleAuth);
         let clusters = from_batch(clusters, StateUpdateKind::Cluster);
         let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
+        let cluster_replica_declarations = from_batch(
+            cluster_replica_declarations,
+            StateUpdateKind::ClusterReplicaDeclaration,
+        );
+        let cluster_runtimes = from_batch(cluster_runtimes, StateUpdateKind::ClusterRuntime);
         let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
         let introspection_sources = from_batch(
             introspection_sources,
@@ -226,6 +233,8 @@ impl StateUpdate {
             .chain(role_auth)
             .chain(clusters)
             .chain(cluster_replicas)
+            .chain(cluster_replica_declarations)
+            .chain(cluster_runtimes)
             .chain(network_policies)
             .chain(introspection_sources)
             .chain(id_allocators)
@@ -260,6 +269,11 @@ pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),
     ClusterReplica(proto::ClusterReplicaKey, proto::ClusterReplicaValue),
+    ClusterReplicaDeclaration(
+        proto::ClusterReplicaDeclarationKey,
+        proto::ClusterReplicaDeclarationValue,
+    ),
+    ClusterRuntime(proto::ClusterRuntimeKey, proto::ClusterRuntimeValue),
     Comment(proto::CommentKey, proto::CommentValue),
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
@@ -319,6 +333,10 @@ impl StateUpdateKind {
             StateUpdateKind::AuditLog(_, _) => Some(CollectionType::AuditLog),
             StateUpdateKind::Cluster(_, _) => Some(CollectionType::ComputeInstance),
             StateUpdateKind::ClusterReplica(_, _) => Some(CollectionType::ComputeReplicas),
+            StateUpdateKind::ClusterReplicaDeclaration(_, _) => {
+                Some(CollectionType::ClusterReplicaDeclaration)
+            }
+            StateUpdateKind::ClusterRuntime(_, _) => Some(CollectionType::ClusterRuntime),
             StateUpdateKind::Comment(_, _) => Some(CollectionType::Comments),
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
@@ -517,6 +535,14 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     cluster_replica,
                 ))
             }
+            StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                Some(memory::objects::StateUpdateKind::ClusterReplicaDeclaration(
+                    into_durable(key, value)?,
+                ))
+            }
+            StateUpdateKind::ClusterRuntime(key, value) => Some(
+                memory::objects::StateUpdateKind::ClusterRuntime(into_durable(key, value)?),
+            ),
             StateUpdateKind::Comment(key, value) => {
                 let comment = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Comment(comment))
@@ -708,6 +734,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::ClusterReplica(key, value) => {
                 proto::StateUpdateKind::ClusterReplica(proto::ClusterReplica { key, value })
             }
+            StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                proto::StateUpdateKind::ClusterReplicaDeclaration(
+                    proto::ClusterReplicaDeclaration { key, value },
+                )
+            }
+            StateUpdateKind::ClusterRuntime(key, value) => {
+                proto::StateUpdateKind::ClusterRuntime(proto::ClusterRuntime { key, value })
+            }
             StateUpdateKind::Comment(key, value) => {
                 proto::StateUpdateKind::Comment(proto::Comment { key, value })
             }
@@ -823,6 +857,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             proto::StateUpdateKind::ClusterReplica(proto::ClusterReplica { key, value }) => {
                 StateUpdateKind::ClusterReplica(key, value)
+            }
+            proto::StateUpdateKind::ClusterReplicaDeclaration(
+                proto::ClusterReplicaDeclaration { key, value },
+            ) => StateUpdateKind::ClusterReplicaDeclaration(key, value),
+            proto::StateUpdateKind::ClusterRuntime(proto::ClusterRuntime { key, value }) => {
+                StateUpdateKind::ClusterRuntime(key, value)
             }
             proto::StateUpdateKind::Comment(proto::Comment { key, value }) => {
                 StateUpdateKind::Comment(key, value)

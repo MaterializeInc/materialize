@@ -611,6 +611,18 @@ steps:
               "--seed=$BUILDKITE_JOB_ID"
           ]
 
+  - id: native-warm-promotion
+    topics: [0dt-migration, kafka, kafka-sink, mysql, postgres, sql-server]
+    label: Native same-version warm promotion
+    depends_on: build-x86_64
+    timeout_in_minutes: 60
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+          run: kafka-source-rehydration
+    agents:
+      queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - id: upgrade-smoke-test
     topics: [0dt-migration, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel, upgrade]
     label: "0dt Upgrade Smoke Test"

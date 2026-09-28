@@ -37,6 +37,7 @@ use mz_adapter_types::compaction::{CompactionWindow, SINCE_GRANULARITY};
 use mz_catalog::expr_cache::{GlobalExpressions, latest_item_version};
 use mz_catalog::memory::implications::{
     CatalogImplication, CatalogImplicationKind, CatalogImplications, ParsedStateUpdate,
+    ParsedStateUpdateKind,
 };
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, MetricSink, Source, Table,
@@ -56,6 +57,7 @@ use mz_ore::task;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
 use mz_sql::plan::ConnectionDetails;
+use mz_sql::session::vars::{DISABLED_METRIC_SINKS, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
@@ -94,6 +96,10 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
 
+        let reconcile_metric_sinks = catalog_updates.iter().any(|update| {
+            matches!(&update.kind, ParsedStateUpdateKind::SystemConfiguration { durable }
+                if durable.name.eq_ignore_ascii_case(DISABLED_METRIC_SINKS.name()))
+        });
         let build =
             crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
                 .to_string();
@@ -131,6 +137,9 @@ impl Coordinator {
             compaction_bounds,
         )
         .await?;
+        if reconcile_metric_sinks {
+            self.reconcile_metric_sinks().await;
+        }
         if let Some(notice_updates) = notice_updates {
             notice_updates.await;
         }
@@ -819,6 +828,10 @@ impl Coordinator {
 
             match command {
                 CatalogImplication::Cluster(CatalogImplicationKind::Added(cluster)) => {
+                    // Status membership follows committed catalog effects, including
+                    // replicas admitted by another metadata writer in this deployment.
+                    self.cluster_replica_statuses
+                        .initialize_cluster_statuses(cluster_id);
                     // The Cluster's log_indexes is empty at parse time
                     // because IntrospectionSourceIndex updates are applied
                     // after the Cluster update. Use the separately collected
@@ -900,6 +913,14 @@ impl Coordinator {
 
             match command {
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Added(replica)) => {
+                    let now = self.now_datetime();
+                    self.cluster_replica_statuses
+                        .initialize_cluster_replica_statuses(
+                            cluster_id,
+                            replica_id,
+                            replica.config.location.num_processes(),
+                            now,
+                        );
                     // Read the cluster name and role from the current catalog
                     // state. This is correct as long as implications are
                     // processed right after each catalog transaction. For a
@@ -1359,11 +1380,15 @@ impl Coordinator {
                 fail::fail_point!("after_catalog_drop_replica");
 
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
+                    self.cluster_replica_statuses
+                        .remove_cluster_replica_statuses(&cluster_id, &replica_id);
                     self.drop_replica(cluster_id, replica_id);
                 }
             }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in &clusters_to_drop {
+                    self.cluster_replica_statuses
+                        .remove_cluster_statuses(cluster_id);
                     self.controller.drop_cluster(*cluster_id);
                 }
             }
@@ -1883,11 +1908,14 @@ impl Coordinator {
         let notices = self.persist_dataflow_metainfo(dataflow_metainfos, global_id);
         physical_plan.set_as_of(as_of);
         mv.apply_execution_bounds(&mut physical_plan);
+        let target = self
+            .materialized_view_physical_target(mv.cluster_id, mv.target_replica)
+            .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)?;
         self.ship_dataflow_and_notice_builtin_table_updates(
             physical_plan,
             mv.cluster_id,
             notices,
-            mv.target_replica,
+            target,
         )
         .await;
         if mv.replacement_target.is_none() {

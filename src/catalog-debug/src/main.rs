@@ -33,6 +33,7 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Stat
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClientIncarnationCollection, ClientReadRequirementCollection,
     ClusterCollection, ClusterIntrospectionSourceIndexCollection, ClusterReplicaCollection,
+    ClusterReplicaDeclarationCollection, ClusterRuntimeCollection,
     ClusterSystemConfigurationCollection, Collection, CollectionCompactionBoundCollection,
     CollectionTrace, CollectionType, CommentCollection, ConfigCollection, DatabaseCollection,
     DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection,
@@ -335,6 +336,10 @@ macro_rules! for_collection {
                 $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?
             }
             CollectionType::ComputeReplicas => $fn::<ClusterReplicaCollection>($($arg),*).await?,
+            CollectionType::ClusterReplicaDeclaration => {
+                $fn::<ClusterReplicaDeclarationCollection>($($arg),*).await?
+            }
+            CollectionType::ClusterRuntime => $fn::<ClusterRuntimeCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
@@ -520,6 +525,8 @@ async fn dump(
         clusters,
         introspection_sources,
         cluster_replicas,
+        cluster_replica_declarations,
+        cluster_runtimes,
         comments,
         configs,
         databases,
@@ -570,6 +577,20 @@ async fn dump(
         consolidate,
     );
     dump_col(&mut data, comments, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        cluster_replica_declarations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        cluster_runtimes,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(&mut data, configs, &ignore, stats_only, consolidate);
     dump_col(&mut data, databases, &ignore, stats_only, consolidate);
     dump_col(

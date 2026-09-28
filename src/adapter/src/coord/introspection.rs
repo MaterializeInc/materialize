@@ -203,7 +203,7 @@ impl Coordinator {
             &self.catalog,
             dependencies,
             Some(cluster_id),
-            Some(replica_id),
+            Some(mz_sql::catalog::ReplicaTarget::Physical(replica_id)),
             role_metadata,
         );
 

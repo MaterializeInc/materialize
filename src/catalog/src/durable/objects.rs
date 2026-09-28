@@ -502,6 +502,94 @@ impl DurableType for IntrospectionSourceIndex {
     }
 }
 
+/// Shared explicit replica intent, independent of deployment-local realizations.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClusterReplicaDeclaration {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub name: String,
+    pub config: ReplicaConfig,
+    pub owner_id: RoleId,
+}
+
+impl DurableType for ClusterReplicaDeclaration {
+    type Key = ClusterReplicaDeclarationKey;
+    type Value = ClusterReplicaDeclarationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClusterReplicaDeclarationKey {
+                id: self.replica_id,
+            },
+            ClusterReplicaDeclarationValue {
+                cluster_id: self.cluster_id,
+                name: self.name,
+                config: self.config,
+                owner_id: self.owner_id,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            cluster_id: value.cluster_id,
+            replica_id: key.id,
+            name: value.name,
+            config: value.config,
+            owner_id: value.owner_id,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterReplicaDeclarationKey {
+            id: self.replica_id,
+        }
+    }
+}
+
+/// Deployment-local realized baseline and controller continuation state.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClusterRuntime {
+    pub cluster_id: ClusterId,
+    pub deployment_generation: u64,
+    pub realized_config: ReconfigurationTarget,
+    pub reconfiguration: Option<ReconfigurationState>,
+    pub burst: Option<BurstState>,
+}
+
+impl DurableType for ClusterRuntime {
+    type Key = ClusterRuntimeKey;
+    type Value = ClusterRuntimeValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            self.key(),
+            ClusterRuntimeValue {
+                realized_config: self.realized_config,
+                reconfiguration: self.reconfiguration,
+                burst: self.burst,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            cluster_id: key.cluster_id,
+            deployment_generation: key.deployment_generation,
+            realized_config: value.realized_config,
+            reconfiguration: value.reconfiguration,
+            burst: value.burst,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterRuntimeKey {
+            cluster_id: self.cluster_id,
+            deployment_generation: self.deployment_generation,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
@@ -509,6 +597,10 @@ pub struct ClusterReplica {
     pub name: String,
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
+    /// Immutable deployment ownership of this physical replica.
+    pub deployment_generation: u64,
+    /// Shared explicit intent, absent for controller-created managed replicas.
+    pub declaration_id: Option<ReplicaId>,
 }
 
 impl DurableType for ClusterReplica {
@@ -525,6 +617,8 @@ impl DurableType for ClusterReplica {
                 name: self.name,
                 config: self.config,
                 owner_id: self.owner_id,
+                deployment_generation: self.deployment_generation,
+                declaration_id: self.declaration_id,
             },
         )
     }
@@ -536,6 +630,8 @@ impl DurableType for ClusterReplica {
             name: value.name,
             config: value.config,
             owner_id: value.owner_id,
+            deployment_generation: value.deployment_generation,
+            declaration_id: value.declaration_id,
         }
     }
 
@@ -1631,6 +1727,9 @@ pub struct Snapshot {
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
     pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+    pub cluster_replica_declarations:
+        BTreeMap<proto::ClusterReplicaDeclarationKey, proto::ClusterReplicaDeclarationValue>,
+    pub cluster_runtimes: BTreeMap<proto::ClusterRuntimeKey, proto::ClusterRuntimeValue>,
     pub introspection_sources: BTreeMap<
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
@@ -1756,6 +1855,32 @@ pub struct ClusterIntrospectionSourceIndexValue {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct ClusterReplicaDeclarationKey {
+    pub(crate) id: ReplicaId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterReplicaDeclarationValue {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) name: String,
+    pub(crate) config: ReplicaConfig,
+    pub(crate) owner_id: RoleId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct ClusterRuntimeKey {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) deployment_generation: u64,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterRuntimeValue {
+    pub(crate) realized_config: ReconfigurationTarget,
+    pub(crate) reconfiguration: Option<ReconfigurationState>,
+    pub(crate) burst: Option<BurstState>,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
     pub(crate) id: ReplicaId,
 }
@@ -1766,6 +1891,8 @@ pub struct ClusterReplicaValue {
     pub(crate) name: String,
     pub(crate) config: ReplicaConfig,
     pub(crate) owner_id: RoleId,
+    pub(crate) deployment_generation: u64,
+    pub(crate) declaration_id: Option<ReplicaId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]

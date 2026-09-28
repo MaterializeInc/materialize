@@ -31,12 +31,18 @@ completion gate is required. Escalate concrete protocol safety gaps, not
 overlapping writes that preserve correctness throughout.
 
 The deployment implementation separates a handle's own generation from the
-active generation it observes in the existing durable fence. Membership derives
-from deployment-scoped replicas, without another durable registry. Restricted
-metadata joins admit protection and ordinary build-owned selections without
-promotion. Complete deployment-owned lifecycle permissions and replica/runtime
-scoping before wiring production prewarming. Scoping includes managed realized
-state, routing, visibility and retirement, not only replica names.
+active generation in the durable fence. The working tree now includes scoped
+replicas and managed runtime, shared explicit declarations, private realization
+and retirement, and native prewarming startup. Membership does not grant output
+authority. Preserve declaration-backed pins and comments through promotion and
+managed/unmanaged conversion, including peers without a local realization.
+
+Continue through native warm-promotion runtime integration next. Readiness uses
+local hydration and output progress, with active-deployment reference frontiers,
+rather than compute-controller inventory or shared Persist progress. The
+replica-set owner's policy distinguishes missing capacity from intentional zero,
+including managed ON REFRESH. Keep that boundary and the existing stability,
+cutoff and external-authorization semantics.
 
 Keep shared replica declarations distinct from deployment realization. Explicit
 replica rows on unmanaged clusters are their declaration today. Copying an

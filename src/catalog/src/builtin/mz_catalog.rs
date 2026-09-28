@@ -2706,6 +2706,8 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
         // The `kind = 'ClusterReplica'` filter is pushed into a subquery on
         // `mz_catalog_raw` by hand. database-issues/8495 keeps the optimizer
         // from pushing a top-level `WHERE` below the LEFT JOIN.
+        // Public membership follows the durable active generation, independently
+        // of the deployment evaluating this shared materialized relation.
         sql: "
 IN CLUSTER mz_catalog_server
 WITH (
@@ -2734,7 +2736,14 @@ SELECT
             AND COALESCE(internal.disk_bytes, 0) != 0
     END AS disk
 FROM (
-    SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
+    SELECT replicas.data
+    FROM (
+        SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
+    ) replicas
+    JOIN (
+        SELECT (data->>'deploy_generation')::uint8 AS generation
+        FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken'
+    ) active ON COALESCE((replicas.data->'value'->>'deployment_generation')::uint8, 0) = active.generation
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
     ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'",

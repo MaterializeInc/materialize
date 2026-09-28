@@ -965,6 +965,12 @@ impl PersistCatalogState {
                     StateUpdateKind::ClusterReplica(key, value) => {
                         apply(&mut snapshot.cluster_replicas, key, value, diff);
                     }
+                    StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                        apply(&mut snapshot.cluster_replica_declarations, key, value, diff);
+                    }
+                    StateUpdateKind::ClusterRuntime(key, value) => {
+                        apply(&mut snapshot.cluster_runtimes, key, value, diff);
+                    }
                     StateUpdateKind::Comment(key, value) => {
                         apply(&mut snapshot.comments, key, value, diff);
                     }
@@ -1167,6 +1173,7 @@ pub(crate) type UnopenedPersistCatalogState =
 #[derive(Clone, Copy, Debug)]
 enum OpenPurpose<'a> {
     Bootstrap(&'a BootstrapArgs),
+    Promotion(&'a BootstrapArgs),
     Join,
     Prewarm(&'a str),
 }
@@ -1337,7 +1344,7 @@ impl UnopenedPersistCatalogState {
         purpose: OpenPurpose<'_>,
     ) -> Result<Box<PersistCatalogState>, CatalogError> {
         let bootstrap_args = match purpose {
-            OpenPurpose::Bootstrap(args) => Some(args),
+            OpenPurpose::Bootstrap(args) | OpenPurpose::Promotion(args) => Some(args),
             OpenPurpose::Join | OpenPurpose::Prewarm(_) => None,
         };
         let join = bootstrap_args.is_none();
@@ -1435,6 +1442,16 @@ impl UnopenedPersistCatalogState {
                 .token()
                 .expect("admitted token")
                 .deploy_generation;
+            if protection_enabled
+                && durable_generation.is_some_and(|generation| generation < admitted_generation)
+                && matches!(purpose, OpenPurpose::Promotion(_) | OpenPurpose::Prewarm(_))
+            {
+                // Revalidate on every CAS attempt. A serving writer can add a
+                // targeted MV after prewarming starts or promotion is authorized.
+                super::promotion::validate_native_promotion(
+                    self.snapshot.iter().map(|(kind, _, _)| kind),
+                )?;
+            }
             if join
                 && prewarming_plan_build.is_none()
                 && durable_generation != Some(admitted_generation)
@@ -1798,6 +1815,22 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .await?)
     }
 
+    #[mz_ore::instrument]
+    async fn open_for_promotion(
+        self: Box<Self>,
+        initial_ts: Timestamp,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                initial_ts,
+                OpenPurpose::Promotion(bootstrap_args),
+            )
+            .boxed()
+            .await?)
+    }
+
     async fn join(mut self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         Ok(self
             .open_inner(Mode::Writable, Timestamp::minimum(), OpenPurpose::Join)
@@ -1850,6 +1883,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .token()
             .map(|token| token.deploy_generation)
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn catalog_read_protection_enabled(&mut self) -> Result<bool, CatalogError> {
+        Ok(self
+            .get_current_config(READ_PROTECTION_CONFIG)
+            .await?
+            .is_some_and(|value| value != 0))
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -2629,6 +2670,13 @@ impl Trace {
                 StateUpdateKind::Cluster(k, v) => trace.clusters.values.push(((k, v), ts, diff)),
                 StateUpdateKind::ClusterReplica(k, v) => {
                     trace.cluster_replicas.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::ClusterReplicaDeclaration(k, v) => trace
+                    .cluster_replica_declarations
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::ClusterRuntime(k, v) => {
+                    trace.cluster_runtimes.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),

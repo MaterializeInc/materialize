@@ -125,6 +125,15 @@ pub struct CatalogState {
     pub(super) clusters_by_name: imbl::OrdMap<String, ClusterId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) clusters_by_id: imbl::OrdMap<ClusterId, Cluster>,
+    /// Unfiltered durable membership for cross-deployment ownership admission.
+    /// Cluster replica routing maps contain only this deployment's realizations.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) replica_membership: imbl::OrdMap<ReplicaId, (ClusterId, u64)>,
+    #[serde(serialize_with = "serialize_replica_declarations")]
+    pub(super) cluster_replica_declarations:
+        imbl::OrdMap<ReplicaId, crate::durable::ClusterReplicaDeclaration>,
+    #[serde(serialize_with = "serialize_cluster_runtimes")]
+    pub(super) cluster_runtimes: imbl::OrdMap<(ClusterId, u64), crate::durable::ClusterRuntime>,
     pub(super) roles_by_name: imbl::OrdMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: imbl::OrdMap<RoleId, Role>,
@@ -171,6 +180,9 @@ pub struct CatalogState {
     pub(super) written_plan_importers: imbl::OrdSet<(GlobalId, GlobalId, String)>,
     pub(super) client_incarnations:
         imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue>,
+    /// The deployment whose internal inventory this catalog projects.
+    #[serde(skip)]
+    pub(super) deployment_generation: u64,
     /// Output-write authority from the committed catalog fence, not local membership.
     pub(super) active_deployment_generation: Option<u64>,
     #[serde(serialize_with = "serialize_client_read_requirements")]
@@ -478,6 +490,9 @@ impl CatalogState {
             ambient_schemas_by_id: Default::default(),
             temporary_namespaces: Default::default(),
             clusters_by_id: Default::default(),
+            replica_membership: Default::default(),
+            cluster_replica_declarations: Default::default(),
+            cluster_runtimes: Default::default(),
             clusters_by_name: Default::default(),
             network_policies_by_name: Default::default(),
             roles_by_name: Default::default(),
@@ -516,6 +531,7 @@ impl CatalogState {
             written_plans: Default::default(),
             written_plan_importers: Default::default(),
             client_incarnations: Default::default(),
+            deployment_generation: 0,
             active_deployment_generation: None,
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
@@ -786,7 +802,8 @@ impl CatalogState {
             let cluster = self.get_cluster(cluster_id);
             for item_id in cluster.bound_objects() {
                 if let CatalogItem::MaterializedView(mv) = self.get_entry(item_id).item()
-                    && mv.target_replica == Some(replica_id)
+                    && mv.target_replica.is_some()
+                    && self.replica_matches_target(cluster_id, replica_id, mv.target_replica)
                 {
                     dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
                 }
@@ -794,6 +811,155 @@ impl CatalogState {
             dependents.push(object_id);
         }
         dependents
+    }
+
+    /// Resolves an MV pin against shared intent, without requiring installation.
+    pub fn resolve_materialized_view_replica(
+        &self,
+        cluster_id: ClusterId,
+        name: &str,
+    ) -> Result<mz_sql::catalog::ReplicaTarget, SqlCatalogError> {
+        use mz_sql::catalog::ReplicaTarget;
+        let cluster = self.get_cluster(cluster_id);
+        if cluster.is_managed() {
+            cluster.replica_id(name).map(ReplicaTarget::Physical)
+        } else {
+            self.cluster_replica_declarations
+                .values()
+                .find(|declaration| {
+                    declaration.cluster_id == cluster_id && declaration.name == name
+                })
+                .map(|declaration| ReplicaTarget::Declaration(declaration.replica_id))
+        }
+        .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(name.to_string()))
+    }
+
+    /// Rejects a staged MV whose stored target name no longer denotes its planned
+    /// identity. A concurrent rename can leave the identity live while making the
+    /// SQL invalid, or binding it to a different declaration that reused the name.
+    pub(super) fn validate_materialized_view_target(
+        &self,
+        mv: &MaterializedView,
+    ) -> Result<(), crate::catalog::CatalogError> {
+        let Some(expected) = mv.target_replica else {
+            return Ok(());
+        };
+        let statement = mz_sql::parse::parse(&mv.create_sql)
+            .expect("valid planned materialized view SQL")
+            .into_element()
+            .ast;
+        let mz_sql_parser::ast::Statement::CreateMaterializedView(definition) = statement else {
+            unreachable!("MV definition is CREATE MATERIALIZED VIEW");
+        };
+        let actual = definition.in_cluster_replica.as_ref().and_then(|name| {
+            self.try_get_cluster(mv.cluster_id)?;
+            self.resolve_materialized_view_replica(mv.cluster_id, name.as_str())
+                .ok()
+        });
+        if actual != Some(expected) {
+            return Err(crate::catalog::CatalogError::DDLTransactionRace);
+        }
+        Ok(())
+    }
+
+    /// This catalog's immutable deployment identity, independent of promotion.
+    pub fn deployment_generation(&self) -> u64 {
+        self.deployment_generation
+    }
+
+    /// Shared membership of the active deployment, independent of local routing.
+    pub fn active_replica_ids(&self) -> impl Iterator<Item = ReplicaId> {
+        let active = self.active_deployment_generation();
+        self.replica_membership
+            .iter()
+            .filter_map(move |(id, (_, generation))| (Some(*generation) == active).then_some(*id))
+    }
+
+    /// The oldest unreclaimed replica incarnation in the shared cluster roster.
+    /// A deployment transition alone does not retire another producer's membership.
+    pub fn oldest_replica_incarnation(&self, cluster_id: ClusterId) -> Option<u64> {
+        self.client_incarnations
+            .iter()
+            .filter(|(_, client)| {
+                client.replica_id.is_some_and(|id| {
+                    self.replica_membership
+                        .get(&id)
+                        .is_some_and(|(cluster, _)| *cluster == cluster_id)
+                })
+            })
+            .map(|(id, _)| *id)
+            .min()
+    }
+
+    /// The managed realization owned by this deployment, if initialized.
+    pub fn cluster_runtime(
+        &self,
+        cluster_id: ClusterId,
+    ) -> Option<&crate::durable::ClusterRuntime> {
+        self.cluster_runtimes
+            .get(&(cluster_id, self.deployment_generation))
+    }
+
+    /// Shared explicit replica intent, independent of this deployment's inventory.
+    pub fn replica_declarations(
+        &self,
+    ) -> impl Iterator<Item = &crate::durable::ClusterReplicaDeclaration> {
+        self.cluster_replica_declarations.values()
+    }
+
+    /// Tests whether a target's catalog identity still exists in the given cluster.
+    /// Declaration validity does not depend on a physical realization.
+    pub fn replica_target_exists(
+        &self,
+        cluster_id: ClusterId,
+        target: mz_sql::catalog::ReplicaTarget,
+    ) -> bool {
+        use mz_sql::catalog::ReplicaTarget;
+        match target {
+            ReplicaTarget::Declaration(id) => self
+                .cluster_replica_declarations
+                .get(&id)
+                .is_some_and(|declaration| declaration.cluster_id == cluster_id),
+            ReplicaTarget::Physical(id) => self
+                .clusters_by_id
+                .get(&cluster_id)
+                .is_some_and(|cluster| cluster.replica(id).is_some()),
+        }
+    }
+
+    /// Tests a concrete local replica against an optional maintained-object pin.
+    /// An unrealized declaration matches no replica, rather than all replicas.
+    pub fn replica_matches_target(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        target: Option<mz_sql::catalog::ReplicaTarget>,
+    ) -> bool {
+        use mz_sql::catalog::ReplicaTarget;
+        self.clusters_by_id
+            .get(&cluster_id)
+            .and_then(|cluster| cluster.replica(replica_id))
+            .is_some_and(|replica| match target {
+                None => true,
+                Some(ReplicaTarget::Physical(id)) => replica.replica_id == id,
+                Some(ReplicaTarget::Declaration(id)) => replica.declaration_id == Some(id),
+            })
+    }
+
+    /// Returns a physical realization of an explicit target in this deployment.
+    /// `None` means unavailable, not untargeted.
+    pub fn physical_replica_for_target(
+        &self,
+        cluster_id: ClusterId,
+        target: mz_sql::catalog::ReplicaTarget,
+    ) -> Option<ReplicaId> {
+        self.clusters_by_id
+            .get(&cluster_id)?
+            .replicas()
+            .find(|replica| {
+                self.replica_matches_target(cluster_id, replica.replica_id, Some(target))
+            })
+            .map(|replica| replica.replica_id)
     }
 
     /// Returns all the IDs of all objects that depend on `database_id`, including `database_id`
@@ -2565,11 +2731,26 @@ impl CatalogState {
             ObjectId::Schema((database, schema)) => CommentObjectId::Schema((database, schema)),
             ObjectId::Cluster(cluster_id) => CommentObjectId::Cluster(cluster_id),
             ObjectId::ClusterReplica(cluster_replica_id) => {
-                CommentObjectId::ClusterReplica(cluster_replica_id)
+                self.canonical_comment_id(CommentObjectId::ClusterReplica(cluster_replica_id))
             }
             ObjectId::NetworkPolicy(network_policy_id) => {
                 CommentObjectId::NetworkPolicy(network_policy_id)
             }
+        }
+    }
+
+    /// Resolve a SQL-visible physical replica to its durable comment identity.
+    /// Explicit replicas share comments across deployment realizations.
+    pub(super) fn canonical_comment_id(&self, object_id: CommentObjectId) -> CommentObjectId {
+        match object_id {
+            CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                let declaration_id = self
+                    .get_cluster(cluster_id)
+                    .replica(replica_id)
+                    .and_then(|replica| replica.declaration_id);
+                CommentObjectId::ClusterReplica((cluster_id, declaration_id.unwrap_or(replica_id)))
+            }
+            _ => object_id,
         }
     }
 
@@ -3208,6 +3389,36 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
     serializer.collect_map(entries)
 }
 
+fn serialize_replica_declarations<S: serde::Serializer>(
+    declarations: &imbl::OrdMap<ReplicaId, crate::durable::ClusterReplicaDeclaration>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use crate::durable::objects::DurableType;
+    use mz_proto::RustType;
+    serializer.collect_seq(declarations.values().map(|record| {
+        let (key, value) = record.clone().into_key_value();
+        mz_catalog_protos::objects::ClusterReplicaDeclaration {
+            key: key.into_proto(),
+            value: value.into_proto(),
+        }
+    }))
+}
+
+fn serialize_cluster_runtimes<S: serde::Serializer>(
+    runtimes: &imbl::OrdMap<(ClusterId, u64), crate::durable::ClusterRuntime>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use crate::durable::objects::DurableType;
+    use mz_proto::RustType;
+    serializer.collect_seq(runtimes.values().map(|record| {
+        let (key, value) = record.clone().into_key_value();
+        mz_catalog_protos::objects::ClusterRuntime {
+            key: key.into_proto(),
+            value: value.into_proto(),
+        }
+    }))
+}
+
 fn serialize_written_plans<S: serde::Serializer>(
     plans: &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
     serializer: S,
@@ -3237,6 +3448,215 @@ fn serialize_client_read_requirements<S: serde::Serializer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn replica_inventory_is_deployment_local_across_promotion() {
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        let cluster_id = ClusterId::User(1);
+        let owner_id = RoleId::System(1);
+        let cluster = crate::durable::Cluster {
+            id: cluster_id,
+            name: "c".into(),
+            owner_id,
+            privileges: Vec::new(),
+            config: crate::durable::ClusterConfig {
+                variant: crate::durable::ClusterVariant::Unmanaged,
+                workload_class: None,
+            },
+        };
+        let replica = |generation| crate::durable::ClusterReplica {
+            cluster_id,
+            replica_id: ReplicaId::User(generation),
+            name: "r1".into(),
+            owner_id,
+            config: crate::durable::ReplicaConfig {
+                location: crate::durable::ReplicaLocation::Unmanaged {
+                    storagectl_addrs: Vec::new(),
+                    computectl_addrs: Vec::new(),
+                },
+                logging: mz_controller_types::clusters::ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+            },
+            deployment_generation: generation,
+            declaration_id: Some(ReplicaId::User(1)),
+        };
+        let update = |kind, diff, ts| StateUpdate {
+            kind,
+            diff,
+            ts: Timestamp::new(ts),
+        };
+        let mut state = CatalogState::empty_test();
+        state.deployment_generation = 8;
+        let _ = state
+            .apply_updates(
+                vec![
+                    update(StateUpdateKind::Cluster(cluster), StateDiff::Addition, 0),
+                    update(
+                        StateUpdateKind::ClusterReplicaDeclaration(
+                            crate::durable::ClusterReplicaDeclaration {
+                                cluster_id,
+                                replica_id: ReplicaId::User(1),
+                                name: "r1".into(),
+                                config: replica(8).config,
+                                owner_id,
+                            },
+                        ),
+                        StateDiff::Addition,
+                        0,
+                    ),
+                ],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        let target = state
+            .resolve_materialized_view_replica(cluster_id, "r1")
+            .expect("declaration resolves before physical realization");
+        assert_eq!(
+            target,
+            mz_sql::catalog::ReplicaTarget::Declaration(ReplicaId::User(1))
+        );
+        assert!(state.replica_target_exists(cluster_id, target));
+        assert_eq!(state.physical_replica_for_target(cluster_id, target), None);
+        assert_eq!(state.get_cluster(cluster_id).replica_id("r1"), None);
+        assert!(!state.replica_matches_target(cluster_id, ReplicaId::User(8), Some(target)));
+        let (_, implications) = state
+            .apply_updates(
+                vec![
+                    update(
+                        StateUpdateKind::ActiveDeploymentGeneration(7),
+                        StateDiff::Addition,
+                        1,
+                    ),
+                    update(
+                        StateUpdateKind::ClusterReplica(replica(7)),
+                        StateDiff::Addition,
+                        1,
+                    ),
+                    update(
+                        StateUpdateKind::ClusterReplica(replica(8)),
+                        StateDiff::Addition,
+                        1,
+                    ),
+                    update(
+                        StateUpdateKind::ClientIncarnation(crate::durable::ClientIncarnation {
+                            id: 70,
+                            heartbeat: 1,
+                            deployment_generation: 7,
+                            replica_id: Some(ReplicaId::User(7)),
+                        }),
+                        StateDiff::Addition,
+                        1,
+                    ),
+                    update(
+                        StateUpdateKind::ClientIncarnation(crate::durable::ClientIncarnation {
+                            id: 80,
+                            heartbeat: 1,
+                            deployment_generation: 8,
+                            replica_id: Some(ReplicaId::User(8)),
+                        }),
+                        StateDiff::Addition,
+                        1,
+                    ),
+                ],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        let physical_updates: Vec<_> = implications
+            .iter()
+            .filter_map(|update| match &update.kind {
+                crate::memory::implications::ParsedStateUpdateKind::ClusterReplica {
+                    durable_cluster_replica,
+                    ..
+                } => Some(durable_cluster_replica.replica_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(physical_updates, [ReplicaId::User(8)]);
+        assert_eq!(
+            state.physical_replica_for_target(cluster_id, target),
+            Some(ReplicaId::User(8))
+        );
+        assert!(state.replica_matches_target(cluster_id, ReplicaId::User(8), Some(target)));
+        assert!(!state.replica_matches_target(cluster_id, ReplicaId::User(7), Some(target)));
+        assert!(!state.replica_matches_target(
+            cluster_id,
+            ReplicaId::User(8),
+            Some(mz_sql::catalog::ReplicaTarget::Physical(ReplicaId::User(1)))
+        ));
+        assert_eq!(
+            state
+                .get_cluster(cluster_id)
+                .replicas()
+                .map(|r| r.replica_id)
+                .collect::<Vec<_>>(),
+            [ReplicaId::User(8)]
+        );
+        assert_eq!(state.active_deployment_generation(), Some(7));
+        assert_eq!(
+            state.active_replica_ids().collect::<Vec<_>>(),
+            [ReplicaId::User(7)]
+        );
+        assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(70));
+
+        let (_, implications) = state
+            .apply_updates(
+                vec![
+                    update(
+                        StateUpdateKind::ActiveDeploymentGeneration(7),
+                        StateDiff::Retraction,
+                        2,
+                    ),
+                    update(
+                        StateUpdateKind::ActiveDeploymentGeneration(8),
+                        StateDiff::Addition,
+                        2,
+                    ),
+                ],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        assert!(
+            implications.is_empty(),
+            "promotion and foreign retirement must not replace warmed execution"
+        );
+        assert_eq!(
+            state
+                .get_cluster(cluster_id)
+                .replicas()
+                .map(|r| r.replica_id)
+                .collect::<Vec<_>>(),
+            [ReplicaId::User(8)]
+        );
+        assert_eq!(state.active_deployment_generation(), Some(8));
+        assert_eq!(
+            state.active_replica_ids().collect::<Vec<_>>(),
+            [ReplicaId::User(8)]
+        );
+        // Promotion changes output authority, not shared producer membership.
+        assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(70));
+        let (_, implications) = state
+            .apply_updates(
+                vec![update(
+                    StateUpdateKind::ClusterReplica(replica(7)),
+                    StateDiff::Retraction,
+                    3,
+                )],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        assert!(implications.is_empty());
+        assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(80));
+        assert_eq!(
+            state
+                .resolve_materialized_view_replica(cluster_id, "r1")
+                .expect("pin survives promotion"),
+            target
+        );
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn committed_updates_apply_in_timestamp_order() {

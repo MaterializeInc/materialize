@@ -245,7 +245,7 @@ impl Coordinator {
             &catalog,
             dependencies,
             Some(cluster_id),
-            replica_id,
+            replica_id.map(mz_sql::catalog::ReplicaTarget::Physical),
             session.role_metadata().clone(),
         );
 

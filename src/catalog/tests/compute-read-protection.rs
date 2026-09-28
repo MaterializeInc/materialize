@@ -120,9 +120,118 @@ fn cluster_id() -> ClusterId {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn warm_promotion_rejects_managed_replica_pins_before_fencing() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_deploy_generation(7);
+    let bootstrap = test_bootstrap_args();
+    let mut active = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    active.sync_to_current_updates().await.unwrap();
+    let mut tx = active.transaction().await.unwrap();
+    tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    let mut cluster = tx
+        .get_clusters()
+        .find(|cluster| {
+            matches!(cluster.config.variant, ClusterVariant::Managed(_))
+                && tx
+                    .get_cluster_replicas()
+                    .any(|replica| replica.cluster_id == cluster.id && replica.name == "r1")
+        })
+        .expect("bootstrap has a managed cluster with replica r1");
+    commit(tx).await;
+
+    let next = builder.clone().with_deploy_generation(8);
+    let pending = next
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap();
+    // Capture a promotion handle before the serving writer adds the unsupported
+    // definition. Admission must refresh it, not rely on the prewarming snapshot.
+    let promotion = next.clone().unwrap_build().await;
+    let mut tx = active.transaction().await.unwrap();
+    tx.insert_item(
+        CatalogItemId::User(1000), 20000, GlobalId::User(1000), SchemaId::User(1),
+        "pinned", format!(
+            "CREATE MATERIALIZED VIEW materialize.public.pinned IN CLUSTER [{}] REPLICA r1 AS SELECT 1",
+            cluster.id
+        ), RoleId::User(1), Vec::new(), BTreeMap::new(), None,
+    ).unwrap();
+    commit(tx).await;
+    let before = active.snapshot().await.unwrap();
+    let error = promotion
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("replica-targeted materialized view"),
+        "{error}"
+    );
+    active.sync_to_current_updates().await.unwrap();
+    assert_eq!(active.snapshot().await.unwrap(), before);
+
+    let error = next
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("replica-targeted materialized view"),
+        "{error}"
+    );
+
+    // Same-generation recovery must preserve the single-deployment feature.
+    let restart = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    restart.expire().await;
+
+    // The rejected takeover leaves the serving writer usable. A pin backed by
+    // an explicit unmanaged declaration does not impose the managed exclusion.
+    active.sync_to_current_updates().await.unwrap();
+    let mut tx = active.transaction().await.unwrap();
+    cluster.config.variant = ClusterVariant::Unmanaged;
+    tx.update_cluster(cluster.id, cluster).unwrap();
+    commit(tx).await;
+    let promoted = next
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    assert!(active.sync_to_current_updates().await.is_err());
+    pending.expire().await;
+    promoted.expire().await;
+    active.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn prewarming_metadata_authority_survives_restart_and_promotion() {
+    use mz_catalog::durable::objects::{
+        ClusterReplicaDeclaration, ClusterRuntime, ReconfigurationTarget, ReplicaPlanOwner,
+    };
     use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
     use mz_catalog_protos::objects::ClientIncarnationKey;
+    use mz_controller_types::ReplicaId;
 
     let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
         .with_deploy_generation(7);
@@ -150,7 +259,43 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     let active_client = tx.create_client_incarnation(None).unwrap();
     tx.publish_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
+    let active_replica = tx
+        .get_cluster_replicas()
+        .find(|replica| replica.name == "r1")
+        .expect("bootstrap has replica r1");
+    assert_eq!(active_replica.deployment_generation, 7);
+    let cluster = tx
+        .get_clusters()
+        .find(|cluster| cluster.id == active_replica.cluster_id)
+        .unwrap();
+    let ClusterVariant::Managed(config) = &cluster.config.variant else {
+        panic!("bootstrap replica belongs to a managed cluster");
+    };
+    let active_runtime = ClusterRuntime {
+        cluster_id: cluster.id,
+        deployment_generation: 7,
+        realized_config: ReconfigurationTarget {
+            size: config.size.clone(),
+            replication_factor: config.replication_factor,
+            availability_zones: config.availability_zones.clone(),
+            logging: config.logging.clone(),
+            arrangement_compression: config.arrangement_compression,
+        },
+        reconfiguration: None,
+        burst: None,
+    };
+    tx.set_cluster_runtime(active_runtime.clone()).unwrap();
+    let declaration = ClusterReplicaDeclaration {
+        cluster_id: cluster.id,
+        replica_id: ReplicaId::User(1000),
+        name: "explicit_replica".into(),
+        config: active_replica.config.clone(),
+        owner_id: active_replica.owner_id,
+    };
+    tx.set_cluster_replica_declaration(declaration.clone())
+        .unwrap();
     commit(tx).await;
+    let active_lifecycle = active.snapshot().await.unwrap();
 
     let pending_builder = builder.clone().with_deploy_generation(8);
     assert!(
@@ -189,7 +334,155 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         BTreeSet::from([input]),
     )
     .unwrap();
+    let own_replica_id = ReplicaId::User(1001);
+    tx.insert_cluster_replica_with_id(
+        cluster.id,
+        own_replica_id,
+        &active_replica.name,
+        active_replica.config.clone(),
+        active_replica.owner_id,
+        None,
+    )
+    .unwrap();
+    let mut own_runtime = active_runtime.clone();
+    own_runtime.deployment_generation = 8;
+    tx.set_cluster_runtime(own_runtime.clone()).unwrap();
+    tx.upsert_replica_system_config(
+        own_replica_id,
+        "enable_arrangement_size_logging",
+        "true".into(),
+    )
+    .unwrap();
+    let own_plan = GlobalId::User(1002);
+    tx.set_written_plan_with_owner(
+        own_plan,
+        build,
+        Some(uuid::Uuid::new_v4()),
+        Some(ReplicaPlanOwner {
+            replica_id: own_replica_id,
+            name: "replica_local_index".into(),
+        }),
+        BTreeSet::new(),
+    )
+    .unwrap();
     commit(tx).await;
+
+    let mut tx = pending.transaction().await.unwrap();
+    let mut own_replica = tx
+        .get_cluster_replicas()
+        .find(|replica| replica.replica_id == own_replica_id)
+        .unwrap();
+    assert_eq!(own_replica.name, active_replica.name);
+    assert_eq!(own_replica.cluster_id, active_replica.cluster_id);
+    assert_ne!(own_replica.replica_id, active_replica.replica_id);
+    assert_eq!(own_replica.deployment_generation, 8);
+    own_replica.config.arrangement_compression = !own_replica.config.arrangement_compression;
+    tx.update_cluster_replica(own_replica_id, own_replica.clone())
+        .unwrap();
+    own_runtime.realized_config.arrangement_compression =
+        !own_runtime.realized_config.arrangement_compression;
+    tx.set_cluster_runtime(own_runtime.clone()).unwrap();
+    commit(tx).await;
+
+    // Each denied write is paired with a real, permitted lifecycle change. The
+    // durable snapshot must remain unchanged, including that own-generation row.
+    for forbidden in [
+        "foreign physical deletion",
+        "foreign physical update",
+        "foreign physical adoption",
+        "own physical transfer",
+        "foreign runtime update",
+        "shared declaration mutation",
+        "shared cluster mutation",
+        "foreign replica configuration",
+        "foreign replica plan",
+    ] {
+        let before = pending.snapshot().await.unwrap();
+        let mut tx = pending.transaction().await.unwrap();
+        let mut changed = own_runtime.clone();
+        changed.realized_config.arrangement_compression =
+            !changed.realized_config.arrangement_compression;
+        tx.set_cluster_runtime(changed).unwrap();
+        match forbidden {
+            "foreign physical deletion" => {
+                tx.remove_cluster_replica(active_replica.replica_id)
+                    .unwrap();
+            }
+            "foreign physical update" => {
+                let mut changed = active_replica.clone();
+                changed.config.arrangement_compression = !changed.config.arrangement_compression;
+                tx.update_cluster_replica(changed.replica_id, changed)
+                    .unwrap();
+            }
+            "foreign physical adoption" => {
+                tx.remove_cluster_replica(active_replica.replica_id)
+                    .unwrap();
+                tx.insert_cluster_replica_with_id(
+                    cluster.id,
+                    active_replica.replica_id,
+                    "adopted_replica",
+                    active_replica.config.clone(),
+                    active_replica.owner_id,
+                    None,
+                )
+                .unwrap();
+            }
+            "own physical transfer" => {
+                tx.remove_cluster_replica(own_replica_id).unwrap();
+                let mut changed = own_replica.clone();
+                changed.deployment_generation = 9;
+                tx.set_replicas(vec![changed]).unwrap();
+            }
+            "foreign runtime update" => {
+                let mut changed = active_runtime.clone();
+                changed.realized_config.arrangement_compression =
+                    !changed.realized_config.arrangement_compression;
+                tx.set_cluster_runtime(changed).unwrap();
+            }
+            "shared declaration mutation" => {
+                let mut changed = declaration.clone();
+                changed.name = "renamed_explicit_replica".into();
+                tx.set_cluster_replica_declaration(changed).unwrap();
+            }
+            "shared cluster mutation" => {
+                let mut changed = cluster.clone();
+                changed.config.workload_class = Some("prewarming".into());
+                tx.update_cluster(cluster.id, changed).unwrap();
+            }
+            "foreign replica configuration" => {
+                tx.upsert_replica_system_config(
+                    active_replica.replica_id,
+                    "enable_arrangement_size_logging",
+                    "true".into(),
+                )
+                .unwrap();
+            }
+            "foreign replica plan" => {
+                tx.set_written_plan_with_owner(
+                    GlobalId::User(1003),
+                    build,
+                    Some(uuid::Uuid::new_v4()),
+                    Some(ReplicaPlanOwner {
+                        replica_id: active_replica.replica_id,
+                        name: "foreign_replica_index".into(),
+                    }),
+                    BTreeSet::new(),
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let ts = tx.upper();
+        let _ = tx.get_and_commit_op_updates();
+        assert!(
+            matches!(
+                tx.commit(ts).await,
+                Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+            ),
+            "{forbidden}"
+        );
+        assert_eq!(pending.snapshot().await.unwrap(), before, "{forbidden}");
+    }
 
     // Rejected shared writes cannot partially publish even permitted metadata.
     let before = pending.snapshot().await.unwrap();
@@ -220,6 +513,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         tx.commit(ts).await,
         Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
     ));
+    let before_restart = pending.snapshot().await.unwrap();
     pending.expire().await;
 
     let mut pending = pending_builder
@@ -230,6 +524,14 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         .await
         .unwrap();
     pending.sync_to_current_updates().await.unwrap();
+    let reopened = pending.snapshot().await.unwrap();
+    assert_eq!(reopened.cluster_replicas, before_restart.cluster_replicas);
+    assert_eq!(reopened.cluster_runtimes, before_restart.cluster_runtimes);
+    assert_eq!(
+        reopened.replica_system_configurations,
+        before_restart.replica_system_configurations
+    );
+    assert_eq!(reopened.written_plans, before_restart.written_plans);
     let mut tx = pending.transaction().await.unwrap();
     tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
@@ -240,6 +542,27 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     tx.publish_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
     commit(tx).await;
+    pending.sync_to_current_updates().await.unwrap();
+    let mut tx = pending.transaction().await.unwrap();
+    tx.remove_cluster_replica(own_replica_id).unwrap();
+    assert_eq!(tx.remove_cluster_runtime(cluster.id, 8), Some(own_runtime));
+    tx.remove_replica_system_config(own_replica_id, "enable_arrangement_size_logging");
+    tx.set_written_plan(own_plan, build, None).unwrap();
+    commit(tx).await;
+    let retired = pending.snapshot().await.unwrap();
+    assert_eq!(retired.cluster_replicas, active_lifecycle.cluster_replicas);
+    assert_eq!(retired.cluster_runtimes, active_lifecycle.cluster_runtimes);
+    assert_eq!(
+        retired.cluster_replica_declarations,
+        active_lifecycle.cluster_replica_declarations
+    );
+    assert_eq!(
+        retired.replica_system_configurations,
+        active_lifecycle.replica_system_configurations
+    );
+    let tx = pending.transaction().await.unwrap();
+    assert!(tx.get_written_plan(own_plan, build).is_none());
+    drop(tx);
     let protected = pending.snapshot().await.unwrap().client_read_requirements;
     pending.sync_to_current_updates().await.unwrap();
     let mut prepared = pending.transaction().await.unwrap();
