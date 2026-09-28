@@ -207,7 +207,7 @@ impl Session {
         let conn_catalog = catalog.for_session(self);
         mz_sql::plan::check_unsafe_functions(&conn_catalog, &query.resolved_ids)?;
         let target = self.transaction().cluster().map_or_else(
-            || catalog_serving::auto_run_on_catalog_server(&conn_catalog, self, &plan),
+            || catalog_serving::catalog_server_target(&conn_catalog, self, &plan),
             TargetCluster::Transaction,
         );
         let cluster = catalog.resolve_target_cluster(target, self)?;
