@@ -4501,10 +4501,19 @@ impl Coordinator {
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");
         let stmt = ps.stmt().cloned();
-        let desc = ps.desc().clone();
+        let desc = ps.shared_desc();
+        let query = ps.query();
         let state_revision = ps.state_revision;
         let logging = Arc::clone(ps.logging());
-        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), state_revision)
+        session.create_new_portal(
+            stmt,
+            logging,
+            desc,
+            query,
+            plan.params,
+            Vec::new(),
+            state_revision,
+        )
     }
 
     #[instrument]
@@ -4898,7 +4907,7 @@ impl Coordinator {
         };
         match ps {
             crate::coord::PlanStatement::Statement { stmt, params } => {
-                self.handle_execute_inner(stmt, params, ctx).await;
+                self.handle_execute_inner(stmt, None, params, ctx).await;
             }
             crate::coord::PlanStatement::Plan {
                 plan,

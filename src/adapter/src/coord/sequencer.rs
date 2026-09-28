@@ -606,6 +606,28 @@ impl Coordinator {
                     {
                         ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                     } else {
+                        let (desc, query) =
+                            if self.catalog().system_config().enable_prepared_query_reuse()
+                                && matches!(plan.stmt, Statement::Select(_))
+                            {
+                                return_if_err!(
+                                    Self::describe_prepared(
+                                        self.catalog(),
+                                        ctx.session(),
+                                        Some(plan.stmt.clone()),
+                                        plan.desc.param_types.iter().cloned().map(Some).collect(),
+                                    ),
+                                    ctx
+                                )
+                            } else {
+                                (Arc::new(plan.desc.clone()), None)
+                            };
+                        if desc.as_ref() != &plan.desc {
+                            ctx.retire(Err(AdapterError::ChangedPlan(
+                                "cached plan must not change result type".to_string(),
+                            )));
+                            return;
+                        }
                         let state_revision = StateRevision {
                             catalog_revision: self.catalog().transient_revision(),
                             session_state_revision: ctx.session().state_revision(),
@@ -614,7 +636,8 @@ impl Coordinator {
                             plan.name,
                             Some(plan.stmt),
                             plan.sql,
-                            plan.desc,
+                            desc,
+                            query,
                             state_revision,
                             self.now(),
                         );
@@ -757,7 +780,7 @@ impl Coordinator {
             extra,
             response_barriers,
         );
-        self.handle_execute_inner(stmt, params, sub_ctx).await;
+        self.handle_execute_inner(stmt, None, params, sub_ctx).await;
 
         // The response can need off-thread processing. Wait for it elsewhere so the coordinator can
         // continue processing.

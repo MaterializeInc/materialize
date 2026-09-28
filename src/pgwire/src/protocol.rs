@@ -1126,7 +1126,7 @@ where
 
         *portal.lifecycle_timestamps = Some(lifecycle_timestamps);
 
-        let stmt_desc = portal.desc.clone();
+        let stmt_desc = portal.desc.as_ref().clone();
         if !stmt_desc.param_types.is_empty() {
             return self
                 .send_error_and_get_state(ErrorResponse::error(
@@ -1657,13 +1657,15 @@ where
             }
         }
 
-        let desc = stmt.desc().clone();
+        let desc = stmt.shared_desc();
+        let query = stmt.query();
         let logging = Arc::clone(stmt.logging());
         let stmt_ast = stmt.stmt().cloned();
         let state_revision = stmt.state_revision;
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
+            query,
             stmt_ast,
             logging,
             params,
