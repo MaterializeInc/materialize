@@ -227,7 +227,7 @@ $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_si
 2
 
 > DROP VIEW tv_temp_dep
-> DROP MATERIALIZED VIEW mv_temp_dep CASCADE
+> DROP MATERIALIZED VIEW mv_temp_dep
 > DROP TABLE t_temp_dep
 
 
