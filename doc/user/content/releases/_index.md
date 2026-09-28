@@ -24,8 +24,18 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-10-01* <br>
 *Released to Materialize Self-Managed: 2026-10-02* <br>
 
+### SCIM group-to-role mapping is generally available {#v26.44-scim-group-to-role-mapping}
+
+<red>*Materialize Cloud only*</red>
+
+Syncing identity provider groups to Materialize via SCIM is now generally available, graduating from private preview. You can manage who has access to what in Materialize directly from your identity provider (IdP):
+
+- **Map IdP groups to custom organization roles**, so members of a group automatically receive the right level of access to your Materialize organization.
+- **Sync group membership to database roles**: when a user reconnects, they are granted membership in database roles with names matching their IdP groups, with no manual `GRANT` or `REVOKE` statements required.
+
+As team members join, leave, or change teams, updating their group membership in your IdP keeps their access in Materialize aligned. Set it up in the [Materialize Console](/developer-tools/console/) or with Terraform. For more information, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
+
 ### Improvements {#v26.44-improvements}
-- **SCIM group-to-role mapping is generally available** (<red>*Materialize Cloud only*</red>): Syncing identity provider groups via SCIM is out of private preview. You can map IdP groups to custom organization roles, and users are granted membership in database roles with matching names when they reconnect. Set it up in the [Materialize Console](/developer-tools/console/) or with Terraform. For more information, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 - **Hedged reads from object storage**: A read from object storage that is still outstanding after 2 seconds is now retried on a second, independent connection with the first response winning, which reduced reads slower than 4 seconds by about 70% in Materialize Cloud, at a cost of roughly 1% extra reads; set `persist_blob_hedged_get_enabled` to `false` to turn it off.
 - **Dynamic balancerd configuration for Self-Managed**: Pointing `spec.balancerdConfigmapName` on a `Materialize` resource, or `spec.configmapName` on a standalone `Balancer`, at a ConfigMap you own containing `config.json` lets you change balancerd settings such as `balancerd_max_connections` without restarting balancer pods, with balancerd rereading the file about once a second after Kubernetes propagates an update.
 - **Connection limits in balancerd count connections from accept**: `balancerd_max_connections` now counts every connection from the moment it is accepted rather than only those that completed the startup sequence, so a connection over the limit is closed rather than answered with an error, and the new `balancerd_pre_resolved_timeout` (default 60 seconds, `0` disables) closes a connection that has not finished TLS negotiation, startup, and authentication within it.
