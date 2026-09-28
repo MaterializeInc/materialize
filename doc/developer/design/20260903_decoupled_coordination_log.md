@@ -37,8 +37,10 @@ concrete integration repairs without starting another acceptance campaign.
 
 ## Additional settled scope
 
-- Filter `mz_cluster_replicas` to the current deployment.
-  Internal observations retain deployment identity.
+- For these milestones, `mz_cluster_replicas` shows the catalog's active
+  deployment and stays shared and materializable. Own-deployment routing,
+  reconciliation and readiness use internal inventory with deployment identity.
+  Query-relative public visibility is deferred to the design's future work.
 - Address-based external replicas are test infrastructure, not an independent
   warm-upgrade deliverable. Do not borrow the serving deployment's identity.
 - DROP INDEX names the objects whose plans the writer rewrote, not still-running
