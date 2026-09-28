@@ -108,6 +108,8 @@ skip = [
     { name = "socket2", version = "0.5.10" },
     # kube-client and reqwest still pull 0.6.
     { name = "tower-http", version = "0.6.11" },
+    # tokio-tungstenite still pulls 0.29.
+    { name = "tungstenite", version = "0.29.0" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
