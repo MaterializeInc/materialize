@@ -61,6 +61,15 @@ and warm promotion, then compatible-version writer coexistence and handover.
 The outage, targeted DDL and bounded-throughput proofs remain closed. Continue
 concrete integration repairs without starting another acceptance campaign.
 
+Preserve and finish the local `m2-compatible-version-wip` work. Close the
+initialization race through catalog-governed Persist compatibility, including
+read-only metadata opens. Admission and retirement, not physical liveness,
+determine required versions. Reuse deployment membership, preserve true binary
+identity, and align initialization and upgrade paths with that policy before
+enabling cross-version admission. After durable retirement, zombies may fail on
+newer formats. Do not add pre-publication initialization or orphan-cleanup
+machinery for this race.
+
 ## Additional settled scope
 
 - M2 excludes native warm handover with replica-targeted MVs on managed

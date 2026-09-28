@@ -32,6 +32,14 @@ throughout, not just after convergence. No generic deployment fence on Persist
 appends or all-output fencing barrier is required. Bring a concrete unsafe
 interleaving before adding stronger fencing, not merely overlapping writers.
 
+Catalog admission and retirement govern Persist compatibility, including fresh
+shard initialization through read-like APIs. Reuse deployment membership and
+needed version information, without spoofing the binary version. Bootstrap and
+maintenance upgrades must honor that policy. After durable retirement, formats
+may advance without waiting for zombies to die. Reject admission incompatible
+with already-written state. Solve the initialization race through Persist
+compatibility, not pre-publication initialization and orphan cleanup.
+
 Use that outcome to establish the deployment model, then complete
 catalog/Persist writer coexistence and handover between compatible versions.
 Same-version success is an intermediate proof, not completion of M2. Do not

@@ -108,13 +108,32 @@ deployment's requirements. Retirement or abandonment releases only that
 deployment's resources under the existing protection rules, not another's holds
 or shared user objects.
 
-While versions coexist, shared catalog and Persist state must remain readable
-and writable by every live participant. Writers preserve each other's state and
-invariants, including shared collection semantics, not merely accept each
-other's encodings. Incompatible records, builtin schema changes and migrations
-wait until the affected older generations are fenced. This is a contract for
-participating versions, not a requirement that unmodified pre-feature binaries
-understand the deployment model.
+### Version compatibility
+
+Catalog admission and retirement determine the versions that shared catalog and
+Persist state must support. Reuse deployment membership with the version
+information needed for that decision, not a separate liveness registry. Writers
+preserve all admitted participants' encodings and shared collection semantics.
+Unsupported participants are not admitted.
+
+Shared Persist shards use a supported state-format target distinct from the
+actual binary identity. This covers first initialization, even through read-only
+metadata access, as well as subsequent writes and maintenance. Bootstrap and
+restart must honor the catalog's policy before such access. A newer initializer
+must not make a shard unreadable to an admitted older participant. An older
+version label must not conceal incompatible state or behavior.
+
+Formats may advance once durable catalog retirement removes the older
+compatibility requirement. Admission and advancement must be ordered so no
+admitted participant loses compatibility. Do not readmit an incompatible older
+version by lowering the label on already-written state. Retired zombies may
+still complete compatible operations or fail on unsupported state. Advancement
+does not wait for physical process death.
+
+Incompatible records, builtin schema changes and migrations still wait until
+the affected older generations are fenced. This is a contract for participating
+versions, not a requirement that unmodified pre-feature binaries understand the
+deployment model.
 
 ## Approach
 
