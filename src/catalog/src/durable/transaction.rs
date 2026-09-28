@@ -2782,6 +2782,10 @@ impl<'a> Transaction<'a> {
         self.durable_catalog.is_savepoint()
     }
 
+    pub fn is_read_only(&self) -> bool {
+        self.durable_catalog.is_read_only()
+    }
+
     fn commit_op(&mut self) {
         self.op_id += 1;
     }

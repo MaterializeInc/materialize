@@ -544,6 +544,14 @@ impl Catalog {
         builtin_table_updates.extend(table_updates);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
+        // Every item is now planned, including those the migrations rewrote,
+        // so record what this build's planner produced for each. A read-only
+        // catalog cannot commit the rows and nothing in memory reads them, so
+        // it is left as it is; a savepoint catalog commits them in memory.
+        if !txn.is_read_only() {
+            state.refresh_item_metadata(&mut txn)?;
+        }
+
         // Bump the migration version immediately before committing.
         set_migration_version(&mut txn, config.build_info.semver_version())?;
 
@@ -1570,9 +1578,21 @@ pub(crate) fn into_consolidatable_updates_startup(
 
 #[cfg(test)]
 mod tests {
-    use mz_catalog::durable::ClusterVariantManaged;
+    use mz_catalog::durable::debug::{IndexColumnCollection, ItemColumnCollection};
+    use mz_catalog::durable::{
+        CatalogError, ClusterVariantManaged, DurableCatalogError, Snapshot,
+        TestCatalogStateBuilder, test_bootstrap_args,
+    };
+    use mz_persist_client::PersistClient;
+    use mz_repr::GlobalId;
+    use mz_sql::names::{
+        DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
+        SchemaSpecifier,
+    };
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
     use super::*;
+    use crate::catalog::{Catalog, Op};
 
     /// A replica the reconciler creates takes every shared field from its
     /// cluster. Nothing here may fall back to a default, or a builtin cluster
@@ -1625,6 +1645,191 @@ mod tests {
                 assert!(!pending);
             }
             ReplicaLocation::Unmanaged { .. } => panic!("expected a managed location"),
+        }
+    }
+
+    /// The bootstrap refresh writes back rows that are missing, which is how
+    /// items that predate the collections get theirs, and nothing else: a
+    /// steady-state boot stages no writes. A read-only catalog commits a
+    /// transaction only when nothing was staged, which tells the two apart,
+    /// and its open skips the refresh for the same reason, so the refresh is
+    /// invoked by hand on it. A writable open runs it itself.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn refresh_writes_only_missing_item_metadata() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+
+        async fn create_item(
+            catalog: &mut Catalog,
+            id: CatalogItemId,
+            gid: GlobalId,
+            name: &str,
+            create_sql: &str,
+        ) {
+            let item = catalog
+                .state()
+                .deserialize_item(
+                    gid,
+                    create_sql,
+                    &BTreeMap::new(),
+                    &mut LocalExpressionCache::Closed,
+                    None,
+                )
+                .expect("valid create_sql");
+            let commit_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    commit_ts,
+                    None,
+                    vec![Op::CreateItem {
+                        item,
+                        name: QualifiedItemName {
+                            qualifiers: ItemQualifiers {
+                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+                                schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
+                            },
+                            item: name.to_string(),
+                        },
+                        id,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
+                    }],
+                )
+                .await
+                .expect("failed to transact");
+        }
+
+        // Stages a refresh of `catalog` and commits it.
+        async fn refresh(catalog: &Catalog) -> Result<(), CatalogError> {
+            let mut storage = catalog.storage().await;
+            let mut tx = storage.transaction().await.expect("transaction");
+            catalog
+                .state()
+                .refresh_item_metadata(&mut tx)
+                .expect("refresh");
+            let commit_ts = tx.upper();
+            tx.commit(commit_ts).await
+        }
+
+        async fn recorded(catalog: &Catalog) -> Snapshot {
+            catalog.storage().await.snapshot().await.expect("snapshot")
+        }
+
+        let view_id = CatalogItemId::User(1);
+        let index_id = CatalogItemId::User(2);
+        let written = {
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
+            create_item(
+                &mut catalog,
+                view_id,
+                GlobalId::User(1),
+                "v",
+                r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 AS a, NULL::text AS b"#,
+            )
+            .await;
+            create_item(
+                &mut catalog,
+                index_id,
+                GlobalId::User(2),
+                "v_idx",
+                r#"CREATE INDEX "v_idx" IN CLUSTER [u1] ON [u1 AS "materialize"."public"."v"] ("a")"#,
+            )
+            .await;
+            let written = recorded(&catalog).await;
+            catalog.expire().await;
+            written
+        };
+        // Each item recorded its rows when it was written.
+        assert_eq!(written.item_columns.len(), 2, "{:?}", written.item_columns);
+        assert_eq!(
+            written.index_columns.len(),
+            1,
+            "{:?}",
+            written.index_columns
+        );
+
+        // A fresh boot plans the items again and finds its output recorded.
+        {
+            let catalog = Catalog::open_debug_read_only_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open read-only debug catalog");
+            refresh(&catalog)
+                .await
+                .expect("a steady-state refresh stages nothing");
+            catalog.expire().await;
+        }
+
+        // Drop the view's second column and the index key behind the
+        // catalog's back.
+        {
+            let column_key = written.item_columns.keys().nth(1).expect("two columns");
+            let index_key = written.index_columns.keys().next().expect("one key");
+            let mut debug_state = TestCatalogStateBuilder::new(persist_client.clone())
+                .with_organization_id(organization_id)
+                .with_default_deploy_generation()
+                .unwrap_build()
+                .await
+                .open_debug()
+                .await
+                .expect("unable to open debug state");
+            debug_state
+                .delete::<ItemColumnCollection>(column_key.clone())
+                .await
+                .expect("delete column");
+            debug_state
+                .delete::<IndexColumnCollection>(index_key.clone())
+                .await
+                .expect("delete index key");
+        }
+
+        // The next refresh stages exactly the two missing rows.
+        {
+            let catalog = Catalog::open_debug_read_only_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open read-only debug catalog");
+            let error = refresh(&catalog)
+                .await
+                .expect_err("a refresh with rows missing stages them");
+            let CatalogError::Durable(DurableCatalogError::NotWritable(message)) = error else {
+                panic!("unexpected error {error:?}");
+            };
+            assert!(
+                message.contains("2 updates")
+                    && message.contains("ItemColumn")
+                    && message.contains("IndexColumn"),
+                "{message}"
+            );
+            catalog.expire().await;
+        }
+        {
+            let catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
+            // A writable open refills the rows itself.
+            let refilled = recorded(&catalog).await;
+            assert_eq!(refilled.item_columns, written.item_columns);
+            assert_eq!(refilled.index_columns, written.index_columns);
+            catalog.expire().await;
         }
     }
 }
