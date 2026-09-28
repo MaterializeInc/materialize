@@ -383,11 +383,17 @@ async fn test_peer_index_pending_installation() {
         loop {
             peer.sync_to_current_updates().await.unwrap();
             let snapshot = peer.snapshot().await.unwrap();
-            assert!(
+            // DROP retires this writer's selections, not another build's
+            // metadata. A selection with no live catalog owner grants no
+            // protection and cannot install an export.
+            assert_eq!(
                 snapshot
                     .written_plans
                     .keys()
-                    .all(|key| key.id != pending_id.into_proto())
+                    .filter(|key| key.id == pending_id.into_proto())
+                    .map(|key| key.build_version.as_str())
+                    .collect::<Vec<_>>(),
+                [pending_build.as_str()]
             );
             let bound = snapshot
                 .collection_compaction_bounds
