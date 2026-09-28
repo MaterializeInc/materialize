@@ -33,16 +33,17 @@ use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType, Timestamp};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
-use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
+use mz_sql::names::ResolvedIds;
+use mz_sql::plan::{AnalyzedSelect, Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, RoleMetadata, SYSTEM_USER, User,
 };
-use mz_sql::session::vars::IsolationLevel;
 pub use mz_sql::session::vars::{
     DEFAULT_DATABASE_NAME, EndTransactionAction, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
     SERVER_PATCH_VERSION, SessionVars, Var,
 };
+use mz_sql::session::vars::{IsolationLevel, SessionVarsSnapshot};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
@@ -52,7 +53,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 use crate::client::RecordFirstRowStream;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
@@ -67,6 +68,8 @@ use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
+mod prepared;
+
 /// A session holds per-connection state.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -76,6 +79,7 @@ pub struct Session {
     /// with `conn_id`, which may be reused.
     uuid: Uuid,
     prepared_statements: BTreeMap<String, PreparedStatement>,
+    prepared_plans: prepared::PreparedPlanCache,
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus,
     pcx: Option<PlanContext>,
@@ -335,6 +339,7 @@ impl Session {
         if let Some(default_cluster) = default_cluster {
             vars.set_cluster(default_cluster.clone());
         }
+        let prepared_plans = prepared::PreparedPlanCache::new(metrics.prepared.cache.clone());
         Session {
             conn_id,
             uuid,
@@ -343,6 +348,7 @@ impl Session {
             metrics,
             builtin_updates: None,
             prepared_statements: BTreeMap::new(),
+            prepared_plans,
             portals: BTreeMap::new(),
             role_metadata: None,
             client_ip,
@@ -467,6 +473,7 @@ impl Session {
     #[must_use]
     pub fn clear_transaction(&mut self) -> TransactionStatus {
         self.portals.clear();
+        self.prepared_plans.prune();
         self.pcx = None;
         self.state_revision += 1;
         mem::take(&mut self.transaction)
@@ -643,7 +650,8 @@ impl Session {
         name: String,
         stmt: Option<Statement<Raw>>,
         raw_sql: String,
-        desc: StatementDesc,
+        desc: Arc<StatementDesc>,
+        query: Option<Arc<PreparedQuery>>,
         state_revision: StateRevision,
         now: EpochMillis,
     ) {
@@ -658,22 +666,27 @@ impl Session {
         let statement = PreparedStatement {
             stmt,
             desc,
+            query,
             state_revision,
             logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
+        self.prepared_plans.prune();
     }
 
     /// Removes the prepared statement associated with `name`.
     ///
     /// Returns whether a statement previously existed.
     pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
-        self.prepared_statements.remove(name).is_some()
+        let removed = self.prepared_statements.remove(name).is_some();
+        self.prepared_plans.prune();
+        removed
     }
 
     /// Removes all prepared statements.
     pub fn remove_all_prepared_statements(&mut self) {
         self.prepared_statements.clear();
+        self.prepared_plans.clear();
     }
 
     /// Retrieves the prepared statement associated with `name`.
@@ -717,7 +730,8 @@ impl Session {
     pub fn set_portal(
         &mut self,
         portal_name: String,
-        desc: StatementDesc,
+        desc: Arc<StatementDesc>,
+        query: Option<Arc<PreparedQuery>>,
         stmt: Option<Statement<Raw>>,
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, SqlScalarType)>,
@@ -735,6 +749,7 @@ impl Session {
             Portal {
                 stmt: stmt.map(Arc::new),
                 desc,
+                query,
                 state_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
@@ -755,7 +770,9 @@ impl Session {
     /// If there is no such portal, this method does nothing. Returns whether that portal existed.
     pub fn remove_portal(&mut self, portal_name: &str) -> bool {
         self.state_revision += 1;
-        self.portals.remove(portal_name).is_some()
+        let removed = self.portals.remove(portal_name).is_some();
+        self.prepared_plans.prune();
+        removed
     }
 
     /// Retrieves a reference to the specified portal.
@@ -775,6 +792,7 @@ impl Session {
         self.portals.get_mut(portal_name).map(|p| PortalRefMut {
             stmt: &p.stmt,
             desc: &p.desc,
+            query: &mut p.query,
             state_revision: &mut p.state_revision,
             parameters: &mut p.parameters,
             result_formats: &mut p.result_formats,
@@ -789,7 +807,8 @@ impl Session {
         &mut self,
         stmt: Option<Statement<Raw>>,
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
-        desc: StatementDesc,
+        desc: Arc<StatementDesc>,
+        query: Option<Arc<PreparedQuery>>,
         parameters: Params,
         result_formats: Vec<Format>,
         state_revision: StateRevision,
@@ -805,6 +824,7 @@ impl Session {
                     entry.insert(Portal {
                         stmt: stmt.map(Arc::new),
                         desc,
+                        query,
                         state_revision,
                         parameters,
                         result_formats,
@@ -825,6 +845,7 @@ impl Session {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
+        self.prepared_plans.clear();
         self.vars.reset_all();
     }
 
@@ -944,12 +965,112 @@ impl Session {
     }
 }
 
+/// Reusable SELECT analysis, independent of any portal's bound values or resources.
+#[derive(Debug)]
+pub struct PreparedQuery {
+    pub(crate) select: AnalyzedSelect,
+    pub(crate) resolved_ids: ResolvedIds,
+    pub(crate) sql_impl_ids: ResolvedIds,
+    parameter_types: Vec<mz_repr::SqlScalarType>,
+    catalog_revision: u64,
+    vars: SessionVarsSnapshot,
+    roles: [RoleId; 3],
+    is_superuser: bool,
+}
+
+pub(crate) enum PreparedInvalidation {
+    Catalog,
+    Settings,
+    Roles,
+}
+
+impl PreparedQuery {
+    pub(crate) fn bind(
+        &self,
+        catalog: &Catalog,
+        session: &Session,
+        params: &Params,
+    ) -> Result<(mz_sql::plan::Plan, ResolvedIds, ResolvedIds), AdapterError> {
+        session.metrics().prepared.custom_bind.inc();
+        let conn_catalog = catalog.for_session(session);
+        let (plan, binding_ids) = mz_sql::plan::plan_analyzed_select(
+            session.pcx(),
+            &conn_catalog,
+            &self.select,
+            params,
+            &self.resolved_ids,
+        )?;
+        let mut sql_impl_ids = self.sql_impl_ids.clone();
+        sql_impl_ids.extend_from(&binding_ids);
+        Ok((
+            mz_sql::plan::Plan::Select(plan),
+            self.resolved_ids.clone(),
+            sql_impl_ids,
+        ))
+    }
+
+    pub(crate) fn new(
+        catalog: &Catalog,
+        session: &Session,
+        select: AnalyzedSelect,
+        resolved_ids: ResolvedIds,
+        sql_impl_ids: ResolvedIds,
+        parameter_types: Vec<mz_repr::SqlScalarType>,
+    ) -> Self {
+        let roles = session.role_metadata();
+        Self {
+            select,
+            resolved_ids,
+            sql_impl_ids,
+            parameter_types,
+            catalog_revision: catalog.transient_revision(),
+            vars: session.vars().snapshot(),
+            roles: [
+                roles.authenticated_role,
+                roles.session_role,
+                roles.current_role,
+            ],
+            is_superuser: session.is_superuser(),
+        }
+    }
+
+    pub(crate) fn is_valid(&self, catalog: &Catalog, session: &Session) -> bool {
+        self.invalidation_reason(catalog, session).is_none()
+    }
+
+    pub(crate) fn invalidation_reason(
+        &self,
+        catalog: &Catalog,
+        session: &Session,
+    ) -> Option<PreparedInvalidation> {
+        if self.catalog_revision != catalog.transient_revision() {
+            return Some(PreparedInvalidation::Catalog);
+        }
+        if !self.vars.matches(session.vars()) {
+            return Some(PreparedInvalidation::Settings);
+        }
+        let roles = session.role_metadata();
+        if self.roles
+            != [
+                roles.authenticated_role,
+                roles.session_role,
+                roles.current_role,
+            ]
+            || self.is_superuser != session.is_superuser()
+        {
+            return Some(PreparedInvalidation::Roles);
+        }
+        None
+    }
+}
+
 /// A prepared statement.
 #[derive(Derivative, Clone)]
 #[derivative(Debug)]
 pub struct PreparedStatement {
     stmt: Option<Statement<Raw>>,
-    desc: StatementDesc,
+    desc: Arc<StatementDesc>,
+    pub(crate) query: Option<Arc<PreparedQuery>>,
     /// The most recent state revision that has verified this statement.
     pub state_revision: StateRevision,
     #[derivative(Debug = "ignore")]
@@ -968,6 +1089,16 @@ impl PreparedStatement {
         &self.desc
     }
 
+    /// Shares the prepared statement's fixed result and parameter description.
+    pub fn shared_desc(&self) -> Arc<StatementDesc> {
+        Arc::clone(&self.desc)
+    }
+
+    /// Shares analysis with a bound portal, subject to execution-time validation.
+    pub fn query(&self) -> Option<Arc<PreparedQuery>> {
+        self.query.clone()
+    }
+
     /// Returns a handle to the metadata for statement logging.
     pub fn logging(&self) -> &Arc<QCell<PreparedStatementLoggingInfo>> {
         &self.logging
@@ -981,7 +1112,9 @@ pub struct Portal {
     /// The statement that is bound to this portal.
     pub stmt: Option<Arc<Statement<Raw>>>,
     /// The statement description.
-    pub desc: StatementDesc,
+    pub desc: Arc<StatementDesc>,
+    /// Optional reusable analysis, validated before execution.
+    pub query: Option<Arc<PreparedQuery>>,
     /// The most recent state revision that has verified this portal.
     pub state_revision: StateRevision,
     /// The bound values for the parameters in the prepared statement, if any.
@@ -1006,7 +1139,9 @@ pub struct PortalRefMut<'a> {
     /// The statement that is bound to this portal.
     pub stmt: &'a Option<Arc<Statement<Raw>>>,
     /// The statement description.
-    pub desc: &'a StatementDesc,
+    pub desc: &'a Arc<StatementDesc>,
+    /// Optional reusable analysis, replaceable after semantic invalidation.
+    pub query: &'a mut Option<Arc<PreparedQuery>>,
     /// The most recent state revision that has verified this portal.
     pub state_revision: &'a mut StateRevision,
     /// The bound values for the parameters in the prepared statement, if any.

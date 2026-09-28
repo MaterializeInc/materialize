@@ -506,6 +506,7 @@ impl CatalogState {
             portals: Some(session.portals()),
             notices_tx: session.retain_notice_transmitter(),
             restrict_to_user_objects: session.vars().restrict_to_user_objects(),
+            compiler_metrics: Some(&session.metrics().sql_compiler),
         }
     }
 
@@ -530,6 +531,7 @@ impl CatalogState {
             portals: None,
             notices_tx,
             restrict_to_user_objects: false,
+            compiler_metrics: None,
         }
     }
 
