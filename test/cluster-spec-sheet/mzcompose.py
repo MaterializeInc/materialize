@@ -213,15 +213,51 @@ def default_cluster_object_limits_sizes(max_n: int) -> list[int]:
     return sizes
 
 
+# `SET LOCAL` is excluded because it only lasts until the end of the current
+# transaction, which a reconnect discards anyway.
+_SESSION_SET_RE = re.compile(
+    r"SET\s+(?:SESSION\s+)?(?!LOCAL\b)(\w+)\s*(?:=|\s+TO\s+).*",
+    re.IGNORECASE | re.DOTALL,
+)
+_SESSION_RESET_RE = re.compile(r"RESET\s+(\w+)\s*;?", re.IGNORECASE)
+
+
 class ConnectionHandler:
     def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
         self.new_connection = new_connection
         self.connection = self.new_connection()
         self.cursor: psycopg.Cursor | None = None
+        # Session `SET` statements keyed by lowercased variable name, replayed
+        # on every new connection.
+        self.session_sets: dict[str, str] = {}
+
+    def record_session_statement(self, query: str) -> None:
+        """Record `query` if it is a session-level `SET` or `RESET`.
+
+        Must be called only after `query` succeeded outside an explicit
+        transaction. Statements executed directly on a cursor are not recorded.
+        """
+        if m := _SESSION_SET_RE.fullmatch(query):
+            self.session_sets[m.group(1).lower()] = query
+        elif m := _SESSION_RESET_RE.fullmatch(query):
+            name = m.group(1).lower()
+            if name == "all":
+                self.session_sets.clear()
+            else:
+                self.session_sets.pop(name, None)
 
     def __ensure_connection(self):
         if not self.connection or self.connection.closed:
             self.connection = self.new_connection()
+            try:
+                for stmt in self.session_sets.values():
+                    self.connection.execute(stmt.encode())
+            except BaseException:
+                # Close so that the next call reconnects and replays all
+                # statements, instead of reusing a partially configured
+                # session.
+                self.connection.close()
+                raise
 
     def __enter__(self) -> psycopg.Cursor:
         self.__ensure_connection()
@@ -323,6 +359,11 @@ class ScenarioRunner:
                         != psycopg.pq.TransactionStatus.IDLE
                     )
                     cur.execute(query.encode(), params)
+                    # A `SET` inside an explicit transaction is undone by
+                    # `ROLLBACK`, and a reconnect reruns the whole transaction
+                    # including the `SET`, so only record it outside one.
+                    if not in_transaction:
+                        self.connection.record_session_statement(query)
                     if fetch:
                         return cur.fetchall()
                     else:
