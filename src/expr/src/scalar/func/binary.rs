@@ -9,7 +9,6 @@
 
 //! Utilities for binary functions.
 
-use mz_ore::assert_none;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::{Eval, EvalError};
@@ -148,9 +147,18 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
         temp_storage: &'a RowArena,
         exprs: &[&'a impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
-        let mut datums = exprs
-            .into_iter()
-            .map(|expr| expr.eval(datums, temp_storage));
+        let [expr_a, expr_b, ..] = exprs else {
+            return Err(EvalError::Internal("unexpectedly missing parameter".into()));
+        };
+        // `try_from_iter` is generic over the iterator, so a closure over `exprs` gives
+        // it a fresh type per function and per `Eval` implementor, and the unwrapping is
+        // emitted once for each. Passing the arguments through an array keeps the
+        // iterator type the same everywhere, so it is emitted once per input type.
+        let mut datums = [
+            expr_a.eval(datums, temp_storage),
+            expr_b.eval(datums, temp_storage),
+        ]
+        .into_iter();
         let input = match T::Input::try_from_iter(&mut datums) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
@@ -165,7 +173,11 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
             Err(Ok(Some(datum))) => return Ok(datum),
             Err(Err(res)) => return Err(res),
         };
-        assert_none!(datums.next(), "No leftover input arguments");
+        // Checking the expression count stands in for checking that the unwrapping
+        // consumed every datum, because every binary `Input` component consumes exactly
+        // one: a `Variadic` or `OptionalArg` parameter routes the function to the
+        // variadic arity instead.
+        assert_eq!(exprs.len(), 2, "No leftover input arguments");
         self.call(input, temp_storage).into_result(temp_storage)
     }
 
