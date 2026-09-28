@@ -15,6 +15,7 @@ import pytest
 from materialize.cargo_bench.targets import (
     BenchTarget,
     BuiltBench,
+    alignment_rustflags,
     bench_executables,
     bench_targets,
     cargo_build_args,
@@ -76,10 +77,6 @@ def test_cargo_build_args_single_package_no_features() -> None:
         "bench",
         "--no-run",
         "--message-format=json",
-        "--config",
-        "target.'cfg(all())'.rustflags=["
-        "'-Cllvm-args=-align-all-functions=6',"
-        "'-Cllvm-args=-align-all-nofallthru-blocks=5']",
         "--package",
         "mz-ore",
         "--bench",
@@ -106,10 +103,6 @@ def test_cargo_build_args_multi_package_features() -> None:
         "bench",
         "--no-run",
         "--message-format=json",
-        "--config",
-        "target.'cfg(all())'.rustflags=["
-        "'-Cllvm-args=-align-all-functions=6',"
-        "'-Cllvm-args=-align-all-nofallthru-blocks=5']",
         "--package",
         "mz-compute",
         "--package",
@@ -243,3 +236,49 @@ def test_closure_dirs_transitive_path_crates_only() -> None:
 def test_closure_dirs_rejects_unknown_package() -> None:
     with pytest.raises(ValueError, match="mz-missing"):
         closure_dirs(RESOLVE_METADATA, "mz-missing")
+
+
+ALIGN = [
+    "-Cllvm-args=-align-all-functions=6",
+    "-Cllvm-args=-align-all-nofallthru-blocks=5",
+]
+
+
+def test_alignment_rustflags_extends_rustflags() -> None:
+    args, env = alignment_rustflags(
+        {"RUSTFLAGS": "-Ctarget-cpu=x86-64-v3 --cfg=tokio_unstable", "PATH": "/bin"}
+    )
+    assert args == []
+    assert env == {
+        "RUSTFLAGS": " ".join(["-Ctarget-cpu=x86-64-v3 --cfg=tokio_unstable", *ALIGN]),
+        "PATH": "/bin",
+    }
+
+
+def test_alignment_rustflags_prefers_encoded_rustflags() -> None:
+    # Cargo ignores `RUSTFLAGS` whenever `CARGO_ENCODED_RUSTFLAGS` is set, so
+    # only the latter may change.
+    args, env = alignment_rustflags(
+        {"CARGO_ENCODED_RUSTFLAGS": "-Ctarget-cpu=native", "RUSTFLAGS": "-Cfoo"}
+    )
+    assert args == []
+    assert env == {
+        "CARGO_ENCODED_RUSTFLAGS": "\x1f".join(["-Ctarget-cpu=native", *ALIGN]),
+        "RUSTFLAGS": "-Cfoo",
+    }
+
+
+def test_alignment_rustflags_empty_encoded_rustflags() -> None:
+    _, env = alignment_rustflags({"CARGO_ENCODED_RUSTFLAGS": ""})
+    assert env == {"CARGO_ENCODED_RUSTFLAGS": "\x1f".join(ALIGN)}
+
+
+def test_alignment_rustflags_falls_back_to_config() -> None:
+    args, env = alignment_rustflags({"PATH": "/bin"})
+    assert args == [
+        "--config",
+        "target.'cfg(all())'.rustflags=["
+        "'-Cllvm-args=-align-all-functions=6',"
+        "'-Cllvm-args=-align-all-nofallthru-blocks=5']",
+    ]
+    assert env == {"PATH": "/bin"}

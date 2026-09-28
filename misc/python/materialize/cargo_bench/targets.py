@@ -12,23 +12,10 @@ argv and JSON-artifact parsing needed to build all of them in one `cargo bench
 --no-run` invocation."""
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-# Where a hot loop lands relative to 64-byte boundaries can decide how fast a
-# sub-nanosecond benchmark runs, and that placement shifts whenever unrelated
-# code or a dependency changes size. An identical 68-byte loop in
-# `mz-repr`'s `AclItem/encode` measured 1.37 ns at one offset and 1.17 ns at
-# another, which fails the 10% threshold in either direction without any
-# source change. Aligning every function to 64 bytes gives each loop the same
-# offset in the ancestor and current builds, which collapsed that difference
-# to 1%.
-ALIGNMENT_RUSTFLAGS = (
-    "-Cllvm-args=-align-all-functions=6",
-    "-Cllvm-args=-align-all-nofallthru-blocks=5",
-)
 
 
 @dataclass(frozen=True, order=True)
@@ -121,9 +108,6 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     Callers must select whole packages. A partial selection within a package
     would build targets absent from the caller's target list, because
     `--bench` names are matched across every selected package.
-
-    Every function and every block without a fallthrough predecessor is
-    aligned, see `ALIGNMENT_RUSTFLAGS`.
     """
     if not targets:
         raise ValueError("no bench targets to build")
@@ -132,18 +116,7 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     features = sorted(
         {f"{t.package}/{feature}" for t in targets for feature in t.required_features}
     )
-    rustflags = ",".join(f"'{flag}'" for flag in ALIGNMENT_RUSTFLAGS)
-    args = [
-        "cargo",
-        "bench",
-        "--no-run",
-        "--message-format=json",
-        # A `target.<cfg>` entry is joined with the workspace's
-        # `target.<triple>.rustflags`, where `RUSTFLAGS` or `build.rustflags`
-        # would replace them and drop the target CPU.
-        "--config",
-        f"target.'cfg(all())'.rustflags=[{rustflags}]",
-    ]
+    args = ["cargo", "bench", "--no-run", "--message-format=json"]
     for package in packages:
         args += ["--package", package]
     for name in names:
@@ -151,6 +124,47 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     if features:
         args += ["--features", ",".join(features)]
     return args
+
+
+# Where a hot loop lands relative to 64-byte boundaries can decide how fast a
+# sub-nanosecond benchmark runs, and that placement shifts whenever unrelated
+# code or a dependency changes size. An identical 68-byte loop in
+# `mz-repr`'s `AclItem/encode` measured 1.37 ns at one offset and 1.17 ns at
+# another, which fails the 10% threshold in either direction without any
+# source change. Aligning every function to 64 bytes gives each loop the same
+# offset in the ancestor and current builds, which collapsed that difference
+# to 1%.
+ALIGNMENT_RUSTFLAGS = (
+    "-Cllvm-args=-align-all-functions=6",
+    "-Cllvm-args=-align-all-nofallthru-blocks=5",
+)
+
+
+def alignment_rustflags(env: Mapping[str, str]) -> tuple[list[str], dict[str, str]]:
+    """Return the extra cargo arguments and the environment that add `ALIGNMENT_RUSTFLAGS` to a build run with `env`.
+
+    The flags join whichever rustflags source cargo reads under `env`, so the
+    build keeps every flag it would otherwise get, the target CPU included.
+    """
+    env = dict(env)
+    # Cargo takes rustflags from the first of these sources that is present
+    # and ignores the rest, so flags added to a lower-ranked source would be
+    # silently dropped. The ci-builder image sets `RUSTFLAGS`. Adding the
+    # flags to two sources is no alternative either, since LLVM rejects an
+    # option given twice.
+    if "CARGO_ENCODED_RUSTFLAGS" in env:
+        env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(
+            [f for f in env["CARGO_ENCODED_RUSTFLAGS"].split("\x1f") if f]
+            + list(ALIGNMENT_RUSTFLAGS)
+        )
+        return [], env
+    if "RUSTFLAGS" in env:
+        env["RUSTFLAGS"] = " ".join([env["RUSTFLAGS"], *ALIGNMENT_RUSTFLAGS]).strip()
+        return [], env
+    # A `target.<cfg>` entry is joined with the workspace's
+    # `target.<triple>.rustflags`, where `build.rustflags` would be ignored.
+    quoted = ",".join(f"'{flag}'" for flag in ALIGNMENT_RUSTFLAGS)
+    return ["--config", f"target.'cfg(all())'.rustflags=[{quoted}]"], env
 
 
 def bench_executables(
