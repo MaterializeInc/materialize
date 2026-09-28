@@ -804,7 +804,7 @@ impl ReplicaEnactment {
             catalog
                 .try_get_cluster_replica(self.cluster, self.replica)
                 .is_some(),
-            "replica was removed"
+            super::ReplicaRemoved
         );
         Ok(())
     }

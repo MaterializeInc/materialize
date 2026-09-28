@@ -40,6 +40,18 @@ mod time_dependence;
 #[cfg(test)]
 mod tests;
 
+/// The committed catalog no longer contains this replica.
+#[derive(Debug)]
+pub(crate) struct ReplicaRemoved;
+
+impl std::fmt::Display for ReplicaRemoved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("replica was removed")
+    }
+}
+
+impl std::error::Error for ReplicaRemoved {}
+
 pub(crate) struct Config {
     pub environment_id: EnvironmentId,
     pub reconstruction: ReplicaCatalogConfig,
@@ -322,7 +334,7 @@ pub(crate) async fn run(
             catalog
                 .try_get_cluster_replica(config.cluster_id, config.replica_id)
                 .is_some(),
-            "replica was removed before initialization"
+            ReplicaRemoved
         );
         let instance = mz_catalog::compute_config::replica_instance_config(
             &catalog,
@@ -400,7 +412,7 @@ pub(crate) async fn run(
                     catalog
                         .try_get_cluster_replica(config.cluster_id, config.replica_id)
                         .is_some(),
-                    "replica was removed"
+                    ReplicaRemoved
                 );
                 execution.configure_storage(&catalog, config.cluster_id, config.replica_id);
                 execution.configure(mz_catalog::compute_config::replica_compute_config(
