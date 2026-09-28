@@ -11,7 +11,7 @@
 # BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
 # MZ_SSH_TUNNEL_CONNECTIONS in src/catalog/src/builtin/mz_catalog.rs and the
 # parse_connection_details helper in
-# src/expr/src/scalar/func/impls/jsonb.rs. The end-to-end SSH tunnel behaviour
+# src/catalog-decode/src/create_sql.rs. The end-to-end SSH tunnel behaviour
 # is exercised by test/ssh-connection/*; this file pins the column shape and
 # the parent-type filtering.
 

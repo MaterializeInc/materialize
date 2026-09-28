@@ -25,7 +25,7 @@
 //! `mz_catalog.mz_audit_events.details` exposes. The durable catalog stores
 //! the proto twin from `mz_catalog_protos::objects::audit_log_event_v1`,
 //! which `parse_catalog_audit_log_details` (in
-//! `src/expr/src/scalar/func/impls/jsonb.rs`) reshapes back into
+//! `src/catalog-decode/src/audit_log.rs`) reshapes back into
 //! `as_json`'s output. Changes here that shift that output (new variants,
 //! renamed fields, added `skip_serializing_if`, field-name diffs against
 //! the proto) need matching updates there. The round-trip is covered by
