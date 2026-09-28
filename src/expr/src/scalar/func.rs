@@ -162,7 +162,6 @@ func_name! {
     CastStringToVarChar => "cast_string_to_var_char",
     CastTimestampToTimestampTz => "cast_timestamp_to_timestamp_tz",
     CastTimestampTzToTimestamp => "cast_timestamp_tz_to_timestamp",
-    CastUint32ToNumeric => "cast_uint32_to_numeric",
     CastUint64ToNumeric => "cast_uint64_to_numeric",
     DatePartInterval => "date_part_interval",
     DatePartTime => "date_part_time",
