@@ -55,7 +55,8 @@ use crate::durable::objects::{
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
     ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    IndexColumn, IndexColumnKey, IndexColumnValue, IntrospectionSourceIndex, Item, ItemColumn,
+    ItemColumnKey, ItemColumnValue, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
     ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
@@ -89,6 +90,8 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
+    item_columns: TableTransaction<ItemColumnKey, ItemColumnValue>,
+    index_columns: TableTransaction<IndexColumnKey, IndexColumnValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
@@ -159,6 +162,8 @@ impl<'a> Transaction<'a> {
             roles,
             role_auth,
             items,
+            item_columns,
+            index_columns,
             comments,
             clusters,
             network_policies,
@@ -232,6 +237,8 @@ impl<'a> Transaction<'a> {
                         && prev.item_type() == next.item_type()
                 },
             )?,
+            item_columns: TableTransaction::new(item_columns)?,
+            index_columns: TableTransaction::new(index_columns)?,
             comments: TableTransaction::new(comments)?,
             roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
             role_auth: TableTransaction::new(role_auth)?,
@@ -287,6 +294,24 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
             .sorted_by_key(|Item { id, .. }| *id)
+    }
+
+    /// The recorded columns of every item, in `(item, position)` order.
+    pub fn get_item_columns(&self) -> impl Iterator<Item = ItemColumn> + use<> {
+        self.item_columns
+            .items()
+            .into_iter()
+            .map(|(k, v)| ItemColumn::from_key_value(k.clone(), v.clone()))
+            .sorted_by_key(|column| (column.id, column.position))
+    }
+
+    /// The recorded keys of every index, in `(index, position)` order.
+    pub fn get_index_columns(&self) -> impl Iterator<Item = IndexColumn> + use<> {
+        self.index_columns
+            .items()
+            .into_iter()
+            .map(|(k, v)| IndexColumn::from_key_value(k.clone(), v.clone()))
+            .sorted_by_key(|column| (column.id, column.position))
     }
 
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
@@ -752,6 +777,8 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        columns: Vec<ItemColumn>,
+        index_columns: Vec<IndexColumn>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
@@ -765,6 +792,8 @@ impl<'a> Transaction<'a> {
             privileges,
             versions,
             ephemeral_owner_session,
+            columns,
+            index_columns,
         )?;
         Ok(oid)
     }
@@ -781,8 +810,10 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        columns: Vec<ItemColumn>,
+        index_columns: Vec<IndexColumn>,
     ) -> Result<(), CatalogError> {
-        match self.items.insert(
+        let inserted = self.items.insert(
             ItemKey { id },
             ItemValue {
                 schema_id,
@@ -796,16 +827,61 @@ impl<'a> Transaction<'a> {
                 ephemeral_owner_session,
             },
             self.op_id,
-        ) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
+        );
+        if inserted.is_err() {
+            return Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into());
         }
+        self.set_item_metadata(id, columns, index_columns)
+    }
+
+    /// Records `columns` and `index_columns` as the planner-resolved metadata
+    /// of item `id`, replacing whatever rows it had. See [`ItemColumn`].
+    ///
+    /// The rows of an item are only ever written as a whole, so that their
+    /// positions stay contiguous.
+    pub fn set_item_metadata(
+        &mut self,
+        id: CatalogItemId,
+        columns: Vec<ItemColumn>,
+        index_columns: Vec<IndexColumn>,
+    ) -> Result<(), CatalogError> {
+        soft_assert_or_log!(
+            columns.iter().all(|column| column.id == id)
+                && index_columns.iter().all(|column| column.id == id),
+            "metadata recorded for item {id} belongs to another item"
+        );
+
+        let positions: BTreeSet<_> = columns.iter().map(|column| column.position).collect();
+        self.item_columns.delete(
+            |key, _| key.id == id && !positions.contains(&key.position),
+            self.op_id,
+        );
+        for column in columns {
+            let (key, value) = column.into_key_value();
+            if self.item_columns.get(&key) != Some(&value) {
+                self.item_columns.set(key, Some(value), self.op_id)?;
+            }
+        }
+
+        let positions: BTreeSet<_> = index_columns.iter().map(|column| column.position).collect();
+        self.index_columns.delete(
+            |key, _| key.id == id && !positions.contains(&key.position),
+            self.op_id,
+        );
+        for column in index_columns {
+            let (key, value) = column.into_key_value();
+            if self.index_columns.get(&key) != Some(&value) {
+                self.index_columns.set(key, Some(value), self.op_id)?;
+            }
+        }
+        Ok(())
     }
 
     /// Removes every item owned by an ephemeral session from the transaction,
     /// along with the durable state a graceful drop would have removed with
     /// it: storage collection metadata (moving the backing shards to the
-    /// finalization WAL), comments, and source references.
+    /// finalization WAL), recorded columns and index keys, comments, and
+    /// source references.
     ///
     /// Used to reclaim temporary items when the catalog is opened with write
     /// intent, at which point every session that could own one is dead.
@@ -830,6 +906,10 @@ impl<'a> Transaction<'a> {
             keys.push(key.clone());
         }
         self.items.delete_by_keys(keys, self.op_id);
+        self.item_columns
+            .delete(|key, _| item_ids.contains(&key.id), self.op_id);
+        self.index_columns
+            .delete(|key, _| item_ids.contains(&key.id), self.op_id);
 
         // Move the items' storage mappings to the finalization WAL, like
         // `StorageCollections::prepare_state` does for a graceful drop. Every
@@ -1185,6 +1265,8 @@ impl<'a> Transaction<'a> {
             roles: self.roles.current_items_proto(),
             role_auth: self.role_auth.current_items_proto(),
             items: self.items.current_items_proto(),
+            item_columns: self.item_columns.current_items_proto(),
+            index_columns: self.index_columns.current_items_proto(),
             comments: self.comments.current_items_proto(),
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
@@ -1503,6 +1585,8 @@ impl<'a> Transaction<'a> {
     pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
+            self.item_columns.delete(|key, _| key.id == id, self.op_id);
+            self.index_columns.delete(|key, _| key.id == id, self.op_id);
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1522,6 +1606,10 @@ impl<'a> Transaction<'a> {
 
         let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
+        self.item_columns
+            .delete(|key, _| ids.contains(&key.id), self.op_id);
+        self.index_columns
+            .delete(|key, _| ids.contains(&key.id), self.op_id);
         if n == ids.len() {
             Ok(())
         } else {
@@ -2582,6 +2670,9 @@ impl<'a> Transaction<'a> {
             configs: _,
             settings: _,
             txn_wal_shard: _,
+            // Not consumed by the in-memory catalog, which plans items itself.
+            item_columns: _,
+            index_columns: _,
             upper,
             op_id: _,
             commit_capability: _,
@@ -2744,6 +2835,8 @@ impl<'a> Transaction<'a> {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
             items: self.items.pending(),
+            item_columns: self.item_columns.pending(),
+            index_columns: self.index_columns.pending(),
             comments: self.comments.pending(),
             roles: self.roles.pending(),
             role_auth: self.role_auth.pending(),
@@ -2797,6 +2890,8 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
@@ -2826,6 +2921,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(databases);
         differential_dataflow::consolidation::consolidate_updates(schemas);
         differential_dataflow::consolidation::consolidate_updates(items);
+        differential_dataflow::consolidation::consolidate_updates(item_columns);
+        differential_dataflow::consolidation::consolidate_updates(index_columns);
         differential_dataflow::consolidation::consolidate_updates(comments);
         differential_dataflow::consolidation::consolidate_updates(roles);
         differential_dataflow::consolidation::consolidate_updates(role_auth);
@@ -3021,6 +3118,8 @@ pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
+    pub(crate) item_columns: Vec<(proto::ItemColumnKey, proto::ItemColumnValue, Diff)>,
+    pub(crate) index_columns: Vec<(proto::IndexColumnKey, proto::IndexColumnValue, Diff)>,
     pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
@@ -3087,6 +3186,8 @@ impl TransactionBatch {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
@@ -3114,6 +3215,8 @@ impl TransactionBatch {
         databases.is_empty()
             && schemas.is_empty()
             && items.is_empty()
+            && item_columns.is_empty()
+            && index_columns.is_empty()
             && comments.is_empty()
             && roles.is_empty()
             && role_auth.is_empty()
@@ -3202,6 +3305,8 @@ mod unique_name {
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
+        IndexColumnValue,
+        ItemColumnValue,
         ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
         SettingValue,

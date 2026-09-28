@@ -528,6 +528,8 @@ mod tests {
             Vec::new(),
             Default::default(),
             None,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
         let replica = tx.get_cluster_replicas().next().unwrap();

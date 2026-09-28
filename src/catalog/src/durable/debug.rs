@@ -62,7 +62,9 @@ pub enum CollectionType {
     Database,
     DefaultPrivileges,
     IdAlloc,
+    IndexColumn,
     Item,
+    ItemColumn,
     NetworkPolicy,
     Role,
     RoleAuth,
@@ -201,6 +203,22 @@ collection_impl!({
     collection_type: CollectionType::Item,
     trace_field: items,
     update: StateUpdateKind::Item,
+});
+collection_impl!({
+    name: ItemColumnCollection,
+    key: proto::ItemColumnKey,
+    value: proto::ItemColumnValue,
+    collection_type: CollectionType::ItemColumn,
+    trace_field: item_columns,
+    update: StateUpdateKind::ItemColumn,
+});
+collection_impl!({
+    name: IndexColumnCollection,
+    key: proto::IndexColumnKey,
+    value: proto::IndexColumnValue,
+    collection_type: CollectionType::IndexColumn,
+    trace_field: index_columns,
+    update: StateUpdateKind::IndexColumn,
 });
 collection_impl!({
     name: NetworkPolicyCollection,
@@ -356,6 +374,8 @@ pub struct Trace {
     pub default_privileges: CollectionTrace<DefaultPrivilegeCollection>,
     pub id_allocator: CollectionTrace<IdAllocatorCollection>,
     pub items: CollectionTrace<ItemCollection>,
+    pub item_columns: CollectionTrace<ItemColumnCollection>,
+    pub index_columns: CollectionTrace<IndexColumnCollection>,
     pub network_policies: CollectionTrace<NetworkPolicyCollection>,
     pub roles: CollectionTrace<RoleCollection>,
     pub role_auth: CollectionTrace<RoleAuthCollection>,
@@ -385,6 +405,8 @@ impl Trace {
             default_privileges: CollectionTrace::new(),
             id_allocator: CollectionTrace::new(),
             items: CollectionTrace::new(),
+            item_columns: CollectionTrace::new(),
+            index_columns: CollectionTrace::new(),
             network_policies: CollectionTrace::new(),
             roles: CollectionTrace::new(),
             role_auth: CollectionTrace::new(),
@@ -414,6 +436,8 @@ impl Trace {
             default_privileges,
             id_allocator,
             items,
+            item_columns,
+            index_columns,
             network_policies,
             roles,
             role_auth,
@@ -439,6 +463,8 @@ impl Trace {
         default_privileges.sort();
         id_allocator.sort();
         items.sort();
+        item_columns.sort();
+        index_columns.sort();
         network_policies.sort();
         roles.sort();
         role_auth.sort();

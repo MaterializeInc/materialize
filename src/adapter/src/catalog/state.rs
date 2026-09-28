@@ -39,7 +39,7 @@ use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -57,7 +57,7 @@ use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFr
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    VersionedRelationDesc,
+    ReprColumnType, SqlScalarType, VersionedRelationDesc,
 };
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
@@ -1024,6 +1024,105 @@ impl CatalogState {
             extra_versions,
             ephemeral_owner_session,
         })
+    }
+
+    /// Stages `entry` in `tx` as an update of its durable item, along with the
+    /// planner-resolved metadata the item records. Every update that comes
+    /// from planning goes through here, so that a change to a relation's
+    /// columns, such as `ALTER TABLE ... ADD COLUMN`, reaches the recorded
+    /// rows in the same transaction.
+    pub(super) fn update_durable_item(
+        &self,
+        tx: &mut mz_catalog::durable::Transaction<'_>,
+        entry: CatalogEntry,
+    ) -> Result<(), AdapterError> {
+        let id = entry.id;
+        let (columns, index_columns) = self.durable_item_metadata(id, &entry.item);
+        tx.update_item(id, self.durable_item(entry)?)?;
+        tx.set_item_metadata(id, columns, index_columns)?;
+        Ok(())
+    }
+
+    /// The planner-resolved metadata the durable catalog records for `item`,
+    /// whose id is `id`: the columns of a relation, each by the identity its
+    /// type presents as, and the keys of an index. See
+    /// `mz_catalog::durable::ItemColumn`.
+    ///
+    /// An index's keys are typed against the version of the indexed relation
+    /// it was created on, which must be in this catalog.
+    pub(super) fn durable_item_metadata(
+        &self,
+        id: CatalogItemId,
+        item: &CatalogItem,
+    ) -> (
+        Vec<mz_catalog::durable::ItemColumn>,
+        Vec<mz_catalog::durable::IndexColumn>,
+    ) {
+        let columns = item
+            .relation_desc(RelationVersionSelector::Latest)
+            .map(|desc| {
+                desc.iter()
+                    .enumerate()
+                    .map(|(i, (name, typ))| {
+                        let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                        let custom_type = match &typ.scalar_type {
+                            SqlScalarType::List {
+                                custom_id: Some(id),
+                                ..
+                            }
+                            | SqlScalarType::Map {
+                                custom_id: Some(id),
+                                ..
+                            }
+                            | SqlScalarType::Record {
+                                custom_id: Some(id),
+                                ..
+                            } => Some(*id),
+                            _ => None,
+                        };
+                        mz_catalog::durable::ItemColumn {
+                            id,
+                            position: i + 1,
+                            name: name.clone(),
+                            nullable: typ.nullable,
+                            type_oid: pg_type.oid(),
+                            type_mod: pg_type.typmod(),
+                            custom_type,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let index_columns = match item {
+            CatalogItem::Index(index) => {
+                let on_entry = self.get_entry_by_global_id(&index.on);
+                let on_desc = on_entry
+                    .relation_desc()
+                    .expect("indexes are built on relations");
+                let column_types: Vec<ReprColumnType> = on_desc
+                    .typ()
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect();
+                index
+                    .keys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, key)| mz_catalog::durable::IndexColumn {
+                        id,
+                        position: i + 1,
+                        column: match key {
+                            MirScalarExpr::Column(column, _) => Some(*column + 1),
+                            _ => None,
+                        },
+                        nullable: key.typ(&column_types).nullable,
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        (columns, index_columns)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.

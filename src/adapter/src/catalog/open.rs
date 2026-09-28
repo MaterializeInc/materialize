@@ -882,6 +882,8 @@ fn add_new_remove_old_builtin_items_migration(
                     acl_items,
                     versions,
                     None,
+                    Vec::new(),
+                    Vec::new(),
                 )?;
                 true
             }
