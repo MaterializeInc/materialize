@@ -38,6 +38,15 @@ Same-version success is an intermediate proof, not completion of M2. Do not
 design a same-version-only shortcut that needs another ownership model for
 version overlap.
 
+M2 requires stable ReplicaIds for shared declarations and replicas deliberately
+carried over across deployments, including their public IDs. Runtime identity
+includes deployment. Independent creates and DROP/recreate get fresh IDs, not
+name-based matches. Deployments can have different replica sets, including
+private hydration bursts. Keep shared intent distinct from deployment-local
+membership, hydration, burst state and reconfiguration progress. Align the
+catalog model with these contracts, not just a stable declaration_id behind
+changing public replica IDs. Table layout and factoring remain yours to choose.
+
 For these milestones, keep mz_cluster_replicas shared and materializable,
 filtered to the catalog's active deployment regardless of the querying adapter.
 Routing, reconciliation and prewarming readiness use their own deployment's
@@ -48,7 +57,8 @@ M2 excludes native warm handover with replica-targeted MVs on managed clusters.
 Reject that combination before promotion, leaving the active deployment intact.
 Preserve single-deployment behavior and handover for explicitly declared
 replicas on unmanaged clusters. Do not retarget pins or cascade-drop shared
-MVs when retiring private replicas. Broader pinning semantics are future work.
+MVs when retiring private replicas. Broader MV pinning semantics are future
+work, not the core replica identity and membership model.
 
 Close the known serving-compatibility gaps at their owning boundaries:
 - Establish the index's initial as_of, bound and logical/actual-input protection
