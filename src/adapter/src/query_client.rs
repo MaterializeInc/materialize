@@ -332,45 +332,86 @@ impl QueryClient {
             .iter()
             .any(|client| {
                 client.frontiers().is_ok_and(|frontiers| {
-                    expected.iter().all(|id| {
-                        let Some(target) = frontiers.get(id) else {
-                            return false;
-                        };
-                        let mut reference_upper = Antichain::from_elem(Timestamp::MIN);
-                        let mut has_reference = false;
-                        if allowed_lag.is_some() {
-                            for (replica_id, frontiers) in &references {
-                                if catalog.try_get_entry_by_global_id(id).is_some_and(|entry| {
-                                    match entry.item() {
-                                        CatalogItem::MaterializedView(mv) => mv
-                                            .target_replica
-                                            .is_some_and(|target| target != *replica_id),
-                                        _ => false,
+                    let mut unobserved = BTreeSet::new();
+                    let mut unhydrated = BTreeSet::new();
+                    let mut lagging_ticks = BTreeMap::new();
+                    let mut awaiting_completion = BTreeSet::new();
+                    // Evaluate every expected export so the probe reports all
+                    // reasons for waiting, rather than only the first blocker.
+                    for id in expected {
+                        let readiness = (|| {
+                            let Some(target) = frontiers.get(id) else {
+                                return None;
+                            };
+                            let mut reference_upper = Antichain::from_elem(Timestamp::MIN);
+                            let mut has_reference = false;
+                            if allowed_lag.is_some() {
+                                for (replica_id, frontiers) in &references {
+                                    if catalog.try_get_entry_by_global_id(id).is_some_and(|entry| {
+                                        match entry.item() {
+                                            CatalogItem::MaterializedView(mv) => mv
+                                                .target_replica
+                                                .is_some_and(|target| target != *replica_id),
+                                            _ => false,
+                                        }
+                                    }) {
+                                        continue;
                                     }
-                                }) {
-                                    continue;
+                                    let Some(output) = frontiers
+                                        .as_ref()
+                                        .and_then(|frontiers| frontiers.get(id))
+                                        .and_then(|frontiers| frontiers.output_frontier.as_ref())
+                                    else {
+                                        return None;
+                                    };
+                                    has_reference = true;
+                                    reference_upper.join_assign(output);
                                 }
-                                let Some(output) = frontiers
-                                    .as_ref()
-                                    .and_then(|frontiers| frontiers.get(id))
-                                    .and_then(|frontiers| frontiers.output_frontier.as_ref())
-                                else {
-                                    return false;
-                                };
-                                has_reference = true;
-                                reference_upper.join_assign(output);
+                            }
+                            let lag = allowed_lag.filter(|_| has_reference);
+                            if lag.is_some() && target.output_frontier.is_none() {
+                                return None;
+                            }
+                            Some(CollectionReadiness::classify(
+                                target.hydrated == Some(true),
+                                target.output_frontier.as_ref().unwrap_or(&reference_upper),
+                                lag.map(|lag| (&reference_upper, lag)),
+                            ))
+                        })();
+                        match readiness {
+                            Some(CollectionReadiness::Ready) => {}
+                            Some(CollectionReadiness::Unhydrated) => {
+                                unhydrated.insert(*id);
+                            }
+                            Some(CollectionReadiness::Lagging { lag: Some(lag) }) => {
+                                lagging_ticks.insert(*id, lag);
+                            }
+                            Some(CollectionReadiness::Lagging { lag: None }) => {
+                                awaiting_completion.insert(*id);
+                            }
+                            None => {
+                                unobserved.insert(*id);
                             }
                         }
-                        let lag = allowed_lag.filter(|_| has_reference);
-                        if lag.is_some() && target.output_frontier.is_none() {
-                            return false;
-                        }
-                        CollectionReadiness::classify(
-                            target.hydrated == Some(true),
-                            target.output_frontier.as_ref().unwrap_or(&reference_upper),
-                            lag.map(|lag| (&reference_upper, lag)),
-                        ) == CollectionReadiness::Ready
-                    })
+                    }
+                    let ready = unobserved.is_empty()
+                        && unhydrated.is_empty()
+                        && lagging_ticks.is_empty()
+                        && awaiting_completion.is_empty();
+                    if !ready {
+                        tracing::info!(
+                            ?cluster,
+                            ?replica,
+                            ?reference,
+                            ?unobserved,
+                            ?unhydrated,
+                            ?lagging_ticks,
+                            ?awaiting_completion,
+                            ?allowed_lag,
+                            "collections are not ready on target replica",
+                        );
+                    }
+                    ready
                 })
             })
     }
