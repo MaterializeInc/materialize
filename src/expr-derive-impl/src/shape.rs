@@ -26,8 +26,8 @@ pub(crate) enum Shape {
 /// A modifier that maps directly onto one optional trait method.
 ///
 /// Modifiers that do not produce a trait method, such as `sqlname`, `output_type`,
-/// `output_type_expr`, and `test`, are absent: `crate::generate::generate` handles
-/// those explicitly because they feed `Display`, the output-type body, or the
+/// `output_type_expr`, `test`, and `skip_display`, are absent: `crate::generate::generate`
+/// handles those explicitly because they feed `Display`, the output-type body, or the
 /// expansion decision instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
@@ -79,6 +79,16 @@ impl ReturnTy {
             ReturnTy::BoolPair => quote! { (bool, bool) },
             ReturnTy::OptUnaryFunc => quote! { Option<crate::UnaryFunc> },
             ReturnTy::OptBinaryFunc => quote! { Option<crate::BinaryFunc> },
+        }
+    }
+
+    /// The method body for a modifier whose value is `expr`. A function-valued
+    /// modifier names the function, and the body converts it into the enum.
+    pub(crate) fn body(&self, expr: &syn::Expr) -> TokenStream {
+        match self {
+            ReturnTy::Bool | ReturnTy::BoolPair => quote! { #expr },
+            ReturnTy::OptUnaryFunc => quote! { Some(crate::UnaryFunc::from(#expr)) },
+            ReturnTy::OptBinaryFunc => quote! { Some(crate::BinaryFunc::from(#expr)) },
         }
     }
 }
@@ -168,14 +178,6 @@ impl Shape {
         }
     }
 
-    /// Whether the trait's `call` receives a `&'a RowArena`.
-    pub(crate) fn takes_arena(&self) -> bool {
-        match self {
-            Shape::Unary => false,
-            Shape::Binary | Shape::Variadic => true,
-        }
-    }
-
     /// The tail of the output-type method, which sets the nullability of the
     /// `output` column type the caller computed.
     ///
@@ -190,6 +192,14 @@ impl Shape {
     /// some input is nullable, because the optimizer short-circuits an all-NULL call.
     pub(crate) fn nullability(&self, checks: &[TokenStream]) -> TokenStream {
         match self {
+            // NOTE: unary omits the non-nullable-position term the other two arities
+            // carry. That is sound only because `PropagatesNulls` is absent from
+            // `UNARY_MODIFIERS`, so a unary `propagates_nulls` is always
+            // `!Input::nullable()`, which is what the position check tests for every
+            // parameter type in the tree.
+            // Adding `PropagatesNulls` to the unary table without also adding the term
+            // here lets `propagates_nulls = false` report a non-nullable output for an
+            // input the evaluation layer short-circuits to NULL.
             Shape::Unary => quote! {
                 output.nullable(nullable || (propagates_nulls && input_type.nullable))
             },
@@ -232,7 +242,11 @@ mod tests {
         assert!(has(Shape::Unary, Modifier::IsEliminableCast));
         assert!(!has(Shape::Unary, Modifier::Negate));
         assert!(!has(Shape::Unary, Modifier::IsInfixOp));
-        assert!(!has(Shape::Unary, Modifier::PropagatesNulls));
+        assert!(
+            !has(Shape::Unary, Modifier::PropagatesNulls),
+            "Shape::nullability omits unary's non-nullable-position term on the strength of \
+             this absence"
+        );
         assert!(!has(Shape::Unary, Modifier::IsAssociative));
     }
 }

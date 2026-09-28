@@ -12,7 +12,7 @@ use std::fmt;
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -21,7 +21,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = true,
-    inverse = to_unary!(NegInt64),
+    inverse = NegInt64,
     is_monotone = true
 )]
 fn neg_int64(a: i64) -> Result<i64, EvalError> {
@@ -32,7 +32,7 @@ fn neg_int64(a: i64) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "~",
     preserves_uniqueness = true,
-    inverse = to_unary!(BitNotInt64)
+    inverse = BitNotInt64
 )]
 fn bit_not_int64(a: i64) -> i64 {
     !a
@@ -47,7 +47,7 @@ fn abs_int64(a: i64) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "bigint_to_boolean",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastBoolToInt64)
+    inverse = super::CastBoolToInt64
 )]
 fn cast_int64_to_bool(a: i64) -> bool {
     a != 0
@@ -56,7 +56,7 @@ fn cast_int64_to_bool(a: i64) -> bool {
 #[sqlfunc(
     sqlname = "bigint_to_smallint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt16ToInt64),
+    inverse = super::CastInt16ToInt64,
     is_monotone = true
 )]
 fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
@@ -66,7 +66,7 @@ fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "bigint_to_integer",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt32ToInt64),
+    inverse = super::CastInt32ToInt64,
     is_monotone = true
 )]
 fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
@@ -76,7 +76,7 @@ fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "bigint_to_oid",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastOidToInt64)
+    inverse = super::CastOidToInt64
 )]
 fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
     // Unlike casting a 16-bit or 32-bit integers to OID, casting a 64-bit
@@ -89,7 +89,7 @@ fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
 #[sqlfunc(
     sqlname = "bigint_to_uint2",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint16ToInt64),
+    inverse = super::CastUint16ToInt64,
     is_monotone = true
 )]
 fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
@@ -99,7 +99,7 @@ fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "bigint_to_uint4",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint32ToInt64),
+    inverse = super::CastUint32ToInt64,
     is_monotone = true
 )]
 fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
@@ -109,7 +109,7 @@ fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "bigint_to_uint8",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint64ToInt64),
+    inverse = super::CastUint64ToInt64,
     is_monotone = true
 )]
 fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
@@ -133,7 +133,7 @@ impl EagerUnaryFunc for CastInt64ToNumeric {
     type Input<'a> = i64;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {
@@ -170,7 +170,7 @@ impl fmt::Display for CastInt64ToNumeric {
 #[sqlfunc(
     sqlname = "bigint_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToInt64),
+    inverse = super::CastFloat32ToInt64,
     is_monotone = true
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -182,7 +182,7 @@ fn cast_int64_to_float32(a: i64) -> f32 {
 #[sqlfunc(
     sqlname = "bigint_to_double",
     preserves_uniqueness = false, // Witness: (1111111111111111111, 1111111111111111112).
-    inverse = to_unary!(super::CastFloat64ToInt64),
+    inverse = super::CastFloat64ToInt64,
     is_monotone = true
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -194,7 +194,7 @@ fn cast_int64_to_float64(a: i64) -> f64 {
 #[sqlfunc(
     sqlname = "bigint_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToInt64)
+    inverse = super::CastStringToInt64
 )]
 fn cast_int64_to_string(a: i64) -> String {
     let mut buf = String::new();

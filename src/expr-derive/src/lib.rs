@@ -16,9 +16,12 @@
 /// appropriate traits: `EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`.
 ///
 /// The macro takes the following arguments:
-/// * `is_monotone`: An expression indicating whether the function is monotone. For unary functions,
-///   it should be an expression that evaluates to a boolean. For binary functions, it should be a
-///   tuple of two expressions, each evaluating to a boolean. See `LazyBinaryFunc` for details.
+/// * `is_monotone`: An expression indicating whether the function is monotone. For unary and
+///   variadic functions, it should be an expression that evaluates to a boolean. For binary
+///   functions, it should be a tuple of two expressions, each evaluating to a boolean. See
+///   `LazyBinaryFunc` for details.
+/// * `is_infinity_monotone`: A boolean indicating whether `is_monotone`'s endpoint-sampling
+///   guarantee still holds when an operand may be infinite. Applies to binary functions only.
 /// * `sqlname`: The SQL name of the function.
 /// * `preserves_uniqueness`: A boolean indicating whether the function preserves uniqueness.
 ///   Unary functions only.
@@ -27,15 +30,19 @@
 ///   the `!=` operator is the negation of the `=` operator, and we'd mark the `Eq` function with
 ///   `negate = Some(BinaryFunc::NotEq)`.
 /// * `is_infix_op`: A boolean indicating whether the function is an infix operator. Applies to
-///   binary functions only.
+///   binary and variadic functions.
+/// * `is_associative`: A boolean indicating whether the function is associative. Applies to
+///   variadic functions only.
+/// * `is_eliminable_cast`: A boolean indicating whether the function is a cast that the
+///   optimizer may remove. Applies to unary functions only.
 /// * `output_type`: The output type of the function.
-/// * `output_type_expr`: An expression that evaluates to the output type. Applies to binary
-///   and variadic functions. For binary functions, the expression has access to `input_type_a`
-///   and `input_type_b`; for variadic functions, it has access to `input_types: &[SqlColumnType]`.
-///   Should evaluate to a `SqlColumnType` value. This expression determines the *base* output
-///   type; the macro separately computes nullability by combining `introduces_nulls`,
-///   `propagates_nulls`, and input nullability. Requires `introduces_nulls`, and conflicts
-///   with `output_type`.
+/// * `output_type_expr`: An expression that evaluates to the output type. Applies to unary,
+///   binary, and variadic functions. For unary functions, the expression has access to
+///   `input_type: SqlColumnType`; for binary and variadic functions,
+///   `input_types: &[SqlColumnType]`. Should evaluate to a `SqlColumnType` value. This
+///   expression determines the *base* output type; the macro separately computes
+///   nullability by combining `introduces_nulls`, `propagates_nulls`, and input nullability.
+///   Requires `introduces_nulls`, and conflicts with `output_type`.
 /// * `could_error`: A boolean indicating whether the function could error.
 /// * `propagates_nulls`: A boolean indicating whether the function propagates nulls. Applies to
 ///   binary and variadic functions. If not specified, use the default implementation from the
@@ -45,10 +52,13 @@
 ///   The default is to return the `nullable` property of the output type.
 /// * `test`: A boolean indicating whether to generate a snapshot test for the function.
 ///   Defaults to `false`.
+/// * `skip_display`: A boolean suppressing the generated `fmt::Display` impl. Set this
+///   when the struct's name depends on its state, so the call site keeps a hand-written
+///   `Display` impl instead. Setting it to `true` rejects `sqlname`, whose only reader
+///   is the suppressed impl.
 ///
 /// # Limitations
 /// * The input and output types can contain lifetime parameters, as long as they are `'a`.
-/// * Unary functions cannot yet receive a `&RowArena` as an argument.
 ///
 /// # Examples
 /// ```ignore

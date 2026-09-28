@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    unimplemented!()\n}\n"
+expression: "#[sqlfunc(sqlname = \"to_arena_string\", test = true)]\nfn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str {\n    temp_storage.push_string(a.to_string())\n}\n"
 ---
 #[derive(
     Ord,
@@ -14,16 +14,16 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    un
     Hash,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
-pub struct UnaryFn;
-impl crate::func::EagerUnaryFunc for UnaryFn {
-    type Input<'a> = &'a i16;
-    type Output<'a> = bool;
+pub struct ToArenaString;
+impl crate::func::EagerUnaryFunc for ToArenaString {
+    type Input<'a> = i32;
+    type Output<'a> = &'a str;
     fn call<'a>(
         &self,
         a: Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output<'a> {
-        unary_fn(a)
+        to_arena_string(a, temp_storage)
     }
     fn output_sql_type(
         &self,
@@ -36,32 +36,30 @@ impl crate::func::EagerUnaryFunc for UnaryFn {
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
 }
-impl std::fmt::Display for UnaryFn {
+impl std::fmt::Display for ToArenaString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(unary_fn))
+        f.write_str("to_arena_string")
     }
 }
-impl crate::func::FuncName for UnaryFn {
-    const NAME: &'static str = stringify!(unary_fn);
+impl crate::func::FuncName for ToArenaString {
+    const NAME: &'static str = stringify!(to_arena_string);
     #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
-        decl: "#[sqlfunc(test = true)] fn unary_fn<'a>(a: &i16) -> bool",
-        signature: "fn(&'a i16) -> bool",
-        body_fingerprint: 4726381389472009124u64,
+        decl: "#[sqlfunc(sqlname = \"to_arena_string\", test = true)] fn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str",
+        signature: "fn(i32) -> &'a str",
+        body_fingerprint: 17915273539525400975u64,
     });
     #[cfg(feature = "func-registry")]
     fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
         use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
         [
-            (&crate::func::registry::ColumnTypeProbe::<
-                &'static i16,
-            >(::std::marker::PhantomData))
+            (&crate::func::registry::ColumnTypeProbe::<i32>(::std::marker::PhantomData))
                 .column_type(),
         ]
             .into_iter()
             .collect()
     }
 }
-fn unary_fn<'a>(a: &i16) -> bool {
-    unimplemented!()
+fn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str {
+    temp_storage.push_string(a.to_string())
 }

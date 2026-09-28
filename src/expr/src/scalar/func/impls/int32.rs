@@ -13,7 +13,7 @@ use mz_expr_derive::sqlfunc;
 use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::{Oid, PgLegacyChar};
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -22,7 +22,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = true,
-    inverse = to_unary!(NegInt32),
+    inverse = NegInt32,
     is_monotone = true
 )]
 fn neg_int32(a: i32) -> Result<i32, EvalError> {
@@ -33,7 +33,7 @@ fn neg_int32(a: i32) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "~",
     preserves_uniqueness = true,
-    inverse = to_unary!(BitNotInt32)
+    inverse = BitNotInt32
 )]
 fn bit_not_int32(a: i32) -> i32 {
     !a
@@ -48,7 +48,7 @@ fn abs_int32(a: i32) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "integer_to_boolean",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastBoolToInt32)
+    inverse = super::CastBoolToInt32
 )]
 fn cast_int32_to_bool(a: i32) -> bool {
     a != 0
@@ -57,7 +57,7 @@ fn cast_int32_to_bool(a: i32) -> bool {
 #[sqlfunc(
     sqlname = "integer_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToInt32),
+    inverse = super::CastFloat32ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_float32(a: i32) -> f32 {
@@ -71,7 +71,7 @@ fn cast_int32_to_float32(a: i32) -> f32 {
 #[sqlfunc(
     sqlname = "integer_to_double",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastFloat64ToInt32),
+    inverse = super::CastFloat64ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_float64(a: i32) -> f64 {
@@ -81,7 +81,7 @@ fn cast_int32_to_float64(a: i32) -> f64 {
 #[sqlfunc(
     sqlname = "integer_to_smallint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt16ToInt32),
+    inverse = super::CastInt16ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
@@ -91,7 +91,7 @@ fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "integer_to_bigint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt64ToInt32),
+    inverse = super::CastInt64ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_int64(a: i32) -> i64 {
@@ -101,7 +101,7 @@ fn cast_int32_to_int64(a: i32) -> i64 {
 #[sqlfunc(
     sqlname = "integer_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToInt32)
+    inverse = super::CastStringToInt32
 )]
 fn cast_int32_to_string(a: i32) -> String {
     let mut buf = String::new();
@@ -112,7 +112,7 @@ fn cast_int32_to_string(a: i32) -> String {
 #[sqlfunc(
     sqlname = "integer_to_uint2",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint16ToInt32),
+    inverse = super::CastUint16ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_uint16(a: i32) -> Result<u16, EvalError> {
@@ -122,7 +122,7 @@ fn cast_int32_to_uint16(a: i32) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "integer_to_uint4",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint32ToInt32),
+    inverse = super::CastUint32ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_uint32(a: i32) -> Result<u32, EvalError> {
@@ -132,7 +132,7 @@ fn cast_int32_to_uint32(a: i32) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "integer_to_uint8",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint64ToInt32),
+    inverse = super::CastUint64ToInt32,
     is_monotone = true
 )]
 fn cast_int32_to_uint64(a: i32) -> Result<u64, EvalError> {
@@ -156,7 +156,7 @@ impl EagerUnaryFunc for CastInt32ToNumeric {
     type Input<'a> = i32;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {
@@ -193,7 +193,7 @@ impl fmt::Display for CastInt32ToNumeric {
 #[sqlfunc(
     sqlname = "integer_to_oid",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastOidToInt32)
+    inverse = super::CastOidToInt32
 )]
 fn cast_int32_to_oid(a: i32) -> Oid {
     // For historical reasons in PostgreSQL, the bytes of the `i32` are
@@ -209,7 +209,7 @@ fn cast_int32_to_oid(a: i32) -> Oid {
 #[sqlfunc(
     sqlname = "integer_to_\"char\"",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastPgLegacyCharToInt32)
+    inverse = super::CastPgLegacyCharToInt32
 )]
 fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
     // Per PostgreSQL, casts to `PgLegacyChar` are performed as if

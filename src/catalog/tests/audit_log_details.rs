@@ -26,6 +26,7 @@ use mz_audit_log::EventDetails;
 use mz_catalog_protos::objects::audit_log_event_v1;
 use mz_expr::func::{EagerUnaryFunc, ParseCatalogAuditLogDetails};
 use mz_proto::RustType;
+use mz_repr::RowArena;
 use mz_repr::adt::jsonb::Jsonb;
 use proptest::prelude::*;
 
@@ -42,8 +43,9 @@ proptest! {
         let proto_json = serde_json::to_value(&proto).expect("proto serializes");
         let jsonb = Jsonb::from_serde_json(proto_json).expect("valid jsonb");
 
+        let temp_storage = RowArena::new();
         let got = ParseCatalogAuditLogDetails
-            .call(jsonb.as_ref())
+            .call(jsonb.as_ref(), &temp_storage)
             .expect("helper succeeded");
         let got_json = got.as_ref().to_serde_json();
 

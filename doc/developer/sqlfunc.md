@@ -1,7 +1,8 @@
 # The `#[sqlfunc]` macro
 
 The `#[sqlfunc]` attribute macro generates boilerplate for SQL scalar functions.
-It creates a unit struct, a trait implementation (`EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`), and a `Display` impl from a plain Rust function.
+From a plain Rust function it creates a trait implementation (`EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`), a `FuncName` implementation, and, unless the function takes a `&self` receiver, the struct itself.
+It also creates a `Display` implementation unless `skip_display` suppresses it.
 
 The macro lives in `src/expr-derive-impl/src/sqlfunc.rs`.
 The generated trait implementations live in `src/expr/src/scalar/func/{unary,binary,variadic}.rs`.
@@ -28,12 +29,14 @@ This generates:
 
 The macro determines function arity from parameter count and types, after excluding `&self` receivers and trailing `&RowArena` parameters:
 
-| Effective params | Dispatches to | Notes |
-|---|---|---|
-| 0 | Error | Nullary functions are not supported. |
-| 1 | `EagerUnaryFunc` | Does not support `&RowArena`. |
-| 2 | `EagerBinaryFunc` | Supports `&RowArena`. |
-| 3+ | `EagerVariadicFunc` | Supports `&RowArena` and `&self`. |
+| Effective params | Dispatches to |
+|---|---|
+| 0 | Error: nullary functions are not supported. |
+| 1 | `EagerUnaryFunc` |
+| 2 | `EagerBinaryFunc` |
+| 3+ | `EagerVariadicFunc` |
+
+Every arity accepts a `&self` receiver and a trailing `&RowArena`.
 
 **Exception:** If any parameter uses `Variadic<T>` or `OptionalArg<T>`, the function is always treated as variadic, regardless of parameter count.
 
@@ -55,6 +58,9 @@ The SQL-visible name of the function.
 * **Type:** string literal or macro expression
 * **Default:** the Rust function name (via `stringify!`)
 * **Applies to:** all arities
+
+The generated `Display` impl is the only reader, so `skip_display = true` rejects
+`sqlname`.
 
 ### `propagates_nulls`
 
@@ -79,7 +85,7 @@ The optimizer uses this to reason about column nullability.
   A function returning `Option<T>` or `Datum` introduces nulls.
   A function returning `String` or `i32` does not.
 * **Applies to:** all arities
-* **Note:** required when using `output_type_expr` (because the output type is not statically known).
+* **Note:** set it where the return type overstates it. A function returning `Datum` or `Option<T>` that yields NULL only for NULL inputs declares `introduces_nulls = false`.
 
 ### `could_error`
 
@@ -122,7 +128,7 @@ Whether the function is injective: if `f(x) = f(y)` then `x = y`.
 
 The inverse function, if it exists.
 
-* **Type:** expression evaluating to `Option<crate::UnaryFunc>`
+* **Type:** expression convertible into `crate::UnaryFunc`, for example `inverse = NegFloat64`
 * **Default:** `None`
 * **Applies to:** unary only
 
@@ -131,7 +137,7 @@ The inverse function, if it exists.
 The logical negation of a comparison function.
 For example, `<` negates to `>=`.
 
-* **Type:** expression evaluating to `Option<crate::BinaryFunc>`
+* **Type:** expression convertible into `crate::BinaryFunc`, for example `negate = NotEq`
 * **Default:** `None`
 * **Applies to:** binary only
 
@@ -170,7 +176,6 @@ Use this for functions whose output type depends on input types or struct fields
 * **Type:** expression evaluating to `SqlColumnType`
 * **Default:** none
 * **Applies to:** all arities
-* **Requires:** `introduces_nulls` (must be specified explicitly)
 * **Cannot be combined with:** `output_type`
 
 ### `test`
@@ -184,26 +189,49 @@ Generate a snapshot test for the macro expansion.
 Snapshot files are stored in `src/expr-derive-impl/src/snapshots/`.
 Update them with `cargo insta accept` after running `cargo test -p mz-expr-derive-impl`.
 
+### `skip_display`
+
+Suppresses the generated `Display` impl. Use this when the displayed name depends on the
+struct's own state rather than being a fixed string, so the call site keeps a
+hand-written `Display` impl. `RangeCreate` is an example: it picks between
+`int4range`, `int8range`, `daterange`, `numrange`, `tsrange`, and `tstzrange` based on
+its `elem_type` field. Setting it to `true` rejects `sqlname`, whose only reader is the
+suppressed impl, and requires a `&self` receiver, since a unit struct has no state to
+display.
+
+* **Type:** `bool`
+* **Default:** `false`
+* **Applies to:** all arities
+
 Which modifiers apply to which arity is declared in
 `src/expr-derive-impl/src/shape.rs`, one table per arity. A modifier absent from an
 arity's table is rejected with an error naming both the modifier and the arity.
 
-## Variadic functions
+## Generated items
 
 ### Struct name
 
-For variadic functions, the struct name can be specified as the first positional argument.
-This is required when a `&self` receiver is present (the struct is defined externally):
+The struct name defaults to the camel-cased function name, and the first positional argument to the `sqlfunc` macro overrides it.
+With a `&self` receiver the macro does not define the struct, so the name must match the one defined externally:
 
 ```rust
-#[sqlfunc(ArrayFill, sqlname = "array_fill")]
-fn array_fill_variadic<'a>(&self, fill: Datum<'a>, dims: Datum<'a>, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(
+    ArrayFill,
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
+    introduces_nulls = false
+)]
+fn array_fill<'a>(
+    &self,
+    fill: Datum<'a>,
+    dims: Option<Array<'a>>,
+    lower_bounds: OptionalArg<Option<Array<'a>>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
     // ...
 }
 ```
 
-Without a `&self` receiver, the struct name defaults to the camel-cased function name.
-It can still be overridden with the first positional argument:
+Without `&self`, the macro defines the struct under that name:
 
 ```rust
 #[sqlfunc(Replace, sqlname = "replace")]
@@ -217,10 +245,17 @@ fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
 When a `&self` receiver is present, the macro assumes the struct is defined externally and generates:
 
 * A method `impl StructName { fn ... }` containing the function body.
-* An `EagerVariadicFunc` trait implementation that delegates to the method.
-* A `Display` implementation.
+* The `Eager*Func` trait implementation for the function's arity, delegating to the method.
+* A `Display` implementation, unless `skip_display` suppresses it.
 
 Without `&self`, the macro generates the struct itself (with standard derives) in addition to the trait and display implementations.
+
+### `&RowArena`
+
+A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
+It is excluded from arity detection and from the generated `Input` type.
+
+## Variadic functions
 
 ### `Variadic<T>` and `OptionalArg<T>`
 
@@ -249,14 +284,6 @@ fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<Str
 
 Both are defined in `src/repr/src/scalar.rs`.
 
-### `&RowArena`
-
-A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
-It is excluded from arity detection and from the generated `Input` type.
-The arena is always passed to binary and variadic `call` implementations (the trait requires it); for functions that don't use it, the parameter is simply unused.
-
-Unary functions do not support `&RowArena`.
-
 ### Input type
 
 For variadic functions, the generated `Input` type depends on parameter count:
@@ -271,11 +298,14 @@ The interplay between `propagates_nulls`, `introduces_nulls`, and input/output t
 The `output_type` method on each generated struct computes the output `SqlColumnType` as:
 
 ```
-output.nullable = output.nullable || (propagates_nulls && any_input_nullable)
+output.nullable = output.nullable
+    || non_nullable_input_is_nullable
+    || (propagates_nulls && any_input_nullable)
 ```
 
 Where:
 * `output.nullable` comes from `introduces_nulls` (or is inferred from the output type).
+* `non_nullable_input_is_nullable` is true if a nullable input column lands in a parameter position whose Rust type cannot represent NULL. Such a position makes the evaluation layer short-circuit to NULL, so the output is nullable no matter what `propagates_nulls` says. Unary functions have no such term, because a unary function's single position is the one `propagates_nulls` already describes.
 * `propagates_nulls` indicates whether NULL passes through.
 * `any_input_nullable` is true if any input column is nullable.
 
@@ -290,7 +320,7 @@ If the input type does not accept NULL (is non-nullable), the evaluation layer r
 #[sqlfunc(
     sqlname = "uint2_to_real",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastFloat32ToUint16),
+    inverse = super::CastFloat32ToUint16,
     is_monotone = true
 )]
 fn cast_uint16_to_float32(a: u16) -> f32 {
@@ -340,11 +370,28 @@ fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
 #[sqlfunc(
     ArrayCreate,
     sqlname = "array_create",
-    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)"
 )]
 fn array_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Array<'a> {
     // &self: struct defined externally with an elem_type field
     // output_type_expr: output type depends on runtime struct fields
 }
 ```
+
+## Shapes the macro does not cover
+
+Two shapes stay hand-written by design.
+
+* Functions generic over an `Eval` implementor, which hold sub-expressions in a `Box<E>`
+  or a `Box<[E]>` and evaluate them per element. The macro would need to emit an
+  implementation generic over a struct type parameter with a trait bound, which is a
+  different mechanism from the type-parameter erasure it applies. The
+  `impl<E: Eval> LazyUnaryFunc` blocks under `src/expr/src/scalar/func/impls/` are these.
+* Functions that do not evaluate every operand. The macro emits `Eager*`
+  implementations, which evaluate all arguments before dispatch. `And`, `Or`,
+  `Coalesce`, `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` are these.
+
+Hand-written `LazyUnaryFunc` implementations under `src/expr/src/scalar/func/impls/`
+outside both categories are convertible. One that allocates its output gets a
+`RowArena` from `EagerUnaryFunc::call`, and `RecordGet`, which returns a field borrowed
+from its input, needs only an `output_type_expr` reading `input_type`.

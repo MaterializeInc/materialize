@@ -25,7 +25,7 @@ use crate::EvalError;
 #[sqlfunc(
     sqlname = "mz_timestamp_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToMzTimestamp)
+    inverse = super::CastStringToMzTimestamp
 )]
 fn cast_mz_timestamp_to_string(a: Timestamp) -> String {
     let mut buf = String::new();
@@ -36,7 +36,7 @@ fn cast_mz_timestamp_to_string(a: Timestamp) -> String {
 #[sqlfunc(
     sqlname = "text_to_mz_timestamp",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastMzTimestampToString)
+    inverse = super::CastMzTimestampToString
 )]
 fn cast_string_to_mz_timestamp(a: String) -> Result<Timestamp, EvalError> {
     strconv::parse_mz_timestamp(&a).err_into()
@@ -127,7 +127,7 @@ fn cast_date_to_mz_timestamp(a: Date) -> Result<Timestamp, EvalError> {
 #[sqlfunc(
     sqlname = "mz_timestamp_to_timestamp",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastTimestampToMzTimestamp)
+    inverse = super::CastTimestampToMzTimestamp
 )]
 fn cast_mz_timestamp_to_timestamp(
     a: Timestamp,
@@ -143,7 +143,7 @@ fn cast_mz_timestamp_to_timestamp(
 #[sqlfunc(
     sqlname = "mz_timestamp_to_timestamp_tz",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastTimestampTzToMzTimestamp)
+    inverse = super::CastTimestampTzToMzTimestamp
 )]
 fn cast_mz_timestamp_to_timestamp_tz(
     a: Timestamp,

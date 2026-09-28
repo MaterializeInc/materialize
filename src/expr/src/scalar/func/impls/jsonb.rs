@@ -15,7 +15,9 @@ use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::role_id::RoleId;
-use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{
+    ArrayRustType, Datum, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType, strconv,
+};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
@@ -36,7 +38,7 @@ use crate::scalar::func::impls::numeric::*;
 #[sqlfunc(
     sqlname = "jsonb_to_text",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastStringToJsonb)
+    inverse = super::CastStringToJsonb
 )]
 pub fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();
@@ -116,7 +118,7 @@ impl EagerUnaryFunc for CastJsonbToNumeric {
     type Input<'a> = JsonbRef<'a>;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         match a.into_datum() {
             Datum::Numeric(mut num) => match self.0 {
                 None => Ok(num.into_inner()),

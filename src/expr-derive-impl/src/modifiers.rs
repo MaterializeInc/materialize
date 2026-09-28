@@ -57,12 +57,20 @@ pub(crate) struct Modifiers {
     is_eliminable_cast: Option<Expr>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
+    /// Suppresses the generated `fmt::Display`. Set this when the struct's name
+    /// depends on its state, so the call site keeps a hand-written impl.
+    skip_display: Option<bool>,
 }
 
 impl Modifiers {
     /// Whether the call site asked for a generated snapshot test.
     pub(crate) fn generates_test(&self) -> bool {
         self.test.unwrap_or(false)
+    }
+
+    /// Whether the call site asked to suppress the generated `Display` impl.
+    pub(crate) fn skip_display(&self) -> bool {
+        self.skip_display.unwrap_or(false)
     }
 
     /// The method-producing modifiers that are present, in this method's own fixed

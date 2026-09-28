@@ -16,7 +16,7 @@ use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::TimeLike;
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -25,7 +25,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "time_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTime)
+    inverse = super::CastStringToTime
 )]
 fn cast_time_to_string(a: NaiveTime) -> String {
     let mut buf = String::new();
@@ -36,7 +36,7 @@ fn cast_time_to_string(a: NaiveTime) -> String {
 #[sqlfunc(
     sqlname = "time_to_interval",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastIntervalToTime)
+    inverse = super::CastIntervalToTime
 )]
 fn cast_time_to_interval(t: NaiveTime) -> Interval {
     // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
@@ -103,7 +103,7 @@ impl EagerUnaryFunc for ExtractTime {
     type Input<'a> = NaiveTime;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         date_part_time_inner(self.0, a)
     }
 
@@ -135,7 +135,7 @@ impl EagerUnaryFunc for DatePartTime {
     type Input<'a> = NaiveTime;
     type Output<'a> = Result<f64, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         date_part_time_inner(self.0, a)
     }
 
@@ -180,7 +180,7 @@ impl EagerUnaryFunc for TimezoneTime {
     type Input<'a> = NaiveTime;
     type Output<'a> = NaiveTime;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         timezone_time(self.tz, a, &self.wall_time)
     }
 

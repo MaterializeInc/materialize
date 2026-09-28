@@ -293,7 +293,7 @@ fn list_length<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
 
 /// The `list_length_max` implementation.
 ///
-/// We're not deriving `sqlfunc` here because we need to pass in the `max_layer` parameter.
+/// TODO: convertible to `#[sqlfunc]`, which accepts a `&self` receiver.
 #[derive(
     Ord,
     PartialOrd,

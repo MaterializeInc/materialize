@@ -20,7 +20,7 @@ use crate::{Eval, EvalError, MirScalarExpr};
 // NOTE: This cast does not preserve uniqueness: It returns only the array's elements and drops the
 // dimension metadata, so arrays that differ only in their lower bounds (e.g. `[1:1]={42}` and
 // `[2:2]={42}`) collapse to the same list.
-#[sqlfunc(sqlname = "arraytolist", introduces_nulls = false)]
+#[sqlfunc(sqlname = "arraytolist")]
 fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>, EvalError> {
     let ndims = a.dims().ndims();
     if ndims > 1 {
