@@ -31,15 +31,11 @@
 //!                                    /      |
 //!                                   /       |
 //!                                  /        |
-//!                                 /   ,-----+----------------------.
-//!                                /    | capture max_seen_time      |
-//!                               /     | exchanged to single worker |
-//!                              /      +-----+----------------------+
-//!                             /             |
-//!                            |              |
-//!                            |        ,-----+-------------------.
-//!                            |        | mint_batch_descriptions |
-//!                            |        | one arbitrary worker    |
+//!                                 /         |
+//!                                /          |
+//!                               /     ,-+-----------------------.
+//!                              /      | mint_batch_descriptions |
+//!                             /       | one arbitrary worker    |
 //!                            |        +-,--,--------+----+------+
 //!                           ,----------´.-´         |     \
 //!                       _.-´ |       .-´            |      \
@@ -61,10 +57,9 @@
 //!                                     +------+---------------+
 //!```
 //!
-//! Ahead of `mint_batch_descriptions` sits `max_seen_timestamps`, which passes the source
-//! collection through and reports each worker's largest timestamp to the minting worker. The
-//! minter also broadcasts a committed ceiling to the writers, which `append_batches` does not see.
-//! The ceiling broadcast edge is left out of the diagram to avoid clutter.
+//! `mint_batch_descriptions` also takes the ingestion's remap upper as a disconnected input, and
+//! broadcasts a committed ceiling to the writers, which `append_batches` does not see. Both edges
+//! are left out of the diagram to avoid clutter.
 //!
 //! ## Similarities with `mz_compute::sink::persist_sink`
 //!
@@ -268,13 +263,14 @@ struct FinishedBatch {
 /// The batch builder the source sink writes with.
 type SourceBatchBuilder = BatchBuilderAndMetadata<SourceData, (), mz_repr::Timestamp, StorageDiff>;
 
-/// How far past the data the minter commits its ceiling while a snapshot pins the frontier, in
-/// milliseconds, the unit of `mz_repr::Timestamp`. `None` turns committing ahead off.
+/// How far past the remap upper the minter commits its ceiling while a snapshot pins the
+/// frontier, in milliseconds, the unit of `mz_repr::Timestamp`. `None` turns committing ahead off.
 ///
-/// We pick `timestamp_interval` as a floor as it's a rough cadence for data comming through
-/// the system, so it seems the most sensible. The floor needs to be longer than the latency of
-/// determining the max seen timestamp and making it visible to the minter.  In production, this
-/// will start as a conservative value (5-10x of the tick interval).
+/// `timestamp_interval` is the floor to avoid having data outrun the ceiling. Remap emits a new
+/// binding and downgrades its capability together. Rows emitted by reclock under the new binding
+/// are racing the new ceiling to the batch writers. At one timestamp interval the previous ceiling
+/// already covers the current timestamp's rows. Rows still outrun it when consecutive probes are
+/// further apart than the lookahead, which costs a batch rather than correctness.
 fn description_lookahead(lookahead: Duration, timestamp_interval: Duration) -> Option<u64> {
     // Saturates rather than panics, since the lookahead is operator-supplied. A lookahead that
     // large overflows the ceiling in `next_mint`, which then commits nothing.
@@ -337,7 +333,9 @@ async fn stage_update(
 ///
 /// `snapshot_time` is the as_of, the time the collection's snapshot lands at, given only for an
 /// export that snapshots in this incarnation. The frontier sits there for the length of the
-/// snapshot, which is what gives the sink something to group. See [`mint_batch_descriptions`].
+/// snapshot, which is what gives the sink something to group. `remap_upper` carries the
+/// ingestion's remap upper as its frontier, which paces the grouping. See
+/// [`mint_batch_descriptions`].
 pub(crate) fn render<'scope>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
@@ -348,6 +346,7 @@ pub(crate) fn render<'scope>(
     busy_signal: Arc<Semaphore>,
     snapshot_time: Option<Antichain<mz_repr::Timestamp>>,
     timestamp_interval: Duration,
+    remap_upper: StreamVec<'scope, mz_repr::Timestamp, ()>,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, ()>,
     StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
@@ -363,17 +362,14 @@ pub(crate) fn render<'scope>(
         timestamp_interval,
     );
 
-    let (desired_stream, max_seen_stream, max_seen_token) =
-        max_seen_timestamps(desired_collection.inner, &operator_name);
-
     let (batch_descriptions, commitments, passthrough_desired_stream, mint_token) =
         mint_batch_descriptions(
             scope,
             collection_id,
             &operator_name,
             &target,
-            desired_stream.as_collection(),
-            max_seen_stream,
+            desired_collection,
+            remap_upper,
             Arc::clone(&persist_clients),
             lookahead,
             snapshot_time,
@@ -414,61 +410,8 @@ pub(crate) fn render<'scope>(
     (
         upper_stream,
         append_errors,
-        vec![max_seen_token, mint_token, write_token, append_token],
+        vec![mint_token, write_token, append_token],
     )
-}
-
-/// Passes `desired` through, and on a second output reports the largest timestamp this worker's
-/// share has reached.
-///
-/// `desired` is pre-sharded, so any one worker sees a share of it. The batch description minter
-/// times its ceiling against the data timestamps, which has to account for every share.
-/// Not every source round-robins messages, and a lack of visibility (e.g. data on one worker,
-/// minter on another) would result in steady state behavior (batch-per-timestamp).
-///
-/// Reported only when the largest timestamp grows, so this carries one timestamp per worker per
-/// distinct time rather than one per batch.
-fn max_seen_timestamps<'scope>(
-    desired: StreamVec<
-        'scope,
-        mz_repr::Timestamp,
-        (Result<Row, DataflowError>, mz_repr::Timestamp, Diff),
-    >,
-    operator_name: &str,
-) -> (
-    StreamVec<'scope, mz_repr::Timestamp, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
-    StreamVec<'scope, mz_repr::Timestamp, mz_repr::Timestamp>,
-    PressOnDropButton,
-) {
-    let mut op = AsyncOperatorBuilder::new(
-        format!("{} max_seen_timestamps", operator_name),
-        desired.scope(),
-    );
-
-    let (data_output, data_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let (max_output, max_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = op.new_input_for_many(desired, Pipeline, [&data_output, &max_output]);
-
-    let button = op.build(move |capabilities| async move {
-        // Both outputs are driven by the input, so they use its data capabilities.
-        drop(capabilities);
-
-        let mut max_seen: Option<mz_repr::Timestamp> = None;
-        while let Some(event) = input.next().await {
-            let Event::Data([data_cap, max_cap], mut data) = event else {
-                continue;
-            };
-            if let Some(next_max) = data.iter().map(|(_, ts, _)| *ts).max()
-                && max_seen < Some(next_max)
-            {
-                max_seen = Some(next_max);
-                max_output.give(&max_cap, next_max);
-            }
-            data_output.give_container(&data_cap, &mut data);
-        }
-    });
-
-    (data_stream, max_stream, button.press_on_drop())
 }
 
 /// Whenever the frontier advances, this mints a new batch description (lower
@@ -487,16 +430,17 @@ fn max_seen_timestamps<'scope>(
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
 /// write operators/workers.
 ///
-/// `max_seen` carries every worker's largest timestamp, which paces the commitments. It is routed
-/// here from [`max_seen_timestamps`], so it is the same collection `desired_collection` is a share
-/// of.
+/// `remap_upper` carries the ingestion's remap upper as its frontier, which paces the
+/// commitments. Reclocking stamps every update below that upper before the update exists, so a
+/// ceiling ahead of it leads every row that can still arrive, however long this export's own data
+/// has been quiet.
 fn mint_batch_descriptions<'scope>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
     desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
-    max_seen: StreamVec<'scope, mz_repr::Timestamp, mz_repr::Timestamp>,
+    remap_upper: StreamVec<'scope, mz_repr::Timestamp, ()>,
     persist_clients: Arc<PersistClientCache>,
     lookahead: Option<u64>,
     snapshot_time: Option<Antichain<mz_repr::Timestamp>>,
@@ -544,10 +488,10 @@ fn mint_batch_descriptions<'scope>(
         [&output, &ceiling_output, &data_output],
     );
 
-    // Every worker's share of the data reports its largest timestamp here. This is a disconnected
-    // input because it doesn't drive the outputs, it only influences the bounds of descriptions.
-    let mut max_seen_input =
-        mint_op.new_disconnected_input(max_seen, Exchange::new(move |_| hashed_id));
+    // The remap upper only influences the bounds of descriptions, it doesn't drive the outputs, so
+    // this input is disconnected. The stream is already broadcast, so every worker holds its
+    // frontier and the active one reads it in place.
+    let mut remap_input = mint_op.new_disconnected_input(remap_upper, Pipeline);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -613,9 +557,8 @@ fn mint_batch_descriptions<'scope>(
         // The current input frontier.
         let mut desired_frontier = Antichain::from_elem(mz_repr::Timestamp::minimum());
 
-        // The largest timestamp any worker's share of the data has reached, which is what the next
-        // commitment is timed against. See [`max_seen_timestamps`].
-        let mut max_seen_ts: Option<mz_repr::Timestamp> = None;
+        // The ingestion's remap upper, which drives the ceiling.
+        let mut remap_upper = Antichain::from_elem(mz_repr::Timestamp::minimum());
 
         // The outstanding ceiling, if any. While one is held nothing below it is minted, which is
         // what makes it binding.
@@ -638,7 +581,7 @@ fn mint_batch_descriptions<'scope>(
             while let Some(mint) = next_mint(
                 &current_upper,
                 &desired_frontier,
-                max_seen_ts,
+                &remap_upper,
                 committed,
                 lookahead.filter(|_| snapshot_in_progress),
             ) {
@@ -713,19 +656,15 @@ fn mint_batch_descriptions<'scope>(
                     // Input is exhausted, so we can shut down.
                     None => return,
                 },
-                // A pinned frontier delivers no progress, so a minter holding a share with no
-                // rows would otherwise sleep through the whole snapshot rather than pace its
-                // ceiling on the other workers' reports.
-                _ = max_seen_input.ready() => {},
+                // During the snapshot, the frontier is pinned and the remap upper drives the
+                // ceiling.
+                _ = remap_input.ready() => {},
             }
 
-            // Reports arrive on their own edge, so one can trail the data it summarizes by a
-            // round. Folding in every report that has arrived times a commitment against the
-            // freshest max rather than one a pass behind, and the first one is timed against the
-            // frontier rather than the data.
-            while let Some(event) = max_seen_input.next_sync() {
-                if let Event::Data(_cap, data) = event {
-                    max_seen_ts = std::cmp::max(max_seen_ts, data.into_iter().max());
+            // The stream carries no data, only its frontier.
+            while let Some(event) = remap_input.next_sync() {
+                if let Event::Progress(frontier) = event {
+                    remap_upper = frontier;
                 }
             }
         }
@@ -767,10 +706,9 @@ enum Mint {
 /// description.
 ///
 /// A `lookahead` is given only while a snapshot pins the frontier, and commits a ceiling that far
-/// past the largest timestamp the data has reached. The lead is what lets the ceiling reach the
-/// writers before the updates it covers, since a builder only takes updates at times it was opened
-/// for. Before any data the snapshot's rows are about to land at the pinned time itself, so that
-/// stands in for the data.
+/// past `remap_upper`. Every reclocked update is stamped below the remap upper before it exists,
+/// so the ceiling leads every row that can still arrive, and the lead is what lets it reach the
+/// writers first, since a builder only takes updates at times it was opened for.
 ///
 /// Committing is confined to a snapshot because a ceiling is binding. While it is outstanding no
 /// description is derived from the frontier either, so once the snapshot ends the shard upper waits
@@ -780,7 +718,7 @@ enum Mint {
 fn next_mint(
     current_upper: &Antichain<mz_repr::Timestamp>,
     desired_frontier: &Antichain<mz_repr::Timestamp>,
-    max_seen_ts: Option<mz_repr::Timestamp>,
+    remap_upper: &Antichain<mz_repr::Timestamp>,
     committed: Option<mz_repr::Timestamp>,
     lookahead: Option<u64>,
 ) -> Option<Mint> {
@@ -795,9 +733,7 @@ fn next_mint(
 
     let lookahead = lookahead?;
     let lower = *current_upper.as_option()?;
-    // Before any data the snapshot's rows are about to land at the pinned time itself, so that
-    // stands in for the data.
-    let ceiling = max_seen_ts.unwrap_or(lower).checked_add(lookahead)?;
+    let ceiling = remap_upper.as_option()?.checked_add(lookahead)?;
     (lower < ceiling && committed.is_none_or(|c| c < ceiling)).then_some(Mint::Ceiling(ceiling))
 }
 
@@ -2394,6 +2330,48 @@ mod tests {
             i64::try_from(SNAPSHOT_ROWS).expect("small")
                 + i64::try_from(PINNED_TIMES).expect("small"),
             "grouping must not change what the shard ends up holding"
+        );
+    }
+
+    #[mz_ore::test]
+    fn next_mint_paces_the_ceiling_on_the_remap_upper() {
+        const LOOKAHEAD: u64 = 10;
+        let lower = frontier(0);
+        let pinned = frontier(0);
+
+        // A pinned frontier derives no description, so the pass commits ahead of the remap upper,
+        // a tick raises the ceiling, and a tick that does not clear it commits nothing.
+        assert_eq!(
+            next_mint(&lower, &pinned, &frontier(5), None, Some(LOOKAHEAD)),
+            Some(Mint::Ceiling(ts(15)))
+        );
+        assert_eq!(
+            next_mint(&lower, &pinned, &frontier(6), Some(ts(15)), Some(LOOKAHEAD)),
+            Some(Mint::Ceiling(ts(16)))
+        );
+        assert_eq!(
+            next_mint(&lower, &pinned, &frontier(6), Some(ts(16)), Some(LOOKAHEAD)),
+            None
+        );
+        // A closed remap stream has no upper to commit past.
+        assert_eq!(
+            next_mint(
+                &lower,
+                &pinned,
+                &Antichain::new(),
+                Some(ts(16)),
+                Some(LOOKAHEAD)
+            ),
+            None
+        );
+        // Once the snapshot ends the ceiling binds until the frontier reaches it.
+        assert_eq!(
+            next_mint(&lower, &frontier(12), &frontier(12), Some(ts(16)), None),
+            None
+        );
+        assert_eq!(
+            next_mint(&lower, &frontier(16), &frontier(16), Some(ts(16)), None),
+            Some(Mint::Description(frontier(16)))
         );
     }
 }

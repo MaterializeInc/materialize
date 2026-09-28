@@ -309,7 +309,7 @@ pub fn build_ingestion_dataflow(
                 busy_signal: Arc::clone(&busy_signal),
             };
 
-            let (outputs, source_health, source_tokens) = match connection {
+            let (outputs, source_health, remap_upper, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     root_scope,
@@ -401,6 +401,7 @@ pub fn build_ingestion_dataflow(
                     Arc::clone(&busy_signal),
                     snapshotting.then(|| as_of.clone()),
                     description.desc.timestamp_interval,
+                    remap_upper.clone(),
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);

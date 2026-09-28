@@ -502,36 +502,31 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     ParameterScope::Environment,
 );
 
-/// How far ahead of the data the source `persist_sink` commits a ceiling while a hydrating
-/// export holds its frontier pinned, so that it can group updates into one batch.
+/// How far ahead of the remap upper the source `persist_sink` commits a ceiling while a
+/// snapshotting export holds its frontier pinned, so that it can group updates into one batch.
 ///
-/// A batch's bounds come from a batch description, and while a collection's frontier is pinned the
-/// minter has nothing to derive one from, so the sink has no bounds to group updates under and
-/// falls back to one batch per timestamp. With a lookahead the minter instead commits to a ceiling
-/// this far past the largest timestamp the data has reached and broadcasts it to the writers, which
-/// group everything below it into a single builder. The minter honors the ceiling by minting no
-/// description below it, so the whole snapshot and the catch-up that follows it become one
-/// description, appended once.
+/// The persist sink mints descriptions based on the data frontier. During a snapshot, that frontier
+/// does not progress. Providing a lookahead instructs the minter to commit to a ceiling based
+/// on the remap upper, which is used by the batch writers to group updates into a batch.
+/// The minter honors the ceiling by minting descriptions at or beyond it. The whole snapshot and
+/// the CDC events that were captured concurrently, up to the ceiling, become one description,
+/// appended once.
 ///
-/// The ceiling has to stay ahead of the data, since a builder only takes updates at times it was
-/// opened for, so this wants to be several `timestamp_interval`s. An update that outruns it writes
-/// a batch of its own instead, which costs a batch rather than correctness.
+/// Because the reclock stamps every update below the remap upper, the ceiling is ahead of the data
+/// by at least the lookahead even if the export has seen no data. It still has to reach the writers
+/// ahead of the rows stamped under the newest binding, since a builder only takes updates at times
+/// it was opened for, so this wants to be at least one `timestamp_interval`. An update that outruns
+/// it writes a batch of its own instead, which costs a batch rather than correctness.
 ///
 /// Only applies to an export that is snapshotting in this dataflow incarnation, and only until the
-/// frontier moves off the time its snapshot occupies. A collection that is keeping up lags the data
-/// by about one `timestamp_interval` and so has nothing to group, and committing ahead of a
-/// frontier that is moving would hold the shard upper at the ceiling instead. That wait is what the
-/// lookahead costs: once the snapshot ends the shard upper waits for the frontier to reach the
-/// ceiling, which is about one lookahead regardless of how long the snapshot ran.
-///
-/// Zero disables committing ahead, leaving descriptions derived from the frontier alone and every
-/// timestamp writing its own batch.
+/// frontier moves off the time its snapshot occupies. Zero disables committing ahead, leaving
+/// descriptions derived from the frontier alone and every timestamp writing its own batch.
 pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
     "storage_persist_sink_description_lookahead",
     Duration::ZERO,
-    "How far past the data the source persist sink commits a ceiling while a snapshotting export \
-    holds its frontier pinned, so updates below it group into one batch and one description \
-    (zero leaves every timestamp writing its own batch).",
+    "Determines how far past the remap upper the source persist sink will commit to a ceiling \
+    in order to group data into one batch and one description. Zero leaves every timestamp \
+    writing its own batch. Other values below the tick interval are clamped to the tick interval.",
     ParameterScope::Environment,
 );
 
