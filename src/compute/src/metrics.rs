@@ -564,11 +564,12 @@ impl WorkerMetrics {
         self.metrics.subscribe_snapshots_skipped_total.inc()
     }
 
-    /// Record a metric sink collector registration that collided and will be retried.
+    /// Increment the count of metric sink collector registrations that collided and will be
+    /// retried.
     ///
     /// Unlabeled on purpose: this is an "is registration contending" signal, and the sink's
     /// identity comes from the log line the sink emits on its first failure.
-    pub fn inc_metric_sink_registration_retry(&self) {
+    pub fn inc_metric_sink_registration_retries(&self) {
         self.metrics.metric_sink_registration_retries_total.inc()
     }
 
