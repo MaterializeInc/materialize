@@ -35,6 +35,7 @@ pub(super) struct StorageIo {
     pub started: BTreeSet<u64>,
     preopens: Vec<(uuid::Uuid, u64, GlobalId)>,
     initialized: bool,
+    writes_allowed: bool,
 }
 
 impl StorageIo {
@@ -46,6 +47,7 @@ impl StorageIo {
             started: BTreeSet::new(),
             preopens: Vec::new(),
             initialized: false,
+            writes_allowed: false,
         }
     }
 
@@ -53,11 +55,15 @@ impl StorageIo {
         self.endpoint
             .send(StorageCommand::UpdateConfiguration(Box::new(parameters)));
         if !self.initialized {
-            // The incarnation has committed under the replica's deployment
-            // generation. Each Run still requires its own protected admission.
-            self.endpoint.send(StorageCommand::AllowWrites);
             self.endpoint.send(StorageCommand::InitializationComplete);
             self.initialized = true;
+        }
+    }
+
+    pub fn allow_writes(&mut self) {
+        if self.initialized && !self.writes_allowed {
+            self.endpoint.send(StorageCommand::AllowWrites);
+            self.writes_allowed = true;
         }
     }
 
