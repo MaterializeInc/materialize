@@ -114,6 +114,7 @@ impl Coordinator {
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
         let future = async move {
             if let Some(session) = cmd.session_mut() {
+                session.require_coordinator_completion();
                 session.apply_external_metadata_updates();
             }
             match cmd {
@@ -870,12 +871,14 @@ impl Coordinator {
             .await
         {
             Ok((role_id, superuser_attribute, session_defaults)) => {
+                let (frontend_cancel_tx, frontend_cancel_rx) = watch::channel(());
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
                     .active_sessions
                     .with_label_values(&[session_type])
                     .inc();
                 let conn = ConnMeta {
+                    frontend_cancel_tx,
                     secret_key,
                     notice_tx,
                     drop_sinks: BTreeSet::new(),
@@ -935,6 +938,7 @@ impl Coordinator {
                     .create_frontend(build_info_human_version);
 
                 let resp = Ok(StartupResponse {
+                    frontend_cancel_rx,
                     role_id,
                     write_notify: notify,
                     session_defaults,
@@ -1975,6 +1979,9 @@ impl Coordinator {
     /// interactive work for the named `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+        if let Some(conn) = self.active_conns.get(&conn_id) {
+            conn.frontend_cancel_tx.send_replace(());
+        }
         let mut maybe_ctx = None;
 
         // Cancel all pending writes for this connection:

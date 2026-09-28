@@ -1401,6 +1401,9 @@ pub struct Config {
 /// Metadata about an active connection.
 #[derive(Debug, Serialize)]
 pub struct ConnMeta {
+    /// Cancellation notifications for session-owned completion waits.
+    #[serde(skip)]
+    frontend_cancel_tx: watch::Sender<()>,
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
     /// requests are required to authenticate with the secret of the connection
@@ -1534,16 +1537,7 @@ pub struct PendingReadTxn {
 impl PendingReadTxn {
     /// Returns the timestamp that needs a fresh oracle check, if any.
     fn timestamp_to_linearize(&self) -> Option<(&Timeline, &Timestamp)> {
-        // The stored oracle result belongs to this transaction. A result cached
-        // from an earlier transaction would not establish its real-time bound.
-        match &self.timestamp_context {
-            TimestampContext::TimelineTimestamp {
-                timeline,
-                chosen_ts,
-                oracle_ts: Some(oracle_ts),
-            } if chosen_ts > oracle_ts => Some((timeline, chosen_ts)),
-            _ => None,
-        }
+        self.timestamp_context.timestamp_to_linearize()
     }
 
     /// Finishes an already-linearized ordinary read, or returns it unchanged.

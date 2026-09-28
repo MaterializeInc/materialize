@@ -42,6 +42,8 @@ pub struct Metrics {
     pub linearize_message_seconds: HistogramVec,
     pub linearize_read_fast_path: IntCounter,
     pub time_to_first_row_seconds: HistogramVec,
+    pub frontend_transaction_completions: IntCounter,
+    pub frontend_transaction_waits: IntCounter,
     pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounter,
     pub statement_logging_actual_bytes: IntCounter,
@@ -186,6 +188,14 @@ impl Metrics {
                 // This histogram retains series for dropped `instance_id` label values.
                 buckets: histogram_seconds_buckets(0.000_512, 32.0)
             }),
+            frontend_transaction_completions: registry.register(metric!(
+                name: "mz_frontend_transaction_completions_total",
+                help: "Read-only transaction completion attempts owned by the session.",
+            )),
+            frontend_transaction_waits: registry.register(metric!(
+                name: "mz_frontend_transaction_waits_total",
+                help: "Session-owned transaction completions that need a fresh oracle check.",
+            )),
             statement_logging_records: registry.register(metric! {
                 name: "mz_statement_logging_record_count",
                 help: "The total number of SQL statements tagged with whether or not they were recorded.",
