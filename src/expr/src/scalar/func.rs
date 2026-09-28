@@ -142,7 +142,6 @@ func_name! {
     CastArrayToString => "cast_array_to_string",
     CastDateToTimestamp => "cast_date_to_timestamp",
     CastDateToTimestampTz => "cast_date_to_timestamp_tz",
-    CastFloat64ToNumeric => "cast_float64_to_numeric",
     CastInt32ToNumeric => "cast_int32_to_numeric",
     CastInt64ToNumeric => "cast_int64_to_numeric",
     CastJsonbToNumeric => "cast_jsonb_to_numeric",
