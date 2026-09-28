@@ -36,7 +36,11 @@ import NewDatabaseSourceForm, {
 import useNormalizedSteps from "./useNormalizedSteps";
 import { typeToLabel } from "./utils";
 
+// TODO: Move these classes out of the component module so that fast refresh
+// can treat it as a component-only boundary.
+// eslint-disable-next-line react-refresh/only-export-components
 export class CreateConnectionError extends Error {}
+// eslint-disable-next-line react-refresh/only-export-components
 export class CreateSourceError extends Error {}
 
 const SOURCE_STEPS = [
