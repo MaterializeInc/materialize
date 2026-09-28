@@ -7,15 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 
 #[sqlfunc(
     sqlname = "-",
@@ -137,39 +134,21 @@ fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
 )]
 pub struct CastInt16ToNumeric(pub Option<NumericMaxScale>);
 
-impl EagerUnaryFunc for CastInt16ToNumeric {
-    type Input<'a> = i16;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        let mut a = Numeric::from(i32::from(a));
-        if let Some(scale) = self.0 {
-            if numeric::rescale(&mut a, scale.into_u8()).is_err() {
-                return Err(EvalError::NumericFieldOverflow);
-            }
+#[sqlfunc(
+    CastInt16ToNumeric,
+    sqlname = "smallint_to_numeric",
+    could_error = self.0.is_some(),
+    inverse = super::CastNumericToInt16,
+    is_monotone = true,
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }
+        .nullable(input_type.nullable)
+)]
+fn cast_int16_to_numeric(&self, a: i16) -> Result<Numeric, EvalError> {
+    let mut a = Numeric::from(i32::from(a));
+    if let Some(scale) = self.0 {
+        if numeric::rescale(&mut a, scale.into_u8()).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
         }
-        Ok(a)
     }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn could_error(&self) -> bool {
-        self.0.is_some()
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastNumericToInt16)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastInt16ToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("smallint_to_numeric")
-    }
+    Ok(a)
 }
