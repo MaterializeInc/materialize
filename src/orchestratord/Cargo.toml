@@ -15,6 +15,7 @@ async-trait.workspace = true
 axum.workspace = true
 axum-server.workspace = true
 clap = { workspace = true, features = ["env"] }
+data-encoding.workspace = true
 futures.workspace = true
 gcp_auth.workspace = true
 http.workspace = true
@@ -41,6 +42,7 @@ rustls.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
