@@ -120,7 +120,7 @@ module "networking" {
 
 # 3. Create AKS cluster with default node pool
 module "aks" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/aks?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/aks?ref=v13.12.1"
 
   resource_group_name = azurerm_resource_group.materialize.name
   kubernetes_version  = local.aks_config.kubernetes_version
@@ -153,7 +153,7 @@ module "aks" {
 
 # 3.1 Create Materialize-dedicated node pool with taints
 module "materialize_nodepool" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nodepool?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nodepool?ref=v13.12.1"
 
   prefix     = var.name_prefix
   cluster_id = module.aks.cluster_id
