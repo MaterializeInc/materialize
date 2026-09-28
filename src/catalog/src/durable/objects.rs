@@ -754,6 +754,15 @@ impl DurableType for IndexColumn {
     }
 }
 
+/// The planner-resolved metadata the durable catalog records for an item
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemMetadata {
+    /// The columns of a relation
+    pub columns: Vec<ItemColumn>,
+    /// The keys of an index
+    pub index_columns: Vec<IndexColumn>,
+}
+
 impl DurableType for Item {
     type Key = ItemKey;
     type Value = ItemValue;

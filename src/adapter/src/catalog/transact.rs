@@ -1002,6 +1002,16 @@ impl Catalog {
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
                     .await;
+                let updated_item_ids = op_updates.iter().filter_map(|update| match &update.kind {
+                    mz_catalog::memory::objects::StateUpdateKind::Item(item)
+                        if update.diff == mz_catalog::memory::objects::StateDiff::Addition =>
+                    {
+                        Some(item.id)
+                    }
+                    _ => None,
+                });
+                // Durably record metadata such as an item's columns.
+                preliminary_state.record_item_metadata(tx, updated_item_ids)?;
             }
             updates.append(&mut op_updates);
         }

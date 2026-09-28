@@ -56,13 +56,13 @@ use crate::durable::objects::{
     ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IndexColumnKey, IndexColumnValue, IntrospectionSourceIndex, Item, ItemColumnKey,
-    ItemColumnValue, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue, ReplicaConfig,
-    ReplicaSystemConfiguration, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
-    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TxnWalShardValue, UnfinalizedShardKey,
+    ItemColumnValue, ItemKey, ItemMetadata, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
+    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
+    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -809,10 +809,71 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Records `metadata` as the planner-resolved metadata of item `id`,
+    /// replacing whatever rows it had.
+    pub fn set_item_metadata(
+        &mut self,
+        id: CatalogItemId,
+        metadata: ItemMetadata,
+    ) -> Result<(), CatalogError> {
+        let ItemMetadata {
+            columns,
+            index_columns,
+        } = metadata;
+        soft_assert_or_log!(
+            columns.iter().all(|column| column.id == id)
+                && index_columns.iter().all(|column| column.id == id),
+            "metadata recorded for item {id} belongs to another item"
+        );
+
+        self.truncate_item_metadata(id, columns.len(), index_columns.len());
+        for column in columns {
+            let (key, value) = column.into_key_value();
+            if self.item_columns.get(&key) != Some(&value) {
+                self.item_columns.set(key, Some(value), self.op_id)?;
+            }
+        }
+
+        for column in index_columns {
+            let (key, value) = column.into_key_value();
+            if self.index_columns.get(&key) != Some(&value) {
+                self.index_columns.set(key, Some(value), self.op_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Deletes the recorded columns of item `id` from position `columns_len` on
+    /// and its recorded index keys from position `index_columns_len` on.
+    fn truncate_item_metadata(
+        &mut self,
+        id: CatalogItemId,
+        columns_len: usize,
+        index_columns_len: usize,
+    ) {
+        let mut position = columns_len;
+        while self
+            .item_columns
+            .delete_by_key(ItemColumnKey { id, position }, self.op_id)
+            .is_some()
+        {
+            position += 1;
+        }
+        let mut position = index_columns_len;
+        while self
+            .index_columns
+            .delete_by_key(IndexColumnKey { id, position }, self.op_id)
+            .is_some()
+        {
+            position += 1;
+        }
+    }
+
     /// Removes every item owned by an ephemeral session from the transaction,
     /// along with the durable state a graceful drop would have removed with
     /// it: storage collection metadata (moving the backing shards to the
-    /// finalization WAL), comments, and source references.
+    /// finalization WAL), recorded columns and index keys, comments, and
+    /// source references.
     ///
     /// Used to reclaim temporary items when the catalog is opened with write
     /// intent, at which point every session that could own one is dead.
@@ -837,6 +898,9 @@ impl<'a> Transaction<'a> {
             keys.push(key.clone());
         }
         self.items.delete_by_keys(keys, self.op_id);
+        for id in &item_ids {
+            self.truncate_item_metadata(*id, 0, 0);
+        }
 
         // Move the items' storage mappings to the finalization WAL, like
         // `StorageCollections::prepare_state` does for a graceful drop. Every
@@ -1512,6 +1576,7 @@ impl<'a> Transaction<'a> {
     pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
+            self.truncate_item_metadata(id, 0, 0);
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1531,6 +1596,9 @@ impl<'a> Transaction<'a> {
 
         let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
+        for id in ids {
+            self.truncate_item_metadata(*id, 0, 0);
+        }
         if n == ids.len() {
             Ok(())
         } else {
