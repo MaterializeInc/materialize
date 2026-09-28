@@ -72,7 +72,7 @@ use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{Instrument, info, info_span};
 
-use crate::deployment::preflight::{PreflightInput, PreflightOutput};
+use crate::deployment::preflight::{self, CatchupConfig};
 use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalRouteConfig};
 
@@ -663,31 +663,11 @@ impl Listeners {
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
-        let bootstrap_args = BootstrapArgs {
-            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
-            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
-            bootstrap_role: config.bootstrap_role.clone(),
-            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
-        };
-        let preflight_config = PreflightInput {
-            boot_ts,
-            environment_id: config.environment_id.clone(),
-            persist_client,
-            deploy_generation: config.controller.deploy_generation,
-            deployment_state: deployment_state.clone(),
-            openable_adapter_storage,
-            catalog_metrics: Arc::clone(&config.catalog_config.metrics),
-            caught_up_max_wait: with_0dt_deployment_max_wait,
-            panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
-            bootstrap_args,
-            ddl_check_interval: with_0dt_deployment_ddl_check_interval,
-        };
-        let PreflightOutput {
-            openable_adapter_storage,
-            read_only,
-            caught_up_trigger,
-            bootstrap_complete,
-        } = deployment::preflight::preflight_0dt(preflight_config).await?;
+        let read_only = preflight::preflight_0dt(
+            openable_adapter_storage.as_mut(),
+            config.controller.deploy_generation,
+        )
+        .await?;
 
         info!(
             "startup: envd serve: preflight checks complete in {:?}",
@@ -705,7 +685,7 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let mut adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
@@ -727,6 +707,26 @@ impl Listeners {
             deployment_state.set_is_leader();
 
             adapter_storage
+        };
+
+        let (caught_up_trigger, catchup) = if read_only {
+            let initial_ids = preflight::get_next_ids(adapter_storage.as_mut()).await?;
+            let (trigger, receiver) = mz_ore::channel::trigger::channel();
+            let catchup_config = CatchupConfig {
+                boot_ts,
+                environment_id: config.environment_id.clone(),
+                persist_client,
+                deploy_generation: config.controller.deploy_generation,
+                deployment_state: deployment_state.clone(),
+                catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+                caught_up_max_wait: with_0dt_deployment_max_wait,
+                panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
+                bootstrap_args,
+                ddl_check_interval: with_0dt_deployment_ddl_check_interval,
+            };
+            (Some(trigger), Some((catchup_config, receiver, initial_ids)))
+        } else {
+            (None, None)
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -820,8 +820,8 @@ impl Listeners {
         .instrument(info_span!("adapter::serve"))
         .await?;
 
-        if let Some(bootstrap_complete) = bootstrap_complete {
-            let _ = bootstrap_complete.send(());
+        if let Some((config, receiver, initial_ids)) = catchup {
+            preflight::spawn_catchup(config, receiver, initial_ids);
         }
 
         // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.
