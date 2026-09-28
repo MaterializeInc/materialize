@@ -808,8 +808,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "error" if failed else "info",
             f"Cargo bench results ({', '.join(shard_packages)})",
             markdown,
-            # `bin/ci-annotate-errors` posts under the default `error` context
-            # and would otherwise replace this table on a failed shard.
+            # `bin/ci-annotate-errors` posts under the job's style-named
+            # context (`error` or `info`) and would otherwise replace this table.
             context="cargo-bench",
         )
         try:
