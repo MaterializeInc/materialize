@@ -1026,6 +1026,16 @@ impl CatalogState {
         })
     }
 
+    /// Records in `tx` the planner-resolved metadata of all items in
+    /// the current transaction.
+    pub(super) fn refresh_item_metadata(
+        &self,
+        tx: &mut mz_catalog::durable::Transaction<'_>,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        let ids: Vec<_> = tx.get_items().map(|item| item.id).collect();
+        self.record_item_metadata(tx, ids)
+    }
+
     /// Records in `tx` the planner-resolved metadata of every item in `ids`
     /// that this catalog has loaded.
     pub(super) fn record_item_metadata(
