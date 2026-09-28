@@ -1394,6 +1394,7 @@ impl UnopenedPersistCatalogState {
 
         let promoted;
         let protected;
+        let cleanup_owners;
         // Admit this generation with a compare-and-append.
         loop {
             self.sync_to_current_upper().await?;
@@ -1463,6 +1464,17 @@ impl UnopenedPersistCatalogState {
                 ?current_fenceable_token,
                 "fencing previous catalogs"
             );
+            let promoting = prewarming_plan_build.is_none()
+                && durable_generation.is_some_and(|generation| generation < admitted_generation);
+            // Recollect on every CAS attempt. Only the successful attempt's
+            // snapshot grants cleanup authority, not subsequent publications.
+            let owners = if protection_enabled && promoting {
+                Some(super::promotion::ephemeral_owners(
+                    self.snapshot.iter().map(|(kind, _, _)| kind),
+                )?)
+            } else {
+                None
+            };
             if matches!(self.mode, Mode::Writable) {
                 match self
                     .compare_and_append(fence_updates.clone(), commit_ts)
@@ -1479,8 +1491,8 @@ impl UnopenedPersistCatalogState {
                 }
             }
             protected = protection_enabled;
-            promoted = prewarming_plan_build.is_none()
-                && durable_generation.is_some_and(|generation| generation < admitted_generation);
+            promoted = promoting;
+            cleanup_owners = owners;
             self.fenceable_token = current_fenceable_token;
             break;
         }
@@ -1594,16 +1606,14 @@ impl UnopenedPersistCatalogState {
 
         let catalog_content_version = catalog.catalog_content_version.to_string();
         loop {
-            let mut txn = catalog.transaction_unchecked().await?;
-            // Reclamation is valid only for the snapshot admitted by promotion.
-            // A cooperating writer may have created live owners after that CAS.
-            if protected && promoted && txn.upper() != commit_ts {
-                return Err(DurableCatalogError::CatalogOutOfSync {
-                    update_count: 0,
-                    upper: txn.upper(),
-                }
-                .into());
-            }
+            let mut txn =
+                match catalog.transaction_unchecked().await {
+                    Ok(txn) => txn,
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) if protected => continue,
+                    Err(error) => return Err(error),
+                };
             let txn = if txn.get_config(USER_VERSION_KEY.into()).is_some() {
                 // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
                 // present in existing catalogs.
@@ -1617,9 +1627,10 @@ impl UnopenedPersistCatalogState {
                 }
 
                 // Exclusive opens invalidate every previous owner. Protected
-                // opens only invalidate owners when promoting the generation.
+                // promotion only invalidates owners in its admitted snapshot.
+                // Keep that set fixed when retrying against newer publications.
                 if (!protected || promoted) && mode != Mode::Readonly {
-                    txn.remove_ephemeral_items();
+                    txn.remove_ephemeral_items_for_owners(cleanup_owners.as_ref());
                 }
 
                 txn.set_catalog_content_version(catalog_content_version.clone())?;
@@ -1645,7 +1656,7 @@ impl UnopenedPersistCatalogState {
                     Ok(_) => {}
                     Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
                         ..
-                    })) if protected && !promoted => continue,
+                    })) if protected => continue,
                     Err(error) => return Err(error),
                 }
             }

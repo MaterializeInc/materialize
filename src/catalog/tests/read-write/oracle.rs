@@ -28,6 +28,8 @@ use tokio::sync::Notify;
 #[derive(Debug, Default)]
 struct TestOracle {
     times: Mutex<(Timestamp, Timestamp)>,
+    allocation_gate: Mutex<Option<Arc<Notify>>>,
+    allocation_started: Notify,
     completion_gate: Mutex<Option<Arc<Notify>>>,
     completion_started: Notify,
 }
@@ -35,6 +37,11 @@ struct TestOracle {
 #[async_trait]
 impl TimestampOracle<Timestamp> for TestOracle {
     async fn write_ts(&self) -> WriteTimestamp {
+        let gate = self.allocation_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.allocation_started.notify_one();
+            gate.notified().await;
+        }
         let mut times = self.times.lock().unwrap();
         times.1 = times.1.step_forward();
         WriteTimestamp {
@@ -61,6 +68,153 @@ impl TimestampOracle<Timestamp> for TestOracle {
         times.0 = times.0.max(timestamp);
         times.1 = times.1.max(timestamp);
     }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported OpenSSL calls
+async fn promotion_cleanup_is_scoped_to_admitted_owners() {
+    use std::collections::BTreeMap;
+
+    use mz_catalog::durable::Transaction;
+    use mz_persist_client::ShardId;
+    use mz_repr::role_id::RoleId;
+    use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+    use mz_sql::names::{CommentObjectId, SchemaId};
+    use mz_storage_client::controller::StorageTxn;
+    use uuid::Uuid;
+
+    fn insert(txn: &mut Transaction<'_>, id: u64, owner: Uuid, shard: ShardId) {
+        txn.insert_item(
+            CatalogItemId::User(id),
+            u32::try_from(20_000 + id).unwrap(),
+            GlobalId::User(id),
+            SchemaId::User(0),
+            &format!("t{id}"),
+            format!("CREATE TABLE t{id} (a int)"),
+            RoleId::User(1),
+            vec![],
+            BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(id + 1))]),
+            Some(owner),
+        )
+        .unwrap();
+        txn.insert_collection_metadata(BTreeMap::from([
+            (GlobalId::User(id), shard),
+            (GlobalId::User(id + 1), shard),
+        ]))
+        .unwrap();
+        txn.update_comment(
+            CommentObjectId::Table(CatalogItemId::User(id)),
+            None,
+            Some(format!("owner {owner}")),
+        )
+        .unwrap();
+    }
+
+    async fn commit(mut txn: Transaction<'_>) {
+        let ts = txn.upper();
+        let _ = txn.get_and_commit_op_updates();
+        txn.commit(ts).await.unwrap();
+    }
+
+    let oracle = Arc::new(TestOracle::default());
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_deploy_generation(7)
+        .with_timestamp_oracle(CatalogTimestampOracle::new(
+            Arc::<TestOracle>::clone(&oracle),
+            NowFn::from(|| 1_000),
+        ));
+    let mut active = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(1_000.into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    active.sync_to_current_updates().await.unwrap();
+    let old_owner = Uuid::new_v4();
+    let old_shard = ShardId::new();
+    let mut txn = active.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    insert(&mut txn, 1000, old_owner, old_shard);
+    commit(txn).await;
+
+    let next = builder.with_deploy_generation(8);
+    let mut peer = next
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap();
+    let promotion = next.unwrap_build().await;
+    let fence_gate = Arc::new(Notify::new());
+    *oracle.completion_gate.lock().unwrap() = Some(Arc::clone(&fence_gate));
+    let opening = mz_ore::task::spawn(|| "promotion with publications", async move {
+        promotion
+            .open_for_promotion(1_000.into(), &test_bootstrap_args())
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), oracle.completion_started.notified())
+        .await
+        .unwrap();
+    // The fence is durable, but open has not yet acknowledged its oracle write.
+    *oracle.completion_gate.lock().unwrap() = None;
+    assert!(active.sync_to_current_updates().await.is_err());
+    peer.sync_to_current_updates().await.unwrap();
+    let fresh_owner = Uuid::new_v4();
+    let fresh_shard = ShardId::new();
+    let mut txn = peer.transaction().await.unwrap();
+    insert(&mut txn, 2000, fresh_owner, fresh_shard);
+    commit(txn).await;
+
+    // Also race the cleanup commit itself, after it has assembled its snapshot.
+    let cleanup_gate = Arc::new(Notify::new());
+    *oracle.allocation_gate.lock().unwrap() = Some(Arc::clone(&cleanup_gate));
+    fence_gate.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), oracle.allocation_started.notified())
+        .await
+        .unwrap();
+    peer.sync_to_current_updates().await.unwrap();
+    let later_shard = ShardId::new();
+    let mut txn = peer.transaction().await.unwrap();
+    insert(&mut txn, 3000, Uuid::new_v4(), later_shard);
+    commit(txn).await;
+    cleanup_gate.notify_one();
+
+    let mut promoted = tokio::time::timeout(Duration::from_secs(5), opening)
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot = promoted.snapshot().await.unwrap();
+    let owners: Vec<_> = snapshot
+        .items
+        .values()
+        .filter_map(|item| item.ephemeral_owner_session)
+        .collect();
+    assert_eq!(owners.len(), 2);
+    assert!(!owners.contains(&old_owner));
+    assert!(owners.contains(&fresh_owner));
+    assert_eq!(snapshot.comments.len(), 2);
+    promoted.sync_to_current_updates().await.unwrap();
+    let txn = promoted.transaction().await.unwrap();
+    assert_eq!(
+        txn.get_collection_metadata(),
+        BTreeMap::from([
+            (GlobalId::User(2000), fresh_shard),
+            (GlobalId::User(2001), fresh_shard),
+            (GlobalId::User(3000), later_shard),
+            (GlobalId::User(3001), later_shard),
+        ])
+    );
+    assert_eq!(
+        txn.get_unfinalized_shards(),
+        std::collections::BTreeSet::from([old_shard])
+    );
+    drop(txn);
+    active.expire().await;
+    peer.expire().await;
+    promoted.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
