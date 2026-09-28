@@ -679,17 +679,6 @@ impl QueryClient {
         bundle: &CollectionIdBundle,
         timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<PreparedRead, AdapterError> {
-        if !catalog
-            .state()
-            .client_incarnations()
-            .contains_key(&self.protection.incarnation())
-        {
-            self.protection.mark_closed();
-            return Err(AdapterError::internal(
-                "query read protection",
-                "incarnation is closed",
-            ));
-        }
         let upper = self.write_frontier(catalog, bundle).await?;
         let read_ts = timestamp(&upper)?;
         let mut index_inputs = BTreeMap::new();
@@ -797,14 +786,21 @@ impl QueryClient {
         timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<(ReadHolds, Antichain<Timestamp>), AdapterError> {
         let prepared = self.prepare_read(catalog, bundle, timestamp).await?;
-        if let Some(holds) = self
-            .protection
-            .try_acquire(
-                &prepared.bundle,
-                &prepared.frontiers,
-                &prepared.index_inputs,
-            )
-            .map_err(|error| AdapterError::Unstructured(error.into()))?
+        // A planning snapshot can predate incarnation allocation, including a
+        // frozen prewarming savepoint. Absence there requires the live writer's
+        // validation, not permanent closure or reuse of cached protection.
+        if catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&self.protection.incarnation())
+            && let Some(holds) = self
+                .protection
+                .try_acquire(
+                    &prepared.bundle,
+                    &prepared.frontiers,
+                    &prepared.index_inputs,
+                )
+                .map_err(|error| AdapterError::Unstructured(error.into()))?
         {
             return Ok((holds, prepared.upper));
         }
@@ -1191,6 +1187,11 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn acquisition_from_snapshot_before_incarnation_consults_live_writer() {
+        acquisition_catalog_harness(AcquisitionCase::SnapshotBeforeIncarnation).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn competing_permission_publication_reobserves_without_reselecting_timestamp() {
         for read_ts in [None, Some(Timestamp::from(50))] {
             acquisition_catalog_harness(AcquisitionCase::PermissionRace(read_ts)).await;
@@ -1211,6 +1212,7 @@ mod tests {
 
     enum AcquisitionCase {
         Historical,
+        SnapshotBeforeIncarnation,
         PermissionRace(Option<Timestamp>),
         UninstalledIndex,
     }
@@ -1447,7 +1449,10 @@ mod tests {
                         .expect("can seed zero-replica cluster");
                 }
             }
-            if race.is_some() || uninstalled_index {
+            if race.is_some()
+                || uninstalled_index
+                || matches!(case, AcquisitionCase::SnapshotBeforeIncarnation)
+            {
                 tx.set_config("catalog_read_protection_enabled".into(), Some(1))
                     .expect("can enable joined protection writers");
             }
@@ -1485,6 +1490,25 @@ mod tests {
         ))
         .await
         .expect("can reconstruct debug catalog");
+        // SQL prewarming can retain a snapshot from before the live protection
+        // writer allocated this client. Absence there is not a durable closure.
+        let mut old_snapshot = None;
+        let incarnation = if matches!(case, AcquisitionCase::SnapshotBeforeIncarnation) {
+            old_snapshot = Some(catalog.clone());
+            let ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::CreateClientIncarnation { replica_id: None }],
+                )
+                .await
+                .expect("live writer creates incarnation")
+                .created_client_incarnations[0]
+        } else {
+            incarnation
+        };
         let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
         let client = QueryClient::new(
             incarnation,
@@ -1796,7 +1820,7 @@ mod tests {
             catalog.state().collection_compaction_bounds()[&id],
             frontier(40)
         );
-        let snapshot = catalog.clone();
+        let snapshot = old_snapshot.unwrap_or_else(|| catalog.clone());
         let read = client.acquire_read_holds_and_upper(&snapshot, &bundle, |upper| {
             assert_eq!(upper, &frontier(80));
             Ok(Some(Timestamp::from(50)))
@@ -1877,14 +1901,35 @@ mod tests {
         drop(holds);
 
         let (holds, upper) = {
-            let ordinary = client.acquire_read_holds_and_upper(&catalog, &bundle, |_| {
+            let stale = matches!(case, AcquisitionCase::SnapshotBeforeIncarnation);
+            let planning = if stale { &snapshot } else { &catalog };
+            let ordinary = client.acquire_read_holds_and_upper(planning, &bundle, |_| {
                 Ok(Some(Timestamp::from(120)))
             });
             tokio::pin!(ordinary);
             tokio::select! {
                 biased;
-                command = commands.recv() => panic!("covered read published: {command:?}"),
-                result = &mut ordinary => result.expect("covered acquisition succeeds"),
+                command = commands.recv() => {
+                    assert!(stale, "covered read published: {command:?}");
+                    let Some(Message::Command(_, Command::AcquireClientReadProtection {
+                        incarnation: requested, read_ts, tx, ..
+                    })) = command else {
+                        panic!("expected live incarnation validation");
+                    };
+                    assert_eq!(requested, incarnation);
+                    assert!(catalog.state().client_incarnations().contains_key(&requested));
+                    let prepared = client.prepare_read(&catalog, &bundle, |_| Ok(read_ts))
+                        .await.expect("live writer observes covered read");
+                    let holds = client.protection.try_acquire(
+                        &bundle, &prepared.frontiers, &prepared.index_inputs,
+                    ).expect("client remains open").expect("live grant covers read");
+                    tx.send(Ok((holds, prepared.upper))).expect("read awaits live validation");
+                    ordinary.await.expect("covered acquisition succeeds")
+                },
+                result = &mut ordinary => {
+                    assert!(!stale, "old snapshot bypassed live validation: {result:?}");
+                    result.expect("covered acquisition succeeds")
+                },
             }
         };
         assert_eq!(holds.since(&id), frontier(50));
