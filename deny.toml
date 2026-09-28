@@ -114,6 +114,8 @@ skip = [
     { name = "zip", version = "6.0.0" },
     # aws-sdk-s3 is on 0.18, while launchdarkly-server-sdk, mysql_async, and mz-frontegg-auth still use 0.16.
     { name = "lru", version = "0.16.3" },
+    # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
+    { name = "miniz_oxide", version = "0.8.9" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
