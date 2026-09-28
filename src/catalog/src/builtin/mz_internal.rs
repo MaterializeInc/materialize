@@ -5399,10 +5399,9 @@ WITH
             ((time_ns / 1000) || 'microseconds')::interval AS hydration_time
         FROM mz_internal.mz_compute_hydration_times
     ),
-    -- MVs that have advanced to the empty frontier don't have a dataflow installed anymore and
-    -- therefore don't show up in `mz_compute_hydration_times`. We still want to show them here to
-    -- avoid surprises for people joining `mz_materialized_views` against this relation (like the
-    -- blue-green readiness query does), so we include them as 'hydrated'.
+    -- Completed MVs are hydrated even without runtime measurements. Their status takes
+    -- precedence over any retained measurement for the same object and replica, so joins
+    -- against this relation (including blue-green readiness) see one completed status.
     complete_mvs AS (
         SELECT
             mv.id,
@@ -5414,6 +5413,11 @@ WITH
         WHERE f.write_frontier IS NULL
     )
 SELECT * FROM dataflows
+WHERE NOT EXISTS (
+    SELECT 1 FROM complete_mvs
+    WHERE complete_mvs.id = dataflows.object_id
+      AND complete_mvs.replica_id = dataflows.replica_id
+)
 UNION ALL
 SELECT * FROM complete_mvs",
     access: vec![PUBLIC_SELECT],

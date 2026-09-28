@@ -672,7 +672,7 @@ impl Listeners {
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
-            persist_client,
+            persist_client: persist_client.clone(),
             deploy_generation: config.controller.deploy_generation,
             deployment_state: deployment_state.clone(),
             openable_adapter_storage,
@@ -704,7 +704,7 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let mut adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
@@ -720,12 +720,42 @@ impl Listeners {
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
-            // Once we have successfully opened the adapter storage in
-            // read/write mode, we can announce we are the leader, as we've
-            // fenced out all other environments using the adapter storage.
+            // Catalog admission succeeded for this deployment. Protected
+            // components can share its generation without fencing one another.
             deployment_state.set_is_leader();
 
             adapter_storage
+        };
+
+        let protected_prewarming = read_only
+            && adapter_storage
+                .snapshot()
+                .await?
+                .configs
+                .iter()
+                .any(|(key, value)| {
+                    key.key == "catalog_read_protection_enabled" && value.value != 0
+                });
+        let compaction_bound_subscriber = if protected_prewarming {
+            // The savepoint reconstructs SQL but cannot follow durable updates. Only
+            // environments born with read protection can use an independent reader.
+            let subscriber = mz_catalog::durable::persist_backed_catalog_state(
+                persist_client.clone(),
+                config.environment_id.organization_id(),
+                BUILD_INFO.semver_version(),
+                // Adopt the active generation so promotion fences this reader.
+                None,
+                Arc::clone(&config.catalog_config.metrics),
+            )
+            .await?
+            .open_read_only(&bootstrap_args)
+            .await
+            .context(
+                "opening protected catalog subscriber, which requires no catalog migrations",
+            )?;
+            Some(subscriber)
+        } else {
+            None
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -748,8 +778,6 @@ impl Listeners {
         {
             return Err(anyhow!("bootstrap default cluster replica size is unknown").into());
         }
-        let envd_epoch = adapter_storage.epoch();
-
         // Initialize storage usage client.
         let storage_usage_client = StorageUsageClient::open(
             config
@@ -774,12 +802,28 @@ impl Listeners {
             connection_limiter.update_superuser_reserved(superuser_reserved);
         });
 
+        let client_protection_storage = if protected_prewarming {
+            Some(
+                mz_catalog::durable::persist_backed_catalog_join_active(
+                    persist_client.clone(),
+                    config.environment_id.organization_id(),
+                    config.controller.build_info.semver_version(),
+                    Arc::clone(&config.catalog_config.metrics),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let envd_epoch = adapter_storage.epoch();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
+            client_protection_storage,
+            compaction_bound_subscriber,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,

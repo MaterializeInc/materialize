@@ -822,6 +822,62 @@ impl ControllerSourceStatistics {
     }
 }
 
+impl ControllerSourceStatistics {
+    /// Restores a row packed by `PackableStats` without attaching replica metrics.
+    ///
+    /// Webhook counters have no upstream offsets or replica metric instruments.
+    pub fn from_row(row: Row) -> (GlobalId, Option<ReplicaId>, Self) {
+        let mut iter = row.iter();
+        let id = iter.next().unwrap().unwrap_str().parse().unwrap();
+        let replica_id_or_null = iter.next().unwrap();
+
+        let replica_id = if replica_id_or_null.is_null() {
+            None
+        } else {
+            Some(
+                replica_id_or_null
+                    .unwrap_str()
+                    .parse::<ReplicaId>()
+                    .unwrap(),
+            )
+        };
+
+        let s = Self {
+            id,
+            replica_id,
+
+            messages_received: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_received: iter.next().unwrap().unwrap_uint64().into(),
+            updates_staged: iter.next().unwrap().unwrap_uint64().into(),
+            updates_committed: iter.next().unwrap().unwrap_uint64().into(),
+
+            records_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            bytes_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            rehydration_latency_ms: Gauge::gauge(
+                <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
+                    .unwrap()
+                    .map(|int| int.micros / 1000),
+            ),
+            snapshot_records_known: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+            snapshot_records_staged: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+
+            snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
+            offset_known: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            last_updated: Instant::now(),
+            // This is coming from a Row, so we have definitely already written
+            // out a "zero update" at some point.
+            needs_zero_initialization: false,
+        };
+
+        (s.id, replica_id, s)
+    }
+}
+
 impl PackableStats for ControllerSourceStatistics {
     fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
         use mz_repr::Datum;
@@ -859,55 +915,9 @@ impl PackableStats for ControllerSourceStatistics {
         row: Row,
         metrics: &crate::metrics::StorageControllerMetrics,
     ) -> (GlobalId, Option<ReplicaId>, Self) {
-        let mut iter = row.iter();
-        let id = iter.next().unwrap().unwrap_str().parse().unwrap();
-        let replica_id_or_null = iter.next().unwrap();
-
-        let replica_id = if replica_id_or_null.is_null() {
-            None
-        } else {
-            Some(
-                replica_id_or_null
-                    .unwrap_str()
-                    .parse::<ReplicaId>()
-                    .unwrap(),
-            )
-        };
-
-        let mut s = Self {
-            id,
-            replica_id,
-
-            messages_received: iter.next().unwrap().unwrap_uint64().into(),
-            bytes_received: iter.next().unwrap().unwrap_uint64().into(),
-            updates_staged: iter.next().unwrap().unwrap_uint64().into(),
-            updates_committed: iter.next().unwrap().unwrap_uint64().into(),
-
-            records_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
-            bytes_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
-            rehydration_latency_ms: Gauge::gauge(
-                <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
-                    .unwrap()
-                    .map(|int| int.micros / 1000),
-            ),
-            snapshot_records_known: Gauge::gauge(
-                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
-            ),
-            snapshot_records_staged: Gauge::gauge(
-                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
-            ),
-
-            snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
-            offset_known: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
-            offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
-            last_updated: Instant::now(),
-            // This is coming from a Row, so we have definitely already written
-            // out a "zero update" at some point.
-            needs_zero_initialization: false,
-        };
-
-        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
-        (s.id, replica_id, s)
+        let (id, replica_id, mut stats) = Self::from_row(row);
+        stats.offset_known.0.regressions = Some(metrics.regressed_offset_known(id));
+        (id, replica_id, stats)
     }
 }
 

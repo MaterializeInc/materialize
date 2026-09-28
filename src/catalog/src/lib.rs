@@ -17,9 +17,14 @@
 use mz_adapter_types::connection::ConnectionId;
 
 pub mod builtin;
+pub mod catalog;
+pub mod compute_config;
 pub mod config;
 pub mod durable;
 pub mod expr_cache;
 pub mod memory;
+pub mod optimize;
+pub mod read_protection;
+pub mod storage_config;
 
 pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);

@@ -91,7 +91,7 @@ use mz_persist_client::operators::shard_source::ErrorHandler;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
-    RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
+    RunIngestionCommand, RunOneshotIngestion, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -100,7 +100,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
 use timely::order::PartialOrder;
@@ -126,6 +125,26 @@ pub mod async_storage_worker;
 type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
+/// A local endpoint is classified by its first worker-visible command.
+struct Peer {
+    commands: CommandReceiver,
+    responses: ResponseSender,
+    query: Option<bool>,
+}
+
+/// Lives in the sequencer's order, independently of local endpoint arrival.
+#[derive(Default)]
+struct Query {
+    /// Retained until disconnect to suppress repeated runs and runs overtaken by
+    /// cancellation, even after the ingestion itself has been reclaimed.
+    seen: BTreeSet<Uuid>,
+    pending: BTreeMap<Uuid, Box<RunOneshotIngestion>>,
+    /// Terminal callbacks observed in the common order, one per worker.
+    finished: BTreeMap<Uuid, usize>,
+    responses: Vec<StorageResponse>,
+    observations: bool,
+}
+
 /// State maintained for each worker thread.
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
@@ -140,6 +159,97 @@ pub struct Worker<'w> {
     pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
+    discard_responses: ResponseSender,
+    peers: BTreeMap<Uuid, Peer>,
+    lifecycle: Option<Uuid>,
+    initialization: Option<Vec<StorageCommand>>,
+    queries: BTreeMap<Uuid, Query>,
+    query_ready: bool,
+    replica_commands: Option<mpsc::UnboundedReceiver<crate::replica::ReplicaCommand>>,
+    replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
+}
+
+/// Complete storage worker state between turns on a shared Timely host.
+/// Detaching releases only the Timely borrow, not client or execution state.
+pub struct GuestWorker {
+    /// The channel over which communication handles for newly connected clients
+    /// are delivered.
+    client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
+    /// The state associated with collection ingress and egress.
+    storage_state: StorageState,
+    discard_responses: ResponseSender,
+    peers: BTreeMap<Uuid, Peer>,
+    lifecycle: Option<Uuid>,
+    initialization: Option<Vec<StorageCommand>>,
+    queries: BTreeMap<Uuid, Query>,
+    query_ready: bool,
+    replica_commands: Option<mpsc::UnboundedReceiver<crate::replica::ReplicaCommand>>,
+    replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
+}
+
+impl GuestWorker {
+    /// Borrows the host to dispatch commands or perform periodic work.
+    pub fn attach(self, timely_worker: &mut TimelyWorker) -> Worker<'_> {
+        let Self {
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        } = self;
+        Worker {
+            timely_worker,
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        }
+    }
+
+    /// Whether arrivals are queued that have already unparked the host.
+    pub fn busy(&self) -> bool {
+        !self.client_rx.is_empty()
+            || self
+                .replica_commands
+                .as_ref()
+                .is_some_and(|rx| !rx.is_empty())
+            || self.peers.values().any(|peer| !peer.commands.is_empty())
+            || !self.storage_state.async_worker.is_empty()
+    }
+
+    /// Bounds host parking by storage's periodic reporting deadlines.
+    pub fn park_duration(&self, last_maintenance: Instant, last_stats_time: Instant) -> Duration {
+        storage_park_duration(&self.storage_state, last_maintenance, last_stats_time)
+    }
+}
+
+fn storage_park_duration(
+    state: &StorageState,
+    last_maintenance: Instant,
+    last_stats_time: Instant,
+) -> Duration {
+    let stats = state
+        .storage_configuration
+        .parameters
+        .statistics_collection_interval
+        .saturating_sub(last_stats_time.elapsed());
+    match (last_maintenance + state.server_maintenance_interval)
+        .checked_duration_since(Instant::now())
+    {
+        Some(maintenance) => maintenance.min(stats),
+        None => stats,
+    }
 }
 
 impl<'w> Worker<'w> {
@@ -189,11 +299,89 @@ impl<'w> Worker<'w> {
         // this once we have a clearer boundary between what sources/sinks need
         // and the full "power" of the internal command flow, which should stay
         // internal to the worker/not be exposed to source/sink implementations.
+        Self::from_state(timely_worker, client_rx, storage_state)
+    }
+
+    /// Attaches client routing to storage state on its hosting Timely worker.
+    pub fn from_state(
+        timely_worker: &'w mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
+        storage_state: StorageState,
+    ) -> Self {
         Self {
             timely_worker,
             client_rx,
             storage_state,
+            discard_responses: mpsc::unbounded_channel().0,
+            peers: BTreeMap::new(),
+            lifecycle: None,
+            initialization: None,
+            queries: BTreeMap::new(),
+            query_ready: false,
+            replica_commands: None,
+            replica_progress: None,
         }
+    }
+
+    /// Releases the host borrow while retaining all storage worker state.
+    pub fn into_guest(self) -> GuestWorker {
+        let Self {
+            timely_worker: _,
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        } = self;
+        GuestWorker {
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        }
+    }
+
+    /// Enables native execution on every guest worker, returning its endpoint on worker zero.
+    pub fn enable_replica_guest(&mut self) -> Option<crate::server::ReplicaStorageBuilder> {
+        let (commands, responses) = self.enable_replica();
+        (self.timely_worker.index() == 0).then(|| {
+            crate::server::ReplicaStorageBuilder((
+                commands,
+                std::thread::current(),
+                responses,
+                self.timely_worker.peers(),
+            ))
+        })
+    }
+
+    /// Installs native ingress and progress in the existing worker runtime.
+    /// Call once on every worker, before running or accepting connections.
+    pub(crate) fn enable_replica(
+        &mut self,
+    ) -> (
+        mpsc::UnboundedSender<crate::replica::ReplicaCommand>,
+        mpsc::UnboundedReceiver<(usize, crate::replica::WorkerResponse)>,
+    ) {
+        assert!(self.replica_progress.is_none());
+        let (progress, responses) = mz_cluster::replica_progress::render(self.timely_worker);
+        self.replica_progress = Some(progress);
+        self.storage_state.executions = Some(Default::default());
+        let (commands, receiver) = mpsc::unbounded_channel();
+        if self.timely_worker.index() == 0 {
+            self.replica_commands = Some(receiver);
+        }
+        (commands, responses)
     }
 }
 
@@ -230,7 +418,7 @@ impl StorageState {
         // we only create the async worker once because a) the worker state is
         // re-used when a new client connects and b) commands that have already
         // been sent and might yield a response will be lost if a new iteration
-        // of `run_client` creates a new async worker.
+        // of the client loop creates a new async worker.
         //
         // If we created a new async worker every time we get a new client
         // (likely because the controller re-started and re-connected), we can
@@ -242,7 +430,7 @@ impl StorageState {
         //
         // The core idea is that both the sequencer and the async worker are
         // part of the per-worker state, and must be treated as such, meaning
-        // they must survive between invocations of `run_client`.
+        // they must survive across client connections.
 
         // TODO(aljoscha): This thread unparking business seems brittle, but that's
         // also how the command channel works currently. We can wrap it inside a
@@ -255,6 +443,7 @@ impl StorageState {
         let cluster_memory_limit = instance_context.cluster_memory_limit;
 
         let storage_state = StorageState {
+            executions: None,
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
             metrics,
@@ -262,6 +451,7 @@ impl StorageState {
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
             oneshot_ingestions: BTreeMap::new(),
+            query_owners: BTreeMap::new(),
             now,
             timely_worker_index,
             timely_worker_peers,
@@ -298,6 +488,7 @@ impl StorageState {
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
+    pub(crate) executions: Option<crate::replica::Executions>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -313,12 +504,15 @@ pub struct StorageState {
     pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
-    /// Descriptions of each installed ingestion.
-    pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
+    /// Commands for each installed ingestion, retained for reconciliation and restart.
+    pub ingestions: BTreeMap<GlobalId, RunIngestionCommand>,
     /// Descriptions of each installed export.
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Descriptions of oneshot ingestions that are currently running.
     pub oneshot_ingestions: BTreeMap<uuid::Uuid, OneshotIngestionDescription<ProtoBatch>>,
+    /// Query ownership outlives local completion, until all workers finish.
+    /// Lifecycle reconciliation and legacy cancellation must not touch these IDs.
+    query_owners: BTreeMap<Uuid, Uuid>,
     /// Undocumented
     pub now: NowFn,
     /// Index of the associated timely dataflow worker.
@@ -404,12 +598,49 @@ pub struct StorageState {
 }
 
 impl StorageState {
+    /// Resolve export errors to the ingestion attempt that owns their readers.
+    pub(crate) fn execution_owner(&self, id: GlobalId) -> GlobalId {
+        self.ingestions
+            .iter()
+            .find_map(|(owner, run)| {
+                run.description
+                    .source_exports
+                    .contains_key(&id)
+                    .then_some(*owner)
+            })
+            .unwrap_or(id)
+    }
+
+    pub(crate) fn execution(&self, id: GlobalId) -> Option<u64> {
+        self.executions
+            .as_ref()?
+            .current
+            .get(&self.execution_owner(id))
+            .copied()
+    }
+
+    fn finish_startup(&mut self, execution: Option<u64>) {
+        if let Some(execution) = execution {
+            self.executions
+                .as_mut()
+                .expect("native execution")
+                .started(execution);
+        }
+    }
+
     /// Return an error handler that triggers a suspend and restart of the corresponding storage
     /// dataflow.
     pub fn error_handler(&self, context: &'static str, id: GlobalId) -> ErrorHandler {
         let tx = self.internal_cmd_tx.clone();
+        let execution = self.execution(id);
+        let id = if execution.is_some() {
+            self.execution_owner(id)
+        } else {
+            id
+        };
         ErrorHandler::signal(move |e| {
             tx.send(InternalStorageCommand::SuspendAndRestart {
+                execution,
                 id,
                 reason: format!("{context}: {e:#}"),
             })
@@ -457,108 +688,34 @@ impl StorageInstanceContext {
 }
 
 impl<'w> Worker<'w> {
-    /// Waits for client connections and runs them to completion.
+    /// Services lifecycle and query endpoints without blocking on initialization.
     pub fn run(&mut self) {
-        while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {
-            self.run_client(rx, tx);
-        }
-    }
-
-    /// Runs this (timely) storage worker until the given `command_rx` is
-    /// disconnected.
-    ///
-    /// See the [module documentation](crate::storage_state) for this
-    /// workers responsibilities, how it communicates with the other workers and
-    /// how commands flow from the controller and through the workers.
-    fn run_client(&mut self, mut command_rx: CommandReceiver, response_tx: ResponseSender) {
-        // At this point, all workers are still reading from the command flow.
-        if self.reconcile(&mut command_rx).is_err() {
-            return;
-        }
-
-        // The last time we reported statistics.
         let mut last_stats_time = Instant::now();
-
-        // The last time we did periodic maintenance.
-        let mut last_maintenance = std::time::Instant::now();
-
-        let mut disconnected = false;
-        while !disconnected {
-            let config = &self.storage_state.storage_configuration;
-            let stats_interval = config.parameters.statistics_collection_interval;
-
-            let maintenance_interval = self.storage_state.server_maintenance_interval;
-
-            let now = std::time::Instant::now();
-            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
-            // time has passed since the last maintenance.
-            let sleep_duration;
-            if now >= last_maintenance + maintenance_interval {
-                last_maintenance = now;
-                sleep_duration = None;
-
-                self.report_frontier_progress(&response_tx);
-            } else {
-                // We didn't perform maintenance, sleep until the next maintenance interval.
-                let next_maintenance = last_maintenance + maintenance_interval;
-                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
+        let mut last_maintenance = Instant::now();
+        loop {
+            self.process_guest(&mut last_maintenance, &mut last_stats_time);
+            // Endpoint loss alone must not stop maintained execution.
+            if self.replica_progress.is_none()
+                && self.client_rx.is_closed()
+                && self.client_rx.is_empty()
+                && self.peers.is_empty()
+            {
+                return;
             }
-
-            // Ask Timely to execute a unit of work.
-            //
-            // If there are no pending commands or responses from the async
-            // worker, we ask Timely to park the thread if there's nothing to
-            // do. We rely on another thread unparking us when there's new work
-            // to be done, e.g., when sending a command or when new Kafka
-            // messages have arrived.
-            //
-            // It is critical that we allow Timely to park iff there are no
-            // pending commands or responses. The command may have already been
-            // consumed by the call to `client_rx.recv`. See:
-            // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
-            if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
-                // Make sure we wake up again to report any pending statistics updates.
-                let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
-                if let Some(sleep_duration) = sleep_duration {
-                    park_duration = std::cmp::min(sleep_duration, park_duration);
-                }
-                self.timely_worker.step_or_park(Some(park_duration));
+            if self.client_rx.is_empty()
+                && self
+                    .replica_commands
+                    .as_ref()
+                    .is_none_or(|rx| rx.is_empty())
+                && self.peers.values().all(|p| p.commands.is_empty())
+                && self.storage_state.async_worker.is_empty()
+            {
+                let park =
+                    storage_park_duration(&self.storage_state, last_maintenance, last_stats_time);
+                self.timely_worker.step_or_park(Some(park));
             } else {
                 self.timely_worker.step();
             }
-
-            // Rerport any dropped ids
-            for id in std::mem::take(&mut self.storage_state.dropped_ids) {
-                self.send_storage_response(&response_tx, StorageResponse::DroppedId(id));
-            }
-
-            self.process_oneshot_ingestions(&response_tx);
-
-            self.report_status_updates(&response_tx);
-
-            if last_stats_time.elapsed() >= stats_interval {
-                self.report_storage_statistics(&response_tx);
-                last_stats_time = Instant::now();
-            }
-
-            // Handle any received commands.
-            loop {
-                match command_rx.try_recv() {
-                    Ok(cmd) => self.storage_state.handle_storage_command(cmd),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-
-            // Handle responses from the async worker.
-            while let Ok(response) = self.storage_state.async_worker.try_recv() {
-                self.handle_async_worker_response(response);
-            }
-
-            // Handle any received commands.
             while let Some(command) = self
                 .storage_state
                 .internal_cmd_rx
@@ -567,6 +724,269 @@ impl<'w> Worker<'w> {
                 .try_recv()
             {
                 self.handle_internal_storage_command(command);
+            }
+        }
+    }
+
+    /// Processes arrivals and periodic duties without stepping the host or reading the lane.
+    /// Internal commands must be dispatched separately in the host's common order.
+    pub fn process_guest(&mut self, last_maintenance: &mut Instant, last_stats_time: &mut Instant) {
+        // Native ingress joins the same global order as queries, restarts,
+        // and async worker responses before mutating worker bookkeeping.
+        if let Some(commands) = &mut self.replica_commands {
+            for _ in 0..commands.len() + 1 {
+                match commands.try_recv() {
+                    Ok(command) => self
+                        .storage_state
+                        .internal_cmd_tx
+                        .send(InternalStorageCommand::Replica(command)),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => panic!("replica storage ingress lost"),
+                }
+            }
+        }
+        self.poll_clients();
+        while let Ok(response) = self.storage_state.async_worker.try_recv() {
+            self.handle_async_worker_response(response);
+        }
+        // A disconnected lifecycle may ignore responses. Query results are routed
+        // separately and maintained work continues while no lifecycle is attached.
+        let response_tx = self
+            .lifecycle
+            .filter(|_| self.initialization.is_none())
+            .and_then(|n| self.peers.get(&n))
+            .map(|p| p.responses.clone())
+            .unwrap_or_else(|| self.discard_responses.clone());
+        let now = Instant::now();
+        if now >= *last_maintenance + self.storage_state.server_maintenance_interval {
+            *last_maintenance = now;
+            self.report_frontier_progress(&response_tx);
+            if let Some(executions) = &mut self.storage_state.executions {
+                for response in executions.report() {
+                    self.replica_progress
+                        .as_ref()
+                        .expect("native progress")
+                        .send(response.into());
+                }
+            }
+        }
+        self.report_dropped_ids(&response_tx);
+        self.process_oneshot_ingestions(&response_tx);
+        self.report_status_updates(&response_tx);
+        if last_stats_time.elapsed()
+            >= self
+                .storage_state
+                .storage_configuration
+                .parameters
+                .statistics_collection_interval
+        {
+            self.report_storage_statistics(&response_tx);
+            *last_stats_time = Instant::now();
+        }
+    }
+
+    fn poll_clients(&mut self) {
+        for _ in 0..self.client_rx.len() {
+            let Ok((nonce, commands, responses)) = self.client_rx.try_recv() else {
+                break;
+            };
+            self.peers.entry(nonce).or_insert(Peer {
+                commands,
+                responses,
+                query: None,
+            });
+        }
+        let nonces: Vec<_> = self.peers.keys().copied().collect();
+        for nonce in nonces {
+            // Bound each turn by the queued work, so a continuous producer cannot
+            // prevent sibling clients or Timely from making progress. The extra
+            // receive observes disconnect even when the queue starts empty.
+            let budget = self.peers.get(&nonce).map_or(0, |p| p.commands.len() + 1);
+            for _ in 0..budget {
+                let Some(peer) = self.peers.get_mut(&nonce) else {
+                    break;
+                };
+                let command = match peer.commands.try_recv() {
+                    Ok(command) => Some(command),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => None,
+                };
+                if peer.query.is_none() {
+                    let Some(first) = &command else {
+                        self.peers.remove(&nonce);
+                        break;
+                    };
+                    let query = matches!(first, StorageCommand::HelloQuery { .. });
+                    if self.replica_progress.is_some() && !query {
+                        self.peers.remove(&nonce);
+                        break;
+                    }
+                    peer.query = Some(query);
+                    if !query {
+                        if let Some(old) = self.lifecycle.replace(nonce) {
+                            if old != nonce {
+                                self.peers.remove(&old);
+                            }
+                        }
+                        self.initialization = Some(Vec::new());
+                    }
+                }
+                let query = self.peers[&nonce].query.expect("classified");
+                let disconnected = command.is_none();
+                if query {
+                    // Only worker zero admits commands, including disconnect. Other
+                    // process endpoints can arrive after globally sequenced responses.
+                    if self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .internal_cmd_tx
+                            .send(InternalStorageCommand::Query { nonce, command });
+                    }
+                } else if let Some(command) = command {
+                    if let Some(commands) = &mut self.initialization {
+                        if matches!(command, StorageCommand::InitializationComplete) {
+                            let commands = self.initialization.take().expect("initializing");
+                            self.reconcile(commands);
+                            if self.timely_worker.index() == 0 {
+                                self.storage_state
+                                    .internal_cmd_tx
+                                    .send(InternalStorageCommand::QueryReady);
+                            }
+                        } else {
+                            commands.push(command);
+                        }
+                    } else {
+                        self.storage_state.handle_storage_command(command);
+                    }
+                }
+                if disconnected {
+                    self.peers.remove(&nonce);
+                    if self.lifecycle == Some(nonce) {
+                        self.lifecycle = None;
+                        self.initialization = None;
+                    }
+                    break;
+                }
+            }
+        }
+        self.flush_query_responses();
+    }
+
+    fn flush_query_responses(&mut self) {
+        for (nonce, query) in &mut self.queries {
+            if let Some(peer) = self.peers.get(nonce).filter(|p| p.query == Some(true)) {
+                for response in query.responses.drain(..) {
+                    let _ = peer.responses.send(response);
+                }
+            }
+        }
+    }
+
+    fn handle_query(&mut self, nonce: Uuid, command: Option<StorageCommand>) {
+        match command {
+            Some(StorageCommand::HelloQuery { nonce: hello }) => {
+                assert_eq!(nonce, hello);
+                if let std::collections::btree_map::Entry::Vacant(entry) = self.queries.entry(nonce)
+                {
+                    let query = entry.insert(Query::default());
+                    if self.query_ready {
+                        query.responses.push(StorageResponse::QueryReady);
+                    }
+                }
+            }
+            Some(StorageCommand::SubscribeObservations) => {
+                if !self.query_ready {
+                    // A malformed query peer must not kill maintained work.
+                    self.handle_query(nonce, None);
+                    return;
+                }
+                let Some(query) = self.queries.get_mut(&nonce) else {
+                    return;
+                };
+                // The client waits for aggregate readiness before subscribing, so
+                // every process has its endpoint and current state available.
+                if !query.observations {
+                    query.observations = true;
+                    let now = mz_ore::now::to_datetime((self.storage_state.now)());
+                    query.responses.extend(
+                        self.storage_state
+                            .latest_status_updates
+                            .values()
+                            .cloned()
+                            .map(|mut update| {
+                                update.timestamp = now.clone();
+                                StorageResponse::StatusUpdate(update)
+                            }),
+                    );
+                }
+            }
+            None => {
+                self.queries.remove(&nonce);
+                self.peers.remove(&nonce);
+                self.storage_state.query_owners.retain(|id, owner| {
+                    if *owner == nonce {
+                        self.storage_state.oneshot_ingestions.remove(id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+            Some(StorageCommand::RunOneshotIngestion(ingestion)) => {
+                let Some(query) = self.queries.get_mut(&nonce) else {
+                    return;
+                };
+                let id = ingestion.ingestion_id;
+                if !query.seen.insert(id) {
+                    return;
+                }
+                // IDs are replica-wide, including legacy oneshots. A collision must
+                // never replace or expose another connection's ingestion.
+                if self.storage_state.query_owners.contains_key(&id)
+                    || self.storage_state.oneshot_ingestions.contains_key(&id)
+                {
+                    query
+                        .responses
+                        .push(StorageResponse::StagedBatches(BTreeMap::from([(
+                            id,
+                            vec![Err("oneshot ingestion ID is already in use".into())],
+                        )])));
+                    return;
+                }
+                self.storage_state.query_owners.insert(id, nonce);
+                query.pending.insert(id, ingestion);
+            }
+            Some(StorageCommand::CancelOneshotIngestion(id)) => {
+                if let Some(query) = self.queries.get_mut(&nonce) {
+                    // Remember cancellation even when it overtakes admission.
+                    query.seen.insert(id);
+                    query.pending.remove(&id);
+                    query.finished.remove(&id);
+                    if self.storage_state.query_owners.get(&id) == Some(&nonce) {
+                        self.storage_state.drop_oneshot_ingestion(id);
+                        self.storage_state.query_owners.remove(&id);
+                    }
+                }
+            }
+            Some(_) => panic!("invalid query command passed role validation"),
+        }
+        self.admit_queries();
+        self.flush_query_responses();
+    }
+
+    fn admit_queries(&mut self) {
+        if !self.query_ready {
+            return;
+        }
+        for query in self.queries.values_mut() {
+            for ingestion in std::mem::take(&mut query.pending).into_values() {
+                crate::render::build_oneshot_ingestion_dataflow(
+                    self.timely_worker,
+                    &mut self.storage_state,
+                    ingestion.ingestion_id,
+                    ingestion.collection_id,
+                    ingestion.collection_meta,
+                    ingestion.request,
+                );
             }
         }
     }
@@ -586,6 +1006,7 @@ impl<'w> Worker<'w> {
         );
         match async_response {
             AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
+                execution,
                 id,
                 ingestion_description,
                 as_of,
@@ -594,6 +1015,7 @@ impl<'w> Worker<'w> {
             } => {
                 self.storage_state.internal_cmd_tx.send(
                     InternalStorageCommand::CreateIngestionDataflow {
+                        execution,
                         id,
                         ingestion_description,
                         as_of,
@@ -603,9 +1025,15 @@ impl<'w> Worker<'w> {
                 );
             }
             AsyncStorageWorkerResponse::ExportFrontiersUpdated { id, description } => {
+                // Native reconstruction requires a newly authorized Run command.
+                assert!(self.storage_state.executions.is_none());
                 self.storage_state
                     .internal_cmd_tx
-                    .send(InternalStorageCommand::RunSinkDataflow(id, description));
+                    .send(InternalStorageCommand::RunSinkDataflow(
+                        None,
+                        id,
+                        description,
+                    ));
             }
             AsyncStorageWorkerResponse::DropDataflow(id) => {
                 self.storage_state
@@ -618,15 +1046,140 @@ impl<'w> Worker<'w> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
-            InternalStorageCommand::SuspendAndRestart { id, reason } => {
+            InternalStorageCommand::Replica(
+                crate::replica::ReplicaCommand::KafkaPreOpenReply {
+                    request,
+                    execution,
+                    id,
+                    max_age,
+                },
+            ) => {
+                self.storage_state
+                    .executions
+                    .as_mut()
+                    .expect("native runtime")
+                    .kafka_pre_open_reply(request, execution, id, max_age);
+            }
+            InternalStorageCommand::KafkaPreOpen {
+                request,
+                execution,
+                id,
+            } => {
+                // Exactly one response, regardless of which process runs the sink.
+                if self.timely_worker.index() == 0 {
+                    self.replica_progress
+                        .as_ref()
+                        .expect("native runtime")
+                        .send(
+                            crate::replica::ReplicaStorageResponse::KafkaPreOpen {
+                                request,
+                                execution,
+                                id,
+                            }
+                            .into(),
+                        );
+                }
+            }
+            InternalStorageCommand::Replica(crate::replica::ReplicaCommand::Storage(
+                sequence,
+                command,
+            )) => {
+                assert!(self.replica_progress.is_some());
+                let dropping = match &command {
+                    StorageCommand::AllowCompaction(_, frontier) => frontier.is_empty(),
+                    _ => false,
+                };
+                if !dropping {
+                    self.storage_state
+                        .executions
+                        .as_mut()
+                        .unwrap()
+                        .outputs
+                        .observe(sequence, &command);
+                }
+                if let Some((id, inputs)) = crate::replica::inputs(&command) {
+                    // Keep existing execution during preparation. Rendering the
+                    // replacement drops its tokens, without releasing old reads.
+                    self.storage_state
+                        .executions
+                        .as_mut()
+                        .unwrap()
+                        .start(sequence, id, inputs);
+                }
+                if matches!(command, StorageCommand::InitializationComplete) {
+                    // Configuration's rendering-stage command was enqueued by
+                    // worker zero while processing preceding native ingress.
+                    // Put readiness behind it, not at this first-stage barrier.
+                    if self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .internal_cmd_tx
+                            .send(InternalStorageCommand::QueryReady);
+                    }
+                } else {
+                    self.storage_state.handle_storage_command(command);
+                }
+            }
+            InternalStorageCommand::Query { nonce, command } => self.handle_query(nonce, command),
+            InternalStorageCommand::QueryFinished {
+                nonce,
+                ingestion_id,
+            } => {
+                if self.storage_state.query_owners.get(&ingestion_id) == Some(&nonce) {
+                    let query = self.queries.get_mut(&nonce).expect("owner exists");
+                    let finished = query.finished.entry(ingestion_id).or_default();
+                    *finished += 1;
+                    if *finished == self.timely_worker.peers() {
+                        query.finished.remove(&ingestion_id);
+                        self.storage_state.drop_oneshot_ingestion(ingestion_id);
+                        self.storage_state.query_owners.remove(&ingestion_id);
+                    }
+                }
+            }
+            InternalStorageCommand::CancelOneshotIngestion(id) => {
+                if !self.storage_state.query_owners.contains_key(&id) {
+                    self.storage_state.drop_oneshot_ingestion(id);
+                }
+            }
+            InternalStorageCommand::QueryReady => {
+                if !self.query_ready {
+                    self.query_ready = true;
+                    for query in self.queries.values_mut() {
+                        query.responses.push(StorageResponse::QueryReady);
+                    }
+                    self.admit_queries();
+                    self.flush_query_responses();
+                }
+            }
+            InternalStorageCommand::SuspendAndRestart {
+                execution,
+                id,
+                reason,
+            } => {
                 info!(
+                    ?execution,
                     "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
                 );
+                if let Some(executions) = &mut self.storage_state.executions {
+                    let Some(execution) = execution else { return };
+                    if executions.current.get(&id) != Some(&execution) {
+                        return;
+                    }
+                    // Removing admission fences late startup and coalesces all
+                    // workers' requests for this attempt. Only a new Run can restart.
+                    executions.retire(id);
+                    self.storage_state.source_tokens.remove(&id);
+                    self.storage_state.sink_tokens.remove(&id);
+                    self.replica_progress.as_ref().unwrap().send(
+                        crate::server::ReplicaStorageResponse::RestartRequested { execution, id }
+                            .into(),
+                    );
+                    return;
+                }
 
                 let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
-                if let Some(ingestion_description) = maybe_ingestion {
+                if let Some(ingestion) = maybe_ingestion {
                     // Yank the token of the previously existing source dataflow.Note that this
                     // token also includes any source exports/subsources.
                     let maybe_token = self.storage_state.source_tokens.remove(&id);
@@ -649,14 +1202,14 @@ impl<'w> Worker<'w> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
-                        for (id, _) in ingestion_description.source_exports.iter() {
+                        for (id, _) in ingestion.description.source_exports.iter() {
                             self.storage_state
                                 .aggregated_statistics
                                 .advance_global_epoch(*id);
                         }
                         self.storage_state
                             .async_worker
-                            .update_ingestion_frontiers(id, ingestion_description);
+                            .update_ingestion_frontiers(ingestion);
                     }
 
                     // Continue with other commands.
@@ -695,7 +1248,7 @@ impl<'w> Worker<'w> {
                     .storage_state
                     .ingestions
                     .values()
-                    .any(|v| v.source_exports.contains_key(&id))
+                    .any(|v| v.description.source_exports.contains_key(&id))
                 {
                     // Our current approach to dropping a source results in a race between shard
                     // finalization (which happens in the controller) and dataflow shutdown (which
@@ -709,12 +1262,20 @@ impl<'w> Worker<'w> {
                 }
             }
             InternalStorageCommand::CreateIngestionDataflow {
+                execution,
                 id: ingestion_id,
                 mut ingestion_description,
                 as_of,
                 mut resume_uppers,
                 mut source_resume_uppers,
             } => {
+                if execution.is_some() && self.storage_state.execution(ingestion_id) != execution {
+                    self.storage_state.finish_startup(execution);
+                    return;
+                }
+                if execution.is_some() {
+                    self.storage_state.source_tokens.remove(&ingestion_id);
+                }
                 info!(
                     ?as_of,
                     ?resume_uppers,
@@ -728,6 +1289,11 @@ impl<'w> Worker<'w> {
                 // machinery will get confused if there are not at least
                 // statistics for the "main" source.
                 for (export_id, export) in ingestion_description.source_exports.iter() {
+                    if execution.is_some() && self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .aggregated_statistics
+                            .advance_global_epoch(*export_id);
+                    }
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
                         *export_id,
@@ -794,6 +1360,7 @@ impl<'w> Worker<'w> {
                         self.timely_worker.index(),
                         self.timely_worker.peers(),
                     );
+                    self.storage_state.finish_startup(execution);
                     return;
                 }
 
@@ -806,6 +1373,7 @@ impl<'w> Worker<'w> {
                     resume_uppers,
                     source_resume_uppers,
                 );
+                self.storage_state.finish_startup(execution);
             }
             InternalStorageCommand::RunOneshotIngestion {
                 ingestion_id,
@@ -813,6 +1381,9 @@ impl<'w> Worker<'w> {
                 collection_meta,
                 request,
             } => {
+                if self.storage_state.query_owners.contains_key(&ingestion_id) {
+                    return;
+                }
                 crate::render::build_oneshot_ingestion_dataflow(
                     self.timely_worker,
                     &mut self.storage_state,
@@ -822,7 +1393,14 @@ impl<'w> Worker<'w> {
                     request,
                 );
             }
-            InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
+            InternalStorageCommand::RunSinkDataflow(execution, sink_id, sink_description) => {
+                if execution.is_some() && self.storage_state.execution(sink_id) != execution {
+                    self.storage_state.finish_startup(execution);
+                    return;
+                }
+                if execution.is_some() {
+                    self.storage_state.sink_tokens.remove(&sink_id);
+                }
                 info!(
                     "worker {}/{} trying to (re-)start sink {sink_id}",
                     self.timely_worker.index(),
@@ -843,6 +1421,11 @@ impl<'w> Worker<'w> {
                     sink_write_frontier.clear();
                     sink_write_frontier.insert(mz_repr::Timestamp::minimum());
                 }
+                if execution.is_some() && self.timely_worker.index() == 0 {
+                    self.storage_state
+                        .aggregated_statistics
+                        .advance_global_epoch(sink_id);
+                }
                 self.storage_state
                     .aggregated_statistics
                     .initialize_sink(sink_id, || {
@@ -859,6 +1442,7 @@ impl<'w> Worker<'w> {
                     sink_id,
                     sink_description,
                 );
+                self.storage_state.finish_startup(execution);
             }
             InternalStorageCommand::DropDataflow(ids) => {
                 for id in &ids {
@@ -988,7 +1572,8 @@ impl<'w> Worker<'w> {
                 .map(|mut update| {
                     update.timestamp = now_ts.clone();
                     update
-                });
+                })
+                .collect::<Vec<_>>();
             for update in status_updates {
                 self.send_storage_response(response_tx, StorageResponse::StatusUpdate(update));
             }
@@ -1017,6 +1602,11 @@ impl<'w> Worker<'w> {
                 .send(InternalStorageCommand::StatisticsUpdate { sources, sinks })
         }
 
+        // Snapshot resets global counters. Keep aggregating at constant memory
+        // through same-process observer outages, without consuming their deltas.
+        if self.replica_progress.is_some() && !self.queries.values().any(|q| q.observations) {
+            return;
+        }
         let (sources, sinks) = self.storage_state.aggregated_statistics.snapshot();
         if !sources.is_empty() || !sinks.is_empty() {
             self.send_storage_response(
@@ -1026,8 +1616,53 @@ impl<'w> Worker<'w> {
         }
     }
 
+    fn report_dropped_ids(&mut self, response_tx: &ResponseSender) {
+        if let Some(executions) = &mut self.storage_state.executions {
+            self.storage_state.dropped_ids.clear();
+            for (id, generation) in std::mem::take(&mut executions.dropped_outputs) {
+                self.replica_progress
+                    .as_ref()
+                    .unwrap()
+                    .send(crate::replica::WorkerResponse {
+                        output_generation: Some(generation),
+                        response: crate::server::ReplicaStorageResponse::Response(
+                            StorageResponse::DroppedId(id),
+                        ),
+                    });
+            }
+        } else {
+            for id in std::mem::take(&mut self.storage_state.dropped_ids) {
+                self.send_storage_response(response_tx, StorageResponse::DroppedId(id));
+            }
+        }
+    }
+
     /// Send a response to the coordinator.
-    pub fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
+    fn send_storage_response(&mut self, response_tx: &ResponseSender, response: StorageResponse) {
+        if matches!(
+            response,
+            StorageResponse::StatusUpdate(_) | StorageResponse::StatisticsUpdates(..)
+        ) {
+            for query in self.queries.values_mut().filter(|q| q.observations) {
+                query.responses.push(response.clone());
+            }
+            self.flush_query_responses();
+            if self.replica_progress.is_some() {
+                return;
+            }
+        }
+        if let Some(progress) = &self.replica_progress {
+            let output_generation = if let StorageResponse::FrontierUpper(id, _) = &response {
+                Some(self.storage_state.executions.as_ref().unwrap().outputs.0[id])
+            } else {
+                None
+            };
+            progress.send(crate::replica::WorkerResponse {
+                output_generation,
+                response: crate::server::ReplicaStorageResponse::Response(response),
+            });
+            return;
+        }
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = response_tx.send(response);
@@ -1036,6 +1671,11 @@ impl<'w> Worker<'w> {
     /// Forward completed oneshot ingestion results to the coordinator.
     pub fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
+            if !self.storage_state.query_owners.contains_key(ingestion_id)
+                && (self.lifecycle.is_none() || self.initialization.is_some())
+            {
+                continue;
+            }
             loop {
                 match ingestion_state.results.try_recv() {
                     Ok(result) => {
@@ -1044,7 +1684,23 @@ impl<'w> Worker<'w> {
                             Err(err) => vec![Err(err)],
                         };
                         let staged_batches = BTreeMap::from([(*ingestion_id, response)]);
-                        let _ = response_tx.send(StorageResponse::StagedBatches(staged_batches));
+                        let response = StorageResponse::StagedBatches(staged_batches);
+                        if let Some(owner) = self.storage_state.query_owners.get(ingestion_id) {
+                            if let Some(query) = self.queries.get_mut(owner) {
+                                query.responses.push(response);
+                            }
+                            // The renderer invokes each worker's callback exactly once.
+                            // Releasing local tokens here could freeze capabilities
+                            // still needed for another worker's terminal result.
+                            self.storage_state.internal_cmd_tx.send(
+                                InternalStorageCommand::QueryFinished {
+                                    nonce: *owner,
+                                    ingestion_id: *ingestion_id,
+                                },
+                            );
+                        } else {
+                            let _ = response_tx.send(response);
+                        }
                     }
                     Err(TryRecvError::Empty) => {
                         break;
@@ -1055,31 +1711,11 @@ impl<'w> Worker<'w> {
                 }
             }
         }
+        self.flush_query_responses();
     }
 
-    /// Extract commands until `InitializationComplete`, and make the worker
-    /// reflect those commands. If the worker can not be made to reflect the
-    /// commands, return an error.
-    fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
-        // To initialize the connection, we want to drain all commands until we
-        // receive a `StorageCommand::InitializationComplete` command to form a
-        // target command state.
-        let mut commands = vec![];
-        loop {
-            match command_rx.blocking_recv().ok_or(())? {
-                StorageCommand::InitializationComplete => break,
-                command => commands.push(command),
-            }
-        }
-
-        self.reconcile_commands(commands);
-        Ok(())
-    }
-
-    /// Reconciles the worker state with the given target command state,
-    /// which the caller has drained from a new client connection up to (exclusive) the
-    /// `InitializationComplete` marker.
-    pub fn reconcile_commands(&mut self, mut commands: Vec<StorageCommand>) {
+    /// Reconcile a complete lifecycle snapshot without touching query-owned work.
+    fn reconcile(&mut self, mut commands: Vec<StorageCommand>) {
         let worker_id = self.timely_worker.index();
 
         // Track which frontiers this envd expects; we will also set their
@@ -1088,7 +1724,7 @@ impl<'w> Worker<'w> {
         let mut expected_objects = BTreeSet::new();
 
         let mut drop_commands = BTreeSet::new();
-        let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
+        let mut running_ingestions = self.storage_state.ingestions.clone();
         let mut running_exports_descriptions = self.storage_state.exports.clone();
 
         let mut create_oneshot_ingestions: BTreeSet<Uuid> = BTreeSet::new();
@@ -1096,8 +1732,10 @@ impl<'w> Worker<'w> {
 
         for command in &mut commands {
             match command {
-                StorageCommand::Hello { .. } => {
-                    panic!("Hello must be captured before")
+                StorageCommand::Hello { .. }
+                | StorageCommand::HelloQuery { .. }
+                | StorageCommand::SubscribeObservations => {
+                    panic!("transport and query commands must be captured before")
                 }
                 StorageCommand::AllowCompaction(id, since) => {
                     info!(%worker_id, ?id, ?since, "reconcile: received AllowCompaction command");
@@ -1116,14 +1754,14 @@ impl<'w> Worker<'w> {
                     info!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
 
                     // Ensure that ingestions are forward-rolling alter compatible.
-                    let prev = running_ingestion_descriptions
-                        .insert(ingestion.id, ingestion.description.clone());
+                    let prev = running_ingestions.insert(ingestion.id, ingestion.as_ref().clone());
 
                     if let Some(prev_ingest) = prev {
                         // If the new ingestion is not exactly equal to the currently running
                         // ingestion, we must either track that we need to synthesize an update
                         // command to change the ingestion, or panic.
                         prev_ingest
+                            .description
                             .alter_compatible(ingestion.id, &ingestion.description)
                             .expect("only alter compatible ingestions permitted");
                     }
@@ -1168,8 +1806,10 @@ impl<'w> Worker<'w> {
         for mut command in commands.into_iter().rev() {
             let mut should_keep = true;
             match &mut command {
-                StorageCommand::Hello { .. } => {
-                    panic!("Hello must be captured before")
+                StorageCommand::Hello { .. }
+                | StorageCommand::HelloQuery { .. }
+                | StorageCommand::SubscribeObservations => {
+                    panic!("transport and query commands must be captured before")
                 }
                 StorageCommand::RunIngestion(ingestion) => {
                     // Subsources can be dropped independently of their
@@ -1223,10 +1863,10 @@ impl<'w> Worker<'w> {
                         // We keep only:
                         // - The most recent version of the ingestion, which
                         //   is why these commands are run in reverse.
-                        // - Ingestions whose descriptions are not exactly
+                        // - Ingestions whose commands are not exactly
                         //   those that are currently running.
-                        should_keep = most_recent_defintion
-                            && running_ingestion != Some(&ingestion.description)
+                        should_keep =
+                            most_recent_defintion && running_ingestion != Some(ingestion.as_ref())
                     }
                 }
                 StorageCommand::RunSink(export) => {
@@ -1299,7 +1939,7 @@ impl<'w> Worker<'w> {
             .storage_state
             .ingestions
             .values()
-            .map(|i| i.collection_ids())
+            .map(|i| i.description.collection_ids())
             .flatten()
             .chain(self.storage_state.exports.keys().copied())
             // Objects are considered stale if we did not see them re-created.
@@ -1309,6 +1949,7 @@ impl<'w> Worker<'w> {
             .storage_state
             .oneshot_ingestions
             .keys()
+            .filter(|ingestion_id| !self.storage_state.query_owners.contains_key(ingestion_id))
             .filter(|ingestion_id| {
                 let to_create = create_oneshot_ingestions.contains(ingestion_id);
                 let to_drop = cancel_oneshot_ingestions.contains(ingestion_id);
@@ -1330,7 +1971,8 @@ impl<'w> Worker<'w> {
             self.storage_state.drop_collection(id);
         }
         for id in stale_oneshot_ingestions {
-            self.storage_state.drop_oneshot_ingestion(id);
+            self.storage_state
+                .handle_storage_command(StorageCommand::CancelOneshotIngestion(id));
         }
 
         // Do not report dropping any objects that do not belong to expected
@@ -1370,7 +2012,11 @@ impl StorageState {
     /// commands to the `internal_cmd_tx`.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::Hello { .. } => panic!("Hello must be captured before"),
+            StorageCommand::Hello { .. }
+            | StorageCommand::HelloQuery { .. }
+            | StorageCommand::SubscribeObservations => {
+                panic!("transport and query commands must be captured before")
+            }
             StorageCommand::InitializationComplete => (),
             StorageCommand::AllowWrites => {
                 self.read_only_tx
@@ -1408,14 +2054,11 @@ impl StorageState {
                 }
             }
             StorageCommand::RunIngestion(ingestion) => {
-                let RunIngestionCommand { id, description } = *ingestion;
-
-                // Remember the ingestion description to facilitate possible
-                // reconciliation later.
-                self.ingestions.insert(id, description.clone());
+                self.ingestions
+                    .insert(ingestion.id, ingestion.as_ref().clone());
 
                 // Initialize shared frontier reporting.
-                for id in description.collection_ids() {
+                for id in ingestion.description.collection_ids() {
                     self.reported_frontiers
                         .entry(id)
                         .or_insert_with(|| Antichain::from_elem(mz_repr::Timestamp::minimum()));
@@ -1432,11 +2075,15 @@ impl StorageState {
                 // ingestion in the local storage state. This is something we might have
                 // interest in fixing in the future, e.g. materialize#19907
                 if self.timely_worker_index == 0 {
+                    let execution = self.execution(ingestion.id);
                     self.async_worker
-                        .update_ingestion_frontiers(id, description);
+                        .update_ingestion_frontiers_for(*ingestion, execution);
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {
+                if self.query_owners.contains_key(&oneshot.ingestion_id) {
+                    return;
+                }
                 if self.timely_worker_index == 0 {
                     self.internal_cmd_tx
                         .send(InternalStorageCommand::RunOneshotIngestion {
@@ -1448,7 +2095,10 @@ impl StorageState {
                 }
             }
             StorageCommand::CancelOneshotIngestion(id) => {
-                self.drop_oneshot_ingestion(id);
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::CancelOneshotIngestion(id));
+                }
             }
             StorageCommand::RunSink(export) => {
                 // Remember the sink description to facilitate possible
@@ -1469,6 +2119,7 @@ impl StorageState {
                 if self.timely_worker_index == 0 {
                     self.internal_cmd_tx
                         .send(InternalStorageCommand::RunSinkDataflow(
+                            self.execution(export.id),
                             export.id,
                             export.description,
                         ));
@@ -1491,6 +2142,18 @@ impl StorageState {
     /// Drop the identified storage collection from the storage state.
     fn drop_collection(&mut self, id: GlobalId) {
         fail_point!("crash_on_drop");
+
+        if let Some(executions) = &mut self.executions {
+            executions.retire(id);
+            if let Some(generation) = executions.outputs.0.remove(&id) {
+                executions.dropped_outputs.push((id, generation));
+            }
+            self.source_tokens.remove(&id);
+            self.sink_tokens.remove(&id);
+            self.source_uppers.remove(&id);
+            self.sink_write_frontiers.remove(&id);
+            self.aggregated_statistics.deinitialize(id);
+        }
 
         self.ingestions.remove(&id);
         self.exports.remove(&id);
@@ -1522,7 +2185,7 @@ impl StorageState {
 
         // Send through async worker for correct ordering with RunIngestion, and
         // dropping the dataflow is done on async worker response.
-        if self.timely_worker_index == 0 {
+        if self.timely_worker_index == 0 && self.executions.is_none() {
             self.async_worker.drop_dataflow(id);
         }
     }
@@ -1533,3 +2196,11 @@ impl StorageState {
         info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
     }
 }
+
+#[cfg(test)]
+#[path = "storage_state/runtime_tests.rs"]
+mod native_runtime_tests;
+
+#[cfg(test)]
+#[path = "storage_state/query_tests.rs"]
+mod query_tests;

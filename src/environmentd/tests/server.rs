@@ -2755,6 +2755,12 @@ async fn migrated_builtin_mvs_readable_at_ready_to_promote(hydrate_migrated_mvs:
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(1)
+        // Builtin schema migrations are unsupported in protected mode. Initialize unprotected
+        // from the first startup because the mode is latched at environment creation.
+        .with_system_parameter_default(
+            "enable_catalog_read_protection".to_string(),
+            "false".to_string(),
+        )
         // Tick often, and tolerate far less lag than production, so the test finishes quickly and
         // actually exercises the gate. The allowed lag has to stay *below* the stability period: a
         // frozen collection looks caught up for as long as the tolerance lasts, so it must fall
@@ -4189,6 +4195,29 @@ async fn test_connection_id() {
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
 async fn test_github_25388() {
+    async fn wait_for_index(client: &tokio_postgres::Client) {
+        // The DROP race needs an index in the planning snapshot, not merely a
+        // committed index definition. Storage fallback does not depend on idx.
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry_async(|_| async {
+                let ready: bool = client
+                    .query_one(
+                        "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                         JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                         JOIN mz_indexes i ON i.id = g.id \
+                         WHERE i.name = 'idx' AND f.read_frontier IS NOT NULL)",
+                        &[],
+                    )
+                    .await
+                    .unwrap()
+                    .get(0);
+                ready.then_some(()).ok_or("Index not readable")
+            })
+            .await
+            .unwrap();
+    }
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start()
@@ -4226,6 +4255,7 @@ async fn test_github_25388() {
                 .batch_execute("CREATE INDEX idx ON t(a)")
                 .await
                 .unwrap();
+            wait_for_index(&client1).await;
 
             let client2 = server.connect().await.unwrap();
             mz_ore::task::spawn(|| "test", async move {
@@ -4255,6 +4285,7 @@ async fn test_github_25388() {
                 .batch_execute("CREATE INDEX idx ON t(a)")
                 .await
                 .unwrap();
+            wait_for_index(&client1).await;
 
             let client2 = server.connect().await.unwrap();
             mz_ore::task::spawn(|| "test", async move {
@@ -4605,6 +4636,20 @@ fn create_replacement_fixture(client: &mut postgres::Client) {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
+fn wait_for_replacement_output(client: &mut postgres::Client) {
+    // Replacement application is asynchronous in the dataflow layer, even
+    // under strict serializable isolation.
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+            let value = row.get::<_, i32>(0);
+            if value == 2 { Ok(()) } else { Err(value) }
+        })
+        .expect("replacement must converge to 2");
+}
+
 // Applying a materialized view replacement changes the definition behind the
 // target's retained GlobalIds (see `mz_catalog::expr_cache::ExpressionCache::open`).
 // If the next bootstrap installs the expressions cached before the apply, and
@@ -4634,15 +4679,13 @@ fn test_replacement_materialized_view_invalidates_expression_cache() {
             .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
             .unwrap();
         client.batch_execute("DROP VIEW v1").unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+        wait_for_replacement_output(&mut client);
     }
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2);
+        wait_for_replacement_output(&mut client);
     }
 }
 
@@ -4686,15 +4729,13 @@ fn test_replacement_materialized_view_stale_expression_cache_entry_dropped_on_op
             .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
             .unwrap();
         client.batch_execute("DROP VIEW v1").unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+        wait_for_replacement_output(&mut client);
     }
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2);
+        wait_for_replacement_output(&mut client);
     }
 }
 

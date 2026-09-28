@@ -39,6 +39,7 @@ use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use crate::table_writer::{TableRegistration, TableWriteHandle};
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
@@ -56,7 +57,6 @@ use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
-use mz_storage_client::controller::{TableRegistration, TableWriteHandle};
 use mz_storage_types::controller::StorageError;
 use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
 use smallvec::SmallVec;
@@ -1271,7 +1271,7 @@ impl Coordinator {
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.controller.read_only() {
+        if self.read_only_controllers {
             panic!(
                 "attempting table write in read-only mode: {:?}",
                 pending_write_txn
@@ -1401,7 +1401,7 @@ impl<'a> BuiltinTableAppend<'a> {
     /// Note: When in read-only mode, this will buffer the update and return
     /// immediately.
     pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.controller.read_only() {
+        if self.coord.read_only_controllers {
             self.coord
                 .buffered_builtin_table_updates
                 .as_mut()
@@ -1429,7 +1429,7 @@ impl<'a> BuiltinTableAppend<'a> {
     /// returned future will resolve immediately, without the update actually
     /// having been written.
     pub fn defer(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.controller.read_only() {
+        if self.coord.read_only_controllers {
             self.coord
                 .buffered_builtin_table_updates
                 .as_mut()
@@ -1453,7 +1453,7 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// In read-only mode, buffers the update and returns a ready future.
     pub fn execute(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.controller.read_only() {
+        if self.coord.read_only_controllers {
             self.coord
                 .buffered_builtin_table_updates
                 .as_mut()

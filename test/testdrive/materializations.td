@@ -119,6 +119,16 @@ b  min
 1  1
 2  1
 
+# Wait until the producer index is readable so the dependent can import it.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'data_view_primary_idx' AND f.read_frontier IS NOT NULL
+  )
+true
+
 > CREATE MATERIALIZED VIEW test4 AS
   SELECT b, max(a) FROM data_view GROUP BY b
 
@@ -127,6 +137,24 @@ b  max
 ------
 1  3
 2  1
+
+# Wait for the dependent's runtime import to advance beyond its initial frontier.
+# A catalog dependency alone does not establish that the import is running.
+# Inspect the same replica as the final arrangement assertion.
+> SET cluster_replica = r1
+
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_introspection.mz_compute_import_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS eg ON eg.global_id = f.export_id
+    JOIN mz_catalog.mz_objects AS e ON e.id = eg.id
+    JOIN mz_internal.mz_object_global_ids AS ig ON ig.global_id = f.import_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = ig.id
+    WHERE e.name = 'test4' AND i.name = 'data_view_primary_idx' AND f.time > 0
+  )
+true
+
+> RESET cluster_replica
 
 # Unmaterialize data view.
 > DROP INDEX data_view_primary_idx
@@ -286,6 +314,16 @@ b  c
 1  3
 2  1
 
+# Wait until the producer index is readable so the dependent can import it.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'data_view_idx' AND f.read_frontier IS NOT NULL
+  )
+true
+
 # Create a suboptimal second index on the same column in data_view.
 > CREATE INDEX data_view_idx2 on data_view(a)
 
@@ -308,6 +346,28 @@ b  c
 ------
 1  3
 2  1
+
+# A trace alias releases its unused import wrapper. Observe its export and
+# completed wrapper, as in mz_compute_error_counts, rather than waiting for
+# an import frontier that disappears on completion. Inspect the final replica.
+> SET cluster_replica = r1
+
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_compute_dependencies AS d
+    JOIN mz_introspection.mz_compute_exports AS x ON x.export_id = d.object_id
+    JOIN mz_internal.mz_object_global_ids AS eg ON eg.global_id = d.object_id
+    JOIN mz_catalog.mz_indexes AS e ON e.id = eg.id
+    JOIN mz_internal.mz_object_global_ids AS ig ON ig.global_id = d.dependency_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = ig.id
+    WHERE e.name = 'data_view_idx2' AND i.name = 'data_view_idx'
+      AND NOT EXISTS (
+        SELECT 1 FROM mz_introspection.mz_dataflows WHERE id = x.dataflow_id
+      )
+  )
+true
+
+> RESET cluster_replica
 
 # Delete the first copy of the same index and ensure everything selects as
 # normal.
@@ -468,6 +528,9 @@ c    d
 
 # Check arrangements, seeing new arrangements can mean a significant increase
 # in memory consumptions and should be understood before adapting the values.
+# Include retained physical dataflows even after their catalog exports are dropped.
+# data_view_idx2 retains data_view_idx's trace. test4 consumes its producer as a
+# stream, so dropping data_view_primary_idx releases its last trace-sharing handle.
 > SET cluster_replica = r1
 
 
@@ -475,16 +538,16 @@ c    d
 > SELECT mdod.dataflow_name, mdod.name
   FROM mz_introspection.mz_arrangement_sharing mash
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
-  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
-  WHERE export_id LIKE 'u%'
+  WHERE EXISTS (
+    SELECT 1 FROM mz_introspection.mz_dataflow_global_ids g
+    WHERE g.id = mdod.dataflow_id AND g.global_id LIKE 'u%'
+  )
 "Dataflow: materialize.public.test4" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.test4" "ReduceMonotonic"
 "Dataflow: materialize.public.test6" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.test6" "ReduceMonotonic"
 "Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, \"a\")]]"
 "Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, \"a\")]]-errors"
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]"
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]-errors"
 "Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, \"b\")]]"
 "Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, \"b\")]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck

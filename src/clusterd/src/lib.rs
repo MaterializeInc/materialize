@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Native catalog reconstruction uses deeply nested async types.
+#![recursion_limit = "256"]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -43,6 +46,7 @@ use tokio::runtime::Handle;
 use tower::Service;
 use tracing::{Instrument, debug, error, info, info_span};
 
+mod catalog_follower;
 mod usage_metrics;
 
 const BUILD_INFO: BuildInfo = build_info!();
@@ -107,6 +111,25 @@ struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+
+    /// The cluster whose committed catalog state this replica follows.
+    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_config"])]
+    catalog_cluster_id: Option<mz_controller_types::ClusterId>,
+    /// Serialized non-runtime configuration for catalog reconstruction.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_config: Option<String>,
+    /// The replica identity within the declared cluster.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_replica_id: Option<mz_controller_types::ReplicaId>,
+    /// The deployment generation this replica may join, never inferred from the leader.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_deploy_generation: Option<u64>,
+    /// Persist blob location for committed catalog and written plans.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_persist_blob_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Persist consensus location for committed catalog and written plans.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_persist_consensus_url: Option<mz_ore::url::SensitiveUrl>,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -419,6 +442,42 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
+    // Catalog following is replica-wide, not independently sampled per process.
+    let follower_config = if args.process == 0
+        && let Some(cluster_id) = args.catalog_cluster_id
+    {
+        let environment_id = connection_context.environment_id.parse()?;
+        let reconstruction: mz_catalog::config::ReplicaCatalogConfig = serde_json::from_str(
+            args.catalog_config
+                .as_deref()
+                .expect("required with cluster identity"),
+        )?;
+        let config = catalog_follower::Config {
+            reconstruction,
+            environment_id,
+            connection_context: connection_context.clone(),
+            cluster_id,
+            replica_id: args
+                .catalog_replica_id
+                .expect("required with cluster identity"),
+            deploy_generation: args
+                .catalog_deploy_generation
+                .expect("required with cluster identity"),
+            persist_location: mz_persist_client::PersistLocation {
+                blob_uri: args
+                    .catalog_persist_blob_url
+                    .expect("required with cluster identity"),
+                consensus_uri: args
+                    .catalog_persist_consensus_url
+                    .expect("required with cluster identity"),
+            },
+            build_info: &BUILD_INFO,
+        };
+        Some(config)
+    } else {
+        None
+    };
+
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
 
@@ -427,20 +486,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    // We assume each storage worker has a corresponding compute worker that can process its logs.
-    assert_eq!(
-        storage_timely_config.workers, compute_timely_config.workers,
-        "storage and compute must have equal workers-per-process",
-    );
-
-    if args.unified_cluster {
+    let replica_owned =
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
+    let (mut compute_server, storage_endpoint, storage_client_builder): (
+        _,
+        _,
+        Box<dyn Fn() -> Box<dyn mz_storage_client::client::StorageClient> + Send + Sync>,
+    ) = if args.unified_cluster {
         info!("running with a unified timely cluster");
-
-        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+        let (server, endpoint, builder) = mz_compute::server::serve_unified(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
+            replica_owned,
             &metrics_registry,
-            persist_clients,
+            Arc::clone(&persist_clients),
             txns_ctx,
             tracing_handle,
             ComputeInstanceContext {
@@ -453,64 +512,50 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
         )
         .await?;
+        (server, endpoint, Box::new(builder))
+    } else {
+        let mut storage_server = mz_storage::server::serve_with_replica(
+            storage_timely_config,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            SYSTEM_TIME.clone(),
+            connection_context.clone(),
+            StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        )
+        .await?;
+        let compute_server = mz_compute::server::serve(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory,
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context,
+            },
+        )
+        .await?;
+        let endpoint = storage_server.take_replica();
+        (
+            compute_server,
+            endpoint,
+            Box::new(storage_server.client_builder()),
+        )
+    };
 
-        info!(
-            "listening for storage controller connections on {}",
-            args.storage_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "storage_server",
-            transport::serve(
-                args.storage_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host.clone(),
-                Duration::MAX,
-                storage_client_builder,
-                cluster_server_metrics.for_server("storage"),
-            )
-            .instrument(info_span!("ctp", name = "storage")),
-        );
-
-        info!(
-            "listening for compute controller connections on {}",
-            args.compute_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "compute_server",
-            transport::serve(
-                args.compute_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host,
-                Duration::MAX,
-                compute_client_builder,
-                cluster_server_metrics.for_server("compute"),
-            )
-            .instrument(info_span!("ctp", name = "compute")),
-        );
-
-        // Block forever.
-        return future::pending().await;
-    }
-
-    // Start storage server.
-    let storage_client_builder = mz_storage::serve(
-        storage_timely_config,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
-        SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
-    )
-    .await?;
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
     );
     mz_ore::task::spawn(
         || "storage_server",
-        transport::serve(
+        transport::serve_concurrent(
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
@@ -521,28 +566,35 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "storage")),
     );
 
-    // Start compute server.
-    let compute_client_builder = mz_compute::server::serve(
-        compute_timely_config,
-        ComputeRuntimeRole::Solo,
-        &metrics_registry,
-        persist_clients,
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
-            connection_context,
-        },
-    )
-    .await?;
+    if let Some(config) = follower_config {
+        let endpoint = compute_server.take_replica();
+        let replica_owned = endpoint.is_some();
+        let registry = metrics_registry.clone();
+        mz_ore::task::spawn(|| "catalog_follower", async move {
+            if let Err(error) = catalog_follower::run(
+                config,
+                persist_clients,
+                registry,
+                endpoint,
+                storage_endpoint,
+            )
+            .await
+            {
+                if replica_owned {
+                    mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
+                }
+                error!(%error, "catalog follower stopped");
+            }
+        });
+    }
+    let compute_client_builder = compute_server.client_builder();
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
     );
     mz_ore::task::spawn(
         || "compute_server",
-        transport::serve(
+        transport::serve_concurrent(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),

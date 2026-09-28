@@ -214,6 +214,9 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             .expect("statistics initialized")
             .clone();
 
+        let pre_open = storage_state.executions.as_ref().map(|executions| {
+            executions.kafka_pre_open(sink_id, storage_state.internal_cmd_tx.clone())
+        });
         let (sink_status, sink_token) = sink_collection(
             format!("kafka-{sink_id}-sink"),
             encoded,
@@ -225,6 +228,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             statistics,
             write_handle,
             write_frontier,
+            pre_open,
         );
 
         let running_status = Some(HealthStatusMessage {
@@ -282,6 +286,7 @@ impl TransactionalProducer {
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
         sink_version: u64,
+        pre_open: Option<crate::replica::KafkaPreOpen>,
     ) -> Result<(Self, Antichain<mz_repr::Timestamp>), ContextCreationError> {
         let client_id = connection.client_id(
             storage_configuration.config_set(),
@@ -408,9 +413,24 @@ impl TransactionalProducer {
         };
 
         let timeout = timeout_config.socket_timeout;
-        producer
-            .spawn_blocking(move |p| p.init_transactions(timeout))
+        if let Some(pre_open) = pre_open {
+            // Secrets and producer setup may block arbitrarily. Ask only after
+            // they finish, and include blocking-pool queue time in approval age.
+            let approval = pre_open.request().await?;
+            let p = producer.producer.clone();
+            task::spawn_blocking(
+                || &producer.task_name,
+                move || {
+                    approval.check().map_err(ContextCreationError::Other)?;
+                    p.init_transactions(timeout).check_ssh_status(p.context())
+                },
+            )
             .await?;
+        } else {
+            producer
+                .spawn_blocking(move |p| p.init_transactions(timeout))
+                .await?;
+        }
 
         // We have just called init_transactions, which means that we have fenced out all previous
         // transactional producers, making it safe to determine the resume upper.
@@ -683,6 +703,7 @@ fn sink_collection<'scope>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    pre_open: Option<crate::replica::KafkaPreOpen>,
 ) -> (
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
@@ -722,6 +743,7 @@ fn sink_collection<'scope>(
                 Arc::clone(&metrics),
                 statistics,
                 sink_version,
+                pre_open,
             )
             .await?;
 

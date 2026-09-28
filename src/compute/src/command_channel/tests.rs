@@ -14,7 +14,9 @@ use super::*;
 /// A comparable digest of a received command.
 fn digest(command: UnifiedCommand) -> String {
     match command {
-        UnifiedCommand::Compute(ComputeCommand::InitializationComplete, _) => "compute".into(),
+        UnifiedCommand::Compute(Some(ComputeCommand::InitializationComplete), _) => {
+            "compute".into()
+        }
         UnifiedCommand::Compute(command, _) => panic!("unexpected compute command: {command:?}"),
         UnifiedCommand::Storage(InternalStorageCommand::SuspendAndRestart { reason, .. }) => reason,
         UnifiedCommand::Storage(command) => panic!("unexpected storage command: {command:?}"),
@@ -46,12 +48,16 @@ fn sequencer_all_workers_observe_one_order() {
         let nonce = Uuid::from_u128(1);
         if worker_id == 0 {
             for _ in 0..COMPUTE_COMMANDS {
-                compute_tx.send((ComputeCommand::InitializationComplete, nonce));
+                compute_tx.send((
+                    Some(ComputeCommand::InitializationComplete),
+                    Origin::Lifecycle(nonce),
+                ));
             }
         }
         for i in 0..STORAGE_COMMANDS {
             storage_tx
                 .send(InternalStorageCommand::SuspendAndRestart {
+                    execution: None,
                     id: GlobalId::User(u64::cast_from(worker_id)),
                     reason: format!("worker{worker_id}-{i}"),
                 })

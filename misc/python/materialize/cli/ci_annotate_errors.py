@@ -154,6 +154,8 @@ IGNORE_RE = re.compile(
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     | cluster-clusterd1-1\ .*\ replica\ expired
+    # The isolation test drops cluster1 while its unmanaged native replicas run.
+    | cluster-isolation-clusterd_1_[12]-1\ .*\ halting\ process:\ execution-critical\ catalog\ follower\ stopped:\ invalid\ read\ protection:\ replica\ u[0-9]+\ does\ not\ exist$
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
     # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.

@@ -29,17 +29,18 @@ pub mod serialization;
 pub(crate) mod state_update;
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use mz_audit_log::VersionedEvent;
-use mz_controller::clusters::ReplicaLogging;
+use mz_controller_types::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
+use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -554,8 +555,8 @@ pub struct ReplicaConfig {
     pub arrangement_compression: bool,
 }
 
-impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
-    fn from(config: mz_controller::clusters::ReplicaConfig) -> Self {
+impl From<mz_controller_types::clusters::ReplicaConfig> for ReplicaConfig {
+    fn from(config: mz_controller_types::clusters::ReplicaConfig) -> Self {
         Self {
             location: config.location.into(),
             logging: config.compute.logging,
@@ -588,11 +589,11 @@ pub enum ReplicaLocation {
     },
 }
 
-impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
-    fn from(loc: mz_controller::clusters::ReplicaLocation) -> Self {
+impl From<mz_controller_types::clusters::ReplicaLocation> for ReplicaLocation {
+    fn from(loc: mz_controller_types::clusters::ReplicaLocation) -> Self {
         match loc {
-            mz_controller::clusters::ReplicaLocation::Unmanaged(
-                mz_controller::clusters::UnmanagedReplicaLocation {
+            mz_controller_types::clusters::ReplicaLocation::Unmanaged(
+                mz_controller_types::clusters::UnmanagedReplicaLocation {
                     storagectl_addrs,
                     computectl_addrs,
                 },
@@ -600,8 +601,8 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 storagectl_addrs,
                 computectl_addrs,
             },
-            mz_controller::clusters::ReplicaLocation::Managed(
-                mz_controller::clusters::ManagedReplicaLocation {
+            mz_controller_types::clusters::ReplicaLocation::Managed(
+                mz_controller_types::clusters::ManagedReplicaLocation {
                     allocation: _,
                     size,
                     availability_zones,
@@ -1302,6 +1303,168 @@ impl DurableType for StorageCollectionMetadata {
     }
 }
 
+/// A collection compaction bound. `frontier: None` is the empty/top frontier.
+/// A missing record leaves the collection ungoverned.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct CollectionCompactionBound {
+    pub id: GlobalId,
+    pub frontier: Option<Timestamp>,
+}
+
+impl DurableType for CollectionCompactionBound {
+    type Key = CollectionCompactionBoundKey;
+    type Value = CollectionCompactionBoundValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            CollectionCompactionBoundKey { id: self.id },
+            CollectionCompactionBoundValue {
+                frontier: self.frontier,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            frontier: value.frontier,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        CollectionCompactionBoundKey { id: self.id }
+    }
+}
+
+/// Remaining reads of a maintained output. `frontier: None` means no remaining reads.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct MaintainedReadRequirement {
+    pub id: GlobalId,
+    /// Logical collection inputs, including reads eliminated by optimization.
+    pub inputs: BTreeSet<GlobalId>,
+    pub frontier: Option<Timestamp>,
+}
+
+impl DurableType for MaintainedReadRequirement {
+    type Key = MaintainedReadRequirementKey;
+    type Value = MaintainedReadRequirementValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            MaintainedReadRequirementKey { id: self.id },
+            MaintainedReadRequirementValue {
+                inputs: self.inputs,
+                frontier: self.frontier,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            inputs: value.inputs,
+            frontier: value.frontier,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        MaintainedReadRequirementKey { id: self.id }
+    }
+}
+
+/// A client identity renewed only by publishing its complete read requirements.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientIncarnation {
+    pub id: u64,
+    pub heartbeat: u64,
+    /// Immutable participant identity, not write ownership or fencing authority.
+    pub replica_id: Option<ReplicaId>,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientIncarnationKey {
+    pub(crate) id: u64,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
+pub struct ClientIncarnationValue {
+    pub heartbeat: u64,
+    pub replica_id: Option<ReplicaId>,
+}
+
+impl DurableType for ClientIncarnation {
+    type Key = ClientIncarnationKey;
+    type Value = ClientIncarnationValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClientIncarnationKey { id: self.id },
+            ClientIncarnationValue {
+                heartbeat: self.heartbeat,
+                replica_id: self.replica_id,
+            },
+        )
+    }
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            heartbeat: value.heartbeat,
+            replica_id: value.replica_id,
+        }
+    }
+    fn key(&self) -> Self::Key {
+        ClientIncarnationKey { id: self.id }
+    }
+}
+
+/// A client's direct collection hold. Absence, rather than an empty frontier,
+/// releases protection. Storage metadata owns the collection's shard identity.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientReadRequirement {
+    pub incarnation: u64,
+    pub id: GlobalId,
+    pub frontier: Timestamp,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientReadRequirementKey {
+    pub(crate) incarnation: u64,
+    pub(crate) id: GlobalId,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientReadRequirementValue {
+    pub(crate) frontier: Timestamp,
+}
+
+impl DurableType for ClientReadRequirement {
+    type Key = ClientReadRequirementKey;
+    type Value = ClientReadRequirementValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClientReadRequirementKey {
+                incarnation: self.incarnation,
+                id: self.id,
+            },
+            ClientReadRequirementValue {
+                frontier: self.frontier,
+            },
+        )
+    }
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            incarnation: key.incarnation,
+            id: key.id,
+            frontier: value.frontier,
+        }
+    }
+    fn key(&self) -> Self::Key {
+        ClientReadRequirementKey {
+            incarnation: self.incarnation,
+            id: self.id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct UnfinalizedShard {
     pub shard: ShardId,
@@ -1328,9 +1491,131 @@ impl DurableType for UnfinalizedShard {
 
 // Structs used internally to represent on-disk state.
 
+/// Structurally shared, derived lookups for changed-record read protection validation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadProtectionIndex {
+    pub(crate) index_identity_counts: imbl::OrdMap<GlobalId, i64>,
+    pub(crate) active_consumers: imbl::OrdMap<GlobalId, imbl::OrdMap<GlobalId, i64>>,
+    pub(crate) client_consumers: imbl::OrdMap<GlobalId, imbl::OrdMap<u64, i64>>,
+    pub(crate) client_targets: imbl::OrdMap<u64, imbl::OrdMap<GlobalId, i64>>,
+}
+
+impl ReadProtectionIndex {
+    /// Applies one committed typed update, exactly once, including during replay.
+    /// The projection is queryable after all updates at a timestamp have been applied.
+    pub(crate) fn apply_update(&mut self, update: &state_update::StateUpdate) {
+        use state_update::StateUpdateKind;
+        let diff = update.diff.into_inner();
+        match &update.kind {
+            StateUpdateKind::Item(_, value) => {
+                let value = ItemValue::from_proto(value.clone()).expect("valid item");
+                if value.item_type() == CatalogItemType::Index {
+                    self.update_identity(value.global_id, diff);
+                }
+            }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                let key = GidMappingKey::from_proto(key.clone()).expect("valid mapping key");
+                if key.object_type == CatalogItemType::Index {
+                    let value = GidMappingValue::from_proto(value.clone()).expect("valid mapping");
+                    self.update_identity(value.global_id.into(), diff);
+                }
+            }
+            StateUpdateKind::IntrospectionSourceIndex(_, value) => {
+                let value = ClusterIntrospectionSourceIndexValue::from_proto(value.clone())
+                    .expect("valid introspection index");
+                self.update_identity(value.global_id.into(), diff);
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                let key = MaintainedReadRequirementKey::from_proto(key.clone())
+                    .expect("valid requirement key");
+                let value = MaintainedReadRequirementValue::from_proto(value.clone())
+                    .expect("valid requirement");
+                self.update_requirement(key.id, &value, diff);
+            }
+            StateUpdateKind::ClientReadRequirement(key, _) => {
+                let key = ClientReadRequirementKey::from_proto(key.clone())
+                    .expect("valid client requirement key");
+                self.update_client_requirement(&key, diff);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn update_client_requirement(&mut self, key: &ClientReadRequirementKey, diff: i64) {
+        fn update<K: Ord + Clone, V: Ord + Clone>(
+            map: &mut imbl::OrdMap<K, imbl::OrdMap<V, i64>>,
+            key: K,
+            value: V,
+            diff: i64,
+        ) {
+            let mut values = map.get(&key).cloned().unwrap_or_default();
+            let count = values.get(&value).copied().unwrap_or(0) + diff;
+            if count == 0 {
+                values.remove(&value);
+            } else {
+                values.insert(value, count);
+            }
+            if values.is_empty() {
+                map.remove(&key);
+            } else {
+                map.insert(key, values);
+            }
+        }
+        // Counts permit replacement additions and retractions in either replay order.
+        update(&mut self.client_consumers, key.id, key.incarnation, diff);
+        update(&mut self.client_targets, key.incarnation, key.id, diff);
+    }
+
+    pub(crate) fn update_identity(&mut self, id: GlobalId, diff: i64) {
+        let count = self.index_identity_counts.get(&id).copied().unwrap_or(0) + diff;
+        if count == 0 {
+            self.index_identity_counts.remove(&id);
+        } else {
+            self.index_identity_counts.insert(id, count);
+        }
+    }
+
+    pub(crate) fn update_requirement(
+        &mut self,
+        owner: GlobalId,
+        value: &MaintainedReadRequirementValue,
+        diff: i64,
+    ) {
+        if value.frontier.is_none() {
+            return;
+        }
+        for input in &value.inputs {
+            let mut owners = self
+                .active_consumers
+                .get(input)
+                .cloned()
+                .unwrap_or_default();
+            // Counts tolerate either ordering of replacement insertions and retractions.
+            let count = owners.get(&owner).copied().unwrap_or(0) + diff;
+            if count == 0 {
+                owners.remove(&owner);
+            } else {
+                owners.insert(owner, count);
+            }
+            if owners.is_empty() {
+                self.active_consumers.remove(input);
+            } else {
+                self.active_consumers.insert(*input, owners);
+            }
+        }
+    }
+
+    pub(crate) fn contains_index(&self, id: GlobalId) -> bool {
+        self.index_identity_counts
+            .get(&id)
+            .is_some_and(|count| *count > 0)
+    }
+}
+
 /// A snapshot of the current on-disk state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
+    pub read_protection_index: ReadProtectionIndex,
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
@@ -1359,6 +1644,14 @@ pub struct Snapshot {
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
+    pub collection_compaction_bounds:
+        BTreeMap<proto::CollectionCompactionBoundKey, proto::CollectionCompactionBoundValue>,
+    pub maintained_read_requirements:
+        BTreeMap<proto::MaintainedReadRequirementKey, proto::MaintainedReadRequirementValue>,
+    pub client_incarnations: BTreeMap<proto::ClientIncarnationKey, proto::ClientIncarnationValue>,
+    pub written_plans: BTreeMap<proto::WrittenPlanKey, proto::WrittenPlanValue>,
+    pub client_read_requirements:
+        BTreeMap<proto::ClientReadRequirementKey, proto::ClientReadRequirementValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
     pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
 }
@@ -1371,8 +1664,9 @@ impl Snapshot {
 
 /// Token used to fence out other processes.
 ///
-/// Every time a new process takes over, the `epoch` should be incremented.
-/// Every time a new version is deployed, the `deploy` generation should be incremented.
+/// Protected catalogs compare deployment generations only, allowing components
+/// in the same generation to cooperate. Unprotected catalogs also compare epochs
+/// to give each ordinary writable opener exclusive ownership.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct FenceToken {
@@ -1629,6 +1923,27 @@ pub struct AuditLogKey {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct CollectionCompactionBoundKey {
+    pub(crate) id: GlobalId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct CollectionCompactionBoundValue {
+    pub(crate) frontier: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct MaintainedReadRequirementKey {
+    pub(crate) id: GlobalId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct MaintainedReadRequirementValue {
+    pub(crate) inputs: BTreeSet<GlobalId>,
+    pub(crate) frontier: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageCollectionMetadataKey {
     pub(crate) id: GlobalId,
 }
@@ -1817,5 +2132,69 @@ mod test {
         };
 
         assert!(ft4 > ft1);
+    }
+}
+
+/// Selects immutable plan bytes in the expression shard for one build.
+/// Selection changes do not change the maintained object's physical installation.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlan {
+    pub id: GlobalId,
+    pub build_version: String,
+    pub revision: Uuid,
+    pub replica_owner: Option<ReplicaPlanOwner>,
+}
+
+/// Replica-local maintained work without a SQL catalog item. Presence of the
+/// selection records admission, independently of the writer's lifetime.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
+pub struct ReplicaPlanOwner {
+    pub replica_id: ReplicaId,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlanKey {
+    pub id: GlobalId,
+    pub build_version: String,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlanValue {
+    pub revision: Uuid,
+    pub replica_owner: Option<ReplicaPlanOwner>,
+}
+
+impl DurableType for WrittenPlan {
+    type Key = WrittenPlanKey;
+    type Value = WrittenPlanValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            WrittenPlanKey {
+                id: self.id,
+                build_version: self.build_version,
+            },
+            WrittenPlanValue {
+                revision: self.revision,
+                replica_owner: self.replica_owner,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            build_version: key.build_version,
+            revision: value.revision,
+            replica_owner: value.replica_owner,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        WrittenPlanKey {
+            id: self.id,
+            build_version: self.build_version.clone(),
+        }
     }
 }

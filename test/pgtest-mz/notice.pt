@@ -14,9 +14,53 @@ ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP ROLE"}
 ReadyForQuery {"status":"I"}
 
+# Assert notice severity and SQLSTATE. Rewritten object lists can depend on
+# which access paths remain in use.
+
 send
 Query {"query": "create table t(a int, b int)"}
 Query {"query": "create index t_idx_a on t(a)"}
+----
+
+until err_field_typs=SC
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE INDEX"}
+ReadyForQuery {"status":"I"}
+
+# Wait for the current index to be readable before creating its dependent MV.
+# Ignore the DataRow containing the variable timestamp, but assert FETCH 1.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE notice_index_ready CURSOR FOR SUBSCRIBE (SELECT i.name AS index_name FROM mz_internal.mz_frontiers AS f JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id JOIN mz_catalog.mz_indexes AS i ON i.id = g.id WHERE i.name = 't_idx_a' AND f.read_frontier IS NOT NULL)"}
+Query {"query": "FETCH 1 FROM notice_index_ready"}
+Query {"query": "CLOSE notice_index_ready"}
+Query {"query": "COMMIT"}
+----
+
+until ignore=DataRow
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"mz_timestamp"},{"name":"mz_diff"},{"name":"index_name"}]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "create materialized view mv1 as select * from t where b=7"}
 Query {"query": "create view v1 as select * from t union select * from t"}
 Query {"query": "create index v1_idx_a on v1(a)"}
@@ -28,15 +72,8 @@ Query {"query": "create materialized view mv2 as select * from t where a=5"}
 Query {"query": "drop index v1_idx_a"}
 Query {"query": "drop materialized view mv2"}
 Query {"query": "create index t_idx_a on t(a)"}
-Query {"query": "create materialized view mv2 as select * from t where a=5"}
-Query {"query": "drop index t_idx_a"}
-Query {"query": "create index t_idx_a on t(a)"}
-Query {"query": "create index v1_idx_a on v1(a)"}
-Query {"query": "drop index t_idx_a"}
-Query {"query": "drop index v1_idx_a"}
 ----
 
-# Ignore the notice messages because they change sometimes based on when things are internally dropped.
 until err_field_typs=SC
 ReadyForQuery
 ReadyForQuery
@@ -49,19 +86,7 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
-ReadyForQuery
 ----
-CommandComplete {"tag":"CREATE TABLE"}
-ReadyForQuery {"status":"I"}
-CommandComplete {"tag":"CREATE INDEX"}
-ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE VIEW"}
@@ -85,6 +110,53 @@ CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
+
+# Wait for the current index to be readable before creating its dependent MV.
+# Ignore the DataRow containing the variable timestamp, but assert FETCH 1.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE notice_index_ready CURSOR FOR SUBSCRIBE (SELECT i.name AS index_name FROM mz_internal.mz_frontiers AS f JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id JOIN mz_catalog.mz_indexes AS i ON i.id = g.id WHERE i.name = 't_idx_a' AND f.read_frontier IS NOT NULL)"}
+Query {"query": "FETCH 1 FROM notice_index_ready"}
+Query {"query": "CLOSE notice_index_ready"}
+Query {"query": "COMMIT"}
+----
+
+until ignore=DataRow
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"mz_timestamp"},{"name":"mz_diff"},{"name":"index_name"}]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "create materialized view mv2 as select * from t where a=5"}
+Query {"query": "drop index t_idx_a"}
+Query {"query": "create index t_idx_a on t(a)"}
+Query {"query": "create index v1_idx_a on v1(a)"}
+Query {"query": "drop index t_idx_a"}
+Query {"query": "drop index v1_idx_a"}
+----
+
+until err_field_typs=SC
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
 CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}

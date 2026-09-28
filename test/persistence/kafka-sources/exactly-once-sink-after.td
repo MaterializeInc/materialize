@@ -32,6 +32,9 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 
 # We expect just the 6 new messages, having consumed the older ones in xactly-once-sink-before.td
 
+# Allow sink takeover to outlast the 300s unchanged-incarnation grace after restart.
+$ set-sql-timeout duration=360s force=true
+
 $ kafka-verify-data format=avro sink=materialize.public.exactly_once_sink sort-messages=true
 {"before":null,"after":{"row":{"f1":20,"f2":20}}}
 {"before":null,"after":{"row":{"f1":21,"f2":21}}}
@@ -39,3 +42,5 @@ $ kafka-verify-data format=avro sink=materialize.public.exactly_once_sink sort-m
 {"before":null,"after":{"row":{"f1":31,"f2":31}}}
 {"before":null,"after":{"row":{"f1":40,"f2":40}}}
 {"before":null,"after":{"row":{"f1":41,"f2":41}}}
+
+$ set-sql-timeout duration=default

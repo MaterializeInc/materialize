@@ -9,7 +9,7 @@
 
 //! Types for bootstrap builtin cluster configuration.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BootstrapBuiltinClusterConfig {
     pub size: String,
     pub replication_factor: u32,

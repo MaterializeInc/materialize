@@ -63,7 +63,10 @@ impl Staged for ExplainTimestampStage {
                     .await
             }
             ExplainTimestampStage::Finish(stage) => {
-                coord.explain_timestamp_finish(ctx.session_mut(), stage)
+                let deadline = ctx.statement_deadline();
+                coord
+                    .explain_timestamp_finish(ctx.session_mut(), stage, deadline)
+                    .await
             }
         }
     }
@@ -283,6 +286,10 @@ impl Coordinator {
         id_bundle: &CollectionIdBundle,
         determination: TimestampDetermination,
     ) -> TimestampExplanation {
+        assert!(
+            self.query_client.is_none(),
+            "legacy frontier observations only"
+        );
         let mut sources = Vec::new();
         {
             let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
@@ -305,8 +312,8 @@ impl Coordinator {
                     .unwrap_or_else(|| id.to_string());
                 sources.push(TimestampSource {
                     name: format!("{name} ({id}, storage)"),
-                    read_frontier: since.elements().to_vec(),
-                    write_frontier: upper.elements().to_vec(),
+                    read_frontier: Some(since.elements().to_vec()),
+                    write_frontier: Some(upper.elements().to_vec()),
                 });
             }
         }
@@ -326,8 +333,8 @@ impl Coordinator {
                         .unwrap_or_else(|| id.to_string());
                     sources.push(TimestampSource {
                         name: format!("{name} ({id}, compute)"),
-                        read_frontier: frontiers.read_frontier.to_vec(),
-                        write_frontier: frontiers.write_frontier.to_vec(),
+                        read_frontier: Some(frontiers.read_frontier.to_vec()),
+                        write_frontier: Some(frontiers.write_frontier.to_vec()),
                     });
                 }
             }
@@ -341,8 +348,51 @@ impl Coordinator {
         }
     }
 
+    /// Build diagnostic work for a cancelable stage. The returned future must
+    /// run off the coordinator. Watch cancellation inside the work as well as
+    /// in `handle_spawn`, which retires the request but does not abort its task.
+    pub(crate) fn timestamp_explanation(
+        &self,
+        session: &Session,
+        cluster_id: ClusterId,
+        id_bundle: CollectionIdBundle,
+        determination: TimestampDetermination,
+        expires: Option<std::time::Instant>,
+    ) -> futures::future::BoxFuture<'static, Result<TimestampExplanation, AdapterError>> {
+        let Some(client) = self.query_client.clone() else {
+            let explanation = self.explain_timestamp(
+                session.conn_id(),
+                session.pcx().wall_time,
+                cluster_id,
+                &id_bundle,
+                determination,
+            );
+            return Box::pin(async { Ok(explanation) });
+        };
+        let catalog = self.owned_catalog();
+        let conn_id = session.conn_id().clone();
+        let wall_time = session.pcx().wall_time;
+        let mut cancel = self
+            .connection_cancel_watches
+            .get(&conn_id)
+            .expect("diagnostics run in a cancelable stage")
+            .1
+            .clone();
+        Box::pin(async move {
+            let canceled = async {
+                let _ = cancel.wait_for(|canceled| *canceled).await;
+            };
+            crate::util::run_diagnostic(canceled, expires, async {
+                Ok(client
+                    .explain_timestamp(&catalog, &conn_id, wall_time, &id_bundle, determination)
+                    .await)
+            })
+            .await
+        })
+    }
+
     #[instrument]
-    fn explain_timestamp_finish(
+    async fn explain_timestamp_finish(
         &mut self,
         session: &mut Session,
         ExplainTimestampFinish {
@@ -355,6 +405,7 @@ impl Coordinator {
             timeline_context,
             oracle_read_ts,
         }: ExplainTimestampFinish,
+        deadline: Option<std::time::Instant>,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
             .index_oracle(cluster_id)
@@ -368,31 +419,37 @@ impl Coordinator {
             }
         };
 
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &when,
-            cluster_id,
-            timeline_context,
-            oracle_read_ts,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-            RequireLinearization::NotRequired,
-        )?;
-        let explanation = self.explain_timestamp(
-            session.conn_id(),
-            session.pcx().wall_time,
-            cluster_id,
-            &id_bundle,
-            determination,
-        );
-
-        let s = if is_json {
-            serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
-        } else {
-            explanation.to_string()
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
+                &when,
+                cluster_id,
+                timeline_context,
+                oracle_read_ts,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+                RequireLinearization::NotRequired,
+            )
+            .await?;
+        let explanation =
+            self.timestamp_explanation(session, cluster_id, id_bundle, determination, deadline);
+        let respond = move |explanation: TimestampExplanation| {
+            let s = if is_json {
+                serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
+            } else {
+                explanation.to_string()
+            };
+            let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
+            Self::send_immediate_rows(rows)
         };
-        let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
-        Ok(StageResult::Response(Self::send_immediate_rows(rows)))
+        if self.query_client.is_none() {
+            // The legacy helper returns an already-computed explanation.
+            return Ok(StageResult::Response(respond(explanation.await?)));
+        }
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+            || "explain timestamp observations",
+            async move { Ok(respond(explanation.await?)) },
+        )))
     }
 }

@@ -23,7 +23,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr as ComputePlan;
-use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
+use mz_controller_types::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -1425,6 +1425,9 @@ pub struct MaterializedView {
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// References in the defining query, including reads eliminated during planning.
+    /// A `FOR` target alone is not a query reference.
+    pub query_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
     /// ID of the materialized view this materialized view is intended to replace.
@@ -1462,6 +1465,23 @@ pub struct MaterializedView {
 }
 
 impl MaterializedView {
+    /// Applies committed visibility and finite-refresh bounds without choosing
+    /// the installation `as_of`.
+    pub fn apply_execution_bounds(&self, dataflow: &mut DataflowDescription<ComputePlan>) {
+        use differential_dataflow::lattice::Lattice;
+        if let Some(initial_as_of) = &self.initial_as_of {
+            dataflow.set_initial_as_of(initial_as_of.clone());
+        }
+        if let Some(until) = self
+            .refresh_schedule
+            .as_ref()
+            .and_then(|schedule| schedule.last_refresh())
+            .and_then(|refresh| refresh.try_step_forward())
+        {
+            dataflow.until.meet_assign(&Antichain::from_elem(until));
+        }
+    }
+
     /// Returns all [`GlobalId`]s that this [`MaterializedView`] can be referenced by.
     pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.collections.values().copied()
@@ -1552,6 +1572,7 @@ impl MaterializedView {
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
             resolved_ids,
+            query_ids: replacement.query_ids,
             dependencies,
             replacement_target: None,
             cluster_id: replacement.cluster_id,
@@ -4287,7 +4308,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn latest_version(&self) -> Option<RelationVersion> {
-        self.table().map(|t| t.desc.latest_version())
+        match self.item() {
+            CatalogItem::Table(table) => Some(table.desc.latest_version()),
+            // Replacement versions share a schema but have distinct collection IDs.
+            CatalogItem::MaterializedView(mv) => mv.collections.keys().next_back().copied(),
+            _ => None,
+        }
     }
 }
 
@@ -4322,7 +4348,12 @@ pub enum StateUpdateKind {
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
+    WrittenPlan(durable::objects::WrittenPlan),
     // Storage updates.
+    CollectionCompactionBound(durable::objects::CollectionCompactionBound),
+    MaintainedReadRequirement(durable::objects::MaintainedReadRequirement),
+    ClientIncarnation(durable::objects::ClientIncarnation),
+    ClientReadRequirement(durable::objects::ClientReadRequirement),
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
 }

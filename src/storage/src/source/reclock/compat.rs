@@ -48,6 +48,8 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
     // Reports `self`'s write frontier.
     shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
+    // Last field so reader streams and handles are dropped before completion.
+    input_progress: Option<crate::replica::ReadProgress<IntoTime>>,
 }
 
 impl<FromTime: Timestamp, IntoTime: Timestamp + Sync> PersistHandle<FromTime, IntoTime>
@@ -55,7 +57,7 @@ where
     FromTime: SourceTimestamp,
     IntoTime: Timestamp + TotalOrder + Lattice + Codec64,
 {
-    pub async fn new(
+    pub(crate) async fn new(
         persist_clients: Arc<PersistClientCache>,
         read_only_rx: watch::Receiver<bool>,
         remap_metadata: CollectionMetadata,
@@ -74,6 +76,7 @@ where
         // TODO(guswynn): use the type-system to prevent misuse here.
         remap_relation_desc: RelationDesc,
         remap_collection_id: GlobalId,
+        input_progress: Option<crate::replica::ReadProgress<IntoTime>>,
     ) -> anyhow::Result<Self> {
         let persist_client = persist_clients
             .open(remap_metadata.persist_location.clone())
@@ -200,6 +203,7 @@ where
             read_only_rx,
             pending_batch: vec![],
             shared_write_frontier,
+            input_progress,
         })
     }
 }
@@ -222,6 +226,11 @@ where
         while let Some(event) = self.events.next().await {
             match event {
                 ListenEvent::Progress(new_upper) => {
+                    // fetch_next has finished fetching the preceding updates.
+                    // A peer's write upper alone must never release protection.
+                    if let Some(progress) = &self.input_progress {
+                        progress.advance(new_upper.clone());
+                    }
                     // Peel off a batch of pending data
                     let batch = self
                         .pending_batch

@@ -30,6 +30,7 @@ use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{ComputeResponse, PeekResponse};
+use crate::sequential_hydration::SequentialHydration;
 
 pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
@@ -145,13 +146,7 @@ impl ComputeControllerMetrics {
                 help: "The number of receives on the compute response queue.",
                 var_labels: ["instance_id"],
             )),
-            hydration_queue_size: metrics_registry.register(metric!(
-                name: "mz_compute_controller_hydration_queue_size",
-                help: "The size of the compute hydration queue.",
-                var_labels: ["instance_id", "replica_id"],
-                visibility: MetricVisibility::Public,
-                tags: [MetricTag::Compute],
-            )),
+            hydration_queue_size: SequentialHydration::register_queue_metric(metrics_registry),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
                 help: "The number of commands in the controller's command history.",
@@ -486,6 +481,12 @@ pub(crate) struct ReplicaCollectionMetrics {
 pub struct CommandMetrics<M> {
     /// Metrics for `Hello`.
     pub hello: M,
+    /// Metrics for query-connection setup.
+    pub hello_query: M,
+    /// Metrics for connection-local query result limits.
+    pub set_query_max_result_size: M,
+    /// Metrics for query-local dataflow creation.
+    pub create_query_dataflow: M,
     /// Metrics for `CreateInstance`.
     pub create_instance: M,
     /// Metrics for `CreateDataflow`.
@@ -514,6 +515,9 @@ impl<M> CommandMetrics<M> {
     {
         Self {
             hello: build_metric("hello"),
+            hello_query: build_metric("hello_query"),
+            set_query_max_result_size: build_metric("set_query_max_result_size"),
+            create_query_dataflow: build_metric("create_query_dataflow"),
             create_instance: build_metric("create_instance"),
             create_dataflow: build_metric("create_dataflow"),
             schedule: build_metric("schedule"),
@@ -531,6 +535,9 @@ impl<M> CommandMetrics<M> {
         F: Fn(&M),
     {
         f(&self.hello);
+        f(&self.hello_query);
+        f(&self.set_query_max_result_size);
+        f(&self.create_query_dataflow);
         f(&self.create_instance);
         f(&self.initialization_complete);
         f(&self.update_configuration);
@@ -548,6 +555,9 @@ impl<M> CommandMetrics<M> {
 
         match command {
             Hello { .. } => &self.hello,
+            HelloQuery { .. } => &self.hello_query,
+            SetQueryMaxResultSize { .. } => &self.set_query_max_result_size,
+            CreateQueryDataflow { .. } => &self.create_query_dataflow,
             CreateInstance(_) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
@@ -564,6 +574,8 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `ComputeResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
+    query_ready: M,
+    query_dataflow_response: M,
     frontiers: M,
     peek_response: M,
     subscribe_response: M,
@@ -577,6 +589,8 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
+            query_ready: build_metric("query_ready"),
+            query_dataflow_response: build_metric("query_dataflow_response"),
             frontiers: build_metric("frontiers"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
@@ -589,6 +603,8 @@ impl<M> ResponseMetrics<M> {
         use ComputeResponse::*;
 
         match response {
+            QueryReady => &self.query_ready,
+            QueryDataflowResponse { .. } => &self.query_dataflow_response,
             Frontiers(..) => &self.frontiers,
             PeekResponse(..) => &self.peek_response,
             SubscribeResponse(..) => &self.subscribe_response,

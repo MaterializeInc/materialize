@@ -86,6 +86,7 @@ mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
+mod query_execution;
 
 /// Cheap handles on the dyncfgs that bound how many rows a peek may examine.
 ///
@@ -175,6 +176,17 @@ fn peek_row_iteration_limit(config: &ConfigSet) -> Option<usize> {
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
+    queries: BTreeMap<Uuid, query_execution::QueryState>,
+    active_query: Option<Uuid>,
+    /// First busy query served in the last sweep. Its successor gets first turn next.
+    last_query_served: Option<Uuid>,
+    /// Dataflows whose remaining export, import, or peek guards defer retirement.
+    retiring_dataflows: BTreeMap<usize, RetiringDataflow>,
+    /// Source-event observer installed only while rendering a query dataflow.
+    pub(crate) query_admission: Option<Rc<RefCell<query_execution::Admission>>>,
+    /// Maintained exports whose committed sealed selection requires no execution.
+    /// Retained until AllowCompaction(empty), independently of query connections.
+    completed_exports: BTreeSet<GlobalId>,
     /// State kept for each installed compute collection.
     ///
     /// Each collection has exactly one frontier.
@@ -321,6 +333,12 @@ impl ComputeState {
         let peek_budget = InlineBudget::new(&worker_config);
 
         Self {
+            queries: Default::default(),
+            active_query: None,
+            last_query_served: None,
+            retiring_dataflows: Default::default(),
+            query_admission: None,
+            completed_exports: BTreeSet::new(),
             collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
@@ -641,6 +659,17 @@ impl ComputeState {
     }
 }
 
+/// A sealed selection certifies completion without requiring snapshot computation.
+fn completed_export_frontiers() -> FrontiersResponse {
+    FrontiersResponse {
+        write_frontier: Some(Antichain::new()),
+        input_frontier: Some(Antichain::new()),
+        output_frontier: Some(Antichain::new()),
+        read_frontier: Some(Antichain::new()),
+        hydrated: Some(true),
+    }
+}
+
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
 pub(crate) struct ActiveComputeState<'a> {
     /// The underlying Timely worker.
@@ -678,6 +707,9 @@ impl<'a> ActiveComputeState<'a> {
             .start_timer();
 
         match cmd {
+            HelloQuery { .. } | SetQueryMaxResultSize { .. } | CreateQueryDataflow { .. } => {
+                panic!("query command on lifecycle connection")
+            }
             Hello { .. } => panic!("Hello must be captured before"),
             CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
             InitializationComplete => (),
@@ -767,8 +799,30 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
+        if self.compute_state.active_query.is_none() && as_of.is_empty() {
+            // The legacy controller skips empty-as_of creation. On the maintained
+            // replica lane it certifies a committed sealed selection, not merely
+            // an absence of observed progress. No Timely index or state is needed.
+            assert!(dataflow.subscribe_ids().next().is_none());
+            assert!(dataflow.copy_to_ids().next().is_none());
+            for id in dataflow.export_ids() {
+                assert!(!self.compute_state.collections.contains_key(&id));
+                self.compute_state.completed_exports.insert(id);
+                self.send_compute_response(ComputeResponse::Frontiers(
+                    id,
+                    completed_export_frontiers(),
+                ));
+            }
+            return;
+        }
+        assert!(
+            self.compute_state.active_query.is_some()
+                || dataflow
+                    .export_ids()
+                    .all(|id| !self.compute_state.completed_exports.contains(&id))
+        );
+        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
 
         let dataflow_expiration = dataflow
             .time_dependence
@@ -900,6 +954,11 @@ impl<'a> ActiveComputeState<'a> {
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         if frontier.is_empty() {
+            if self.compute_state.active_query.is_none()
+                && self.compute_state.completed_exports.remove(&id)
+            {
+                return;
+            }
             // Indicates that we may drop `id`, as there are no more valid times to read.
             self.drop_collection(id);
         } else {
@@ -915,6 +974,17 @@ impl<'a> ActiveComputeState<'a> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
+                let trace_bundle = if self.compute_state.active_query.is_some() {
+                    let producer = self
+                        .compute_state
+                        .collections
+                        .get(id)
+                        .map(|c| Rc::clone(&c.dataflow_index));
+                    let retained = trace_bundle.to_drop().clone();
+                    trace_bundle.with_drop((retained, producer))
+                } else {
+                    trace_bundle
+                };
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
@@ -972,7 +1042,7 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Drop the given collection.
     fn drop_collection(&mut self, id: GlobalId) {
-        let collection = self
+        let mut collection = self
             .compute_state
             .collections
             .remove(&id)
@@ -983,25 +1053,62 @@ impl<'a> ActiveComputeState<'a> {
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
-        // Drop the dataflow, if all its exports have been dropped.
-        if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
+        // Importers and peeks retain the producer's scheduling guard as well as
+        // its trace. Retire only when both exports and readers have released it.
+        // Capture hydration before retiring frontiers or releasing probes. Empty
+        // retirement frontiers are not evidence of completed snapshot computation.
+        let hydrated = collection.hydration_update();
+        let index = *collection.dataflow_index;
+        let retained = Rc::strong_count(&collection.dataflow_index) > 1;
+        let defer_input = retained
+            && (id.is_user() || id.is_system())
+            && !collection.is_subscribe_or_copy
+            && !collection.reported_frontiers.input_frontier.is_empty();
+        if !retained {
             self.timely_worker.drop_dataflow(index);
+            if let Some(retired) = self.compute_state.retiring_dataflows.remove(&index) {
+                for response in retired.input_completions() {
+                    self.send_compute_response(response);
+                }
+            }
+        } else {
+            let retired = self
+                .compute_state
+                .retiring_dataflows
+                .entry(index)
+                .or_insert_with(|| RetiringDataflow {
+                    guard: Rc::downgrade(&collection.dataflow_index),
+                    inputs: BTreeMap::new(),
+                });
+            if defer_input {
+                retired.inputs.insert(
+                    id,
+                    RetiredInput {
+                        probes: collection.input_probes,
+                        reported: collection.reported_frontiers.input_frontier.clone(),
+                    },
+                );
+            }
         }
 
-        // The compute protocol requires us to send a `Frontiers` response with empty frontiers
-        // when a collection was dropped, unless:
+        // Retire the protocol-visible export immediately. Input completion must
+        // wait if importers keep its execution alive. No response is needed if:
         //  * The frontier was already reported as empty previously, or
         //  * The collection is a subscribe or copy-to.
         if !collection.is_subscribe_or_copy {
             let reported = collection.reported_frontiers;
             let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
-            let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
+            let input_frontier =
+                (!defer_input && !reported.input_frontier.is_empty()).then(Antichain::new);
             let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
+            let read_frontier = (!reported.read_frontier.is_empty()).then(Antichain::new);
 
             let frontiers = FrontiersResponse {
                 write_frontier,
                 input_frontier,
                 output_frontier,
+                read_frontier,
+                hydrated,
             };
             if frontiers.has_updates() {
                 self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
@@ -1078,10 +1185,14 @@ impl<'a> ActiveComputeState<'a> {
     pub fn report_frontiers(&mut self) {
         let mut responses = Vec::new();
 
-        // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
+        // Reuse frontier allocations across collections.
         let mut new_frontier = Antichain::new();
+        let mut write_frontier = Antichain::new();
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
+            if self.compute_state.active_query.is_some() && !id.is_transient() {
+                continue;
+            }
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
             // collections (database-issues#4701).
             if collection.is_subscribe_or_copy {
@@ -1089,6 +1200,17 @@ impl<'a> ActiveComputeState<'a> {
             }
 
             let reported = collection.reported_frontiers();
+
+            let read_frontier = self
+                .compute_state
+                .traces
+                .get_mut(&id)
+                .map(|trace| collection.read_frontier(trace))
+                .unwrap_or_default();
+            let new_read_frontier = reported
+                .read_frontier
+                .allows_reporting(&read_frontier)
+                .then_some(read_frontier);
 
             // Collect the write frontier and check for progress.
             new_frontier.clear();
@@ -1104,15 +1226,19 @@ impl<'a> ActiveComputeState<'a> {
                 error!(id = ?id, "collection without write frontier");
                 continue;
             }
+            // The collection cannot write before its as-of, even if its trace or shared
+            // Persist upper is still behind. Keep the raw upper for output progress.
+            write_frontier.clone_from(&new_frontier);
+            write_frontier.join_assign(&collection.as_of);
             let new_write_frontier = reported
                 .write_frontier
-                .allows_reporting(&new_frontier)
-                .then(|| new_frontier.clone());
+                .allows_reporting(&write_frontier)
+                .then(|| write_frontier.clone());
 
             // Collect the output frontier and check for progress.
             //
-            // By default, the output frontier equals the write frontier (which is still stored in
-            // `new_frontier`). If the collection provides a compute frontier, we construct the
+            // By default, the output frontier equals the raw write frontier (which is still stored
+            // in `new_frontier`). If the collection provides a compute frontier, we construct the
             // output frontier by taking the meet of write and compute frontier, to avoid:
             //  * reporting progress through times we have not yet written
             //  * reporting progress through times we have not yet fully processed, for
@@ -1142,6 +1268,10 @@ impl<'a> ActiveComputeState<'a> {
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
 
+            if let Some(frontier) = &new_read_frontier {
+                collection.reported_frontiers.read_frontier =
+                    ReportedFrontier::Reported(frontier.clone());
+            }
             if let Some(frontier) = &new_write_frontier {
                 collection
                     .set_reported_write_frontier(ReportedFrontier::Reported(frontier.clone()));
@@ -1159,9 +1289,34 @@ impl<'a> ActiveComputeState<'a> {
                 write_frontier: new_write_frontier,
                 input_frontier: new_input_frontier,
                 output_frontier: new_output_frontier,
+                read_frontier: new_read_frontier,
+                hydrated: collection.hydration_update(),
             };
             if response.has_updates() {
                 responses.push((id, response));
+            }
+        }
+
+        if self.compute_state.active_query.is_none() {
+            for retired in self.compute_state.retiring_dataflows.values_mut() {
+                for (&id, input) in &mut retired.inputs {
+                    new_frontier.clear();
+                    for probe in input.probes.values() {
+                        probe.with_frontier(|frontier| {
+                            new_frontier.extend(frontier.iter().copied())
+                        });
+                    }
+                    if input.reported.allows_reporting(&new_frontier) {
+                        input.reported = ReportedFrontier::Reported(new_frontier.clone());
+                        responses.push((
+                            id,
+                            FrontiersResponse {
+                                input_frontier: Some(new_frontier.clone()),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                }
             }
         }
 
@@ -1380,7 +1535,9 @@ impl<'a> ActiveComputeState<'a> {
         // Above the early return because this is the only place an activation begins. A replica
         // whose peeks all answer inline leaves none pending, and beginning an activation only
         // where there is work would let the aggregate drain across its arrivals.
-        self.compute_state.peek_budget.start_activation();
+        if self.compute_state.active_query.is_none() {
+            self.compute_state.peek_budget.start_activation();
+        }
 
         // Says what this sweep found, so it is cleared before the sweep rather than carried in
         // from the last one. A peek cancelled or dropped between two sweeps would otherwise leave
@@ -1493,7 +1650,19 @@ impl<'a> ActiveComputeState<'a> {
     fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(response);
+        if let Some(nonce) = self.compute_state.active_query {
+            let _ = self.response_tx.send_query(nonce, response);
+        } else {
+            if matches!(
+                &response,
+                ComputeResponse::Frontiers(id, _) if id.is_user() || id.is_system()
+            ) {
+                for nonce in self.compute_state.queries.keys() {
+                    let _ = self.response_tx.send_query(*nonce, response.clone());
+                }
+            }
+            let _ = self.response_tx.send(response);
+        }
     }
 
     /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
@@ -1982,6 +2151,8 @@ enum PeekStatus {
 /// The frontiers we have reported to the controller for a collection.
 #[derive(Debug)]
 struct ReportedFrontiers {
+    /// The reported readable trace since.
+    read_frontier: ReportedFrontier,
     /// The reported write frontier.
     write_frontier: ReportedFrontier,
     /// The reported input frontier.
@@ -1994,6 +2165,7 @@ impl ReportedFrontiers {
     /// Creates a new `ReportedFrontiers` instance.
     fn new() -> Self {
         Self {
+            read_frontier: ReportedFrontier::new(),
             write_frontier: ReportedFrontier::new(),
             input_frontier: ReportedFrontier::new(),
             output_frontier: ReportedFrontier::new(),
@@ -2041,16 +2213,61 @@ impl ReportedFrontier {
     }
 }
 
+/// Reporting owns neither capabilities nor a strong scheduling guard. A retired
+/// export may still read inputs for its importers, but this bookkeeping must not
+/// itself keep execution alive.
+struct RetiringDataflow {
+    guard: std::rc::Weak<usize>,
+    inputs: BTreeMap<GlobalId, RetiredInput>,
+}
+
+struct RetiredInput {
+    probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
+    reported: ReportedFrontier,
+}
+
+impl RetiringDataflow {
+    /// Call only after dropping the actual dataflow. Destroyed probes need not
+    /// advance to empty, so final execution completion is reported explicitly.
+    fn input_completions(&self) -> impl Iterator<Item = ComputeResponse> + '_ {
+        self.inputs
+            .iter()
+            .filter(|(_, input)| !input.reported.is_empty())
+            .map(|(&id, _)| {
+                ComputeResponse::Frontiers(
+                    id,
+                    FrontiersResponse {
+                        input_frontier: Some(Antichain::new()),
+                        ..Default::default()
+                    },
+                )
+            })
+    }
+}
+
+impl ComputeState {
+    /// Retired exports belong to the previous maintained connection. Reconciliation
+    /// must not send their progress to a controller that no longer tracks them.
+    pub(crate) fn silence_retired_frontiers(&mut self) {
+        for retired in self.retiring_dataflows.values_mut() {
+            retired.inputs.clear();
+        }
+    }
+}
+
 /// State maintained for a compute collection.
 pub struct CollectionState {
     /// Tracks the frontiers that have been reported to the controller.
     reported_frontiers: ReportedFrontiers,
+    /// Last hydration observation broadcast on the progress protocol.
+    reported_hydrated: Option<bool>,
+    /// Actual hydration is monotone even when reported frontiers are reset.
+    hydrated: bool,
     /// The index of the dataflow computing this collection.
     ///
-    /// Used for dropping the dataflow when the collection is dropped.
-    /// The Dataflow index is wrapped in an `Rc`s and can be shared between collections, to reflect
-    /// the possibility that a single dataflow can export multiple collections.
-    dataflow_index: Rc<usize>,
+    /// Shared by all exports and by query readers that still need the producer to run.
+    /// Dropping the final guard permits the worker to retire the dataflow.
+    pub(crate) dataflow_index: Rc<usize>,
     /// Whether this collection is a subscribe or copy-to.
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
@@ -2111,6 +2328,8 @@ impl CollectionState {
 
         Self {
             reported_frontiers: ReportedFrontiers::new(),
+            reported_hydrated: None,
+            hydrated: false,
             dataflow_index,
             is_subscribe_or_copy,
             as_of,
@@ -2130,8 +2349,19 @@ impl CollectionState {
         &self.reported_frontiers
     }
 
+    /// The earliest readable times, respecting both trace compaction and installation.
+    fn read_frontier(&self, trace: &mut TraceBundle) -> Antichain<Timestamp> {
+        // A new trace handle can report MIN even though the dataflow only represents
+        // the collection from its as-of onward.
+        let mut frontier = trace.compaction_frontier();
+        frontier.join_assign(&self.as_of);
+        frontier
+    }
+
     /// Reset all reported frontiers to the given value.
     pub fn reset_reported_frontiers(&mut self, frontier: ReportedFrontier) {
+        self.reported_hydrated = None;
+        self.reported_frontiers.read_frontier = frontier.clone();
         self.reported_frontiers.write_frontier = frontier.clone();
         self.reported_frontiers.input_frontier = frontier.clone();
         self.reported_frontiers.output_frontier = frontier;
@@ -2165,11 +2395,16 @@ impl CollectionState {
 
     /// Set the output frontier that has been reported to the controller.
     fn set_reported_output_frontier(&mut self, frontier: ReportedFrontier) {
-        let already_hydrated = self.hydrated();
-
+        if let ReportedFrontier::Reported(output) = &frontier {
+            self.observe_hydration(output);
+        }
         self.reported_frontiers.output_frontier = frontier;
+    }
 
-        if !already_hydrated && self.hydrated() {
+    /// Observe actual output progress, never synthetic retirement progress.
+    fn observe_hydration(&mut self, output: &Antichain<Timestamp>) {
+        if !self.hydrated && PartialOrder::less_than(&self.as_of, output) {
+            self.hydrated = true;
             if let Some(logging) = &mut self.logging {
                 logging.set_hydrated();
             }
@@ -2179,9 +2414,16 @@ impl CollectionState {
 
     /// Return whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        match &self.reported_frontiers.output_frontier {
-            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
-            ReportedFrontier::NotReported { .. } => false,
+        self.hydrated
+    }
+
+    fn hydration_update(&mut self) -> Option<bool> {
+        let hydrated = self.hydrated();
+        if self.reported_hydrated == Some(hydrated) {
+            None
+        } else {
+            self.reported_hydrated = Some(hydrated);
+            Some(hydrated)
         }
     }
 

@@ -7,12 +7,69 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Tests of how a peek's responses from several replicas are merged.
+//! Tests of partitioned compute response aggregation.
 
 use super::*;
 use std::num::NonZeroUsize;
 
 use mz_repr::Row;
+
+#[mz_ore::test]
+fn hydration_waits_for_every_worker_and_is_monotone() {
+    for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+        let mut state = <(ComputeCommand, ComputeResponse)>::new(3);
+        let mut absorb = |part, update: FrontiersResponse| {
+            state
+                .absorb_response(part, ComputeResponse::Frontiers(GlobalId::User(1), update))
+                .map(|response| match response.unwrap() {
+                    ComputeResponse::Frontiers(_, f) => f,
+                    other => panic!("unexpected response: {other:?}"),
+                })
+        };
+        // Even false is unknown until all workers have supplied a status.
+        for (position, part) in order.into_iter().enumerate() {
+            assert_eq!(
+                absorb(
+                    part,
+                    FrontiersResponse {
+                        hydrated: Some(part != order[1]),
+                        ..Default::default()
+                    }
+                ),
+                (position == 2).then_some(FrontiersResponse {
+                    hydrated: Some(false),
+                    ..Default::default()
+                }),
+            );
+        }
+        // Completion and readability are not hydration evidence.
+        for part in order {
+            let response = absorb(
+                part,
+                FrontiersResponse {
+                    write_frontier: Some(Antichain::new()),
+                    output_frontier: Some(Antichain::new()),
+                    read_frontier: Some(Antichain::new()),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(response.and_then(|f| f.hydrated), None);
+        }
+        for (value, expected) in [(true, Some(true)), (true, None), (false, None)] {
+            assert_eq!(
+                absorb(
+                    order[1],
+                    FrontiersResponse {
+                        hydrated: Some(value),
+                        ..Default::default()
+                    }
+                )
+                .and_then(|f| f.hydrated),
+                expected,
+            );
+        }
+    }
+}
 
 #[mz_ore::test]
 fn pending_peek_response_precedence() {

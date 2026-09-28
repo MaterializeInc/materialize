@@ -993,6 +993,92 @@ CREATE MATERIALIZED VIEW mv_no_refresh
 WITH (REFRESH AT '2000-01-01 10:00')
 AS SELECT * FROM t2;
 
+## Logical inputs constrain admission even when an unmaterialized view optimizes to a constant.
+# t2 is not readable at 0. Keep a nonempty result to also check constant data survives timestamp selection.
+statement ok
+CREATE VIEW v_eliminated_input AS
+SELECT x FROM t2 WHERE false UNION ALL SELECT 7;
+
+query error REFRESH AT requested for a time where not all the inputs are readable
+CREATE MATERIALIZED VIEW mv_eliminated_past
+WITH (REFRESH AT 0)
+AS SELECT * FROM v_eliminated_input;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_eliminated_auto AS SELECT * FROM v_eliminated_input;
+
+# Inspect the creation boundary, not a since that compaction can advance independently.
+query B
+SELECT (regexp_match(create_sql, 'AS OF ([0-9]+)'))[1]::numeric > 0
+FROM mz_materialized_views WHERE name = 'mv_eliminated_auto';
+----
+true
+
+query I
+SELECT * FROM mv_eliminated_auto;
+----
+7
+
+statement ok
+CREATE MATERIALIZED VIEW mv_eliminated_creation
+WITH (REFRESH AT CREATION)
+AS SELECT * FROM v_eliminated_input;
+
+query I
+SELECT * FROM mv_eliminated_creation;
+----
+7
+
+# An unused CTE names a logical input even though planning removes its read.
+statement ok
+CREATE VIEW v_unused_input AS WITH unused AS (SELECT * FROM t2) SELECT 7;
+
+query error REFRESH AT requested for a time where not all the inputs are readable
+CREATE MATERIALIZED VIEW mv_unused_past
+WITH (REFRESH AT 0)
+AS SELECT * FROM v_unused_input;
+
+statement ok
+DROP MATERIALIZED VIEW mv_eliminated_auto, mv_eliminated_creation;
+
+statement ok
+DROP VIEW v_eliminated_input, v_unused_input;
+
+# The FOR target is a catalog dependency, not a read of its output.
+statement ok
+CREATE MATERIALIZED VIEW mv_future_target WITH (REFRESH AT '3000-01-01') AS SELECT 7;
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement FOR mv_future_target AS SELECT 8;
+
+query B
+SELECT (regexp_match(create_sql, 'AS OF ([0-9]+)'))[1]::numeric = 0
+FROM mz_materialized_views WHERE name = 'mv_replacement';
+----
+true
+
+statement ok
+DROP MATERIALIZED VIEW mv_replacement;
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement FOR mv_future_target
+WITH (REFRESH AT 0) AS SELECT 8;
+
+statement ok
+DROP MATERIALIZED VIEW mv_future_target CASCADE;
+
+# The SQL function body introduces a collection read absent from query name resolution.
+query error REFRESH AT requested for a time where not all the inputs are readable
+CREATE MATERIALIZED VIEW mv_implicit_past WITH (REFRESH AT 0)
+AS SELECT pg_get_userbyid(1::oid);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_implicit_input WITH (REFRESH AT '3000-01-01')
+AS SELECT pg_get_userbyid(1::oid);
+
+statement ok
+DROP MATERIALIZED VIEW mv_implicit_input;
+
 ## Query MV after the last refresh
 statement ok
 CREATE MATERIALIZED VIEW mv3

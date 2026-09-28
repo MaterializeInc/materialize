@@ -24,7 +24,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
-use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -51,9 +50,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
-use mz_storage_client::controller::{
-    IntrospectionType, StorageController, StorageMetadata, StorageTxn,
-};
+use mz_storage_client::controller::{IntrospectionType, StorageController, StorageTxn};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -68,7 +65,8 @@ pub mod replica_http_locator;
 
 // Export this on behalf of the storage controller to provide a unified
 // interface, allowing other crates to depend on this crate alone.
-pub use mz_storage_controller::prepare_initialization;
+pub use mz_storage_controller::adapter_storage::AdapterStorageWriter;
+pub use mz_storage_controller::rtr::real_time_recency_ts;
 pub use replica_http_locator::ReplicaHttpLocator;
 
 /// Configures a controller.
@@ -177,6 +175,12 @@ pub struct Controller {
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
 
+    /// Catalog access supplied to replicas in writable protected environments.
+    catalog_persist_location: Option<PersistLocation>,
+
+    /// Opaque serialized reconstruction inputs supplied by the catalog owner.
+    catalog_follower_config: Option<String>,
+
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
 
@@ -214,6 +218,19 @@ pub struct Controller {
 }
 
 impl Controller {
+    /// Sets catalog reconstruction inputs for subsequently provisioned replicas.
+    /// Must be called before provisioning replicas in a protected writable environment.
+    pub fn set_catalog_follower_config(&mut self, config: String) {
+        self.catalog_follower_config = Some(config);
+    }
+
+    /// Whether maintained compute is enacted by catalog-following replicas.
+    /// Process provisioning and adapter-owned table work remain local.
+    pub fn replica_owned_compute(&self) -> bool {
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
+            && self.catalog_persist_location.is_some()
+    }
+
     /// Update the controller configuration.
     pub fn update_configuration(&mut self, updates: ConfigUpdates) {
         updates.apply(&self.dyncfg);
@@ -296,6 +313,8 @@ impl Controller {
             metrics_rx: _,
             now: _,
             persist_pubsub_url: _,
+            catalog_persist_location: _,
+            catalog_follower_config: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
@@ -508,11 +527,8 @@ impl Controller {
 
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
-    fn process_storage_response(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
-        let maybe_response = self.storage.process(storage_metadata)?;
+    fn process_storage_response(&mut self) -> Result<Option<ControllerResponse>, anyhow::Error> {
+        let maybe_response = self.storage.process()?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
                 self.handle_frontier_updates(&r)
@@ -546,17 +562,11 @@ impl Controller {
     ///
     /// This method is guaranteed to return "quickly" unless doing so would
     /// compromise the correctness of the system.
-    ///
-    /// This method is **not** guaranteed to be cancellation safe. It **must**
-    /// be awaited to completion.
     #[mz_ore::instrument(level = "debug")]
-    pub fn process(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
+    pub fn process(&mut self) -> Result<Option<ControllerResponse>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response(storage_metadata),
+            Readiness::Storage => self.process_storage_response(),
             Readiness::Compute => self.process_compute_response(),
             Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
             Readiness::Internal(message) => Ok(Some(message)),
@@ -668,17 +678,19 @@ impl Controller {
 impl Controller {
     /// Creates a new controller.
     ///
-    /// For correctness, this function expects to have access to the mutations
-    /// to the `storage_txn` that occurred in [`prepare_initialization`].
+    /// The transaction WAL identity in `storage_txn` must be durably initialized
+    /// by catalog bootstrap before construction opens Persist handles.
     ///
     /// # Panics
-    /// If this function is called before [`prepare_initialization`].
+    /// If `storage_txn` is missing the transaction WAL identity.
     #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
-        envd_epoch: NonZeroI64,
+        envd_epoch: std::num::NonZeroI64,
         read_only: bool,
+        catalog_read_protection_enabled: bool,
         storage_txn: &dyn StorageTxn,
+        txns_metrics: Arc<TxnMetrics>,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
@@ -689,7 +701,6 @@ impl Controller {
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
-        let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),
@@ -698,6 +709,7 @@ impl Controller {
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
+            catalog_read_protection_enabled,
             config.connection_context.clone(),
             storage_txn,
         )
@@ -705,6 +717,10 @@ impl Controller {
 
         let collections_ctl: Arc<dyn StorageCollections + Send + Sync> = Arc::new(collections_ctl);
 
+        let catalog_persist_location = (catalog_read_protection_enabled && !read_only)
+            .then(|| config.persist_location.clone());
+        let replica_owned = mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
+            && catalog_persist_location.is_some();
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.persist_location.clone(),
@@ -713,6 +729,7 @@ impl Controller {
             wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
             read_only,
+            replica_owned,
             &config.metrics_registry,
             controller_metrics.clone(),
             config.connection_context,
@@ -726,6 +743,7 @@ impl Controller {
             config.build_info,
             storage_collections,
             read_only,
+            catalog_read_protection_enabled,
             &config.metrics_registry,
             config.persist_location,
             controller_metrics,
@@ -749,6 +767,8 @@ impl Controller {
             metrics_rx,
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
+            catalog_persist_location,
+            catalog_follower_config: None,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),

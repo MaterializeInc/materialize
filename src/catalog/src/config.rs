@@ -17,7 +17,8 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_controller::clusters::ReplicaAllocation;
+use mz_controller_types::clusters::ReplicaAllocation;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
@@ -27,11 +28,62 @@ use mz_repr::CatalogItemId;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::durable::{CatalogError, DurableCatalogState};
 
 const GIB: u64 = 1024 * 1024 * 1024;
+
+/// Scoped (per-cluster and per-replica) system-parameter overrides, keyed by
+/// object id. Each value is the raw (unparsed) string for a parameter whose
+/// scoped value differs from the environment-wide value. An absent entry means
+/// no override. Empty maps mean no scoped overrides at all.
+///
+/// This is the in-memory mirror of the durable `cluster_system_configurations`
+/// and `replica_system_configurations` catalog collections.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScopedParameters {
+    /// Cluster-coherent overrides, keyed by cluster id.
+    pub cluster: BTreeMap<ClusterId, BTreeMap<String, String>>,
+    /// Replica-local overrides, keyed by replica id.
+    pub replica: BTreeMap<ReplicaId, BTreeMap<String, String>>,
+}
+
+/// The set of objects a [`ScopedParameters`] update was evaluated for, used to
+/// bound which durable override rows the update may prune.
+///
+/// The update is authoritative only for objects in this set. The durable apply
+/// removes a row only when its owning object is in scope and the update no
+/// longer carries that override, so an object created after the update's
+/// evaluation snapshot, and the override it folded into its own create
+/// transaction, is not wiped by a concurrent full-state reconcile.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScopedParametersScope {
+    /// Cluster ids whose rows the update may prune.
+    pub clusters: BTreeSet<ClusterId>,
+    /// Replica ids whose rows the update may prune.
+    pub replicas: BTreeSet<ReplicaId>,
+}
+
+impl ScopedParameters {
+    /// Returns `true` if there are no cluster or replica overrides.
+    pub fn is_empty(&self) -> bool {
+        self.cluster.is_empty() && self.replica.is_empty()
+    }
+
+    /// Returns a copy of `self` with `other`'s entries merged in, replacing any
+    /// existing entry for the same object. Expresses no removals.
+    pub fn merge(&self, other: &ScopedParameters) -> ScopedParameters {
+        let mut merged = self.clone();
+        merged
+            .cluster
+            .extend(other.cluster.iter().map(|(id, v)| (*id, v.clone())));
+        merged
+            .replica
+            .extend(other.replica.iter().map(|(id, v)| (*id, v.clone())));
+        merged
+    }
+}
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -101,6 +153,145 @@ pub struct StateConfig {
     pub license_key: ValidatedLicenseKey,
 }
 
+/// Non-runtime configuration required to reconstruct the catalog in a replica.
+///
+/// This is provisioner-supplied configuration, not an end-user input. Runtime
+/// handles and credentials are supplied locally and are never serialized here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicaCatalogConfig {
+    /// Written-plan namespace supplied by the provisioning writer. In development,
+    /// the provisioner must pair compatible sibling binaries. Version equality
+    /// and successful plan decoding do not establish compatibility.
+    pub plan_build: String,
+    pub unsafe_mode: bool,
+    pub all_features: bool,
+    #[serde(serialize_with = "serialize_replica_sizes")]
+    pub cluster_replica_sizes: ClusterReplicaSizeMap,
+    pub builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
+    pub system_parameter_defaults: BTreeMap<String, String>,
+    pub availability_zones: Vec<String>,
+    pub egress_addresses: Vec<IpNet>,
+    pub aws_principal_context: Option<AwsPrincipalContext>,
+    pub aws_privatelink_availability_zones: Option<BTreeSet<String>>,
+    pub http_host_name: Option<String>,
+    pub helm_chart_version: Option<String>,
+    pub license_key: ValidatedLicenseKey,
+}
+
+// ReplicaAllocation accepts string credits on input but its generic serializer
+// emits Numeric's internal representation. Only this JSON transport needs the
+// input representation, so leave existing diagnostic serialization unchanged.
+fn serialize_replica_sizes<S>(
+    sizes: &ClusterReplicaSizeMap,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::{Error, SerializeMap};
+
+    let mut map = serializer.serialize_map(Some(sizes.0.len()))?;
+    for (name, allocation) in &sizes.0 {
+        let mut value = serde_json::to_value(allocation).map_err(S::Error::custom)?;
+        value["credits_per_hour"] =
+            serde_json::Value::String(allocation.credits_per_hour.to_string());
+        map.serialize_entry(name, &value)?;
+    }
+    map.end()
+}
+
+impl ReplicaCatalogConfig {
+    /// Returns the supplied writer namespace when the replica's semantic version,
+    /// including prerelease, matches. Build metadata identifies the namespace and
+    /// is not a compatibility check.
+    pub fn plan_build_version(&self, replica: &BuildInfo) -> anyhow::Result<semver::Version> {
+        let build: semver::Version = self.plan_build.parse()?;
+        let replica_version = replica.semver_version();
+        anyhow::ensure!(
+            build.cmp_precedence(&replica_version).is_eq(),
+            "written-plan version {build} does not match replica version {replica_version}"
+        );
+        Ok(build)
+    }
+
+    /// Copies reconstruction inputs without runtime handles or credentials.
+    ///
+    /// The caller must supply effective system parameter defaults in `state`.
+    pub fn from_state(state: &StateConfig) -> Self {
+        Self {
+            plan_build: crate::expr_cache::expression_build_version(state.build_info).to_string(),
+            unsafe_mode: state.unsafe_mode,
+            all_features: state.all_features,
+            cluster_replica_sizes: state.cluster_replica_sizes.clone(),
+            builtin_system_cluster_config: state.builtin_system_cluster_config.clone(),
+            builtin_catalog_server_cluster_config: state
+                .builtin_catalog_server_cluster_config
+                .clone(),
+            builtin_probe_cluster_config: state.builtin_probe_cluster_config.clone(),
+            builtin_support_cluster_config: state.builtin_support_cluster_config.clone(),
+            builtin_analytics_cluster_config: state.builtin_analytics_cluster_config.clone(),
+            system_parameter_defaults: state.system_parameter_defaults.clone(),
+            availability_zones: state.availability_zones.clone(),
+            egress_addresses: state.egress_addresses.clone(),
+            aws_principal_context: state.aws_principal_context.clone(),
+            aws_privatelink_availability_zones: state.aws_privatelink_availability_zones.clone(),
+            http_host_name: state.http_host_name.clone(),
+            helm_chart_version: state.helm_chart_version.clone(),
+            license_key: state.license_key.clone(),
+        }
+    }
+
+    /// Creates a read-only catalog configuration without migrations or remote
+    /// parameter synchronization. Native reconstruction sets the boot timestamp
+    /// from the catalog upper before loading the state.
+    pub fn into_state(
+        self,
+        build_info: &'static BuildInfo,
+        environment_id: EnvironmentId,
+        connection_context: mz_storage_types::connections::ConnectionContext,
+        persist_client: PersistClient,
+    ) -> StateConfig {
+        StateConfig {
+            unsafe_mode: self.unsafe_mode,
+            all_features: self.all_features,
+            cluster_replica_sizes: self.cluster_replica_sizes,
+            builtin_system_cluster_config: self.builtin_system_cluster_config,
+            builtin_catalog_server_cluster_config: self.builtin_catalog_server_cluster_config,
+            builtin_probe_cluster_config: self.builtin_probe_cluster_config,
+            builtin_support_cluster_config: self.builtin_support_cluster_config,
+            builtin_analytics_cluster_config: self.builtin_analytics_cluster_config,
+            system_parameter_defaults: self.system_parameter_defaults,
+            availability_zones: self.availability_zones,
+            egress_addresses: self.egress_addresses,
+            aws_principal_context: self.aws_principal_context,
+            aws_privatelink_availability_zones: self.aws_privatelink_availability_zones,
+            http_host_name: self.http_host_name,
+            helm_chart_version: self.helm_chart_version,
+            license_key: self.license_key,
+            build_info,
+            environment_id,
+            read_only: true,
+            now: mz_ore::now::SYSTEM_TIME.clone(),
+            boot_ts: mz_repr::Timestamp::MIN,
+            skip_migrations: true,
+            remote_system_parameters: None,
+            connection_context,
+            builtin_item_migration_config: BuiltinItemMigrationConfig {
+                persist_client: persist_client.clone(),
+                read_only: true,
+                force_migration: None,
+            },
+            persist_client,
+            enable_expression_cache_override: Some(false),
+            external_login_password_mz_system: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct BuiltinItemMigrationConfig {
     pub persist_client: PersistClient,
@@ -108,7 +299,7 @@ pub struct BuiltinItemMigrationConfig {
     pub force_migration: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl ClusterReplicaSizeMap {
@@ -305,7 +496,7 @@ impl ClusterReplicaSizeMap {
 ///
 /// In the case of AWS PrivateLink connections, Materialize will connect to the
 /// VPC endpoint as the AWS Principal generated via this context.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsPrincipalContext {
     pub aws_account_id: String,
     pub aws_external_id_prefix: AwsExternalIdPrefix,
@@ -345,5 +536,56 @@ mod tests {
         let alloc = map.get_allocation_by_name("test").unwrap();
         let expected = Numeric::from(2000) / Numeric::from(1024);
         assert_eq!(alloc.credits_per_hour, expected);
+    }
+}
+
+#[cfg(test)]
+mod scoped_parameters_tests {
+    use std::collections::BTreeMap;
+
+    use super::{ClusterId, ReplicaId, ScopedParameters};
+
+    fn cfg(name: &str, value: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(name.to_string(), value.to_string())])
+    }
+
+    #[mz_ore::test]
+    fn test_scoped_parameters_is_empty() {
+        assert!(ScopedParameters::default().is_empty());
+
+        let mut params = ScopedParameters::default();
+        params.cluster.insert(ClusterId::User(1), cfg("f", "true"));
+        assert!(!params.is_empty());
+
+        let mut params = ScopedParameters::default();
+        params.replica.insert(ReplicaId::User(1), cfg("f", "true"));
+        assert!(!params.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_scoped_parameters_merge() {
+        let mut base = ScopedParameters::default();
+        base.cluster.insert(ClusterId::User(1), cfg("f", "old"));
+        base.cluster.insert(ClusterId::User(2), cfg("f", "keep"));
+        base.replica.insert(ReplicaId::User(1), cfg("g", "old"));
+
+        let mut incoming = ScopedParameters::default();
+        // Overrides the existing entry for the same object...
+        incoming.cluster.insert(ClusterId::User(1), cfg("f", "new"));
+        // ...and adds a new object, leaving others untouched.
+        incoming.replica.insert(ReplicaId::User(2), cfg("g", "new"));
+
+        let merged = base.merge(&incoming);
+
+        // Replaced.
+        assert_eq!(merged.cluster[&ClusterId::User(1)], cfg("f", "new"));
+        // Untouched object retained (merge does not express removals).
+        assert_eq!(merged.cluster[&ClusterId::User(2)], cfg("f", "keep"));
+        // Pre-existing replica retained, new replica added.
+        assert_eq!(merged.replica[&ReplicaId::User(1)], cfg("g", "old"));
+        assert_eq!(merged.replica[&ReplicaId::User(2)], cfg("g", "new"));
+
+        // The original is unchanged (merge returns a copy).
+        assert_eq!(base.cluster[&ClusterId::User(1)], cfg("f", "old"));
     }
 }

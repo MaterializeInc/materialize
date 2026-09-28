@@ -236,6 +236,10 @@ impl Default for TestHarness {
             system_parameter_defaults: BTreeMap::from([
                 ("log_filter".to_string(), "error".to_string()),
                 (
+                    "enable_catalog_read_protection".to_string(),
+                    "true".to_string(),
+                ),
+                (
                     ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
                     "true".to_string(),
                 ),
@@ -833,6 +837,7 @@ impl Listeners {
 
         let secrets_controller = Arc::clone(&orchestrator);
         let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        connection_context.environment_id = config.environment_id.to_string();
         if !config.aws_connection_context {
             connection_context.aws_external_id_prefix = None;
             connection_context.aws_connection_role_arn = None;
@@ -878,6 +883,13 @@ impl Listeners {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
         };
+        let persist_location = PersistLocation {
+            blob_uri: format!("file://{}/persist/blob", data_directory.display())
+                .parse()
+                .expect("invalid blob URI"),
+            consensus_uri,
+        };
+        let environment_id = config.environment_id.clone();
 
         let inner = self
             .inner
@@ -890,13 +902,8 @@ impl Listeners {
                     clusterd_image: "clusterd".into(),
                     init_container_image: None,
                     deploy_generation: config.deploy_generation,
-                    persist_location: PersistLocation {
-                        blob_uri: format!("file://{}/persist/blob", data_directory.display())
-                            .parse()
-                            .expect("invalid blob URI"),
-                        consensus_uri,
-                    },
-                    persist_clients,
+                    persist_location: persist_location.clone(),
+                    persist_clients: Arc::clone(&persist_clients),
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
@@ -964,6 +971,9 @@ impl Listeners {
         Ok(TestServer {
             inner,
             metrics_registry,
+            persist_clients,
+            persist_location,
+            environment_id,
             _temp_dir: temp_dir,
             _scratch_dir: scratch_dir,
         })
@@ -974,6 +984,10 @@ impl Listeners {
 pub struct TestServer {
     pub inner: crate::Server,
     pub metrics_registry: MetricsRegistry,
+    /// Connection identity for fixture peers of this server's durable catalog.
+    pub persist_clients: Arc<PersistClientCache>,
+    pub persist_location: PersistLocation,
+    pub environment_id: EnvironmentId,
     /// The `TempDir`s are saved to prevent them from being dropped, and thus cleaned up too early.
     _temp_dir: Option<TempDir>,
     _scratch_dir: TempDir,

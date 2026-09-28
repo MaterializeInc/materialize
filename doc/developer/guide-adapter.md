@@ -86,6 +86,15 @@ those drops before the creates. An orchestrator can retry a failed create
 indefinitely. Queuing the drop behind it would deadlock a replacement against
 the same physical quota that catalog accounting correctly considered available.
 
+### Frontend sequencing and worker stacks
+
+`SessionClient::execute` heap-allocates its large execution-attempt future so it
+does not inflate every caller's connection state machine. Inline async state can
+produce multiple stack copies at each level of a poll chain, including tracing
+wrappers. A stack overflow in a leaf planner function need not mean recursive
+planning. Keep large sequencing state behind this boundary rather than increasing
+worker stack sizes or moving the allocation burden into each frontend protocol.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds
@@ -316,6 +325,26 @@ pre-fence write after barrier  -> `InvalidUppers` -> retry at a fresh timestamp
 A system-table write before the barrier is included in the reset. A user-table write remains
 visible to later reads. The retry's `advance_to` is above the stale catalog handle's cached upper,
 so its catalog check is durable. An `advance_upper` no-op only checks an already-observed fence.
+
+### Durable sink progress can precede controller observations
+
+A sink commits external output before advancing its Persist progress shard, then
+reports that progress to the controller. A query client can observe the durable
+upper before the controller processes the report. Sink alteration must establish
+input overlap against durable progress, not reject committed desired state using
+a lagging controller observation. Waiting for that report on the coordinator loop
+can also block the loop that must process it.
+
+This applies to the sink's output-progress shard, not a source remap shard. Remap
+progress alone does not establish completion of source output.
+
+### Planning eligibility is not execution readability
+
+EXPLAIN may describe a catalog-declared index before any replica has installed it.
+Keep those planning candidates separate from the observed collections used for
+timestamp selection, transaction read holds, and actual statistics reads. A fresh
+index can legitimately have neither a reported read frontier nor a published bound.
+Do not invent a bound or weaken execution admission merely to describe its plan.
 
 ## Rejected Optimizations
 

@@ -13,6 +13,15 @@ workspace = true
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
+mz-orchestrator = { path = "../orchestrator" }
+mz-ore = { path = "../ore", default-features = false }
+mz-repr = { path = "../repr" }
+serde.workspace = true
+
+[dev-dependencies]
+bytesize.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+serde_json.workspace = true
 
 [features]
 default = []

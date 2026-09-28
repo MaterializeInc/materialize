@@ -172,19 +172,25 @@ running
 > SELECT COUNT(*) FROM mz_ssh_tunnel_connections
 2
 
-> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = 'u1';
+$ set-from-sql var=ssh-id
+SELECT c.id FROM mz_connections c
+JOIN mz_schemas s ON s.id = c.schema_id
+JOIN mz_databases d ON d.id = s.database_id
+WHERE d.name = 'testdrive_no_reset_connections' AND s.name = 'public' AND c.name = 'ssh'
+
+> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = '${ssh-id}';
 1
 
 ! DROP CONNECTION testdrive_no_reset_connections.public.ssh;
 contains:still depended upon by connection "kafka_ssh"
 
-> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = 'u1';
+> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = '${ssh-id}';
 1
 
 > ALTER CONNECTION kafka_ssh SET (BROKER 'kafka:9093' USING SSH TUNNEL testdrive_no_reset_connections.public.ssh_backup);
 
 # We've removed all dependencies on testdrive_no_reset_connections.public.ssh, so it could be dropped
-> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = 'u1';
+> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = '${ssh-id}';
 0
 
 # Break new SSH tunnel to show that we can fix it

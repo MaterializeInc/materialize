@@ -1,0 +1,855 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+mod notice;
+
+use crate::SYSTEM_CONN_ID;
+use crate::builtin::{
+    BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OPERATORS, MZ_PSEUDO_TYPES,
+    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+};
+use crate::durable::SourceReferences;
+use crate::memory::error::Error;
+use crate::memory::objects::{
+    CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table, TableDataSource, Type,
+};
+use bytesize::ByteSize;
+use ipnet::IpNet;
+use mz_adapter_types::compaction::CompactionWindow;
+use mz_audit_log::VersionedStorageUsage;
+use mz_expr::MirScalarExpr;
+use mz_license_keys::ValidatedLicenseKey;
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_persist_client::batch::ProtoBatch;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::adt::mz_acl_item::PrivilegeMap;
+use mz_repr::refresh_schedule::RefreshEvery;
+use mz_repr::role_id::RoleId;
+use mz_repr::{
+    CatalogItemId, Datum, Diff, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
+};
+use mz_sql::ast::{CreateIndexStatement, Statement};
+use mz_sql::catalog::{CatalogType, TypeCategory};
+use mz_sql::func::FuncImplCatalogDetails;
+use mz_sql::names::SchemaSpecifier;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage_client::client::TableData;
+use smallvec::smallvec;
+
+use crate::catalog::CatalogState;
+
+/// An update to a built-in table.
+#[derive(Debug, Clone)]
+pub struct BuiltinTableUpdate<T = CatalogItemId> {
+    /// The reference of the table to update.
+    pub id: T,
+    /// The data to put into the table.
+    pub data: TableData,
+}
+
+impl<T> BuiltinTableUpdate<T> {
+    /// Create a [`BuiltinTableUpdate`] from a [`Row`].
+    pub fn row(id: T, row: Row, diff: Diff) -> BuiltinTableUpdate<T> {
+        BuiltinTableUpdate {
+            id,
+            data: TableData::Rows(vec![(row, diff)]),
+        }
+    }
+
+    pub fn batch(id: T, batch: ProtoBatch) -> BuiltinTableUpdate<T> {
+        BuiltinTableUpdate {
+            id,
+            data: TableData::Batches(smallvec![batch]),
+        }
+    }
+}
+
+impl CatalogState {
+    pub fn resolve_builtin_table_updates(
+        &self,
+        builtin_table_update: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+    ) -> Vec<BuiltinTableUpdate<CatalogItemId>> {
+        builtin_table_update
+            .into_iter()
+            .map(|builtin_table_update| self.resolve_builtin_table_update(builtin_table_update))
+            .collect()
+    }
+
+    pub fn resolve_builtin_table_update(
+        &self,
+        BuiltinTableUpdate { id, data }: BuiltinTableUpdate<&'static BuiltinTable>,
+    ) -> BuiltinTableUpdate<CatalogItemId> {
+        let id = self.resolve_builtin_table(id);
+        BuiltinTableUpdate { id, data }
+    }
+
+    pub(super) fn pack_role_auth_update(
+        &self,
+        id: RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let role_auth = self.get_role_auth(&id);
+        let role = self.get_role(&id);
+        BuiltinTableUpdate::row(
+            &*MZ_ROLE_AUTH,
+            Row::pack_slice(&[
+                Datum::String(&role_auth.role_id.to_string()),
+                Datum::UInt32(role.oid),
+                match &role_auth.password_hash {
+                    Some(hash) => Datum::String(hash),
+                    None => Datum::Null,
+                },
+                Datum::TimestampTz(
+                    mz_ore::now::to_datetime(role_auth.updated_at)
+                        .try_into()
+                        .expect("must fit"),
+                ),
+            ]),
+            diff,
+        )
+    }
+
+    pub(super) fn pack_item_update(
+        &self,
+        id: CatalogItemId,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let entry = self.get_entry(&id);
+        let oid = entry.oid();
+        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let schema_id = &self
+            .get_schema(
+                &entry.name().qualifiers.database_spec,
+                &entry.name().qualifiers.schema_spec,
+                conn_id,
+            )
+            .id;
+        let name = &entry.name().item;
+        let owner_id = entry.owner_id();
+        let privileges_row = self.pack_privilege_array_row(entry.privileges());
+        let privileges = privileges_row.unpack_first();
+        let mut updates = match entry.item() {
+            CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
+            CatalogItem::Source(source) => {
+                match &source.data_source {
+                    DataSourceDesc::Webhook { .. } => {
+                        vec![self.pack_webhook_source_update(id, diff)]
+                    }
+                    // Old-syntax subsource metadata (mz_postgres/mysql/sql_server_source_tables)
+                    // is now derived from create_sql by materialized views over
+                    // mz_catalog_raw, so ingestion exports need no special packing.
+                    DataSourceDesc::Ingestion { .. }
+                    | DataSourceDesc::OldSyntaxIngestion { .. }
+                    | DataSourceDesc::IngestionExport { .. }
+                    | DataSourceDesc::Introspection(_)
+                    | DataSourceDesc::Progress
+                    | DataSourceDesc::Catalog => vec![],
+                }
+            }
+            CatalogItem::MaterializedView(mview) => {
+                self.pack_materialized_view_update(id, mview, diff)
+            }
+            // mz_sinks, mz_kafka_sinks and mz_iceberg_sinks read create_sql
+            // out of mz_catalog_raw, so there is nothing to pack here.
+            CatalogItem::Sink(_) => vec![],
+            CatalogItem::Type(ty) => {
+                self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
+            }
+            CatalogItem::Func(func) => {
+                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
+            }
+            // Tables, views, and metric sinks are exposed through materialized
+            // views derived from `mz_catalog_raw`, and logs and secrets never
+            // had builtin-table rows, so none pack a row here.
+            CatalogItem::Table(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::MetricSink(_) => vec![],
+            // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
+            // mz_aws_connections, mz_aws_privatelink_connections) are now derived
+            // from the persisted create_sql by materialized views over
+            // mz_catalog_raw, so connections need no special packing here.
+            CatalogItem::Connection(_) => vec![],
+        };
+
+        // Always report the latest for an objects columns.
+        if let Some(desc) = entry.relation_desc_latest() {
+            let defaults = match entry.item() {
+                CatalogItem::Table(Table {
+                    data_source: TableDataSource::TableWrites { defaults },
+                    ..
+                }) => Some(defaults),
+                _ => None,
+            };
+            for (i, (column_name, column_type)) in desc.iter().enumerate() {
+                let default: Option<String> = defaults.map(|d| d[i].to_ast_string_stable());
+                let default: Datum = default
+                    .as_ref()
+                    .map(|d| Datum::String(d))
+                    .unwrap_or(Datum::Null);
+                let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
+                let (type_name, type_oid) = match &column_type.scalar_type {
+                    SqlScalarType::List {
+                        custom_id: Some(custom_id),
+                        ..
+                    }
+                    | SqlScalarType::Map {
+                        custom_id: Some(custom_id),
+                        ..
+                    }
+                    | SqlScalarType::Record {
+                        custom_id: Some(custom_id),
+                        ..
+                    } => {
+                        let entry = self.get_entry(custom_id);
+                        // NOTE(benesch): the `mz_columns.type text` field is
+                        // wrong. Types do not have a name that can be
+                        // represented as a single textual field. There can be
+                        // multiple types with the same name in different
+                        // schemas and databases. We should eventually deprecate
+                        // the `type` field in favor of a new `type_id` field
+                        // that can be joined against `mz_types`.
+                        //
+                        // For now, in the interest of pragmatism, we just use
+                        // the type's item name, and accept that there may be
+                        // ambiguity if the same type name is used in multiple
+                        // schemas. The ambiguity is mitigated by the OID, which
+                        // can be joined against `mz_types.oid` to resolve the
+                        // ambiguity.
+                        let name = &*entry.name().item;
+                        let oid = entry.oid();
+                        (name, oid)
+                    }
+                    _ => (pgtype.name(), pgtype.oid()),
+                };
+                updates.push(BuiltinTableUpdate::row(
+                    &*MZ_COLUMNS,
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String(column_name),
+                        Datum::UInt64(u64::cast_from(i + 1)),
+                        Datum::from(column_type.nullable),
+                        Datum::String(type_name),
+                        default,
+                        Datum::UInt32(type_oid),
+                        Datum::Int32(pgtype.typmod()),
+                    ]),
+                    diff,
+                ));
+            }
+        }
+
+        // Use initial lcw so that we can tell apart default from non-existent windows.
+        if let Some(cw) = entry.item().initial_logical_compaction_window() {
+            updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
+        }
+
+        updates
+    }
+
+    fn pack_history_retention_strategy_update(
+        &self,
+        id: CatalogItemId,
+        cw: CompactionWindow,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let cw: u64 = cw.comparable_timestamp().into();
+        let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
+            .expect("must serialize");
+        BuiltinTableUpdate::row(
+            &*MZ_HISTORY_RETENTION_STRATEGIES,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                // FOR is the only strategy at the moment. We may introduce FROM or others later.
+                Datum::String("FOR"),
+                cw.into_row().into_element(),
+            ]),
+            diff,
+        )
+    }
+
+    fn pack_materialized_view_update(
+        &self,
+        id: CatalogItemId,
+        mview: &MaterializedView,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut updates = Vec::new();
+
+        if let Some(refresh_schedule) = &mview.refresh_schedule {
+            // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
+            // empty `RefreshSchedule`.
+            assert!(!refresh_schedule.is_empty());
+            for RefreshEvery {
+                interval,
+                aligned_to,
+            } in refresh_schedule.everies.iter()
+            {
+                let aligned_to_dt = mz_ore::now::to_datetime(
+                    <&Timestamp as TryInto<u64>>::try_into(aligned_to).expect("undoes planning"),
+                );
+                updates.push(BuiltinTableUpdate::row(
+                    &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String("every"),
+                        Datum::Interval(
+                            Interval::from_duration(interval).expect(
+                                "planning ensured that this is convertible back to Interval",
+                            ),
+                        ),
+                        Datum::TimestampTz(aligned_to_dt.try_into().expect("undoes planning")),
+                        Datum::Null,
+                    ]),
+                    diff,
+                ));
+            }
+            for at in refresh_schedule.ats.iter() {
+                let at_dt = mz_ore::now::to_datetime(
+                    <&Timestamp as TryInto<u64>>::try_into(at).expect("undoes planning"),
+                );
+                updates.push(BuiltinTableUpdate::row(
+                    &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String("at"),
+                        Datum::Null,
+                        Datum::Null,
+                        Datum::TimestampTz(at_dt.try_into().expect("undoes planning")),
+                    ]),
+                    diff,
+                ));
+            }
+        } else {
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String("on-commit"),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Null,
+                ]),
+                diff,
+            ));
+        }
+
+        if let Some(target_id) = mview.replacement_target {
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_REPLACEMENTS,
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(&target_id.to_string()),
+                ]),
+                diff,
+            ));
+        }
+
+        updates
+    }
+
+    fn pack_index_update(
+        &self,
+        id: CatalogItemId,
+        index: &Index,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut updates = vec![];
+
+        let create_stmt = mz_sql::parse::parse(&index.create_sql)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    index.create_sql, e
+                )
+            })
+            .into_element()
+            .ast;
+
+        let key_sqls = match &create_stmt {
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts
+                .as_ref()
+                .expect("key_parts is filled in during planning"),
+            _ => unreachable!(),
+        };
+
+        let on_entry = self.get_entry_by_global_id(&index.on);
+        let on_desc = on_entry
+            .relation_desc()
+            .expect("can only create indexes on items with a valid description");
+        let repr_col_types: Vec<ReprColumnType> = on_desc
+            .typ()
+            .column_types
+            .iter()
+            .map(ReprColumnType::from)
+            .collect();
+        for (i, key) in index.keys.iter().enumerate() {
+            let nullable = key.typ(&repr_col_types).nullable;
+            let seq_in_index = u64::cast_from(i + 1);
+            let key_sql = key_sqls
+                .get(i)
+                .expect("missing sql information for index key")
+                .to_ast_string_simple();
+            let (field_number, expression) = match key {
+                MirScalarExpr::Column(col, _) => {
+                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
+                }
+                _ => (Datum::Null, Datum::String(&key_sql)),
+            };
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_INDEX_COLUMNS,
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::UInt64(seq_in_index),
+                    field_number,
+                    expression,
+                    Datum::from(nullable),
+                ]),
+                diff,
+            ));
+        }
+
+        updates
+    }
+
+    fn pack_type_update(
+        &self,
+        id: CatalogItemId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        privileges: Datum,
+        typ: &Type,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut out = vec![];
+
+        let redacted = typ.create_sql.as_ref().map(|create_sql| {
+            mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast
+                .to_ast_string_redacted()
+        });
+
+        out.push(BuiltinTableUpdate::row(
+            &*MZ_TYPES,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
+                Datum::String(&owner_id.to_string()),
+                privileges,
+                if let Some(create_sql) = &typ.create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
+                } else {
+                    Datum::Null
+                },
+            ]),
+            diff,
+        ));
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+
+        fn append_modifier(packer: &mut RowPacker<'_>, mods: &[i64]) {
+            if mods.is_empty() {
+                packer.push(Datum::Null);
+            } else {
+                packer.push_list(mods.iter().map(|m| Datum::Int64(*m)));
+            }
+        }
+
+        let index_id = match &typ.details.typ {
+            CatalogType::Array {
+                element_reference: element_id,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&element_id.to_string()));
+                &MZ_ARRAY_TYPES
+            }
+            CatalogType::List {
+                element_reference: element_id,
+                element_modifiers,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&element_id.to_string()));
+                append_modifier(&mut packer, element_modifiers);
+                &MZ_LIST_TYPES
+            }
+            CatalogType::Map {
+                key_reference: key_id,
+                value_reference: value_id,
+                key_modifiers,
+                value_modifiers,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&key_id.to_string()));
+                packer.push(Datum::String(&value_id.to_string()));
+                append_modifier(&mut packer, key_modifiers);
+                append_modifier(&mut packer, value_modifiers);
+                &MZ_MAP_TYPES
+            }
+            CatalogType::Pseudo => {
+                packer.push(Datum::String(&id.to_string()));
+                &MZ_PSEUDO_TYPES
+            }
+            _ => {
+                packer.push(Datum::String(&id.to_string()));
+                &MZ_BASE_TYPES
+            }
+        };
+        out.push(BuiltinTableUpdate::row(index_id, row, diff));
+
+        if let Some(pg_metadata) = &typ.details.pg_metadata {
+            out.push(BuiltinTableUpdate::row(
+                &*MZ_TYPE_PG_METADATA,
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::UInt32(pg_metadata.typinput_oid),
+                    Datum::UInt32(pg_metadata.typreceive_oid),
+                    Datum::UInt32(pg_metadata.typsend_oid),
+                ]),
+                diff,
+            ));
+        }
+
+        out
+    }
+
+    fn pack_func_update(
+        &self,
+        id: CatalogItemId,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        func: &Func,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut updates = vec![];
+        for func_impl_details in func.inner.func_impls() {
+            let arg_type_ids = func_impl_details
+                .arg_typs
+                .iter()
+                .map(|typ| self.get_system_type(typ).id().to_string())
+                .collect::<Vec<_>>();
+
+            let mut row = Row::default();
+            row.packer()
+                .try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: arg_type_ids.len(),
+                    }],
+                    arg_type_ids.iter().map(|id| Datum::String(id)),
+                )
+                .expect(
+                    "arg_type_ids is 1 dimensional, and its length is used for the array length",
+                );
+            let arg_type_ids = row.unpack_first();
+
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_FUNCTIONS,
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::UInt32(func_impl_details.oid),
+                    Datum::String(&schema_id.to_string()),
+                    Datum::String(name),
+                    arg_type_ids,
+                    Datum::from(
+                        func_impl_details
+                            .variadic_typ
+                            .map(|typ| self.get_system_type(typ).id().to_string())
+                            .as_deref(),
+                    ),
+                    Datum::from(
+                        func_impl_details
+                            .return_typ
+                            .map(|typ| self.get_system_type(typ).id().to_string())
+                            .as_deref(),
+                    ),
+                    func_impl_details.return_is_set.into(),
+                    Datum::String(&owner_id.to_string()),
+                ]),
+                diff,
+            ));
+
+            if let mz_sql::func::Func::Aggregate(_) = func.inner {
+                updates.push(BuiltinTableUpdate::row(
+                    &*MZ_AGGREGATES,
+                    Row::pack_slice(&[
+                        Datum::UInt32(func_impl_details.oid),
+                        // TODO(database-issues#1064): Support ordered-set aggregate functions.
+                        Datum::String("n"),
+                        Datum::Int16(0),
+                    ]),
+                    diff,
+                ));
+            }
+        }
+        updates
+    }
+
+    pub fn pack_op_update(
+        &self,
+        operator: &str,
+        func_impl_details: FuncImplCatalogDetails,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let arg_type_ids = func_impl_details
+            .arg_typs
+            .iter()
+            .map(|typ| self.get_system_type(typ).id().to_string())
+            .collect::<Vec<_>>();
+
+        let mut row = Row::default();
+        row.packer()
+            .try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: arg_type_ids.len(),
+                }],
+                arg_type_ids.iter().map(|id| Datum::String(id)),
+            )
+            .expect("arg_type_ids is 1 dimensional, and its length is used for the array length");
+        let arg_type_ids = row.unpack_first();
+
+        BuiltinTableUpdate::row(
+            &*MZ_OPERATORS,
+            Row::pack_slice(&[
+                Datum::UInt32(func_impl_details.oid),
+                Datum::String(operator),
+                arg_type_ids,
+                Datum::from(
+                    func_impl_details
+                        .return_typ
+                        .map(|typ| self.get_system_type(typ).id().to_string())
+                        .as_deref(),
+                ),
+            ]),
+            diff,
+        )
+    }
+
+    pub fn pack_storage_usage_update(
+        &self,
+        VersionedStorageUsage::V1(event): VersionedStorageUsage,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let id = &MZ_STORAGE_USAGE_BY_SHARD;
+        let row = Row::pack_slice(&[
+            Datum::UInt64(event.id),
+            Datum::from(event.shard_id.as_deref()),
+            Datum::UInt64(event.size_bytes),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(event.collection_timestamp)
+                    .try_into()
+                    .expect("must fit"),
+            ),
+        ]);
+        BuiltinTableUpdate::row(id, row, diff)
+    }
+
+    pub fn pack_egress_ip_update(
+        &self,
+        ip: &IpNet,
+    ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
+        let id = &MZ_EGRESS_IPS;
+        let addr = ip.network();
+        let row = Row::pack_slice(&[
+            Datum::String(&addr.to_string()),
+            Datum::Int32(ip.prefix_len().into()),
+            Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
+        ]);
+        Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
+    }
+
+    pub fn pack_license_key_update(
+        &self,
+        license_key: &ValidatedLicenseKey,
+    ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
+        let id = &MZ_LICENSE_KEYS;
+        let row = Row::pack_slice(&[
+            Datum::String(&license_key.id),
+            Datum::String(&license_key.organization),
+            Datum::String(&license_key.environment_id),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(license_key.expiration * 1000)
+                    .try_into()
+                    .expect("must fit"),
+            ),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(license_key.not_before * 1000)
+                    .try_into()
+                    .expect("must fit"),
+            ),
+        ]);
+        Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
+    }
+
+    pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut updates = Vec::new();
+        for (size, alloc) in &self.cluster_replica_sizes.0 {
+            // Just invent something when the limits are `None`, which only happens in non-prod
+            // environments (tests, process orchestrator, etc.)
+            let DiskLimit(ByteSize(disk_bytes)) =
+                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+
+            // The disk column of mz_clusters / mz_cluster_replicas MVs needs
+            // `swap_enabled` and `disk_bytes`; expose them through a parallel
+            // internal table. Unlike the public sizes table below, we write
+            // here unconditionally — `cluster_replica_size_has_disk` previously
+            // indexed the in-memory map without checking `disabled`, so a
+            // managed cluster pinned to a disabled size still resolved its
+            // `disk` column from the real allocation. Writing disabled rows
+            // here preserves that behavior.
+            let internal_row = Row::pack_slice(&[
+                size.as_str().into(),
+                Datum::from(alloc.swap_enabled),
+                disk_bytes.into(),
+            ]);
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+                internal_row,
+                Diff::ONE,
+            ));
+
+            if alloc.disabled {
+                continue;
+            }
+
+            let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
+            let MemoryLimit(ByteSize(memory_bytes)) =
+                (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
+
+            let row = Row::pack_slice(&[
+                size.as_str().into(),
+                u64::cast_from(alloc.scale).into(),
+                u64::cast_from(alloc.workers).into(),
+                cpu_limit.as_nanocpus().into(),
+                memory_bytes.into(),
+                disk_bytes.into(),
+                (alloc.credits_per_hour).into(),
+            ]);
+
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_CLUSTER_REPLICA_SIZES,
+                row,
+                Diff::ONE,
+            ));
+        }
+
+        updates
+    }
+
+    fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {
+        let mut row = Row::default();
+        let flat_privileges: Vec<_> = privileges.all_values_owned().collect();
+        row.packer()
+            .try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: flat_privileges.len(),
+                }],
+                flat_privileges
+                    .into_iter()
+                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
+            )
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        row
+    }
+
+    pub fn pack_webhook_source_update(
+        &self,
+        item_id: CatalogItemId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let url = self
+            .try_get_webhook_url(&item_id)
+            .expect("webhook source should exist");
+        let url = url.to_string();
+        let name = &self.get_entry(&item_id).name().item;
+        let id_str = item_id.to_string();
+
+        BuiltinTableUpdate::row(
+            &*MZ_WEBHOOKS_SOURCES,
+            Row::pack_slice(&[
+                Datum::String(&id_str),
+                Datum::String(name),
+                Datum::String(&url),
+            ]),
+            diff,
+        )
+    }
+
+    pub fn pack_source_references_update(
+        &self,
+        source_references: &SourceReferences,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let source_id = source_references.source_id.to_string();
+        let updated_at = &source_references.updated_at;
+        source_references
+            .references
+            .iter()
+            .map(|reference| {
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                packer.extend([
+                    Datum::String(&source_id),
+                    reference
+                        .namespace
+                        .as_ref()
+                        .map(|s| Datum::String(s))
+                        .unwrap_or(Datum::Null),
+                    Datum::String(&reference.name),
+                    Datum::TimestampTz(
+                        mz_ore::now::to_datetime(*updated_at)
+                            .try_into()
+                            .expect("must fit"),
+                    ),
+                ]);
+                if reference.columns.len() > 0 {
+                    packer
+                        .try_push_array(
+                            &[ArrayDimension {
+                                lower_bound: 1,
+                                length: reference.columns.len(),
+                            }],
+                            reference.columns.iter().map(|col| Datum::String(col)),
+                        )
+                        .expect(
+                            "columns is 1 dimensional, and its length is used for the array length",
+                        );
+                } else {
+                    packer.push(Datum::Null);
+                }
+
+                BuiltinTableUpdate::row(&*MZ_SOURCE_REFERENCES, row, diff)
+            })
+            .collect()
+    }
+}

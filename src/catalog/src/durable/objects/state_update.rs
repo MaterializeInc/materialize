@@ -152,6 +152,11 @@ impl StateUpdate {
             replica_system_configurations,
             default_privileges,
             system_privileges,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            written_plans,
+            client_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
@@ -190,6 +195,21 @@ impl StateUpdate {
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let source_references = from_batch(source_references, StateUpdateKind::SourceReferences);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
+        let collection_compaction_bounds = from_batch(
+            collection_compaction_bounds,
+            StateUpdateKind::CollectionCompactionBound,
+        );
+        let maintained_read_requirements = from_batch(
+            maintained_read_requirements,
+            StateUpdateKind::MaintainedReadRequirement,
+        );
+        let client_incarnations =
+            from_batch(client_incarnations, StateUpdateKind::ClientIncarnation);
+        let written_plans = from_batch(written_plans, StateUpdateKind::WrittenPlan);
+        let client_read_requirements = from_batch(
+            client_read_requirements,
+            StateUpdateKind::ClientReadRequirement,
+        );
         let storage_collection_metadata = from_batch(
             storage_collection_metadata,
             StateUpdateKind::StorageCollectionMetadata,
@@ -218,6 +238,11 @@ impl StateUpdate {
             .chain(replica_system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(collection_compaction_bounds)
+            .chain(maintained_read_requirements)
+            .chain(client_incarnations)
+            .chain(written_plans)
+            .chain(client_read_requirements)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
             .chain(txn_wal_shard)
@@ -266,6 +291,20 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    CollectionCompactionBound(
+        proto::CollectionCompactionBoundKey,
+        proto::CollectionCompactionBoundValue,
+    ),
+    MaintainedReadRequirement(
+        proto::MaintainedReadRequirementKey,
+        proto::MaintainedReadRequirementValue,
+    ),
+    ClientIncarnation(proto::ClientIncarnationKey, proto::ClientIncarnationValue),
+    WrittenPlan(proto::WrittenPlanKey, proto::WrittenPlanValue),
+    ClientReadRequirement(
+        proto::ClientReadRequirementKey,
+        proto::ClientReadRequirementValue,
+    ),
     StorageCollectionMetadata(
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
@@ -305,6 +344,17 @@ impl StateUpdateKind {
             }
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::CollectionCompactionBound(_, _) => {
+                Some(CollectionType::CollectionCompactionBound)
+            }
+            StateUpdateKind::MaintainedReadRequirement(_, _) => {
+                Some(CollectionType::MaintainedReadRequirement)
+            }
+            StateUpdateKind::ClientIncarnation(_, _) => Some(CollectionType::ClientIncarnation),
+            StateUpdateKind::WrittenPlan(_, _) => Some(CollectionType::WrittenPlan),
+            StateUpdateKind::ClientReadRequirement(_, _) => {
+                Some(CollectionType::ClientReadRequirement)
+            }
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
                 Some(CollectionType::StorageCollectionMetadata)
             }
@@ -336,7 +386,7 @@ impl StateUpdateKindJson {
         serde_json::from_value::<D>(serde_value)
     }
 
-    fn kind(&self) -> &str {
+    pub(crate) fn kind(&self) -> &str {
         let row = self.0.row();
         let mut iter = row.unpack_first().unwrap_map().iter();
         let datum = iter
@@ -511,6 +561,34 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let source_references = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SourceReferences(
                     source_references,
+                ))
+            }
+            StateUpdateKind::CollectionCompactionBound(key, value) => {
+                let collection_compaction_bounds = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::CollectionCompactionBound(
+                    collection_compaction_bounds,
+                ))
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                let maintained_read_requirements = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::MaintainedReadRequirement(
+                    maintained_read_requirements,
+                ))
+            }
+            StateUpdateKind::ClientIncarnation(key, value) => {
+                let client_incarnations = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClientIncarnation(
+                    client_incarnations,
+                ))
+            }
+            StateUpdateKind::WrittenPlan(key, value) => {
+                let written_plans = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::WrittenPlan(written_plans))
+            }
+            StateUpdateKind::ClientReadRequirement(key, value) => {
+                let client_read_requirements = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClientReadRequirement(
+                    client_read_requirements,
                 ))
             }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
@@ -695,6 +773,28 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::SystemPrivilege(key, value) => {
                 proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value })
             }
+            StateUpdateKind::CollectionCompactionBound(key, value) => {
+                proto::StateUpdateKind::CollectionCompactionBound(
+                    proto::CollectionCompactionBound { key, value },
+                )
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                proto::StateUpdateKind::MaintainedReadRequirement(
+                    proto::MaintainedReadRequirement { key, value },
+                )
+            }
+            StateUpdateKind::ClientIncarnation(key, value) => {
+                proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value })
+            }
+            StateUpdateKind::WrittenPlan(key, value) => {
+                proto::StateUpdateKind::WrittenPlan(proto::WrittenPlan { key, value })
+            }
+            StateUpdateKind::ClientReadRequirement(key, value) => {
+                proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
+                    key,
+                    value,
+                })
+            }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 proto::StateUpdateKind::StorageCollectionMetadata(
                     proto::StorageCollectionMetadata { key, value },
@@ -778,6 +878,22 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value }) => {
                 StateUpdateKind::SystemPrivilege(key, value)
             }
+            proto::StateUpdateKind::CollectionCompactionBound(
+                proto::CollectionCompactionBound { key, value },
+            ) => StateUpdateKind::CollectionCompactionBound(key, value),
+            proto::StateUpdateKind::MaintainedReadRequirement(
+                proto::MaintainedReadRequirement { key, value },
+            ) => StateUpdateKind::MaintainedReadRequirement(key, value),
+            proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value }) => {
+                StateUpdateKind::ClientIncarnation(key, value)
+            }
+            proto::StateUpdateKind::WrittenPlan(proto::WrittenPlan { key, value }) => {
+                StateUpdateKind::WrittenPlan(key, value)
+            }
+            proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
+                key,
+                value,
+            }) => StateUpdateKind::ClientReadRequirement(key, value),
             proto::StateUpdateKind::StorageCollectionMetadata(
                 proto::StorageCollectionMetadata { key, value },
             ) => StateUpdateKind::StorageCollectionMetadata(key, value),
@@ -835,6 +951,33 @@ mod tests {
     use crate::durable::objects::FenceToken;
     use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
+
+    #[mz_ore::test]
+    fn written_plan_serialization() {
+        use mz_proto::RustType;
+
+        use crate::durable::objects::{DurableType, WrittenPlan};
+
+        let plan = WrittenPlan {
+            id: mz_repr::GlobalId::User(42),
+            build_version: "26.43.0-dev (build hash)".into(),
+            revision: uuid::Uuid::new_v4(),
+            replica_owner: None,
+        };
+        let (key, value) = plan.clone().into_key_value();
+        let update = StateUpdateKind::WrittenPlan(key.into_proto(), value.into_proto());
+        let raw = StateUpdateKindJson::from(update.clone());
+        assert_eq!(raw.kind(), "WrittenPlan");
+        let decoded = StateUpdateKind::try_from(raw).expect("decode written plan selection");
+        assert_eq!(decoded, update);
+        let memory: Option<crate::memory::objects::StateUpdateKind> = (&decoded)
+            .try_into()
+            .expect("convert written plan selection to memory update");
+        assert_eq!(
+            memory,
+            Some(crate::memory::objects::StateUpdateKind::WrittenPlan(plan))
+        );
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
