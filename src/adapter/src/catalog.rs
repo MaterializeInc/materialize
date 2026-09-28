@@ -286,6 +286,7 @@ pub struct ConnCatalog<'a> {
     portals: Option<&'a BTreeMap<String, Portal>>,
     notices_tx: UnboundedSender<AdapterNotice>,
     restrict_to_user_objects: bool,
+    compiler_metrics: Option<&'a crate::metrics::SqlCompilerMetrics>,
 }
 
 impl ConnCatalog<'_> {
@@ -1946,6 +1947,12 @@ impl ExprHumanizer for ConnCatalog<'_> {
 }
 
 impl SessionCatalog for ConnCatalog<'_> {
+    fn record_plan_operation(&self, operation: mz_sql::catalog::PlanOperation) {
+        if let Some(metrics) = self.compiler_metrics {
+            metrics.record(operation);
+        }
+    }
+
     fn active_role_id(&self) -> &RoleId {
         &self.role_id
     }
@@ -1963,7 +1970,7 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn get_portal_desc_unverified(&self, portal_name: &str) -> Option<&StatementDesc> {
         self.portals
-            .and_then(|portals| portals.get(portal_name).map(|portal| &portal.desc))
+            .and_then(|portals| portals.get(portal_name).map(|portal| portal.desc.as_ref()))
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
