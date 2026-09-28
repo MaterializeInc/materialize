@@ -3598,6 +3598,9 @@ WITH (
     ASSERT NOT NULL name,
     ASSERT NOT NULL updated_at
 ) AS
+-- `refs` projects away usage of the `data` column before the `columns` subquery.
+-- Without the CTE, each row would need a copy of `data` which contains all source
+-- references, leading to memory growing quadratically.
 WITH refs AS (
     SELECT
         mz_internal.parse_catalog_id(data->'key'->'source') AS source_id,

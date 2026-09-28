@@ -42,6 +42,13 @@ WHERE s.name = 'lg_counter'
 ----
 counter  counter  true
 
+# `updated_at` is when the references were last fetched.
+query B
+SELECT bool_and(updated_at BETWEEN now() - INTERVAL '1 hour' AND now() + INTERVAL '1 minute')
+FROM mz_internal.mz_source_references
+----
+true
+
 # Dropping a source retracts its references.
 statement ok
 DROP SOURCE lg_auction CASCADE
