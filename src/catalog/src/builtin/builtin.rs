@@ -9,6 +9,7 @@
 
 //! Constant builtin views exposing information about builtin objects.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use itertools::Itertools;
@@ -70,12 +71,45 @@ pub(super) fn builtins(
         Builtin::View(x) => Some(*x),
         _ => None,
     });
+    // `mz_builtin_columns` lists the columns of every builtin relation,
+    // `mz_builtin_views` and itself included, and `mz_builtin_views` lists it.
+    // Both need only the other's identity and declared desc, so the columns
+    // view is built in two steps around the views view.
+    let mut columns = builtin_columns_view();
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         view_iter,
-        [sources, materialized_views, tables, indexes],
+        [sources, materialized_views, tables, indexes, &columns],
     )));
+    let relations = builtin_items
+        .iter()
+        .filter_map(|b| match b {
+            Builtin::Table(t) => Some((t.schema, t.name, Cow::Borrowed(&t.desc), true)),
+            Builtin::Source(s) => Some((s.schema, s.name, Cow::Borrowed(&s.desc), false)),
+            Builtin::Log(l) => Some((l.schema, l.name, Cow::Owned(l.variant.desc()), false)),
+            Builtin::View(v) => Some((v.schema, v.name, Cow::Borrowed(&v.desc), false)),
+            Builtin::MaterializedView(mv) => {
+                Some((mv.schema, mv.name, Cow::Borrowed(&mv.desc), false))
+            }
+            Builtin::Type(_) | Builtin::Func(_) | Builtin::Index(_) | Builtin::Connection(_) => {
+                None
+            }
+        })
+        .chain(
+            [
+                sources,
+                materialized_views,
+                tables,
+                indexes,
+                views,
+                &columns,
+            ]
+            .into_iter()
+            .map(|v| (v.schema, v.name, Cow::Borrowed(&v.desc), false)),
+        );
+    columns.sql = Box::leak(builtin_columns_sql(relations).into_boxed_str());
+    let columns: &'static BuiltinView = Box::leak(Box::new(columns));
 
-    [sources, materialized_views, tables, indexes, views]
+    [sources, materialized_views, tables, indexes, columns, views]
         .into_iter()
         .map(Builtin::View)
 }
@@ -311,7 +345,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, is_retained_metrics_object)"
 /// declared keys rely on.
 fn make_builtin_views<'a>(
     iter: impl Iterator<Item = &'a BuiltinView>,
-    generated: [&BuiltinView; 4],
+    generated: [&BuiltinView; 5],
 ) -> BuiltinView {
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 
@@ -384,6 +418,70 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, definition, privileges, crea
 
     view.sql = Box::leak(sql.into_boxed_str());
     view
+}
+
+/// `mz_internal.mz_builtin_columns` without its SQL, which
+/// `builtin_columns_sql` generates.
+fn builtin_columns_view() -> BuiltinView {
+    BuiltinView {
+        name: "mz_builtin_columns",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_COLUMNS_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("relation_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("position", SqlScalarType::UInt64.nullable(false))
+            .with_column("nullable", SqlScalarType::Bool.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("default", SqlScalarType::String.nullable(true))
+            .with_column("type_oid", SqlScalarType::Oid.nullable(false))
+            .with_column("type_mod", SqlScalarType::Int32.nullable(false))
+            // No single column is unique, so the optimizer derives no key
+            // from the generated VALUES list (`verify_builtin_descs`
+            // enforces that the declared keys match).
+            .finish(),
+        column_comments: Default::default(),
+        sql: "",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// The SQL of `mz_internal.mz_builtin_columns`: one VALUES row per column of
+/// each `(schema, name, desc, is_table)` relation, as `mz_columns` presents
+/// it. Every column of a builtin table has the `NULL` default that
+/// `TableDataSource::TableWrites` gives it, and no other relation has one.
+fn builtin_columns_sql<'a>(
+    relations: impl Iterator<Item = (&'a str, &'a str, Cow<'a, RelationDesc>, bool)>,
+) -> String {
+    let values = relations
+        .flat_map(|(schema, relation, desc, is_table)| {
+            let schema = escaped_string_literal(schema);
+            let relation = escaped_string_literal(relation);
+            desc.iter()
+                .enumerate()
+                .map(|(i, (name, typ))| {
+                    let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                    format!(
+                        "({schema}, {relation}, {}, {}, {}, {}, {}, {}, {})",
+                        escaped_string_literal(name.as_str()),
+                        i + 1,
+                        typ.nullable,
+                        escaped_string_literal(pg_type.name()),
+                        if is_table { "'NULL'" } else { "NULL" },
+                        pg_type.oid(),
+                        pg_type.typmod(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .join(",");
+    format!(
+        "
+SELECT schema_name, relation_name, name, position::uint8 AS position, nullable, type, \"default\", type_oid::oid AS type_oid, type_mod
+FROM (VALUES {values}) AS v(schema_name, relation_name, name, position, nullable, type, \"default\", type_oid, type_mod)"
+    )
 }
 
 /// Convert the given list of [`MzAclItem`] to the equivalent SQL syntax.
