@@ -489,6 +489,7 @@ impl CatalogState {
         let mut catalog = state.for_session_metadata(session, session.retain_notice_transmitter());
         catalog.prepared_statements = Some(session.prepared_statements());
         catalog.portals = Some(session.portals());
+        catalog.compiler_metrics = Some(&session.metrics().sql_compiler);
         catalog
     }
 
@@ -515,6 +516,7 @@ impl CatalogState {
             portals: None,
             notices_tx,
             restrict_to_user_objects: session.vars().restrict_to_user_objects(),
+            compiler_metrics: None,
         }
     }
 
@@ -539,6 +541,7 @@ impl CatalogState {
             portals: None,
             notices_tx,
             restrict_to_user_objects: false,
+            compiler_metrics: None,
         }
     }
 
