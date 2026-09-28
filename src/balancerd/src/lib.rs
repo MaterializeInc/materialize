@@ -734,6 +734,14 @@ fn configured_watermarks(configs: &ConfigSet) -> Result<Option<Watermarks>, Stri
     ))
 }
 
+/// One effective watermark as a gauge value, -1 when the watermarks are off.
+fn watermark_metric(configs: &ConfigSet, pick: fn(Watermarks) -> usize) -> i64 {
+    configured_watermarks(configs)
+        .ok()
+        .flatten()
+        .map_or(-1, |w| i64::try_from(pick(w)).unwrap_or(i64::MAX))
+}
+
 impl ConnectionLimiter {
     fn new(registry: &MetricsRegistry, configs: ConfigSet) -> Arc<Self> {
         let rejected = registry.register(metric!(
@@ -766,24 +774,27 @@ impl ConnectionLimiter {
                 move || i64::from(accepting.load(Ordering::Relaxed))
             },
         );
-        let watermark_gauge = |name, help, pick: fn(Watermarks) -> usize| -> ComputedIntGauge {
-            let configs = configs.clone();
-            registry.register_computed_gauge(metric!(name: name, help: help), move || {
-                configured_watermarks(&configs)
-                    .ok()
-                    .flatten()
-                    .map_or(-1, |w| i64::try_from(pick(w)).unwrap_or(i64::MAX))
-            })
-        };
-        let high_watermark = watermark_gauge(
-            "mz_balancer_connection_high_watermark",
-            "Connections at which balancerd leaves load balancer rotation, -1 if disabled.",
-            |w| w.high,
+        // The metrics catalog is generated from `metric!` literals, so each gauge is spelled out.
+        let high_watermark = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_high_watermark",
+                help: "Connections at which balancerd leaves load balancer rotation, -1 if disabled.",
+            ),
+            {
+                let configs = configs.clone();
+                move || watermark_metric(&configs, |w| w.high)
+            },
         );
-        let low_watermark = watermark_gauge(
-            "mz_balancer_connection_low_watermark",
-            "Connections below which balancerd returns to load balancer rotation, -1 if disabled.",
-            |w| w.low,
+        let low_watermark = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_low_watermark",
+                help: "Connections below which balancerd returns to load balancer rotation, -1 if \
+                disabled.",
+            ),
+            {
+                let configs = configs.clone();
+                move || watermark_metric(&configs, |w| w.low)
+            },
         );
         Arc::new(ConnectionLimiter {
             configs,
