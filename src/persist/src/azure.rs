@@ -64,8 +64,11 @@ const AZURE_FEDERATED_TOKEN_FILE: &str = "AZURE_FEDERATED_TOKEN_FILE";
 /// The account name of the Azurite emulator.
 const EMULATOR_ACCOUNT: &str = "devstoreaccount1";
 
-/// The publicly documented account key of the Azurite emulator's
-/// [EMULATOR_ACCOUNT].
+/// The account key of the Azurite emulator's [EMULATOR_ACCOUNT].
+///
+/// NOTE: This is not a secret. Azurite ships with this key, Microsoft
+/// publishes it in the Azurite documentation, and it grants access only to
+/// local emulator instances.
 const EMULATOR_ACCOUNT_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
@@ -800,12 +803,12 @@ impl Blob for AzureBlob {
         let Some(first) = download_range(&blob, 0, None).await? else {
             return Ok(None);
         };
-        let content_length = download_total_len(&first.headers);
+        // Without the blob's length there is no telling which ranges remain,
+        // and returning only the first would silently truncate the blob.
+        let content_length = download_total_len(&first.headers)
+            .ok_or_else(|| anyhow!("azure blob get error: no length for blob {path}"))?;
         // Pin the remaining ranges to the version the first range read.
         let etag = first.properties.etag.clone();
-        let partition_size = u64::cast_from(GET_PARTITION_SIZE.get());
-        let offsets =
-            (partition_size..content_length.unwrap_or(0)).step_by(GET_PARTITION_SIZE.get());
 
         let mut segments = SegmentedBytes::new();
         let mut total_len: u64 = 0;
@@ -813,6 +816,10 @@ impl Blob for AzureBlob {
             total_len += u64::cast_from(part.len());
             segments.push(part);
         }
+        // Continue after the bytes the first response delivered rather than
+        // after one partition, so a response that ignored the requested range
+        // and returned more is not read twice.
+        let offsets = (total_len..content_length).step_by(GET_PARTITION_SIZE.get());
         let mut rest = futures_util::stream::iter(offsets)
             .map(|offset| {
                 let (blob, etag) = (&blob, etag.clone());
@@ -836,7 +843,7 @@ impl Blob for AzureBlob {
 
         // Report if the content-length header didn't match the number of
         // bytes we read from the network.
-        if content_length != Some(total_len) {
+        if content_length != total_len {
             self.metrics.get_invalid_resp.inc();
         }
 
@@ -991,17 +998,8 @@ mod tests {
         }
     }
 
-    /// `HedgedBlob` cancels the losing leg of a race by dropping its get, so
-    /// dropping a get must drop every request it has in flight.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // too slow
-    async fn azure_blob_get_drop_cancels_requests() {
-        let started = Arc::new(AtomicUsize::new(0));
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let http_client = HangingRangesClient {
-            started: Arc::clone(&started),
-            dropped: Arc::clone(&dropped),
-        };
+    /// Returns an [AzureBlob] whose requests `http_client` serves.
+    fn mock_blob(http_client: impl HttpClient + 'static) -> AzureBlob {
         let client = BlobContainerClient::new(
             Url::parse("https://account.blob.core.windows.net/container").expect("valid url"),
             None,
@@ -1014,11 +1012,90 @@ mod tests {
             }),
         )
         .expect("valid client");
-        let blob = AzureBlob {
+        AzureBlob {
             metrics: S3BlobMetrics::new(&MetricsRegistry::new()),
             client: Arc::new(client),
             prefix: "prefix".to_string(),
+        }
+    }
+
+    /// An [HttpClient] that ignores the requested range and answers every
+    /// request with the whole blob of three partitions.
+    #[derive(Debug)]
+    struct FullBodyClient {
+        /// Whether responses carry a `Content-Length`.
+        with_length: bool,
+        /// Number of requests served.
+        requests: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HttpClient for FullBodyClient {
+        async fn execute_request(
+            &self,
+            _request: &Request,
+        ) -> azure_core::Result<AsyncRawResponse> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            let len = 3 * GET_PARTITION_SIZE.get();
+            let mut headers = Headers::new();
+            if self.with_length {
+                headers.insert("content-length", len.to_string());
+            }
+            headers.insert("etag", "\"v1\"");
+            Ok(AsyncRawResponse::from_bytes(
+                StatusCode::Ok,
+                headers,
+                vec![7u8; len],
+            ))
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn azure_blob_get_full_body_response() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let blob = mock_blob(FullBodyClient {
+            with_length: true,
+            requests: Arc::clone(&requests),
+        });
+        let value = blob
+            .get("key")
+            .await
+            .expect("get")
+            .expect("blob exists")
+            .into_contiguous();
+        // Compared piecewise so a failure does not print megabytes.
+        assert_eq!(value.len(), 3 * GET_PARTITION_SIZE.get());
+        assert!(value.iter().all(|b| *b == 7), "unexpected blob contents");
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(blob.metrics.get_invalid_resp.get(), 0);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn azure_blob_get_without_length_fails() {
+        let blob = mock_blob(FullBodyClient {
+            with_length: false,
+            requests: Arc::new(AtomicUsize::new(0)),
+        });
+        let Err(err) = blob.get("key").await else {
+            panic!("get without length succeeded");
         };
+        assert!(err.to_string().contains("no length"), "{err}");
+    }
+
+    /// `HedgedBlob` cancels the losing leg of a race by dropping its get, so
+    /// dropping a get must drop every request it has in flight.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn azure_blob_get_drop_cancels_requests() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let http_client = HangingRangesClient {
+            started: Arc::clone(&started),
+            dropped: Arc::clone(&dropped),
+        };
+        let blob = mock_blob(http_client);
 
         // Drive the get until both hanging partitions are requested, then
         // drop it.
