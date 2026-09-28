@@ -625,8 +625,7 @@ impl Controller {
             }
         }
 
-        // Flush queued deletes before bootstrap allows a DDL-triggered restart.
-        self.orchestrator.list_services().await?;
+        self.orchestrator.flush().await?;
         Ok(())
     }
 

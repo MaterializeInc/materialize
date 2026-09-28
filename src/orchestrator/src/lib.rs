@@ -68,10 +68,11 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
-    ///
-    /// Waits for preceding ensure and drop requests to be processed, but not for
-    /// the affected processes to start or terminate.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
+
+    /// Waits for previously queued requests to be processed, not for affected
+    /// processes to start or terminate.
+    async fn flush(&self) -> Result<(), anyhow::Error>;
 
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;

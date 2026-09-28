@@ -266,6 +266,9 @@ enum WorkerCommand {
         namespace: String,
         result_tx: oneshot::Sender<Vec<String>>,
     },
+    Flush {
+        result_tx: oneshot::Sender<()>,
+    },
     FetchServiceMetrics {
         name: String,
         info: ServiceInfo,
@@ -1315,6 +1318,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         Ok(list)
     }
 
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
             let process_id = pod.name_any().split('-').next_back().unwrap().parse()?;
@@ -1506,6 +1516,9 @@ impl OrchestratorWorker {
             } => {
                 let result = retry(|| self.list_services(&namespace), "ListServices").await;
                 let _ = result_tx.send(result);
+            }
+            Flush { result_tx } => {
+                let _ = result_tx.send(());
             }
             FetchServiceMetrics {
                 name,
