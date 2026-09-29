@@ -179,14 +179,7 @@ impl TimeoutConfig {
     /// Apply relevant timeout configurations to a `mysql_async::OptsBuilder`.
     pub fn apply_to_opts(&self, mut opts_builder: OptsBuilder) -> Result<OptsBuilder, MySqlError> {
         if let Some(tcp_keepalive) = self.tcp_keepalive {
-            opts_builder = opts_builder.tcp_keepalive(Some(
-                u32::try_from(tcp_keepalive.as_millis()).map_err(|e| {
-                    MySqlError::InvalidClientConfig(format!(
-                        "invalid tcp_keepalive duration: {}",
-                        e
-                    ))
-                })?,
-            ));
+            opts_builder = opts_builder.tcp_keepalive(Some(tcp_keepalive));
         }
         Ok(opts_builder)
     }
