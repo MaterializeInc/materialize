@@ -1240,7 +1240,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
-        let pod_template_hash = format!("{:x}", hasher.finalize());
+        let pod_template_hash = hex::encode(hasher.finalize());
         pod_annotations.insert(
             POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
             pod_template_hash.clone(),

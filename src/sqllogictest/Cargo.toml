@@ -17,6 +17,7 @@ clap.workspace = true
 dec.workspace = true
 fallible-iterator.workspace = true
 futures.workspace = true
+hex.workspace = true
 itertools.workspace = true
 junit-report.workspace = true
 maplit.workspace = true

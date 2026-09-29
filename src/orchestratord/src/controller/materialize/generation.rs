@@ -458,7 +458,7 @@ impl Resources {
     pub fn generate_hash(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(&serde_json::to_string(self).unwrap());
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     }
 }
 

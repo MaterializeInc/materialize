@@ -17,6 +17,7 @@ axum-server.workspace = true
 clap = { workspace = true, features = ["env"] }
 futures.workspace = true
 gcp_auth.workspace = true
+hex.workspace = true
 http.workspace = true
 humantime.workspace = true
 k8s-controller.workspace = true
