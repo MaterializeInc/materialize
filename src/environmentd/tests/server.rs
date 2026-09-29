@@ -2185,6 +2185,63 @@ async fn test_termination_races() {
         .expect("coordinator did not survive an abandoned failed startup");
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_session_owned_completion_after_role_drop() {
+    use mz_adapter::session::{EndTransactionAction, TransactionStatus};
+    use mz_postgres_util::{batch_execute, sql};
+
+    let server = test_util::TestHarness::default().start().await;
+    let admin = server.connect().await.unwrap();
+    batch_execute(&admin, sql!("CREATE ROLE completion_reader"))
+        .await
+        .unwrap();
+    let adapter = server.inner.adapter_client();
+    let session = adapter.new_session(
+        SessionConfig {
+            conn_id: adapter.new_conn_id().unwrap(),
+            uuid: Uuid::new_v4(),
+            user: "completion_reader".into(),
+            client_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            external_metadata_rx: None,
+            helm_chart_version: None,
+            authenticator_kind: AuthenticatorKind::None,
+            groups: None,
+        },
+        Authenticated,
+    );
+    let mut session = adapter.startup(session).await.unwrap();
+    session.start_transaction(Some(1)).unwrap();
+    let stmt = mz_sql::parse::parse("SELECT 1").unwrap().pop().unwrap().ast;
+    session
+        .declare("completion_portal".into(), stmt, "SELECT 1".into())
+        .await
+        .unwrap();
+    batch_execute(&admin, sql!("DROP ROLE completion_reader"))
+        .await
+        .unwrap();
+
+    let before = adapter.metrics().frontend_transaction_completions.get();
+    let error = session
+        .end_transaction(EndTransactionAction::Commit)
+        .await
+        .unwrap_err();
+    assert_contains!(error.to_string(), "concurrently dropped");
+    assert_eq!(
+        adapter.metrics().frontend_transaction_completions.get(),
+        before + 1
+    );
+    assert!(matches!(
+        session.session().transaction(),
+        TransactionStatus::Default
+    ));
+    assert!(
+        session
+            .session()
+            .get_portal_unverified("completion_portal")
+            .is_none()
+    );
+}
+
 #[mz_ore::test]
 fn test_internal_console_proxy() {
     let server = test_util::TestHarness::default().start_blocking();

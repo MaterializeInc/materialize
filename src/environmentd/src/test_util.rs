@@ -242,6 +242,10 @@ impl Default for TestHarness {
                     "enable_prepared_query_templates".to_string(),
                     "true".to_string(),
                 ),
+                (
+                    "enable_frontend_transaction_completion".to_string(),
+                    "true".to_string(),
+                ),
                 ("log_filter".to_string(), "error".to_string()),
                 (
                     ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),

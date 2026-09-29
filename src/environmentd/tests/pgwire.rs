@@ -2670,6 +2670,200 @@ fn test_pgtest_transactions() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Exercise simple-query protocol with fixed SQL literals.
+fn test_session_owned_read_completion() {
+    for enabled in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default(
+                "enable_frontend_transaction_completion".into(),
+                enabled.to_string(),
+            )
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("CREATE TABLE completion_read (v int)")
+            .unwrap();
+        client
+            .batch_execute("INSERT INTO completion_read VALUES (42), (7)")
+            .unwrap();
+        client
+            .batch_execute("CREATE DEFAULT INDEX ON completion_read")
+            .unwrap();
+        let counts = || {
+            // The coordinator records a handler's duration after sending its response.
+            // A subsequent command ensures the preceding commit sample is visible.
+            server
+                .runtime()
+                .block_on(server.inner().adapter_client().get_system_vars());
+            let metrics = server.metrics_registry().gather();
+            let local = metrics
+                .iter()
+                .find(|m| m.name() == "mz_frontend_transaction_completions_total")
+                .unwrap()
+                .get_metric()[0]
+                .get_counter()
+                .value();
+            let commits: u64 = metrics
+                .iter()
+                .filter(|m| m.name() == "mz_slow_message_handling")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    m.get_label()
+                        .iter()
+                        .any(|l| l.name() == "message_kind" && l.value() == "command-commit")
+                })
+                .map(|m| m.get_histogram().get_sample_count())
+                .sum();
+            let template_hits: u64 = metrics
+                .iter()
+                .filter(|m| m.name() == "mz_prepared_query_events_total")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    m.get_label()
+                        .iter()
+                        .any(|l| l.name() == "event" && l.value() == "template_hit")
+                })
+                .map(|m| u64::cast_lossy(m.get_counter().value()))
+                .sum();
+            (local, commits, template_hits)
+        };
+
+        // Warm up the collection and protocol paths before measuring completion routing.
+        client
+            .simple_query("SELECT v FROM completion_read WHERE v = 42")
+            .unwrap();
+        let stmt = client
+            .prepare("SELECT v FROM completion_read WHERE v = $1")
+            .unwrap();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&42_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            42
+        );
+        let before = counts();
+        for key in [42_i32, 7, 42, 7] {
+            let rows = client
+                .simple_query("SELECT v FROM completion_read WHERE v = 42")
+                .unwrap();
+            let values: Vec<_> = rows
+                .iter()
+                .filter_map(|message| match message {
+                    SimpleQueryMessage::Row(row) => Some(row.get(0)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values, vec![Some("42")]);
+            assert_eq!(
+                client.query_one(&stmt, &[&key]).unwrap().get::<_, i32>(0),
+                key
+            );
+        }
+        let after = counts();
+        assert_eq!(
+            after.2,
+            before.2 + 4,
+            "changing binds must use the template"
+        );
+        if enabled {
+            assert!(
+                after.0 >= before.0 + 8.0,
+                "reads must finish in the session"
+            );
+            assert_eq!(after.1, before.1, "reads must not send coordinator commits");
+        } else {
+            assert_eq!(after.0, before.0, "disabled path must use the coordinator");
+            assert!(after.1 >= before.1 + 8);
+        }
+
+        assert!(client.simple_query("SELECT 1 / 0").is_err());
+        assert_eq!(
+            client.query_one("SELECT 42", &[]).unwrap().get::<_, i32>(0),
+            42
+        );
+        client.batch_execute("BEGIN").unwrap();
+        let before = counts();
+        assert_eq!(
+            client.query_one(&stmt, &[&7_i32]).unwrap().get::<_, i32>(0),
+            7
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+        let after = counts();
+        assert_eq!(
+            after.2,
+            before.2 + 1,
+            "explicit transactions can reuse plans"
+        );
+        assert_eq!(
+            after.0, before.0,
+            "transaction read holds require coordinator retirement"
+        );
+
+        client
+            .batch_execute("PREPARE completion_sql AS SELECT v FROM completion_read WHERE v = $1")
+            .unwrap();
+        client.simple_query("EXECUTE completion_sql(42)").unwrap();
+        let before = counts();
+        for key in [7, 42] {
+            let rows = client
+                .simple_query(&format!("EXECUTE completion_sql({key})"))
+                .unwrap();
+            let values: Vec<_> = rows
+                .iter()
+                .filter_map(|message| match message {
+                    SimpleQueryMessage::Row(row) => {
+                        Some(row.get(0).unwrap().parse::<i32>().unwrap())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values, vec![key]);
+        }
+        let after = counts();
+        assert_eq!(after.2, before.2 + 2, "SQL EXECUTE must reuse the template");
+        if enabled {
+            assert!(after.0 >= before.0 + 2.0);
+            assert_eq!(after.1, before.1);
+        } else {
+            assert_eq!(after.0, before.0);
+            assert!(after.1 >= before.1 + 2);
+        }
+        let before = counts();
+        client
+            .simple_query("EXECUTE completion_sql(42); EXECUTE completion_sql(7)")
+            .unwrap();
+        let after = counts();
+        assert_eq!(after.2, before.2 + 2);
+        assert_eq!(after.0, before.0, "shared read holds cannot retire locally");
+        assert!(
+            after.1 > before.1,
+            "implicit multi-statement transaction must reach coordinator completion"
+        );
+        client
+            .batch_execute("BEGIN; INSERT INTO completion_read VALUES (7); COMMIT")
+            .unwrap();
+        assert_eq!(
+            client
+                .query("SELECT v FROM completion_read", &[])
+                .unwrap()
+                .len(),
+            3
+        );
+        client
+            .batch_execute("SET LOCAL application_name = 'local'; SELECT 1")
+            .unwrap();
+        assert_ne!(
+            client
+                .query_one("SHOW application_name", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            "local"
+        );
+    }
+}
+
+#[mz_ore::test]
 fn test_pgtest_vars() {
     pg_test_inner(Path::new("../../test/pgtest/vars.pt"), false);
 }
