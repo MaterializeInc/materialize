@@ -123,10 +123,6 @@ skip = [
     # Used by tokio-postgres (MaterializeInc/rust-postgres fork)
     { name = "phf", version = "0.13.1" },
     { name = "phf_shared", version = "0.13.1" },
-    # Used by junit-report
-    { name = "quick-xml", version = "0.31.0" },
-    # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
-    { name = "quick-xml", version = "0.41.0" },
     # Used by iceberg, iceberg-catalog-rest, libduckdb-sys (build), segment, and
     # the iceberg connection code in mz-storage-types, whose client crosses into
     # iceberg's API.
@@ -348,11 +344,6 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
-    # `quick-xml` pulled in as transitive dependency: Quadratic run time when
-    # checking a start tag for duplicate attribute names. Not used to parse
-    # untrusted XML.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
     # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
     "RUSTSEC-2026-0253",
     # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our
