@@ -27,11 +27,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Thread;
 
-use differential_dataflow::operators::arrange::Arranged;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::progress::Antichain;
+use timely::worker::Worker;
 
-use crate::shared_trace::{PublishArrangement, Published, SharedErrsHandle, SharedOksHandle};
+use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
@@ -100,7 +100,7 @@ impl ArrangementSharingRegistry {
     ///
     /// Whichever side touches `(id, worker_index)` first creates the slot; the other observes and
     /// shares the same `Arc`, so a point a reader already imported is backed in place by a later
-    /// [`crate::shared_trace::PublishArrangement::adopt`] rather than being overwritten by a second,
+    /// [`crate::shared_trace::adopt_trace`] rather than being overwritten by a second,
     /// disconnected arrangement. Grows the slot vector to `peers` when `id` is not yet present.
     ///
     /// An unbacked point carries no data, so this does not `notify`: there is nothing yet for a
@@ -124,8 +124,8 @@ impl ArrangementSharingRegistry {
         }))
     }
 
-    /// Publishes index `id`'s `oks` and `errs` arrangements on their worker and wakes readers
-    /// waiting on `id`.
+    /// Publishes index `id`'s `oks` and `errs` traces and wakes readers waiting on `id`. `worker`
+    /// must be the worker that maintains the traces.
     ///
     /// Adopts the slot for `id` rather than inserting a fresh one, so a placeholder a reader has
     /// already imported is backed in place. Each half signals its own seal: a peek whose result is
@@ -135,19 +135,23 @@ impl ArrangementSharingRegistry {
     /// Every id gets its own publication point, including an index that re-exports another's
     /// arrangement. The point's writer frontier and standing hold are per collection, and the
     /// controller compacts two collections independently even when they share a trace.
-    pub(crate) fn publish<'scope>(
+    pub(crate) fn publish(
         &self,
         id: GlobalId,
-        oks: &Arranged<'scope, RowRowAgent<Timestamp, Diff>>,
-        errs: &Arranged<'scope, ErrAgent<Timestamp, Diff>>,
+        worker: &Worker,
+        oks: &RowRowAgent<Timestamp, Diff>,
+        errs: &ErrAgent<Timestamp, Diff>,
     ) {
-        let scope = oks.stream.scope();
-        let worker_index = scope.index();
-        let slot = self.get_or_create(id, worker_index, scope.peers());
+        let worker_index = worker.index();
+        let slot = self.get_or_create(id, worker_index, worker.peers());
         let registry = self.clone();
-        oks.adopt(&slot.oks, move || registry.notify(id, worker_index));
+        adopt_trace(oks, worker, &slot.oks, move || {
+            registry.notify(id, worker_index)
+        });
         let registry = self.clone();
-        errs.adopt(&slot.errs, move || registry.notify(id, worker_index));
+        adopt_trace(errs, worker, &slot.errs, move || {
+            registry.notify(id, worker_index)
+        });
         self.notify(id, worker_index);
     }
 

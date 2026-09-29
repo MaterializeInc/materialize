@@ -24,7 +24,7 @@ use timely::progress::Antichain;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
-use crate::shared_trace::PublishArrangement;
+use crate::shared_trace::adopt_trace;
 use crate::shared_trace::tests::SharedReaderExt;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
@@ -71,7 +71,7 @@ fn publish_index_into(registry: &ArrangementSharingRegistry, id: GlobalId, rows:
                 ErrSpine<_, _>,
             >("test errs");
 
-            registry_in.publish(id, &oks, &errs);
+            registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
 
             for (k, v) in rows {
                 oks_input.update((k, v), Diff::ONE);
@@ -359,7 +359,7 @@ fn publish_join_input(
             ErrSpine<_, _>,
         >("input errs");
 
-        registry_in.publish(id, &oks, &errs);
+        registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
         (
             oks_input,
             errs_input,
@@ -517,7 +517,7 @@ fn join_over_imported_arrangements_matches_direct() {
 ///
 /// Mirrors [`publish_join_input`], but instead of minting a fresh publication and registering it,
 /// it installs its publisher into the caller-provided `point` via
-/// [`PublishArrangement::adopt`]. The point may already back live importers (see
+/// [`adopt_trace`]. The point may already back live importers (see
 /// [`join_over_point_adopted_late_matches_direct`]). Adoption fills their queues from the
 /// same publisher iteration. Only the `oks` arrangement is adopted, since the test joins on `oks`.
 fn adopt_join_input(
@@ -538,7 +538,7 @@ fn adopt_join_input(
         >("adopt oks");
         // Attach this arrangement's trace to the pre-existing point, rather than minting a fresh
         // one. Importers already registered against it (built before this call) are seeded now.
-        PublishArrangement::adopt(&oks, point, || {});
+        adopt_trace(&oks.trace, oks.stream.scope().worker(), point, || {});
         (oks_input, oks.trace.clone())
     });
 
@@ -746,8 +746,8 @@ fn bare_handle_read_upper_advances_cross_thread() {
                     >("spike errs");
 
                     let slot = publisher_registry.get_or_create(id, worker_index, peers);
-                    PublishArrangement::adopt(&oks, &slot.oks, || {});
-                    PublishArrangement::adopt(&errs, &slot.errs, || {});
+                    adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
+                    adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
                     publisher_registry.notify(id, worker_index);
                     (
                         oks_input,
