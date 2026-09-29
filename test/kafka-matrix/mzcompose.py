@@ -56,14 +56,7 @@ CONFLUENT_PLATFORM_VERSIONS = [
 ]
 
 SERVICES = [
-    Materialized(
-        default_replication_factor=2,
-        # Curated metric sinks make the first catalog status queries after a
-        # restart take minutes on 4-CPU agents, which times out this suite.
-        # The flag defaults off in production.
-        # TODO(SQL-730): remove once the post-restart slowdown is fixed.
-        additional_system_parameter_defaults={"enable_metric_sink": "false"},
-    ),
+    Materialized(default_replication_factor=2),
     # Occasional timeouts in CI with 60s timeout
     Testdrive(
         volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="120s"
