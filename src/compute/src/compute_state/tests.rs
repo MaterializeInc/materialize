@@ -41,7 +41,7 @@ use crate::arrangement::manager::PaddedTrace;
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
-use crate::shared_trace::PublishArrangement;
+use crate::shared_trace::adopt_trace;
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
 #[mz_ore::test]
@@ -304,8 +304,8 @@ fn publish_kv_index_into(
             >("test errs");
 
             let slot = registry_in.get_or_create(id, 0, 1);
-            PublishArrangement::adopt(&oks, &slot.oks, || {});
-            PublishArrangement::adopt(&errs, &slot.errs, || {});
+            adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
+            adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
             registry_in.notify(id, 0);
 
             for (k, v) in rows {
@@ -510,8 +510,8 @@ fn interactive_shared_peek_defers_until_sealed() {
                 >("test errs");
 
                 let slot = registry_in.get_or_create(id, worker_index, peers);
-                PublishArrangement::adopt(&oks, &slot.oks, || {});
-                PublishArrangement::adopt(&errs, &slot.errs, || {});
+                adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
+                adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
                 registry_in.notify(id, worker_index);
                 (
                     oks_input,
@@ -647,8 +647,8 @@ fn publish_index_current_worker(
         >("test errs");
 
         let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
-        PublishArrangement::adopt(&oks, &slot.oks, || {});
-        PublishArrangement::adopt(&errs, &slot.errs, || {});
+        adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
+        adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
         registry_in.notify(id, scope.index());
         (
             oks_input,
@@ -819,8 +819,8 @@ fn interactive_peek_resolves_on_seal_via_note_frontier() {
                 >("test errs");
 
                 let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
-                PublishArrangement::adopt(&oks, &slot.oks, || {});
-                PublishArrangement::adopt(&errs, &slot.errs, || {});
+                adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
+                adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
                 registry_in.notify(id, scope.index());
                 (
                     oks_input,
