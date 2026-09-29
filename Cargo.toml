@@ -471,10 +471,11 @@ rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ss
 regex = "1.12.3"
 regex-syntax = "0.8.10"
 reqsign-core = "3.3.0"
-reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "default-tls", "http2", "json", "native-tls-vendored", "stream"] }
-# The Azure SDK implements its HTTP transport for reqwest 0.13 only, while
-# iceberg's public API still uses reqwest 0.12.
-reqwest-0-13 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["charset", "http2", "native-tls-vendored", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "charset", "cookies", "http2", "json", "native-tls-vendored", "query", "stream", "system-proxy"] }
+# The iceberg fork's public API (`with_client`, `OAuth2TokenProvider`) takes
+# reqwest 0.12 types, so the iceberg connection code in mz-storage-types uses
+# this alias.
+reqwest-0-12 = { package = "reqwest", version = "0.12.28", default-features = false, features = ["charset", "http2", "json", "native-tls-vendored"] }
 reqwest-middleware = { version = "0.5.2", features = ["json"] }
 reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
