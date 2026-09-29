@@ -108,7 +108,7 @@ skip = [
     { name = "tungstenite", version = "0.29.0" },
     # libduckdb-sys still pulls 6.
     { name = "zip", version = "6.0.0" },
-    # aws-sdk-s3 is on 0.18, while launchdarkly-server-sdk, mysql_async, and mz-frontegg-auth still use 0.16.
+    # launchdarkly-server-sdk still uses 0.16, up to its latest release 3.3.
     { name = "lru", version = "0.16.3" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
@@ -346,7 +346,7 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
-    # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
+    # `launchdarkly-server-sdk` requires `lru ^0.16.3` in its latest release.
     "RUSTSEC-2026-0253",
     # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our
     # `h2 0.4` is patched, but `h2 0.3` is also in the tree via `hyper 0.14`,
