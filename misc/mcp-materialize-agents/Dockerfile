@@ -9,7 +9,7 @@
 
 # Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
 # digest for security fixes.
-FROM python:3.13-alpine@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
+FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01
 
 RUN pip install uv
 
