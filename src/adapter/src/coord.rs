@@ -366,7 +366,11 @@ pub struct ArrangementSizeRecord {
 
 #[derive(Debug)]
 pub enum Message {
-    Command(OpenTelemetryContext, Command),
+    Command(
+        OpenTelemetryContext,
+        Command,
+        mz_ore::metrics::phase::PhaseGuard,
+    ),
     ControllerReady {
         controller: ControllerReadiness,
     },
@@ -503,7 +507,7 @@ impl Message {
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
         match self {
-            Message::Command(_, msg) => match msg {
+            Message::Command(_, msg, _) => match msg {
                 Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
                 Command::Startup { .. } => "command-startup",
                 Command::Execute { .. } => "command-execute",
@@ -4173,7 +4177,11 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
+        mut cmd_rx: mpsc::UnboundedReceiver<(
+            OpenTelemetryContext,
+            Command,
+            mz_ore::metrics::phase::PhaseGuard,
+        )>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
@@ -4339,7 +4347,7 @@ impl Coordinator {
                             break;
                         } else {
                             messages.extend(cmd_messages.drain(..).map(
-                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
+                                |(otel_ctx, cmd, queued)| Message::Command(otel_ctx, cmd, queued),
                             ));
                         }
                     },
@@ -4443,6 +4451,7 @@ impl Coordinator {
                                     session,
                                     ..
                                 },
+                                _,
                             ) => session
                                 .get_portal_unverified(portal_name)
                                 .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
@@ -4451,7 +4460,10 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(msg).instrument(span.clone()).await;
+                    let phase = self.metrics.qps.coordinator_service.clone();
+                    phase
+                        .time(self.handle_message(msg).instrument(span.clone()))
+                        .await;
                     let duration = start.elapsed();
 
                     self.metrics
