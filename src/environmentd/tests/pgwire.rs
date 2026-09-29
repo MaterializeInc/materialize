@@ -1141,6 +1141,276 @@ fn test_prepared_indexed_as_of_changes() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Synchronize a warm execution with cluster teardown.
+fn test_prepared_indexed_drop_after_registration() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    struct ResumePeek(mpsc::SyncSender<()>);
+    impl Drop for ResumePeek {
+        fn drop(&mut self) {
+            fail::remove("peek_after_register_before_issue");
+            let _ = self.0.try_send(());
+        }
+    }
+
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_race_rows (id int, value int)",
+            "INSERT INTO prepared_race_rows VALUES (1, 11), (2, 22)",
+            "CREATE CLUSTER prepared_race SIZE 'scale=1,workers=1'",
+            "CREATE INDEX prepared_race_id IN CLUSTER prepared_race ON prepared_race_rows (id)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.batch_execute("SET cluster = prepared_race").unwrap();
+        let stmt = client
+            .prepare("SELECT value FROM prepared_race_rows WHERE id = $1")
+            .unwrap();
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        let hits = || -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_prepared_query_events_total")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|label| label.name() == "event" && label.value() == "template_hit")
+                })
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum()
+        };
+        let before = hits();
+        let (reached_tx, reached_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        let armed = AtomicBool::new(true);
+        let resume_rx = Mutex::new(resume_rx);
+        let failpoint = "peek_after_register_before_issue";
+        fail::cfg_callback(failpoint, move || {
+            if armed.swap(false, Ordering::SeqCst) {
+                // The DDL needs this runtime too. Yield the worker before parking.
+                tokio::task::block_in_place(|| {
+                    let _ = reached_tx.send(());
+                    let _ = resume_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(30));
+                });
+            }
+        })
+        .unwrap();
+        let _resume = ResumePeek(resume_tx.clone());
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = client.query_one(&stmt, &[&2_i32]);
+            let _ = done_tx.send((client, stmt, result));
+        });
+        reached_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("execution reached registration");
+        assert_eq!(
+            hits() - before,
+            u64::from(reuse),
+            "the racing execution must be a warm template hit"
+        );
+        admin
+            .batch_execute("DROP CLUSTER prepared_race CASCADE")
+            .unwrap();
+        fail::remove(failpoint);
+        resume_tx.send(()).unwrap();
+        let (mut client, stmt, result) = done_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("dropped-cluster execution completed");
+        let error = result.unwrap_db_error();
+        assert_eq!(error.code(), &SqlState::UNDEFINED_OBJECT, "{error}");
+        for sql in [
+            "CREATE CLUSTER prepared_race SIZE 'scale=1,workers=1'",
+            "CREATE INDEX prepared_race_id IN CLUSTER prepared_race ON prepared_race_rows (id)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        assert_eq!(
+            client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
+        let before = hits();
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        assert_eq!(hits() - before, u64::from(reuse));
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Retain one prepared handle across transactions and isolation changes.
+fn test_prepared_indexed_isolation_and_writes() {
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .with_system_parameter_default("enable_session_timelines".into(), "true".into())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_isolation (id int, value int)",
+            "INSERT INTO prepared_isolation VALUES (1, 11), (2, 22)",
+            "CREATE INDEX prepared_isolation_id ON prepared_isolation (id)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let stmt = client
+            .prepare("SELECT value, mz_now()::text FROM prepared_isolation WHERE id = $1")
+            .unwrap();
+        let hits = || -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_prepared_query_events_total")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|label| label.name() == "event" && label.value() == "template_hit")
+                })
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum()
+        };
+        for isolation in [
+            "serializable",
+            "strong session serializable",
+            "strict serializable",
+        ] {
+            client
+                .batch_execute(&format!("SET transaction_isolation = '{isolation}'"))
+                .unwrap();
+            // Serializable reads can initially precede the fixture's insert.
+            Retry::default()
+                .max_duration(Duration::from_secs(30))
+                .retry(|_| {
+                    let value = client
+                        .query_opt(&stmt, &[&1_i32])
+                        .unwrap()
+                        .map(|row| row.get::<_, i32>(0));
+                    if value == Some(11) {
+                        Ok(())
+                    } else {
+                        Err(value)
+                    }
+                })
+                .expect("fixture is visible under the selected isolation");
+            let before = hits();
+            assert_eq!(
+                client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+                22
+            );
+            assert_eq!(hits() - before, u64::from(reuse), "{isolation}");
+
+            client.batch_execute("BEGIN").unwrap();
+            let snapshot = client
+                .query_opt(&stmt, &[&1_i32])
+                .unwrap()
+                .map(|row| (row.get::<_, i32>(0), row.get::<_, String>(1)));
+            if isolation != "serializable" {
+                assert_eq!(snapshot.as_ref().map(|row| row.0), Some(11));
+            }
+            admin
+                .batch_execute("UPDATE prepared_isolation SET value = 12 WHERE id = 1")
+                .unwrap();
+            let same_snapshot = client
+                .query_opt(&stmt, &[&1_i32])
+                .unwrap()
+                .map(|row| (row.get::<_, i32>(0), row.get::<_, String>(1)));
+            assert_eq!(
+                same_snapshot, snapshot,
+                "{isolation} must retain the transaction snapshot"
+            );
+            client.batch_execute("COMMIT").unwrap();
+
+            if isolation == "strict serializable" {
+                assert_eq!(
+                    client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+                    12,
+                    "strict serializable must observe a completed external write"
+                );
+            }
+            // Weaker isolation does not promise real-time visibility across sessions.
+            Retry::default()
+                .max_duration(Duration::from_secs(30))
+                .retry(|_| {
+                    let value = client
+                        .query_opt(&stmt, &[&1_i32])
+                        .unwrap()
+                        .map(|row| row.get::<_, i32>(0));
+                    if value == Some(12) {
+                        Ok(())
+                    } else {
+                        Err(value)
+                    }
+                })
+                .expect("a new transaction eventually observes the committed write");
+
+            client
+                .batch_execute("BEGIN; INSERT INTO prepared_isolation VALUES (3, 33)")
+                .unwrap();
+            let error = client.query_one(&stmt, &[&3_i32]).unwrap_db_error();
+            assert_eq!(error.code(), &SqlState::INVALID_TRANSACTION_STATE);
+            assert_eq!(error.message(), "transaction in write-only mode");
+            client.batch_execute("ROLLBACK").unwrap();
+            assert!(client.query(&stmt, &[&3_i32]).unwrap().is_empty());
+
+            client.batch_execute("BEGIN").unwrap();
+            let rows = client.query(&stmt, &[&2_i32]).unwrap();
+            assert!(rows.iter().all(|row| row.get::<_, i32>(0) == 22));
+            if isolation != "serializable" {
+                assert_eq!(rows.len(), 1);
+            }
+            let error = client
+                .batch_execute("INSERT INTO prepared_isolation VALUES (3, 33)")
+                .unwrap_db_error();
+            assert_eq!(error.code(), &SqlState::READ_ONLY_SQL_TRANSACTION);
+            client.batch_execute("ROLLBACK").unwrap();
+
+            client
+                .batch_execute("UPDATE prepared_isolation SET value = 11 WHERE id = 1")
+                .unwrap();
+            if isolation != "serializable" {
+                let own_write = client.query_one(&stmt, &[&1_i32]).unwrap();
+                assert_eq!(own_write.get::<_, i32>(0), 11, "{isolation}");
+                assert!(
+                    own_write.get::<_, String>(1).parse::<u64>().unwrap()
+                        > snapshot.as_ref().unwrap().1.parse::<u64>().unwrap(),
+                    "the execution must not reuse the earlier timestamp"
+                );
+            } else {
+                Retry::default()
+                    .max_duration(Duration::from_secs(30))
+                    .retry(|_| {
+                        let value: i32 = client.query_one(&stmt, &[&1_i32]).unwrap().get(0);
+                        if value == 11 { Ok(()) } else { Err(value) }
+                    })
+                    .expect("serializable execution eventually observes the committed write");
+            }
+        }
+    }
+}
+
+#[mz_ore::test]
 fn test_read_many_rows() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
