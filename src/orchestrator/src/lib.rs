@@ -102,9 +102,13 @@ pub struct ServiceEvent {
     /// but can reset (e.g. when a pod is recreated). Orchestrators that don't
     /// track restarts report 0.
     pub restart_count: u64,
-    /// Beginning of the current uninterrupted healthy run, if known. Unlike
-    /// event receipt time, this must survive reconnecting the service watch.
-    /// Report `None` when offline or when the orchestrator cannot establish it.
+    /// Beginning of the current uninterrupted healthy run, or `None` when
+    /// offline or unknown.
+    ///
+    /// The value must not be earlier than the true start of the run, but it
+    /// may be later. Unlike event receipt time, it must survive reconnects of
+    /// the service watch and, where the orchestrator can observe the run,
+    /// environmentd restarts.
     pub healthy_since: Option<DateTime<Utc>>,
     pub time: DateTime<Utc>,
 }

@@ -79,14 +79,14 @@ pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
 pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
     "enable_0dt_caught_up_stability_check",
     true,
-    "Require clusters to be caught-up and have been healthy for a stability period before being considered ready during 0dt deployments. Emergency break-glass flag: disabling reverts to treating a caught-up cluster as ready with no replica-health requirement, which differs from setting the stability period to zero (a zero period still requires all replicas to be healthy).",
+    "Require clusters to be caught-up, and to have been hydrated and healthy for a stability period, before being considered ready during 0dt deployments. Emergency break-glass flag: disabling reverts to treating a caught-up cluster as ready with no replica-health requirement, which differs from setting the stability period to zero (a zero period still requires all replicas to be healthy and waits for replicas to report hydration times).",
     ParameterScope::Environment,
 );
 
 pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_stability_period",
     Duration::from_secs(10 * 60), // 10 minutes
-    "How long a caught-up cluster must have had all replicas continuously healthy before it is considered ready to cut over during a 0dt deployment.",
+    "How long a caught-up cluster must have been hydrated with all replicas continuously healthy before it is considered ready to cut over during a 0dt deployment.",
     ParameterScope::Environment,
 );
 
@@ -115,7 +115,7 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
 pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
     "enable_introspection_subscribes",
     true,
-    "Enable installation of introspection subscribes.",
+    "Enable installation of introspection subscribes, which also feed the hydration evidence of the 0dt caught-up check.",
     ParameterScope::Environment,
 );
 

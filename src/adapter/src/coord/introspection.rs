@@ -15,13 +15,15 @@
 //! querying introspection data across all replicas and regardless of the health of individual
 //! replicas.
 //!
+//! The same machinery also feeds coordinator-local state, see [`SubscribeTarget`].
+//!
 //! # Lifecycle of Introspection Subscribes
 //!
 //! * After a new replica was created, the coordinator calls `install_introspection_subscribes` to
-//!   install all defined introspection subscribes on the new replica.
+//!   install the introspection subscribes on the new replica. Subscribes for targets other than
+//!   storage may be conditional, see [`SubscribeTarget`].
 //! * The coordinator calls `handle_introspection_subscribe_batch` for each response it receives
-//!   from an introspection subscribe, to write received updates to their corresponding
-//!   storage-managed collection.
+//!   from an introspection subscribe, to apply received updates to the subscribe's target.
 //! * Before a replica is dropped, the coordinator calls `drop_introspection_subscribes` to drop
 //!   all introspection subscribes previously installed on the replica.
 //! * When a replica disconnects without being dropped (e.g. because of a crash or network
@@ -39,9 +41,10 @@ use mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, Row, RowRef, Timestamp};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
@@ -67,7 +70,7 @@ pub(super) struct IntrospectionSubscribe {
     /// The spec from which this subscribe was created.
     spec: &'static SubscribeSpec,
     /// A storage write to be applied the next time the introspection subscribe produces any
-    /// output.
+    /// output. Only used for [`SubscribeTarget::Storage`].
     ///
     /// This mechanism exists to delay the deletion of previous subscribe results from the target
     /// storage collection when an introspection subscribe is reinstalled. After reinstallation it
@@ -82,6 +85,8 @@ pub(super) struct IntrospectionSubscribe {
     /// reconnected). Consumers that must not observe such stale rows, like the
     /// `mz_object_arrangement_size_history` snapshots, use this to judge per-replica freshness.
     first_data_at: Option<Instant>,
+    /// The as-of of the subscribe's dataflow, once sequencing has chosen it.
+    as_of: Option<Timestamp>,
 }
 
 impl IntrospectionSubscribe {
@@ -139,6 +144,19 @@ impl Coordinator {
             self.install_introspection_subscribe(cluster_id, replica_id, spec)
                 .await;
         }
+
+        if self.wants_hydration_times_subscribe(cluster_id, replica_id) {
+            let now = self.now();
+            self.hydration_times_mut()
+                .expect("caught-up check is pending")
+                .reset(replica_id, now);
+            self.install_introspection_subscribe(
+                cluster_id,
+                replica_id,
+                &HYDRATION_TIMES_SUBSCRIBE,
+            )
+            .await;
+        }
     }
 
     async fn install_introspection_subscribe(
@@ -151,7 +169,7 @@ impl Coordinator {
         info!(
             %id,
             %replica_id,
-            type_ = ?spec.introspection_type,
+            target = ?spec.target,
             "installing introspection subscribe",
         );
 
@@ -164,6 +182,7 @@ impl Coordinator {
             spec,
             deferred_write: None,
             first_data_at: None,
+            as_of: None,
         };
         self.introspection_subscribes.insert(id, subscribe);
 
@@ -284,7 +303,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
 
-        let global_mir_plan = global_mir_plan.resolve(as_of);
+        let global_mir_plan = global_mir_plan.resolve(as_of.clone());
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -299,6 +318,7 @@ impl Coordinator {
                         validity,
                         global_lir_plan,
                         read_holds,
+                        as_of,
                         cluster_id,
                         replica_id,
                     });
@@ -316,6 +336,7 @@ impl Coordinator {
             validity: _,
             global_lir_plan,
             read_holds,
+            as_of,
             cluster_id,
             replica_id,
         } = stage;
@@ -324,7 +345,9 @@ impl Coordinator {
 
         // The subscribe may already have been dropped, in which case we must not install a
         // dataflow for it.
-        let response = if self.introspection_subscribes.contains_key(&subscribe_id) {
+        let response = if let Some(subscribe) = self.introspection_subscribes.get_mut(&subscribe_id)
+        {
+            subscribe.as_of = as_of.into_option();
             let (df_desc, _df_meta) = global_lir_plan.unapply();
             self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
                 .await;
@@ -348,13 +371,29 @@ impl Coordinator {
     /// Dropping an introspection subscribe entails:
     ///  * removing it from [`Coordinator::introspection_subscribes`]
     ///  * dropping its compute collection
-    ///  * retracting any rows previously omitted by it from its corresponding storage-managed
-    ///    collection
+    ///  * retracting any rows previously omitted by it from its target
     pub(super) fn drop_introspection_subscribes(&mut self, replica_id: ReplicaId) {
         let to_drop: Vec<_> = self
             .introspection_subscribes
             .iter()
             .filter(|(_, s)| s.replica_id == replica_id)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in to_drop {
+            self.drop_introspection_subscribe(id);
+        }
+    }
+
+    /// Drops all introspection subscribes with target [`SubscribeTarget::HydrationTimes`].
+    ///
+    /// Must be called once the caught-up check is gone, because nothing reads their updates
+    /// afterwards.
+    pub(super) fn drop_hydration_times_subscribes(&mut self) {
+        let to_drop: Vec<_> = self
+            .introspection_subscribes
+            .iter()
+            .filter(|(_, s)| s.spec.target == SubscribeTarget::HydrationTimes)
             .map(|(id, _)| *id)
             .collect();
 
@@ -372,7 +411,7 @@ impl Coordinator {
         info!(
             %id,
             replica_id = %subscribe.replica_id,
-            type_ = ?subscribe.spec.introspection_type,
+            target = ?subscribe.spec.target,
             "dropping introspection subscribe",
         );
 
@@ -384,10 +423,19 @@ impl Coordinator {
             .compute
             .drop_collections(subscribe.cluster_id, vec![id]);
 
-        self.controller.storage.update_introspection_collection(
-            subscribe.spec.introspection_type,
-            subscribe.delete_write_op(),
-        );
+        match subscribe.spec.target {
+            SubscribeTarget::Storage(introspection_type) => {
+                self.controller.storage.update_introspection_collection(
+                    introspection_type,
+                    subscribe.delete_write_op(),
+                );
+            }
+            SubscribeTarget::HydrationTimes => {
+                if let Some(times) = self.hydration_times_mut() {
+                    times.remove(subscribe.replica_id);
+                }
+            }
+        }
     }
 
     async fn reinstall_introspection_subscribe(&mut self, id: GlobalId) {
@@ -412,7 +460,7 @@ impl Coordinator {
 
         info!(
             %old_id, %new_id, %replica_id,
-            type_ = ?subscribe.spec.introspection_type,
+            target = ?subscribe.spec.target,
             "reinstalling introspection subscribe",
         );
 
@@ -427,12 +475,25 @@ impl Coordinator {
             );
         }
 
-        // Ensure that the contents of the target storage collection are cleaned when the new
-        // subscribe starts reporting data.
-        subscribe.deferred_write = Some(subscribe.delete_write_op());
-        // Until then, the collection serves the previous subscribe's data, which the replica may
-        // have invalidated by restarting.
-        subscribe.first_data_at = None;
+        match spec.target {
+            SubscribeTarget::Storage(_) => {
+                // Ensure that the contents of the target storage collection are cleaned when the
+                // new subscribe starts reporting data. Until then, the collection serves the
+                // previous subscribe's data, which the replica may have invalidated by
+                // restarting.
+                subscribe.deferred_write = Some(subscribe.delete_write_op());
+                subscribe.first_data_at = None;
+            }
+            // Unlike a storage collection, nothing presents the hydration times to users, so
+            // we discard what the previous incarnation of the replica reported right away.
+            SubscribeTarget::HydrationTimes => {
+                let now = self.now();
+                if let Some(times) = self.hydration_times_mut() {
+                    times.reset(replica_id, now);
+                }
+            }
+        }
+        subscribe.as_of = None;
 
         self.introspection_subscribes.insert(new_id, subscribe);
         self.sequence_introspection_subscribe(new_id, spec, cluster_id, replica_id)
@@ -441,8 +502,8 @@ impl Coordinator {
 
     /// Processes a batch returned by an introspection subscribe.
     ///
-    /// Depending on the contents of the batch, this either appends received updates to the
-    /// corresponding storage-managed collection, or reinstalls a disconnected subscribe.
+    /// Depending on the contents of the batch, this either applies received updates to the
+    /// subscribe's target, or reinstalls a disconnected subscribe.
     pub(super) async fn handle_introspection_subscribe_batch(
         &mut self,
         id: GlobalId,
@@ -454,7 +515,6 @@ impl Coordinator {
         };
 
         let updates = match batch.updates {
-            Ok(updates) if updates.is_empty() => return,
             Ok(updates) => updates,
             Err(error) if error == ERROR_TARGET_REPLICA_FAILED => {
                 // The target replica disconnected, reinstall the subscribe.
@@ -466,9 +526,40 @@ impl Coordinator {
                     "introspection subscribe produced an error: {error} \
                      (id={id}, subscribe={subscribe:?})",
                 );
+                // Nothing reinstalls the subscribe, so waiting for its snapshot would be futile.
+                if subscribe.spec.target == SubscribeTarget::HydrationTimes {
+                    let replica_id = subscribe.replica_id;
+                    if let Some(times) = self.hydration_times_mut() {
+                        times.remove(replica_id);
+                    }
+                }
                 return;
             }
         };
+
+        let introspection_type = match subscribe.spec.target {
+            SubscribeTarget::Storage(introspection_type) => introspection_type,
+            SubscribeTarget::HydrationTimes => {
+                let replica_id = subscribe.replica_id;
+                // The snapshot consists of the updates at the as-of. Timestamps are totally
+                // ordered, so it is complete once the upper has passed the as-of. A batch that
+                // carries no rows can complete the snapshot too.
+                let snapshot_complete = subscribe
+                    .as_of
+                    .is_some_and(|as_of| !batch.upper.less_equal(&as_of));
+                if let Some(times) = self.hydration_times_mut() {
+                    let rows = updates.iter().flat_map(|collection| collection.iter());
+                    let updates = rows.filter_map(|(row, _time, diff)| {
+                        parse_hydration_time(row).map(|(id, at)| (id, at, diff.into_inner()))
+                    });
+                    times.apply(replica_id, snapshot_complete, updates);
+                }
+                return;
+            }
+        };
+        if updates.is_empty() {
+            return;
+        }
 
         // Prepend the `replica_id` to each row.
         let replica_id = subscribe.replica_id.to_string();
@@ -488,13 +579,13 @@ impl Coordinator {
         if let Some(op) = subscribe.deferred_write.take() {
             self.controller
                 .storage
-                .update_introspection_collection(subscribe.spec.introspection_type, op);
+                .update_introspection_collection(introspection_type, op);
         }
 
         subscribe.first_data_at.get_or_insert_with(Instant::now);
 
         self.controller.storage.update_introspection_collection(
-            subscribe.spec.introspection_type,
+            introspection_type,
             StorageWriteOp::Append {
                 updates: new_updates,
             },
@@ -532,7 +623,7 @@ impl Coordinator {
     ) -> BTreeSet<String> {
         self.introspection_subscribes
             .values()
-            .filter(|s| s.spec.introspection_type == introspection_type)
+            .filter(|s| s.spec.target == SubscribeTarget::Storage(introspection_type))
             .filter(|s| s.first_data_at.is_some_and(|at| at.elapsed() >= margin))
             .map(|s| s.replica_id.to_string())
             .collect()
@@ -576,11 +667,24 @@ impl Staged for IntrospectionSubscribeStage {
 /// The specification for an introspection subscribe.
 #[derive(Debug)]
 pub(super) struct SubscribeSpec {
-    /// An [`IntrospectionType`] identifying the storage-managed collection to which updates
-    /// received from subscribes instantiated from this spec are written.
-    introspection_type: IntrospectionType,
+    /// Where updates received from subscribes instantiated from this spec go.
+    target: SubscribeTarget,
     /// The SQL definition of the subscribe.
     sql: &'static str,
+}
+
+/// Where the updates of an introspection subscribe go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SubscribeTarget {
+    /// The storage-managed collection of this type, with each row prefixed by the replica ID.
+    Storage(IntrospectionType),
+    /// The hydration times mirror of the 0dt caught-up check, see
+    /// [`crate::coord::caught_up::ReplicaHydrationTimes`].
+    ///
+    /// Subscribes with this target are installed only where
+    /// [`Coordinator::wants_hydration_times_subscribe`] says so, and are dropped with the
+    /// caught-up check.
+    HydrationTimes,
 }
 
 impl SubscribeSpec {
@@ -596,9 +700,38 @@ impl SubscribeSpec {
     }
 }
 
+/// Reports when each compute collection finished hydrating on all workers. Collections that
+/// have not hydrated on every worker are absent.
+const HYDRATION_TIMES_SUBSCRIBE: SubscribeSpec = SubscribeSpec {
+    target: SubscribeTarget::HydrationTimes,
+    sql: "SUBSCRIBE (
+        SELECT export_id, max(hydrated_at) AS hydrated_at
+        FROM mz_introspection.mz_compute_hydration_times_per_worker
+        WHERE export_id NOT LIKE 't%'
+        GROUP BY export_id
+        HAVING count(*) = count(hydrated_at)
+        OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+    )",
+};
+
+/// Parses a row of [`HYDRATION_TIMES_SUBSCRIBE`].
+fn parse_hydration_time(row: &RowRef) -> Option<(GlobalId, EpochMillis)> {
+    let mut datums = row.iter();
+    let export_id = datums.next()?.unwrap_str();
+    let hydrated_at = datums.next()?.unwrap_timestamptz();
+    let parsed = export_id
+        .parse()
+        .ok()
+        .zip(u64::try_from(hydrated_at.timestamp_millis()).ok());
+    if parsed.is_none() {
+        soft_panic_or_log!("unexpected hydration times row: {row:?}");
+    }
+    parsed
+}
+
 const SUBSCRIBES: &[SubscribeSpec] = &[
     SubscribeSpec {
-        introspection_type: IntrospectionType::ComputeErrorCounts,
+        target: SubscribeTarget::Storage(IntrospectionType::ComputeErrorCounts),
         sql: "SUBSCRIBE (
             SELECT export_id, sum(count)
             FROM mz_introspection.mz_compute_error_counts_raw
@@ -606,7 +739,7 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
         )",
     },
     SubscribeSpec {
-        introspection_type: IntrospectionType::ComputeHydrationTimes,
+        target: SubscribeTarget::Storage(IntrospectionType::ComputeHydrationTimes),
         sql: "SUBSCRIBE (
             SELECT
                 export_id,
@@ -621,7 +754,7 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
         )",
     },
     SubscribeSpec {
-        introspection_type: IntrospectionType::ComputeOperatorHydrationStatus,
+        target: SubscribeTarget::Storage(IntrospectionType::ComputeOperatorHydrationStatus),
         sql: "SUBSCRIBE (
             SELECT
                 export_id,
@@ -655,7 +788,7 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
     // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
     // including this one); we drop them to avoid self-feedback churn.
     SubscribeSpec {
-        introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
+        target: SubscribeTarget::Storage(IntrospectionType::ComputeObjectArrangementSizes),
         sql: "SUBSCRIBE (
             SELECT
                 ce.export_id AS object_id,
@@ -675,3 +808,32 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
         )",
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use chrono::DateTime;
+    use mz_repr::adt::timestamp::CheckedTimestamp;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn parse_hydration_time_row() {
+        let hydrated_at = DateTime::from_timestamp_millis(1_234).expect("valid timestamp");
+        let row = Row::pack_slice(&[
+            Datum::String("u7"),
+            Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(hydrated_at).expect("in range"),
+            ),
+        ]);
+        assert_eq!(parse_hydration_time(&row), Some((GlobalId::User(7), 1_234)));
+    }
+
+    #[mz_ore::test]
+    fn subscribe_sql_parses() {
+        for spec in SUBSCRIBES.iter().chain([&HYDRATION_TIMES_SUBSCRIBE]) {
+            let stmts = mz_sql::parse::parse(spec.sql)
+                .unwrap_or_else(|e| panic!("{:?} does not parse: {e}", spec.target));
+            assert_eq!(stmts.len(), 1, "{:?}", spec.target);
+        }
+    }
+}

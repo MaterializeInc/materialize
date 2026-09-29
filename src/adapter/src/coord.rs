@@ -1167,6 +1167,7 @@ pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     read_holds: ReadHolds,
+    as_of: Antichain<Timestamp>,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -5333,6 +5334,7 @@ pub fn serve(
                     trigger,
                     exclude_collections,
                     cluster_stability: BTreeMap::new(),
+                    hydration_times: Default::default(),
                 }
             });
 
