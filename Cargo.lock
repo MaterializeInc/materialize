@@ -1170,7 +1170,7 @@ dependencies = [
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",
- "md-5 0.11.0",
+ "md-5",
  "pin-project-lite",
  "sha1 0.11.0",
  "sha2 0.11.0",
@@ -3848,6 +3848,7 @@ dependencies = [
  "clap",
  "csv-async",
  "futures",
+ "hex",
  "insta",
  "itertools 0.14.0",
  "mz-build-tools",
@@ -3863,7 +3864,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
@@ -5959,16 +5960,6 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "md-5"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
-dependencies = [
- "cfg-if",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
@@ -6274,7 +6265,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "smallvec",
  "static_assertions",
  "thiserror 2.0.21",
@@ -6590,7 +6581,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "static_assertions",
  "thiserror 2.0.21",
  "timely",
@@ -6644,7 +6635,8 @@ name = "mz-catalog-protos"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "md-5 0.10.6",
+ "hex",
+ "md-5",
  "mz-audit-log",
  "mz-catalog-protos",
  "mz-compute-types",
@@ -6714,6 +6706,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "hex",
  "humantime",
  "indexmap 2.14.2",
  "k8s-openapi",
@@ -6726,7 +6719,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tracing",
  "uuid",
 ]
@@ -6949,6 +6942,7 @@ dependencies = [
  "columnar",
  "differential-dataflow",
  "fail",
+ "hex",
  "itertools 0.14.0",
  "mz-dyncfg",
  "mz-expr",
@@ -6959,7 +6953,7 @@ dependencies = [
  "serde",
  "serde-reflection",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "timely",
  "tracing",
 ]
@@ -7053,6 +7047,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures",
+ "hex",
  "itertools 0.14.0",
  "junit-report",
  "mz-aws-util",
@@ -7078,7 +7073,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "strsim",
  "supports-color 3.0.2",
  "tempfile",
@@ -7312,10 +7307,10 @@ dependencies = [
  "enum-iterator",
  "fallible-iterator 0.2.0",
  "hex",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "insta",
  "itertools 0.14.0",
- "md-5 0.10.6",
+ "md-5",
  "murmur2",
  "mz-build-tools",
  "mz-catalog-decode",
@@ -7665,7 +7660,7 @@ dependencies = [
  "hex",
  "hex-literal",
  "reqwest 0.12.28",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tar",
  "walkdir",
 ]
@@ -7709,6 +7704,7 @@ dependencies = [
  "clap",
  "fail",
  "futures",
+ "hex",
  "k8s-openapi",
  "kube",
  "maplit",
@@ -7720,7 +7716,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tokio",
  "tracing",
 ]
@@ -7745,7 +7741,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
- "sha1 0.10.6",
+ "sha1 0.11.0",
  "sysinfo",
  "tokio",
  "tracing",
@@ -7784,6 +7780,7 @@ dependencies = [
  "clap",
  "futures",
  "gcp_auth",
+ "hex",
  "http 1.4.2",
  "humantime",
  "k8s-controller",
@@ -7808,7 +7805,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
  "tower-http 0.7.1",
@@ -7942,7 +7939,6 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "time",
  "timely",
@@ -8671,10 +8667,11 @@ dependencies = [
  "dec",
  "fallible-iterator 0.2.0",
  "futures",
+ "hex",
  "itertools 0.14.0",
  "junit-report",
  "maplit",
- "md-5 0.10.6",
+ "md-5",
  "mz-adapter-types",
  "mz-catalog",
  "mz-controller",
@@ -8802,7 +8799,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "sqlparser",
  "tempfile",
  "thiserror 2.0.21",
@@ -9057,7 +9054,7 @@ dependencies = [
  "itertools 0.14.0",
  "junit-report",
  "maplit",
- "md-5 0.10.6",
+ "md-5",
  "mysql_async",
  "mz-adapter",
  "mz-avro",
@@ -9755,7 +9752,7 @@ dependencies = [
  "http 1.4.2",
  "jiff",
  "log",
- "md-5 0.11.0",
+ "md-5",
  "percent-encoding",
  "quick-xml 0.41.0",
  "reqsign-core",
@@ -9866,7 +9863,7 @@ dependencies = [
  "crc-fast",
  "http 1.4.2",
  "log",
- "md-5 0.11.0",
+ "md-5",
  "opendal-core",
  "quick-xml 0.41.0",
  "reqsign-aws-v4",
@@ -10688,7 +10685,7 @@ dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
  "hmac 0.13.0",
- "md-5 0.11.0",
+ "md-5",
  "memchr",
  "rand 0.10.3",
  "sha2 0.11.0",
@@ -12731,7 +12728,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
- "sha2-asm",
 ]
 
 [[package]]
@@ -12743,15 +12739,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "digest 0.11.3",
-]
-
-[[package]]
-name = "sha2-asm"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab"
-dependencies = [
- "cc",
 ]
 
 [[package]]

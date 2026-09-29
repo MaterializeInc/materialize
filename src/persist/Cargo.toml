@@ -67,13 +67,6 @@ url.workspace = true
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
-# While this crate doesn't directly depend on `sha2` we want to ensure that the
-# `asm` feature is enabled since computing SHA256 hashes is taking a
-# significant amount of CPU time when uploading data to S3
-[dependencies.sha2]
-workspace = true
-features = ["asm"]
-
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json.workspace = true
@@ -86,8 +79,3 @@ prost-build.workspace = true
 [features]
 default = ["mz-build-tools/default"]
 turmoil = ["dep:serde_json", "dep:turmoil"]
-
-[package.metadata.unused-deps]
-# Depended on for its `asm` feature rather than its API, see the comment on the
-# `[dependencies.sha2]` section above.
-ignore = ["sha2"]

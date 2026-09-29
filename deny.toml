@@ -162,18 +162,22 @@ skip = [
     { name = "arrow-schema", version = "57.2.0" },
     { name = "arrow-select", version = "57.2.0" },
     { name = "arrow-string", version = "57.1.0" },
-    # opendal 0.59 and reqsign 3.x (both via iceberg) are on the next generation
-    # of the RustCrypto crates, while the rest of the workspace is still on the
-    # current one.
+    # hyper-util, opendal 0.59, pem 4, reqsign 3.x and reqwest 0.13 are on
+    # base64 0.23, while the workspace is still on 0.22.
     { name = "base64", version = "0.23.1" },
-    { name = "block-buffer", version = "0.12.1" },
-    { name = "const-oid", version = "0.10.2" },
-    { name = "crypto-common", version = "0.2.2" },
-    { name = "digest", version = "0.11.3" },
-    { name = "hmac", version = "0.13.0" },
-    { name = "md-5", version = "0.11.0" },
-    { name = "sha1", version = "0.11.0" },
-    { name = "sha2", version = "0.11.0" },
+    # The previous generation of the RustCrypto crates is still used by
+    # apache-avro, aws-config, axum, azure_core, crc-fast, headers,
+    # launchdarkly-server-sdk-evaluation, mysql_common, pest_meta, tungstenite,
+    # and the RustCrypto signature, key and cipher crates (ecdsa, elliptic-curve,
+    # p256, p384, p521, pbkdf2, pkcs5, rsa, rfc6979, scrypt, ssh-key and
+    # friends).
+    { name = "block-buffer", version = "0.10.4" },
+    { name = "const-oid", version = "0.9.6" },
+    { name = "crypto-common", version = "0.1.6" },
+    { name = "digest", version = "0.10.7" },
+    { name = "hmac", version = "0.12.1" },
+    { name = "sha1", version = "0.10.6" },
+    { name = "sha2", version = "0.10.9" },
     # reqsign-azure-storage 3.2 moved to pem 4, while jsonwebtoken, and so most
     # of the workspace, is still on pem 3. The ADLS credential loader needs the
     # `expires_at` field that 3.2 added to `Credential::SasToken`, so the older

@@ -1990,7 +1990,7 @@ impl<'a> RunnerInner<'a> {
                     hasher.update(value);
                     hasher.update("\n");
                 }
-                let md5 = format!("{:x}", hasher.finalize());
+                let md5 = hex::encode(hasher.finalize());
                 if values.len() != *num_values || md5 != *expected_md5 {
                     return Ok(Outcome::OutputFailure {
                         expected_output,
