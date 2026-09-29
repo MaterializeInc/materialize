@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_adapter::ResultExt;
-use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
+use mz_catalog::durable::{
+    BootstrapArgs, CatalogError, DurableCatalogState, Metrics, OpenableDurableCatalogState,
+};
 use mz_controller_types::ReplicaId;
 use mz_ore::channel::trigger;
 use mz_ore::exit;
@@ -23,19 +25,19 @@ use mz_ore::str::separated;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::catalog::EnvironmentId;
+use tokio::sync::oneshot;
 use tracing::info;
 
 use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentState;
 
-/// The necessary input for preflight checks.
-pub struct PreflightInput {
+/// Configuration for catching up and promoting a read-only deployment.
+pub struct CatchupConfig {
     pub boot_ts: Timestamp,
     pub environment_id: EnvironmentId,
     pub persist_client: PersistClient,
     pub deploy_generation: u64,
     pub deployment_state: DeploymentState,
-    pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
     pub caught_up_max_wait: Duration,
     pub ddl_check_interval: Duration,
@@ -43,74 +45,74 @@ pub struct PreflightInput {
     pub bootstrap_args: BootstrapArgs,
 }
 
-/// Output of preflight checks.
-pub struct PreflightOutput {
-    pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
-    pub read_only: bool,
-    pub caught_up_trigger: Option<trigger::Trigger>,
+/// Returns whether this deployment should boot in read-only mode.
+pub async fn preflight_0dt(
+    openable_adapter_storage: &mut dyn OpenableDurableCatalogState,
+    deploy_generation: u64,
+) -> Result<bool, CatalogError> {
+    if !openable_adapter_storage.is_initialized().await? {
+        info!("catalog not initialized; booting with writes allowed");
+        return Ok(false);
+    }
+
+    let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
+    info!(%catalog_generation, %deploy_generation, "catalog initialized");
+    if catalog_generation < deploy_generation {
+        info!("this deployment is a new generation; booting in read only mode");
+        Ok(true)
+    } else if catalog_generation == deploy_generation {
+        info!("this deployment is the current generation; booting with writes allowed");
+        Ok(false)
+    } else {
+        exit!(0, "this deployment has been fenced out");
+    }
 }
 
-/// Perform a 0dt preflight check.
+/// Starts catching up and promoting a read-only deployment.
 ///
-/// Returns the openable adapter storage to use and whether or not to boot in
-/// read only mode.
-pub async fn preflight_0dt(
-    PreflightInput {
+/// An administrative skip is accepted right away and promotes without waiting
+/// for bootstrap. Otherwise, catch-up checks and the catch-up timeout start
+/// once `bootstrapped` yields the ID baseline, which must come from the
+/// savepoint used to bootstrap the adapter. The task exits if `bootstrapped`
+/// is dropped.
+pub fn spawn_catchup(
+    CatchupConfig {
         boot_ts,
         environment_id,
         persist_client,
         deploy_generation,
         deployment_state,
-        mut openable_adapter_storage,
         catalog_metrics,
         caught_up_max_wait,
         ddl_check_interval,
         panic_after_timeout,
         bootstrap_args,
-    }: PreflightInput,
-) -> Result<PreflightOutput, CatalogError> {
-    info!(%deploy_generation, ?caught_up_max_wait, "performing 0dt preflight checks");
+    }: CatchupConfig,
+    mut caught_up_receiver: trigger::Receiver,
+    bootstrapped: oneshot::Receiver<(u64, u64)>,
+) {
+    mz_ore::task::spawn(|| "deployment_catchup", async move {
+        let mut skip_catchup = deployment_state.set_catching_up();
 
-    if !openable_adapter_storage.is_initialized().await? {
-        info!("catalog not initialized; booting with writes allowed");
-        return Ok(PreflightOutput {
-            openable_adapter_storage,
-            read_only: false,
-            caught_up_trigger: None,
-        });
-    }
+        let initial_ids = tokio::select! {
+            biased;
 
-    let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
-    info!(%catalog_generation, "catalog initialized");
-    if catalog_generation < deploy_generation {
-        info!("this deployment is a new generation; booting in read only mode");
+            () = &mut skip_catchup => None,
+            result = bootstrapped => match result {
+                Ok(ids) => Some(ids),
+                Err(_) => return,
+            },
+        };
 
-        let (caught_up_trigger, mut caught_up_receiver) = trigger::channel();
-
-        // Spawn a background task to handle promotion to leader.
-        mz_ore::task::spawn(|| "preflight_0dt", async move {
-            let (initial_next_user_item_id, initial_next_replica_id) = get_next_ids(
-                boot_ts,
-                persist_client.clone(),
-                environment_id.clone(),
-                deploy_generation,
-                Arc::clone(&catalog_metrics),
-                bootstrap_args.clone(),
-            )
-            .await;
-
+        if let Some((initial_next_user_item_id, initial_next_replica_id)) = initial_ids {
             info!(
                 %initial_next_user_item_id,
                 %initial_next_replica_id,
-                "waiting for deployment to be caught up");
+                ?caught_up_max_wait,
+                "waiting for deployment to be caught up"
+            );
 
-            let caught_up_max_wait_fut = async {
-                tokio::time::sleep(caught_up_max_wait).await;
-                ()
-            };
-            let mut caught_up_max_wait_fut = pin!(caught_up_max_wait_fut);
-
-            let mut skip_catchup = deployment_state.set_catching_up();
+            let mut caught_up_max_wait_fut = pin!(tokio::time::sleep(caught_up_max_wait));
 
             let mut check_ddl_changes_interval = tokio::time::interval(ddl_check_interval);
             check_ddl_changes_interval
@@ -168,62 +170,49 @@ pub async fn preflight_0dt(
                 )
                 .await;
             }
+        } else {
+            info!("skipping bootstrap and catch-up due to administrator request");
+        }
 
-            // Announce that we're ready to promote.
-            let promoted = deployment_state.set_ready_to_promote();
-            info!("announced as ready to promote; waiting for promotion");
-            promoted.await;
+        // Announce that we're ready to promote.
+        let promoted = deployment_state.set_ready_to_promote();
+        info!("announced as ready to promote; waiting for promotion");
+        promoted.await;
 
-            // Take over the catalog.
-            info!("promoted; attempting takeover");
+        // Take over the catalog.
+        info!("promoted; attempting takeover");
 
-            // NOTE: There _is_ a window where DDL can happen in the old
-            // environment, between checking above, us announcing as ready to
-            // promote, and cloud giving us the go-ahead signal. Its size
-            // depends on how quickly cloud will trigger promotion once we
-            // report as ready.
-            //
-            // We could add another check here, right before cutting over, but I
-            // think this requires changes in Cloud: with this additional check,
-            // it can now happen that cloud gives us the promote signal but we
-            // then notice there were changes and restart. Could would have to
-            // notice this and give us the promote signal again, once we're
-            // ready again.
+        // NOTE: There _is_ a window where DDL can happen in the old
+        // environment, between checking above, us announcing as ready to
+        // promote, and cloud giving us the go-ahead signal. Its size
+        // depends on how quickly cloud will trigger promotion once we
+        // report as ready.
+        //
+        // We could add another check here, right before cutting over, but I
+        // think this requires changes in Cloud: with this additional check,
+        // it can now happen that cloud gives us the promote signal but we
+        // then notice there were changes and restart. Could would have to
+        // notice this and give us the promote signal again, once we're
+        // ready again.
 
-            let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
-                persist_client.clone(),
-                environment_id.organization_id(),
-                BUILD_INFO.semver_version(),
-                Some(deploy_generation),
-                Arc::clone(&catalog_metrics),
-            )
+        let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+            persist_client.clone(),
+            environment_id.organization_id(),
+            BUILD_INFO.semver_version(),
+            Some(deploy_generation),
+            Arc::clone(&catalog_metrics),
+        )
+        .await
+        .expect("incompatible catalog/persist version");
+
+        let _catalog = openable_adapter_storage
+            .open(boot_ts, &bootstrap_args)
             .await
-            .expect("incompatible catalog/persist version");
+            .unwrap_or_terminate("unexpected error while fencing out old deployment");
 
-            let _catalog = openable_adapter_storage
-                .open(boot_ts, &bootstrap_args)
-                .await
-                .unwrap_or_terminate("unexpected error while fencing out old deployment");
-
-            // Reboot as the leader.
-            halt!("fenced out old deployment; rebooting as leader")
-        });
-
-        Ok(PreflightOutput {
-            openable_adapter_storage,
-            read_only: true,
-            caught_up_trigger: Some(caught_up_trigger),
-        })
-    } else if catalog_generation == deploy_generation {
-        info!("this deployment is the current generation; booting with writes allowed");
-        Ok(PreflightOutput {
-            openable_adapter_storage,
-            read_only: false,
-            caught_up_trigger: None,
-        })
-    } else {
-        exit!(0, "this deployment has been fenced out");
-    }
+        // Reboot as the leader.
+        halt!("fenced out old deployment; rebooting as leader")
+    });
 }
 
 /// Check if there have been any DDL that create new collections or replicas,
@@ -319,51 +308,16 @@ async fn check_ddl_changes(
     )
 }
 
-/// Gets and returns the next user item ID and user replica ID based on the
-/// maximum existing IDs in the catalog.
-///
-/// We compute these from the actual catalog items rather than the allocator
-/// counter (e.g. `get_next_user_item_id()`), because batch ID allocation
-/// (`IdPool`) can advance the counter far ahead of actually-created items.
-/// Using the counter would cause `check_ddl_changes` to miss items created
-/// from the pool, since their IDs would be below the counter value.
-async fn get_next_ids(
-    boot_ts: Timestamp,
-    persist_client: PersistClient,
-    environment_id: EnvironmentId,
-    deploy_generation: u64,
-    catalog_metrics: Arc<Metrics>,
-    bootstrap_args: BootstrapArgs,
-) -> (u64, u64) {
-    let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
-        persist_client,
-        environment_id.organization_id(),
-        BUILD_INFO.semver_version(),
-        Some(deploy_generation),
-        catalog_metrics,
-    )
-    .await
-    .expect("incompatible catalog/persist version");
+/// Returns the next user item and replica IDs based on existing catalog objects.
+pub async fn get_next_ids(
+    catalog: &mut dyn DurableCatalogState,
+) -> Result<(u64, u64), CatalogError> {
+    // Preserve the pending updates that adapter bootstrap must consume.
+    let snapshot = catalog.snapshot().await?;
+    let mut dry_run = catalog.transaction_from_snapshot(snapshot)?;
+    let tx = dry_run.transaction_mut();
 
-    let mut catalog = openable_adapter_storage
-        .open_savepoint(boot_ts, &bootstrap_args)
-        .await
-        .unwrap_or_terminate("can open in savepoint mode");
-
-    // `transaction` rejects unapplied catalog content. This reader has no derived catalog to
-    // update, so discard the initial update stream before opening the transaction.
-    let _ = catalog
-        .sync_to_current_updates()
-        .await
-        .unwrap_or_terminate("unexpected error while draining initial catalog updates");
-    let tx = catalog
-        .transaction()
-        .await
-        .unwrap_or_terminate("unexpected error while getting transaction");
-
-    // Use the max existing user ID + 1 instead of the allocator counter.
-    // The allocator counter can be far ahead of actual items when batch ID
-    // allocation (IdPool) is in use.
+    // Allocator counters can be ahead of committed objects due to ID pooling.
     fn next_user_id(iter: impl Iterator<Item = u64>) -> u64 {
         iter.max().map(|id| id + 1).unwrap_or(0)
     }
@@ -380,5 +334,205 @@ async fn get_next_ids(
         },
     ));
 
-    (next_user_item_id, next_replica_id)
+    Ok((next_user_item_id, next_replica_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+    use mz_orchestratord::controller::materialize::generation::DeploymentStatus;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::PersistLocation;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_repr::GlobalId;
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+
+    use crate::deployment::state::DeploymentStateHandle;
+
+    async fn setup() -> (
+        TestCatalogStateBuilder,
+        CatchupConfig,
+        DeploymentStateHandle,
+    ) {
+        let mut config = PersistConfig::new_for_tests();
+        config.build_version = BUILD_INFO.semver_version();
+        let cache = PersistClientCache::new(config, &MetricsRegistry::new(), |_, _| {
+            PubSubClientConnection::noop()
+        });
+        let persist_client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let environment_id = EnvironmentId::for_tests();
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let builder = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(environment_id.organization_id())
+            .with_version(BUILD_INFO.semver_version())
+            .with_metrics(Arc::clone(&metrics))
+            .with_deploy_generation(0);
+        let boot_ts = SYSTEM_TIME().into();
+        let catalog = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(boot_ts, &test_bootstrap_args())
+            .await
+            .unwrap();
+        catalog.expire().await;
+
+        let (deployment_state, handle) = DeploymentState::new();
+        let config = CatchupConfig {
+            boot_ts,
+            environment_id,
+            persist_client,
+            deploy_generation: 1,
+            deployment_state,
+            catalog_metrics: metrics,
+            caught_up_max_wait: Duration::from_secs(1),
+            ddl_check_interval: Duration::from_millis(10),
+            panic_after_timeout: false,
+            bootstrap_args: test_bootstrap_args(),
+        };
+        (builder, config, handle)
+    }
+
+    async fn wait_ready(handle: &DeploymentStateHandle) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.status() != DeploymentStatus::ReadyToPromote {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn catchup_starts_after_bootstrap() {
+        let (builder, config, handle) = setup().await;
+        let mut openable = builder.with_deploy_generation(1).unwrap_build().await;
+        assert!(preflight_0dt(openable.as_mut(), 1).await.unwrap());
+        let (_trigger, receiver) = trigger::channel();
+        let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
+        let metrics = Arc::clone(&config.catalog_metrics);
+        let before = metrics.transactions_started.get();
+        let caught_up_max_wait = config.caught_up_max_wait;
+        let (boot_ts, bootstrap_args) = (config.boot_ts, config.bootstrap_args.clone());
+
+        tokio::time::pause();
+        spawn_catchup(config, receiver, bootstrapped_receiver);
+        tokio::time::advance(2 * caught_up_max_wait).await;
+        tokio::task::yield_now().await;
+        assert_eq!(metrics.transactions_started.get(), before);
+        assert_eq!(handle.status(), DeploymentStatus::Initializing);
+
+        let mut catalog = openable
+            .open_savepoint(boot_ts, &bootstrap_args)
+            .await
+            .unwrap();
+        bootstrapped
+            .send(get_next_ids(catalog.as_mut()).await.unwrap())
+            .unwrap();
+        wait_ready(&handle).await;
+        catalog.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn skip_before_bootstrap() {
+        let (_, config, handle) = setup().await;
+        let (_trigger, receiver) = trigger::channel();
+        let (_bootstrapped, bootstrapped_receiver) = oneshot::channel();
+        spawn_catchup(config, receiver, bootstrapped_receiver);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.try_skip_catchup().is_err() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        wait_ready(&handle).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn caught_up_before_task_starts() {
+        let (builder, mut config, handle) = setup().await;
+        let mut catalog = builder
+            .with_deploy_generation(1)
+            .unwrap_build()
+            .await
+            .open_savepoint(config.boot_ts, &config.bootstrap_args)
+            .await
+            .unwrap();
+        let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
+        bootstrapped
+            .send(get_next_ids(catalog.as_mut()).await.unwrap())
+            .unwrap();
+        let (trigger, receiver) = trigger::channel();
+        drop(trigger);
+        config.caught_up_max_wait = Duration::ZERO;
+        config.panic_after_timeout = true;
+        spawn_catchup(config, receiver, bootstrapped_receiver);
+        wait_ready(&handle).await;
+        catalog.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn baseline_uses_bootstrap_snapshot() {
+        let (builder, config, _) = setup().await;
+        let mut writer = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(config.boot_ts, &config.bootstrap_args)
+            .await
+            .unwrap();
+        let mut catalog = builder
+            .with_deploy_generation(1)
+            .unwrap_build()
+            .await
+            .open_savepoint(config.boot_ts, &config.bootstrap_args)
+            .await
+            .unwrap();
+        let initial_ids = get_next_ids(catalog.as_mut()).await.unwrap();
+        assert!(!catalog.sync_to_current_updates().await.unwrap().is_empty());
+
+        writer.sync_to_current_updates().await.unwrap();
+        let mut tx = writer.transaction().await.unwrap();
+        let item_id = initial_ids.0 + 10;
+        let replica_id = initial_ids.1 + 10;
+        let schema_id = tx.get_schemas().find(|s| s.name == "public").unwrap().id;
+        tx.insert_item(
+            CatalogItemId::User(item_id),
+            20000,
+            GlobalId::User(item_id),
+            schema_id,
+            "new_item",
+            "CREATE TABLE new_item (a int)".into(),
+            MZ_SYSTEM_ROLE_ID,
+            Vec::new(),
+            Default::default(),
+            None,
+        )
+        .unwrap();
+        let replica = tx.get_cluster_replicas().next().unwrap();
+        tx.insert_cluster_replica_with_id(
+            replica.cluster_id,
+            ReplicaId::User(replica_id),
+            "new_replica",
+            replica.config,
+            replica.owner_id,
+        )
+        .unwrap();
+        let commit_ts = tx.upper();
+        let _ = tx.get_and_commit_op_updates();
+        tx.commit(commit_ts).await.unwrap();
+
+        assert_eq!(get_next_ids(catalog.as_mut()).await.unwrap(), initial_ids);
+        assert_eq!(
+            get_next_ids(writer.as_mut()).await.unwrap(),
+            (item_id + 1, replica_id + 1)
+        );
+        catalog.expire().await;
+        writer.expire().await;
+    }
 }
