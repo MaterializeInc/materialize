@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 
 /// The largest number of roles the single-word encoding can represent.
@@ -53,7 +54,7 @@ impl RoleGraph {
     pub fn decode(&self, mut mask: u64) -> BTreeSet<RoleId> {
         let mut roles = BTreeSet::new();
         while mask != 0 {
-            let index = mask.trailing_zeros() as usize;
+            let index = usize::cast_from(mask.trailing_zeros());
             mask &= mask - 1;
             // A mask produced by `membership_closure` only has bits for roles in the graph, but
             // callers can pass an arbitrary mask, so ignore bits that name nothing.
@@ -127,7 +128,7 @@ pub fn membership_closure(edges: &[u64], role: usize) -> u64 {
         let mut next = reached;
         let mut remaining = reached;
         while remaining != 0 {
-            let index = remaining.trailing_zeros() as usize;
+            let index = usize::cast_from(remaining.trailing_zeros());
             remaining &= remaining - 1;
             next |= edges[index] & valid;
         }
@@ -181,17 +182,17 @@ pub fn membership_closure_reference(
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::cast::CastFrom;
     use proptest::prelude::*;
+    use proptest::strategy::Union;
 
     use super::*;
 
     fn any_role_id() -> impl Strategy<Value = RoleId> {
-        prop_oneof![
-            (0..6u64).prop_map(RoleId::User),
-            (0..2u64).prop_map(RoleId::System),
-            Just(RoleId::Public),
-        ]
+        Union::new(vec![
+            (0..6u64).prop_map(RoleId::User).boxed(),
+            (0..2u64).prop_map(RoleId::System).boxed(),
+            Just(RoleId::Public).boxed(),
+        ])
     }
 
     /// Unconstrained membership maps, including cyclic and self-referential ones.
@@ -236,7 +237,7 @@ mod tests {
 
                 let mut remaining = closure;
                 while remaining != 0 {
-                    let reached = remaining.trailing_zeros() as usize;
+                    let reached = usize::cast_from(remaining.trailing_zeros());
                     remaining &= remaining - 1;
                     let inner = membership_closure(&graph.edges, reached);
                     prop_assert_eq!(

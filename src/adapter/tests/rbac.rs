@@ -123,7 +123,7 @@ async fn datadriven() {
                             let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
                             let database_name = database.name.clone();
                             let database_spec =
-                                ResolvedDatabaseSpecifier::Id(database.id());
+                                ResolvedDatabaseSpecifier::Id(database.id);
                             let schema = catalog
                                 .resolve_schema_in_database(
                                     &database_spec,

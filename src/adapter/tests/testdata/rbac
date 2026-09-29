@@ -22,47 +22,95 @@ u1
 requirements
 SELECT * FROM t
 ----
+membership: none
+ownership: none
+privileges:
+  USAGE on SCHEMA "materialize.public" for u0
+  SELECT on TABLE "materialize.public.t" for u0
+item usage: secret, connection
 
 # Creating an object requires CREATE on the containing schema, and USAGE on the item types the
 # statement can reference.
 requirements
 CREATE TABLE t2 (a int)
 ----
+membership: none
+ownership: none
+privileges:
+  CREATE on SCHEMA "materialize.public" for u0
+item usage: type, secret, connection
 
 # A view records the same CREATE requirement as a table. The reads inside it are not required of
 # the creator here, they are required of the view's owner when someone later selects from it.
 requirements
 CREATE VIEW v AS SELECT * FROM t
 ----
+membership: none
+ownership: none
+privileges:
+  CREATE on SCHEMA "materialize.public" for u0
+item usage: type, secret, connection
 
 # Index creation requires ownership of the indexed object, which is stronger than a privilege:
 # no grant can substitute for it.
 requirements
 CREATE INDEX i ON t (a)
 ----
+membership: none
+ownership:
+  TABLE "materialize.public.t"
+privileges:
+  CREATE on SCHEMA "materialize.public" for u0
+  CREATE on CLUSTER "mz_system" for u0
+item usage: type, secret, connection
 
 # Dropping requires ownership of the object and USAGE on its container.
 requirements
 DROP TABLE t
 ----
+membership: none
+ownership:
+  TABLE "materialize.public.t"
+privileges:
+  USAGE on SCHEMA "materialize.public" for u0
+item usage: secret, connection
 
 # Role creation is gated on a system privilege rather than on any object.
 requirements
 CREATE ROLE r
 ----
+membership: none
+ownership: none
+privileges:
+  CREATEROLE on SYSTEM for u0
+item usage: type, secret, connection
 
 # Database creation is likewise a system privilege.
 requirements
 CREATE DATABASE d
 ----
+membership: none
+ownership: none
+privileges:
+  CREATEDB on SYSTEM for u0
+item usage: type, secret, connection
 
 # SHOW CREATE can name an object without requiring any privilege on the object itself, only
 # USAGE on its schema. This is why it carries an empty item usage set.
 requirements
 SHOW CREATE TABLE t
 ----
+membership: none
+ownership: none
+privileges:
+  USAGE on SCHEMA "materialize.public" for u0
+item usage: none
 
 # Statements with no catalog footprint require nothing at all.
 requirements
 SELECT 1
 ----
+membership: none
+ownership: none
+privileges: none
+item usage: secret, connection

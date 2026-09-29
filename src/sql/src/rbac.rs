@@ -2100,6 +2100,7 @@ pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclI
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+    use proptest::strategy::Union;
 
     use super::*;
     use crate::names::{DatabaseId, SchemaId};
@@ -2156,22 +2157,22 @@ mod tests {
     }
 
     fn any_role_id() -> impl Strategy<Value = RoleId> {
-        prop_oneof![
-            Just(RoleId::Public),
-            (0..3u64).prop_map(RoleId::User),
-            (0..3u64).prop_map(RoleId::System),
-        ]
+        Union::new(vec![
+            Just(RoleId::Public).boxed(),
+            (0..3u64).prop_map(RoleId::User).boxed(),
+            (0..3u64).prop_map(RoleId::System).boxed(),
+        ])
     }
 
     fn any_acl_mode() -> impl Strategy<Value = AclMode> {
         proptest::collection::vec(
-            prop_oneof![
-                Just(AclMode::SELECT),
-                Just(AclMode::INSERT),
-                Just(AclMode::USAGE),
-                Just(AclMode::CREATE),
-                Just(AclMode::CREATE_DB),
-            ],
+            proptest::sample::select(vec![
+                AclMode::SELECT,
+                AclMode::INSERT,
+                AclMode::USAGE,
+                AclMode::CREATE,
+                AclMode::CREATE_DB,
+            ]),
             0..4,
         )
         .prop_map(|modes| {
@@ -2186,27 +2187,40 @@ mod tests {
     /// included because `check_object_privileges` skips them, and a skip is a place where a
     /// requirement silently stops applying.
     fn any_object_id() -> impl Strategy<Value = ObjectId> {
-        prop_oneof![
-            (0..3u64).prop_map(|id| ObjectId::Item(CatalogItemId::User(id))),
-            (0..3u64).prop_map(|id| ObjectId::Item(CatalogItemId::System(id))),
-            (0..3u64).prop_map(|id| ObjectId::Database(DatabaseId::User(id))),
-            (0..3u64).prop_map(|id| ObjectId::Database(DatabaseId::System(id))),
-            (0..3u64).prop_map(|id| ObjectId::Schema((
-                ResolvedDatabaseSpecifier::Id(DatabaseId::User(0)),
-                SchemaSpecifier::Id(SchemaId::User(id)),
-            ))),
+        Union::new(vec![
+            (0..3u64)
+                .prop_map(|id| ObjectId::Item(CatalogItemId::User(id)))
+                .boxed(),
+            (0..3u64)
+                .prop_map(|id| ObjectId::Item(CatalogItemId::System(id)))
+                .boxed(),
+            (0..3u64)
+                .prop_map(|id| ObjectId::Database(DatabaseId::User(id)))
+                .boxed(),
+            (0..3u64)
+                .prop_map(|id| ObjectId::Database(DatabaseId::System(id)))
+                .boxed(),
+            (0..3u64)
+                .prop_map(|id| {
+                    ObjectId::Schema((
+                        ResolvedDatabaseSpecifier::Id(DatabaseId::User(0)),
+                        SchemaSpecifier::Id(SchemaId::User(id)),
+                    ))
+                })
+                .boxed(),
             Just(ObjectId::Schema((
                 ResolvedDatabaseSpecifier::Ambient,
                 SchemaSpecifier::Temporary,
-            ))),
-        ]
+            )))
+            .boxed(),
+        ])
     }
 
     fn any_system_object_id() -> impl Strategy<Value = SystemObjectId> {
-        prop_oneof![
-            Just(SystemObjectId::System),
-            any_object_id().prop_map(SystemObjectId::Object),
-        ]
+        Union::new(vec![
+            Just(SystemObjectId::System).boxed(),
+            any_object_id().prop_map(SystemObjectId::Object).boxed(),
+        ])
     }
 
     fn any_requirements() -> impl Strategy<Value = RbacRequirementsDescription> {
@@ -2217,7 +2231,7 @@ mod tests {
                 (any_system_object_id(), any_acl_mode(), any_role_id()),
                 0..4,
             ),
-            prop_oneof![Just(None), Just(Some("do a superuser thing".to_string()))],
+            proptest::option::of(Just("do a superuser thing".to_string())),
         )
             .prop_map(
                 |(role_membership, ownership, privileges, superuser_action)| {
@@ -2300,7 +2314,9 @@ mod tests {
             // Every surviving privilege must be implied by one the caller already had to hold.
             for (object_id, acl_mode, role_id) in &filtered.privileges {
                 let implied = reqs.privileges.iter().any(|(orig_object, orig_mode, orig_role)| {
-                    orig_object == object_id && orig_role == role_id && orig_mode.contains(*acl_mode)
+                    orig_object == object_id
+                        && orig_role == role_id
+                        && orig_mode.contains(*acl_mode)
                 });
                 prop_assert!(
                     implied,
