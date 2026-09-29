@@ -1063,6 +1063,14 @@ impl Coordinator {
         // rewriting the record when neither the status nor the restart count
         // changed.
         if !status_changed && !restart_count_changed {
+            let mut status = old_process_status.clone();
+            status.healthy_since = event.healthy_since;
+            self.cluster_replica_statuses.ensure_cluster_status(
+                event.cluster_id,
+                event.replica_id,
+                event.process_id,
+                status,
+            );
             return;
         }
 
@@ -1093,6 +1101,7 @@ impl Coordinator {
         let new_process_status = ClusterReplicaProcessStatus {
             status: event.status,
             restart_count: event.restart_count,
+            healthy_since: event.healthy_since,
             time: event.time,
         };
         self.cluster_replica_statuses.ensure_cluster_status(
