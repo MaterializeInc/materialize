@@ -219,8 +219,9 @@ pub fn spawn_catchup(
 /// restart in read-only mode if so, in order to pick up those new items and
 /// start hydrating them before cutting over.
 ///
-/// We do this by checking if new IDs that were allocated after the preflight
-/// check began were committed to the catalog.
+/// We do this by checking whether items or replicas with IDs above the highest
+/// ones in the catalog snapshot this deployment bootstrapped from were
+/// committed.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -421,8 +422,7 @@ mod tests {
 
         tokio::time::pause();
         spawn_catchup(config, receiver, bootstrapped_receiver);
-        tokio::time::advance(2 * caught_up_max_wait).await;
-        tokio::task::yield_now().await;
+        tokio::time::sleep(2 * caught_up_max_wait).await;
         assert_eq!(metrics.transactions_started.get(), before);
         assert_eq!(handle.status(), DeploymentStatus::Initializing);
 
