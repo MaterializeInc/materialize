@@ -357,6 +357,52 @@ Keep these behaviors in mind:
   and HTTPS connections together. Setting it to `0` disables this limit. The
   separate environmentd `max_connections` limit still applies.
 
+### Take a nearly full balancerd out of load balancer rotation
+
+{{< warn-if-unreleased "v26.45" >}}
+
+A load balancer keeps sending new connections to a balancerd pod until the pod
+reaches `balancerd_max_connections` and refuses them. Two optional watermarks,
+both below the hard limit, take a nearly full pod out of rotation instead:
+
+- At or above `balancerd_connection_high_watermark` open connections, the pod
+  reports not ready on `/api/readyz`. Kubernetes removes it from the Service
+  endpoints, so the load balancer stops sending it new connections. Its
+  existing connections continue to be served.
+- Below `balancerd_connection_low_watermark` open connections, and after at
+  least 30 seconds out of rotation, the pod reports ready again.
+
+Set both watermarks together, with `1 <= low < high < balancerd_max_connections`.
+balancerd logs a warning and ignores values that violate this. Both unset, the
+default, leaves readiness unconditional. `balancerd_max_connections` remains
+the hard limit either way.
+
+{{< warning >}}
+Before setting the watermarks, confirm that the load balancer in front of
+balancerd keeps established connections open when a backend becomes unhealthy
+or not ready. A load balancer that closes them drops every connection on a
+nearly full pod each time it leaves rotation. Check this for any load
+balancer, including one created by the Materialize Terraform modules.
+{{< /warning >}}
+
+For example, with the hard limit at `10000`:
+
+```json
+{
+  "balancerd_max_connections": 10000,
+  "balancerd_connection_high_watermark": 9000,
+  "balancerd_connection_low_watermark": 8500
+}
+```
+
+The readiness probe on balancerd pods runs every 2 seconds and fails after 2
+consecutive failures, so a pod leaves the Service endpoints within about 4
+seconds of crossing the high watermark. Your load balancer's own health check
+interval adds to that. A pod out of rotation shows `READY 0/1` in
+`kubectl get pods`. To disable the watermarks at runtime, set both to `null`.
+A pod that is out of rotation then reports ready immediately, without the 30
+second wait.
+
 ## Troubleshooting
 
 ### ConfigMap not being applied
