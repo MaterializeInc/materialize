@@ -11,8 +11,10 @@ FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2ee
 
 WORKDIR /app
 
-# Enable Corepack
-RUN corepack enable
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in package.json. Reinstall corepack
+# so it can provision that yarn version. Same reason as in console/Dockerfile.
+RUN npm install -g corepack && corepack enable
 
 # Copy the application source code
 COPY ../../ .
