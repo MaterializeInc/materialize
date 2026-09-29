@@ -2758,7 +2758,26 @@ fn test_session_owned_read_completion() {
                 })
                 .map(|m| u64::cast_lossy(m.get_counter().value()))
                 .sum();
-            (local, commits, template_hits)
+            let local_phases: u64 = metrics
+                .iter()
+                .filter(|m| m.name() == "mz_adapter_qps_phase_seconds")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    [
+                        ("phase", "local_completion_total"),
+                        ("outcome", "returned"),
+                        ("kind", "wall"),
+                    ]
+                    .iter()
+                    .all(|(name, value)| {
+                        m.get_label()
+                            .iter()
+                            .any(|label| label.name() == *name && label.value() == *value)
+                    })
+                })
+                .map(|m| m.get_histogram().get_sample_count())
+                .sum();
+            (local, commits, template_hits, local_phases)
         };
 
         // Warm up the collection and protocol paths before measuring completion routing.
@@ -2794,6 +2813,18 @@ fn test_session_owned_read_completion() {
             );
         }
         let after = counts();
+        if enabled && mz_ore::metrics::phase::Mode::from_env() != mz_ore::metrics::phase::Mode::Off
+        {
+            assert!(
+                after.3 >= before.3 + 8,
+                "local completion phases must be observed"
+            );
+        } else {
+            assert_eq!(
+                after.3, before.3,
+                "inactive completion phases must stay empty"
+            );
+        }
         assert_eq!(
             after.2,
             before.2 + 4,
