@@ -22,6 +22,7 @@ use timely::progress::Antichain;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::shared_trace::SharedOksFrontier;
+use crate::shared_trace::adopt_trace;
 use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
 use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
