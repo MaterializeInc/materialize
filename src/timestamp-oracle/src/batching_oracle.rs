@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::phase::PhaseGuard;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -35,11 +36,12 @@ use crate::{TimestampOracle, WriteTimestamp};
 pub struct BatchingTimestampOracle<T> {
     inner: Arc<dyn TimestampOracle<T> + Send + Sync>,
     command_tx: UnboundedSender<Command<T>>,
+    qps: crate::metrics::QpsPhases,
 }
 
 /// A command on the internal batching command stream.
 enum Command<T> {
-    ReadTs(oneshot::Sender<T>),
+    ReadTs(oneshot::Sender<(T, PhaseGuard)>, PhaseGuard),
 }
 
 impl<T> std::fmt::Debug for BatchingTimestampOracle<T> {
@@ -57,6 +59,7 @@ where
         let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let task_oracle = Arc::clone(&oracle);
+        let qps = metrics.qps.clone();
 
         mz_ore::task::spawn(|| "BatchingTimestampOracle Worker Task", async move {
             let read_ts_metrics = &metrics.batching.read_ts;
@@ -74,15 +77,16 @@ where
                     .inc_by(u64::cast_from(pending_cmds.len()));
                 read_ts_metrics.batches_count.inc();
 
-                let ts = task_oracle.read_ts().await;
-                for cmd in pending_cmds {
-                    match cmd {
-                        Command::ReadTs(response_tx) => {
-                            // It's okay if the receiver drops, just means
-                            // they're not interested anymore.
-                            let _ = response_tx.send(ts.clone());
-                        }
-                    }
+                // End the queue interval only after the batch is closed. Never
+                // add a later arrival to an already-running backing read.
+                for Command::ReadTs(_, queued) in &mut pending_cmds {
+                    std::mem::take(queued).finish();
+                }
+                let ts = metrics.qps.backing_read.time(task_oracle.read_ts()).await;
+                for Command::ReadTs(response_tx, _) in pending_cmds {
+                    // It's okay if the receiver drops, just means
+                    // they're not interested anymore.
+                    let _ = response_tx.send((ts.clone(), metrics.qps.response_resume.start()));
                 }
             }
 
@@ -92,6 +96,7 @@ where
         Self {
             inner: oracle,
             command_tx,
+            qps,
         }
     }
 }
@@ -125,15 +130,25 @@ where
 
     async fn read_ts(&self) -> T {
         let (tx, rx) = oneshot::channel();
-
-        if self.command_tx.send(Command::ReadTs(tx)).is_err() {
-            return worker_task_gone().await;
-        }
-
-        match rx.await {
-            Ok(ts) => ts,
-            Err(_) => worker_task_gone().await,
-        }
+        self.qps
+            .read_total
+            .time(async {
+                if self
+                    .command_tx
+                    .send(Command::ReadTs(tx, self.qps.queue.start()))
+                    .is_err()
+                {
+                    return worker_task_gone().await;
+                }
+                match rx.await {
+                    Ok((ts, resume)) => {
+                        resume.finish();
+                        ts
+                    }
+                    Err(_) => worker_task_gone().await,
+                }
+            })
+            .await
     }
 
     async fn apply_write(&self, write_ts: T) {
@@ -194,6 +209,118 @@ mod tests {
             let read_ts = std::pin::pin!(oracle.read_ts());
             assert!(futures::poll!(read_ts).is_pending());
         });
+    }
+
+    #[derive(Debug)]
+    struct ControlledOracle {
+        calls: tokio::sync::mpsc::UnboundedSender<oneshot::Sender<u64>>,
+    }
+
+    #[async_trait]
+    impl TimestampOracle<u64> for ControlledOracle {
+        async fn read_ts(&self) -> u64 {
+            let (tx, rx) = oneshot::channel();
+            self.calls.send(tx).expect("test receiver alive");
+            rx.await.expect("test supplies timestamp")
+        }
+        async fn write_ts(&self) -> WriteTimestamp<u64> {
+            panic!("test only reads")
+        }
+        async fn peek_write_ts(&self) -> u64 {
+            panic!("test only reads")
+        }
+        async fn apply_write(&self, _: u64) {
+            panic!("test only reads")
+        }
+    }
+
+    // A late arrival must not join a read that is already in progress. Exercise
+    // all diagnostic modes without a metadata store or global env mutation.
+    #[mz_ore::test(tokio::test)]
+    async fn qps_diagnostics_preserve_batch_boundaries_and_cancellation() {
+        use mz_ore::metrics::phase::Mode;
+        for mode in [Mode::Off, Mode::Wall, Mode::Poll] {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let (calls_tx, mut calls_rx) = tokio::sync::mpsc::unbounded_channel();
+                let mut metrics = Metrics::new(&MetricsRegistry::new());
+                let registry = MetricsRegistry::new();
+                metrics.qps = crate::metrics::QpsPhases::new(&registry, mode);
+                let oracle = BatchingTimestampOracle::new(
+                    Arc::new(metrics),
+                    Arc::new(ControlledOracle { calls: calls_tx }),
+                );
+
+                let first = oracle.read_ts();
+                tokio::pin!(first);
+                assert!(futures::poll!(&mut first).is_pending());
+                let backing_first = calls_rx.recv().await.expect("first batch");
+
+                // The backing read is already running before the next request.
+                let second = oracle.read_ts();
+                tokio::pin!(second);
+                assert!(futures::poll!(&mut second).is_pending());
+                backing_first.send(10).expect("worker waiting");
+                assert_eq!(first.await, 10);
+                let backing_second = calls_rx.recv().await.expect("new batch");
+                backing_second.send(20).expect("worker waiting");
+                assert_eq!(second.await, 20);
+
+                // Losing a caller must not kill the worker or cache its result.
+                let mut cancelled = Box::pin(oracle.read_ts());
+                assert!(futures::poll!(&mut cancelled).is_pending());
+                let backing_cancelled = calls_rx.recv().await.expect("cancelled batch");
+                drop(cancelled);
+                backing_cancelled.send(30).expect("worker still waiting");
+
+                let fourth = oracle.read_ts();
+                tokio::pin!(fourth);
+                assert!(futures::poll!(&mut fourth).is_pending());
+                let backing_fourth = calls_rx.recv().await.expect("fresh batch after cancel");
+                backing_fourth.send(40).expect("worker still alive");
+                assert_eq!(fourth.await, 40);
+
+                let gathered = registry.gather();
+                let active = gathered
+                    .iter()
+                    .find(|family| family.name() == "mz_ts_oracle_qps_phase_active");
+                if mode == Mode::Off {
+                    assert!(active.is_none());
+                } else {
+                    let active = active.expect("enabled phase gauges");
+                    for metric in active.get_metric() {
+                        assert_eq!(metric.get_gauge().value(), 0.0);
+                    }
+                    let durations = gathered
+                        .iter()
+                        .find(|family| family.name() == "mz_ts_oracle_qps_phase_seconds")
+                        .expect("enabled histograms");
+                    let sample_count = |phase, outcome, kind| {
+                        durations
+                            .get_metric()
+                            .iter()
+                            .find(|metric| {
+                                [("phase", phase), ("outcome", outcome), ("kind", kind)]
+                                    .iter()
+                                    .all(|(name, value)| {
+                                        metric.get_label().iter().any(|label| {
+                                            label.name() == *name && label.value() == *value
+                                        })
+                                    })
+                            })
+                            .expect("bound metric")
+                            .get_histogram()
+                            .sample_count()
+                    };
+                    assert_eq!(sample_count("read_total", "returned", "wall"), 3);
+                    assert_eq!(sample_count("read_total", "dropped", "wall"), 1);
+                    assert_eq!(sample_count("batch_backing_read", "returned", "wall"), 4);
+                    assert_eq!(sample_count("response_resume", "returned", "wall"), 3);
+                    assert_eq!(sample_count("response_resume", "dropped", "wall"), 1);
+                }
+            })
+            .await
+            .expect("test did not make progress");
+        }
     }
 
     #[mz_ore::test(tokio::test)]
