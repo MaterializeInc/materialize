@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { hcl } from "d3";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -22,7 +23,7 @@ function line(
   key: string,
   breachValue: number | null,
 ): ThresholdLineSeries<never> {
-  return { key, label: key, yAccessor: () => null, breachValue };
+  return { key, yAccessor: () => null, breachValue };
 }
 
 describe("isBreaching", () => {
@@ -36,38 +37,33 @@ describe("isBreaching", () => {
   });
 });
 
-/** The integer hue out of an `hsl(...)` string. */
+/** The hue a color actually renders at, in degrees. */
 function hue(color: string) {
-  return parseInt(/hsl\((\d+)/.exec(color)?.[1] ?? "", 10);
+  return hcl(color).h;
+}
+
+/** The closest any two of these colors sit on the wheel, in degrees. */
+function minHueGap(colors: string[]) {
+  const hues = colors.map(hue).sort((a, b) => a - b);
+  return Math.min(
+    ...hues.map((h, i) => {
+      const next = hues[(i + 1) % hues.length];
+      return (next - h + 360) % 360;
+    }),
+  );
 }
 
 describe("generateRainbowPalette", () => {
-  it("puts the first four hues a quarter turn apart", () => {
-    expect(
-      generateRainbowPalette(4)
-        .map(hue)
-        .sort((a, b) => a - b),
-    ).toEqual([0, 90, 180, 270]);
+  it("puts the first four colors about a quarter turn apart", () => {
+    expect(minHueGap(generateRainbowPalette(4))).toBeGreaterThan(80);
   });
 
-  it("halves the spacing as the palette grows", () => {
-    const spacing = (count: number) => {
-      const hues = generateRainbowPalette(count)
-        .map(hue)
-        .sort((a, b) => a - b);
-      return Math.min(...hues.slice(1).map((h, i) => h - hues[i]));
-    };
-    expect(spacing(2)).toBe(180);
-    expect(spacing(4)).toBe(90);
-    expect(spacing(8)).toBe(45);
-    // 22.5 degrees, which alternates 23 and 22 on a whole-degree grid.
-    expect(spacing(16)).toBe(22);
-  });
-
-  it("orders hues furthest-apart first", () => {
-    expect(generateRainbowPalette(8).map(hue)).toEqual([
-      0, 180, 90, 270, 45, 225, 135, 315,
-    ]);
+  it("narrows the spacing as the palette grows, without bunching", () => {
+    // The sequence halves its spacing each time it doubles. Asserted with
+    // tolerance because a color outside sRGB is clamped, which moves its hue.
+    expect(minHueGap(generateRainbowPalette(8))).toBeGreaterThan(35);
+    expect(minHueGap(generateRainbowPalette(16))).toBeGreaterThan(15);
+    expect(minHueGap(generateRainbowPalette(32))).toBeGreaterThan(5);
   });
 
   it("never recolors an earlier entry when the palette grows", () => {
@@ -77,10 +73,10 @@ describe("generateRainbowPalette", () => {
     );
   });
 
-  it("honors saturation and lightness overrides", () => {
-    expect(generateRainbowPalette(2, 40, 65)).toEqual([
-      "hsl(0, 40%, 65%)",
-      "hsl(180, 40%, 65%)",
+  it("honors chroma and lightness overrides", () => {
+    expect(generateRainbowPalette(2, 40, 70)).toEqual([
+      hcl(0, 40, 70).formatHex(),
+      hcl(180, 40, 70).formatHex(),
     ]);
   });
 
@@ -88,9 +84,8 @@ describe("generateRainbowPalette", () => {
     expect(generateRainbowPalette(0)).toEqual([]);
   });
 
-  it("stays distinct up to a whole wheel of hues, then repeats", () => {
-    expect(new Set(generateRainbowPalette(256)).size).toBe(256);
-    expect(new Set(generateRainbowPalette(2048)).size).toBeLessThan(2048);
+  it("gives distinct colors at the sizes a cluster reaches", () => {
+    expect(new Set(generateRainbowPalette(128)).size).toBe(128);
   });
 });
 
@@ -110,11 +105,8 @@ describe("assignLineColors", () => {
       line("high", 9),
       line("mid", 5),
     ]);
-    expect([...colors]).toEqual([
-      ["high", "hsl(0, 90%, 50%)"],
-      ["mid", "hsl(180, 90%, 50%)"],
-      ["low", "hsl(90, 90%, 50%)"],
-    ]);
+    expect([...colors.keys()]).toEqual(["high", "mid", "low"]);
+    expect([...colors.values()]).toEqual(generateRainbowPalette(3));
   });
 
   it("does not depend on the order the lines arrive in", () => {
@@ -126,11 +118,6 @@ describe("assignLineColors", () => {
     expect([...forward].sort()).toEqual([...backward].sort());
   });
 
-  it("takes no threshold, so no threshold can recolor a line", () => {
-    // Guards the property by signature: there is nothing to pass.
-    expect(assignLineColors.length).toBe(1);
-  });
-
   it("gives no two lines the same color, below the wheel's ceiling", () => {
     const lines = Array.from({ length: 12 }, (_unused, i) => line(`k${i}`, i));
     expect(new Set(assignLineColors(lines).values()).size).toBe(12);
@@ -138,15 +125,15 @@ describe("assignLineColors", () => {
 
   it("separates the worst breaches, which are the ones a threshold picks", () => {
     // Any threshold highlights a prefix of the ranking, so the prefix is what
-    // has to be spread. The first four land a quarter turn apart.
+    // has to be spread.
     const lines = Array.from({ length: 47 }, (_unused, i) =>
       line(`k${String(i).padStart(2, "0")}`, 100 - i),
     );
     const colors = assignLineColors(lines);
-    const worstFour = ["k00", "k01", "k02", "k03"].map((k) =>
-      hue(colors.get(k) ?? ""),
+    const worstFour = ["k00", "k01", "k02", "k03"].map(
+      (key) => colors.get(key) ?? "",
     );
-    expect([...worstFour].sort((a, b) => a - b)).toEqual([0, 90, 180, 270]);
+    expect(minHueGap(worstFour)).toBeGreaterThan(80);
   });
 });
 

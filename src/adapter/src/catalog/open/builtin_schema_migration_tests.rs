@@ -21,7 +21,7 @@ use mz_repr::{RelationDesc, SqlScalarType};
 use mz_storage_client::controller::IntrospectionType;
 use rand::rngs::SmallRng;
 use rand::seq::IteratorRandom;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use semver::Version;
 use tracing::info;
 

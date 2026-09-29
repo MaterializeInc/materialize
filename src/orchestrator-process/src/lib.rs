@@ -46,7 +46,7 @@ use nix::sys::signal::Signal;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
-use sysinfo::{Pid, PidExt, Process, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -529,8 +529,11 @@ impl OrchestratorWorker {
             let (cpu_nano_cores, memory_bytes) = match pid {
                 None => (None, None),
                 Some(pid) => {
-                    self.system
-                        .refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
+                    self.system.refresh_processes_specifics(
+                        ProcessesToUpdate::Some(&[pid]),
+                        true,
+                        ProcessRefreshKind::nothing().with_cpu().with_memory(),
+                    );
                     match self.system.process(pid) {
                         None => (None, None),
                         Some(process) => {
@@ -992,7 +995,12 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
     // on each iteration to detect PID reuse.
     let mut system = System::new();
     loop {
-        if !system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+        let refreshed = system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        if refreshed == 0 {
             break;
         }
         match system.process(pid) {
@@ -1076,7 +1084,11 @@ fn did_process_crash(status: ExitStatus) -> bool {
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
     let mut system = System::new();
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
     let start_time = system.process(pid).map_or(0, |p| p.start_time());
     fs::write(pid_file, format!("{pid}\n{start_time}\n")).await?;
     Ok(())
@@ -1099,7 +1111,11 @@ async fn find_process_from_pid_file<'a>(
     let Ok(start_time) = u64::from_str(start_time) else {
         return None;
     };
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
     let process = system.process(pid)?;
     // Checking the start time protects against killing an unrelated process due
     // to PID reuse.

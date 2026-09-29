@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/hedge.rs
-revision: 71750da8ad
+revision: 897da7252d
 ---
 
 # `persist::hedge`
@@ -30,7 +30,7 @@ Only `get` is hedged. All other `Blob` methods (`list_keys_and_metadata`, `set`,
 
 | Config | Default | Description |
 |---|---|---|
-| `persist_blob_hedged_get_enabled` | `false` | Master enable/disable switch |
+| `persist_blob_hedged_get_enabled` | `true` | Master enable/disable switch |
 | `persist_blob_hedged_get_delay` | 2 s | Time before a hedge fires |
 | `persist_blob_hedged_get_max_concurrent` | 2 | Concurrent hedge cap |
 | `persist_blob_hedged_get_budget_ratio` | 0.01 | Long-run hedge fraction |

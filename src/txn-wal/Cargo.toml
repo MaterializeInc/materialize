@@ -29,7 +29,7 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 crossbeam-channel.workspace = true
-rand = { workspace = true, features = ["small_rng"] }
+rand.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

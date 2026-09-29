@@ -17,7 +17,7 @@ use mz_repr::{Datum, ProtoRow, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_storage_types::sources::SourceData;
 use rand::distr::{Alphanumeric, Distribution, SampleString, StandardUniform};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn encode_legacy(data: &[SourceData]) -> ColumnarRecords {
     let mut buf = ColumnarRecordsBuilder::default();

@@ -48,3 +48,20 @@ def test_log_start_marker_absent(tmp_path: Path) -> None:
             b"environmentd: fatal: setup failure", str(log_file)
         )
     ]
+
+
+def test_glibc_heap_abort_is_an_error(tmp_path: Path) -> None:
+    log_file = tmp_path / "run.log"
+    log_file.write_text(
+        "--- list.td\n"
+        "malloc(): unsorted double linked list corrupted\n"
+        "--- load-generator.td\n"
+    )
+
+    errors = ci_annotate_errors.get_errors([str(log_file)])
+
+    assert errors == [
+        ci_annotate_errors.ErrorLog(
+            b"malloc(): unsorted double linked list corrupted", str(log_file)
+        )
+    ]
