@@ -62,10 +62,13 @@ The `execution_strategy` column shows how Materialize executed the query:
 
 | Strategy | Meaning |
 |----------|---------|
-| `fast-path` | The cluster read the result directly from an existing index. This is the fastest strategy. |
-| `persist-fast-path` | The cluster read the result directly from a source, table, or materialized view in storage, without building a dataflow. |
+| `fast-path` | The cluster read the result directly from an existing index, or from storage for [small `LIMIT` queries](#return-less-data), without building a dataflow. |
 | `standard` | The cluster built a temporary dataflow to compute the result, then dropped it. |
 | `constant` | Materialize computed the result without a cluster. |
+
+The query only lists successful statements. Canceled and failed statements
+have no `execution_strategy`. To include them, remove the `finished_status`
+filter.
 
 The **Query history** tab in the [Materialize
 console](/developer-tools/console/) shows the same information, and lets you
@@ -118,9 +121,9 @@ Use the stage that dominates to pick a resolution:
 
 | Stage | What happens | Resolution |
 |-------|--------------|------------|
-| `optimization` | Materialize parses, plans, and optimizes the query, and picks a timestamp. | Simplify the query, or [index a view](#use-an-index) that performs the complex part. |
+| `optimization` | Materialize parses, plans, and optimizes the query, and picks a timestamp. With [real-time recency](/sql/set/#other-configuration-parameters) enabled, this includes waiting for the latest upstream offsets. | Simplify the query, or [index a view](#use-an-index) that performs the complex part. In self-managed deployments, see [Check `environmentd`](#check-environmentd). |
 | `dependency_wait` | Materialize waits for the sources, tables, materialized views, and indexes the query reads from to catch up to the chosen timestamp. | [Fix lagging dependencies](#fix-lagging-dependencies). |
-| `execution` | The cluster computes the result and returns it. | [Use an index](#use-an-index), [reduce cluster load](#reduce-cluster-load), or [return less data](#return-less-data). |
+| `execution` | The cluster computes the result and returns it to Materialize. Sending the rows to the client is not included. | [Use an index](#use-an-index), [reduce cluster load](#reduce-cluster-load), or [return less data](#return-less-data). |
 
 If `total` is small but your client reports a much higher latency, the time is
 spent outside of Materialize. See [Reduce client-side
@@ -143,7 +146,8 @@ LIMIT 10;
 A lag of a few seconds is expected. Lag that is much higher, or that keeps
 growing, means the object can't keep up with its inputs. To see lag visually,
 open the object's workflow graph in the console: click **Clusters**, select the
-cluster, then select the object under **Materialized Views** or **Indexes**.
+cluster, select the object under **Materialized Views** or **Indexes**, then
+open the **Workflow** tab.
 
 ### Check the query plan
 
@@ -167,10 +171,10 @@ Used Indexes:
 Target cluster: quickstart
 ```
 
-`Explained Query (fast path)` and an `Index Lookup` mean the query reads
-directly from an index. A plan without `(fast path)`, or without `Used
-Indexes`, means Materialize builds a dataflow or reads from storage on every
-execution.
+`Explained Query (fast path)` means that no dataflow is built: an `Index
+Lookup` or `Indexed` operator reads from an index, and `ReadStorage` reads from
+storage. A plan without `(fast path)` means Materialize builds a temporary
+dataflow on every execution, even if the plan lists `Used Indexes`.
 
 ### Check cluster utilization
 
@@ -192,13 +196,16 @@ console.
 ### Fix lagging dependencies
 
 - To find and fix the cause of lag in a materialized view or index, see
+  [Freshness troubleshooting](/transform-data/freshness-troubleshooting/) and
   [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/). For a
   lagging source, see [Troubleshoot ingestion](/ingest-data/troubleshooting/).
 - Avoid chaining materialized views where you don't need to. Each materialized
   view in a chain adds a small amount of lag to the next one.
 - If you don't need [strict serializable](/serve-results/isolation-level/)
   results, use the `serializable` isolation level. Materialize can then serve
-  results from a lagging object at an earlier timestamp instead of waiting.
+  results at the latest timestamp that all inputs can already serve, instead
+  of waiting for the lagging object. The whole result is then as stale as the
+  most lagging input.
 - If you run queries inside a transaction, see [Avoid
   transactions](#avoid-unnecessary-transactions).
 - If the dependencies can't keep up with their inputs, [size up the
@@ -219,7 +226,9 @@ console.
 ### Reduce cluster load
 
 - Move queries that build dataflows onto a separate cluster, so that they don't
-  compete with indexes and materialized views for CPU. See [Expensive
+  compete with indexes and materialized views for CPU. Indexes are local to a
+  cluster, so a query that uses an index on the original cluster can become
+  more expensive on the new one. See [Expensive
   queries](/serve-results/troubleshooting/expensive-queries/).
 - [Size up the cluster](/sql/alter-cluster/).
 
@@ -228,10 +237,10 @@ console.
 - Filter results with [temporal
   filters](/transform-data/patterns/temporal-filters/). Materialize can skip
   over old data in storage that doesn't match the filter.
-- Add a `LIMIT` clause to exploratory queries. A query on a single source,
-  table, or materialized view with only a `LIMIT` (no filters, ordering, or
-  offset) reads directly from storage. `EXPLAIN` shows `Explained Query (fast
-  path)` for these queries.
+- Add a `LIMIT` clause to exploratory queries. A query that selects from a
+  single source, table, or materialized view with no filters, no ordering, and
+  a `LIMIT` plus `OFFSET` below 25 reads directly from storage. `EXPLAIN` shows
+  `Explained Query (fast path)` for these queries.
 - Select only the columns you need. A large `result_size` in
   `mz_recent_activity_log` adds time to transmit the result.
 
@@ -283,7 +292,7 @@ time goes.
 |-------------|--------|
 | Latency reported by your client | The full round trip: client, network, `balancerd`, `environmentd`, and the cluster. |
 | `finished_at - began_at` in `mz_recent_activity_log` | `environmentd` and the cluster. |
-| [`mz_compute_peek_duration_seconds`](/observability/essential-metrics/) | The cluster: from when `environmentd` sends the query to the cluster until the result arrives. |
+| [`mz_compute_peek_duration_seconds`](/observability/essential-metrics/) | From when `environmentd` sends the query to the cluster until the result arrives. This includes waiting for dependencies and, for `standard` queries, building the temporary dataflow. |
 
 To compute the average statement log latency over the last minute:
 
@@ -305,12 +314,17 @@ Then compare:
   in the client, the network, or `balancerd`. See [Check
   `balancerd`](#check-balancerd) and [Check the client](#check-the-client).
 - **Statement log latency is much higher than peek duration**: The time is
-  spent in `environmentd`. Use the [lifecycle
-  breakdown](#break-down-where-the-time-goes) to see whether it is optimization
-  or waiting for dependencies, and [check
+  spent in `environmentd` before the query reaches the cluster, for example in
+  optimization or timestamp selection. See [Check
   `environmentd`](#check-environmentd).
-- **Peek duration is high**: The time is spent on the cluster. Follow the steps
-  in [Resolution](#resolution).
+- **Peek duration is high**: Use the [lifecycle
+  breakdown](#break-down-where-the-time-goes) to see whether the query waits for
+  dependencies or for execution on the cluster, then follow the steps in
+  [Resolution](#resolution).
+
+`mz_compute_peek_duration_seconds` has an `instance_id` label that holds the
+cluster ID. Filter on it to compare the same clusters as the statement log
+query, which excludes system clusters.
 
 To collect `mz_compute_peek_duration_seconds` and other Prometheus metrics, see
 [Grafana](/observability/self-managed/grafana/).
@@ -318,11 +332,12 @@ To collect `mz_compute_peek_duration_seconds` and other Prometheus metrics, see
 ### Check `environmentd`
 
 Every query passes through `environmentd`. Watch the CPU of the `environmentd`
-pod while queries are slow. If it stays near its CPU request or limit while
-cluster CPU is low, give `environmentd` more CPU with
+pod while queries are slow. If it is saturated, or throttled by a CPU limit,
+while cluster CPU is low, give `environmentd` more CPU with
 `environmentdResourceRequirements` in the Materialize custom resource. See
 [Materialize CRD field
 descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
+Changing this field rolls out a new `environmentd`.
 
 ### Check `balancerd`
 

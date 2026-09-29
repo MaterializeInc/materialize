@@ -68,6 +68,10 @@ Look for two patterns:
   ad-hoc query. [Isolate it](#isolate-ad-hoc-queries) or [reduce the data it
   reads](#return-less-data).
 
+Canceled and failed statements have no `execution_strategy`, so this query
+doesn't include them. To find long-running statements that were canceled or
+failed, filter on `finished_status IN ('canceled', 'error')` instead.
+
 ### Find expensive queries that are running now
 
 Dataflows for queries that are running are named `oneshot-select-<id>`. To
@@ -111,7 +115,9 @@ EXPLAIN ANALYZE CLUSTER CPU, MEMORY;
 ```
 
 If the indexes and materialized views account for most of the cluster's CPU and
-memory, the queries are not the main cost. See [Dataflow
+memory, the queries are not the main cost. To see which operators of an index
+or materialized view use the most resources, see [`EXPLAIN
+ANALYZE`](/sql/explain-analyze/) and [Dataflow
 troubleshooting](/transform-data/dataflow-troubleshooting/).
 
 ### Check the query plan
@@ -133,8 +139,9 @@ matching index, or `Read` operators on large sources or materialized views.
 
 ### Make frequent queries fast path
 
-A query that reads from an index with an equality lookup doesn't build a
-dataflow. `EXPLAIN` shows `Explained Query (fast path)` for these queries.
+A query that reads from an index and applies only filters and projections
+doesn't build a dataflow. `EXPLAIN` shows `Explained Query (fast path)` for
+these queries.
 
 - Create an [index](/fundamentals/concepts/indexes/) on the columns that the
   query filters on.
@@ -153,7 +160,8 @@ dataflow. `EXPLAIN` shows `Explained Query (fast path)` for these queries.
   SELECT * FROM order_totals WHERE customer_id = 5;
   ```
 
-- Run the query on the same cluster as the index.
+- Run the query on the same cluster as the index. Indexes are local to a
+  cluster.
 
 For more techniques, see [Optimization](/transform-data/optimization/).
 
@@ -179,9 +187,9 @@ guidelines](/clusters/operational-guidelines/).
 - Select only the columns you need.
 
 The `max_query_result_size` [configuration
-parameter](/sql/set/#other-configuration-parameters) limits the size of a
-single query's result, so that a large result fails instead of exhausting
-memory.
+parameter](/sql/set/#other-configuration-parameters) makes a query fail if its
+result exceeds the limit. It doesn't limit the memory that the temporary
+dataflow uses to compute the result.
 
 ### Size up the cluster
 

@@ -16,8 +16,8 @@ This section contains troubleshooting guides for queries that don't perform as
 expected. Each guide starts from a symptom, helps you find the cause with SQL
 against the system catalog, and describes how to fix it.
 
-For problems with maintaining indexes and materialized views, such as high
-memory or CPU on a cluster, see [Dataflow
+For problems with maintaining indexes and materialized views, see [Freshness
+troubleshooting](/transform-data/freshness-troubleshooting/) and [Dataflow
 troubleshooting](/transform-data/dataflow-troubleshooting/). For problems with
 sources, see [Troubleshoot ingestion](/ingest-data/troubleshooting/).
 
@@ -40,10 +40,9 @@ console](/developer-tools/console/), or query it through
 To query the statement log, connect as a *superuser* or as a user granted the
 [`mz_monitor` role](/security/appendix/appendix-built-in-roles/#system-catalog-roles).
 
-Statements are sampled, so not every statement appears in the log. In
-Materialize Cloud, the default and maximum sample rate for most organizations
-is 99%, and Materialize may change it at any time. In self-managed deployments,
-the operator sets the sample rate. See [Query
+Statements are sampled and throttled, so not every statement appears in the
+log. In Materialize Cloud, Materialize controls the sample rate and may change
+it at any time. In self-managed deployments, the operator sets it. See [Query
 History](/self-managed-deployments/query-history/).
 
 For a complete history of DDL statements, use

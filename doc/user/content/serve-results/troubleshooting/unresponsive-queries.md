@@ -59,6 +59,8 @@ ORDER BY a.began_at;
 Note the `connection_id`. You need it to [cancel the
 query](#cancel-the-query).
 
+The statement log is sampled, so a running query may not appear here.
+
 ### Check for snapshotting sources
 
 ```mzsql
@@ -78,11 +80,10 @@ wait until the snapshot completes.
 SELECT name, type, status, error
 FROM mz_internal.mz_source_statuses
 WHERE id LIKE 'u%'
-  AND status NOT IN ('running', 'created');
+  AND status IN ('stalled', 'paused');
 ```
 
-A source with status `stalled` or `paused`, or with an `error`, isn't ingesting
-data.
+A source in the result isn't ingesting data. The `error` column shows why.
 
 ### Check for hydrating objects
 
@@ -96,8 +97,8 @@ WHERE NOT h.hydrated;
 
 Any object in the result is still hydrating on that replica. You can also see
 hydration status on the object's workflow graph in the console: click
-**Clusters**, select the cluster, then select the object under **Materialized
-Views** or **Indexes**.
+**Clusters**, select the cluster, select the object under **Materialized
+Views** or **Indexes**, then open the **Workflow** tab.
 
 ### Check cluster health
 
