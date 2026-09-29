@@ -13,24 +13,55 @@ without redeploying it. This guide assumes you manage Materialize with the
 [Materialize Terraform modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
 including the `materialize-instance` module.
 
-The change happens in two applies, so you can check the stack before any
-user signs in through it:
+Materialize is switched over in a separate apply at the end, so you can check
+the stack before any user signs in through it:
 
-1. Add the `ory-stack` module and check that it's healthy. Materialize keeps
+1. Create the Ory databases.
+2. Add the `ory-stack` module and check that it's healthy. Materialize keeps
    using its current authentication.
-2. Point Materialize at Hydra.
+3. Point Materialize at Hydra.
 
 ## Before you begin
 
-- Complete the [prerequisites](/self-managed-deployments/sso/advanced/prerequisites/).
-- Create PostgreSQL databases for Kratos and Hydra, plus one for Polis if
-  you plan to enable SAML. They can live on your existing PostgreSQL server
-  or on a dedicated instance.
+Complete the [prerequisites](/self-managed-deployments/sso/advanced/prerequisites/).
 
-## Step 1: Add the Ory stack
+## Step 1: Create the Ory databases
+
+Kratos and Hydra each need their own PostgreSQL database, and Polis needs one
+too if you plan to enable SAML. They can share a PostgreSQL server, either your
+existing one or a dedicated instance, as long as the Kubernetes cluster can
+reach it. The enterprise examples use a managed instance (Cloud SQL, Azure
+Database for PostgreSQL flexible server, or RDS) in the same network as the
+cluster.
+
+1. Create a user and the databases. Each component runs its own schema
+   migrations on startup, so the user must own its databases:
+
+   ```sql
+   CREATE USER oryadmin WITH PASSWORD '<password>';
+   CREATE DATABASE kratos OWNER oryadmin;
+   CREATE DATABASE hydra OWNER oryadmin;
+   -- Only if you plan to enable SAML:
+   CREATE DATABASE polis OWNER oryadmin;
+   ```
+
+1. Build a connection string for each database. URL-encode the password, for
+   example with Terraform's `urlencode()`:
+
+   ```hcl
+   locals {
+     ory_kratos_dsn = "postgres://oryadmin:${urlencode(var.ory_db_password)}@<host>:5432/kratos?sslmode=require"
+     ory_hydra_dsn  = "postgres://oryadmin:${urlencode(var.ory_db_password)}@<host>:5432/hydra?sslmode=require"
+     # uselibpqcompat=true keeps sslmode=require at libpq semantics (encrypt,
+     # don't verify), which Polis's driver needs against managed servers.
+     ory_polis_dsn  = "postgres://oryadmin:${urlencode(var.ory_db_password)}@<host>:5432/polis?sslmode=require&uselibpqcompat=true"
+   }
+   ```
+
+## Step 2: Add the Ory stack
 
 1. Add the `ory-stack` module next to your existing modules, substituting
-   your own hostnames, database connection strings, and `ClusterIssuer`:
+   your own hostnames and `ClusterIssuer`:
 
    ```hcl
    module "ory" {
@@ -42,8 +73,8 @@ user signs in through it:
      kratos_fqdn = "kratos.example.com"
      ui_fqdn     = "auth.example.com"
 
-     kratos_dsn = "postgres://<user>:<password>@<host>:5432/kratos?sslmode=require"
-     hydra_dsn  = "postgres://<user>:<password>@<host>:5432/hydra?sslmode=require"
+     kratos_dsn = local.ory_kratos_dsn
+     hydra_dsn  = local.ory_hydra_dsn
 
      # Use the ory_oel_image_tag default from the enterprise example at the same release.
      oel_image_tag   = "<ORY_IMAGE_TAG>"
@@ -72,7 +103,7 @@ user signs in through it:
    ([AWS](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws/examples/enterprise),
    [Azure](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/enterprise),
    [GCP](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/enterprise)).
-   To enable SAML, also set `enable_polis`, `polis_fqdn`, and `polis_dsn`;
+   To enable SAML, also set `enable_polis`, `polis_fqdn`, and `polis_dsn = local.ory_polis_dsn`;
    see [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/).
 
 1. Apply:
@@ -93,7 +124,7 @@ user signs in through it:
    curl -fsSL https://hydra.example.com/.well-known/openid-configuration | jq .issuer
    ```
 
-## Step 2: Point Materialize at Hydra
+## Step 3: Point Materialize at Hydra
 
 1. In your existing `materialize-instance` module, switch authentication to
    OIDC and set the OIDC parameters from the `ory-stack` outputs:
@@ -115,7 +146,7 @@ user signs in through it:
        oidc_authentication_claim    = "email"
        console_oidc_client_id       = module.ory.oauth2_client_id
        console_oidc_scopes          = "openid email"
-       # Optional: grant roles from IdP groups (see Operations).
+       # Optional: grant roles from IdP groups (see Enable role mapping).
        oidc_group_role_sync_enabled = "true"
      }
 
@@ -134,11 +165,11 @@ user signs in through it:
    terraform apply
    ```
 
-## Step 3: Verify sign-in
+## Step 4: Verify sign-in
 
 {{% include-headless "/headless/self-managed-deployments/enterprise-sso/verify" %}}
 
 ## Next steps
 
 - [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/)
-- [Enable role mapping](/self-managed-deployments/sso/advanced/operations/#enable-role-mapping)
+- [Enable role mapping](/self-managed-deployments/sso/advanced/role-mapping/)

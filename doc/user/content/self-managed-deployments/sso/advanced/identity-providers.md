@@ -326,7 +326,7 @@ curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
 Group memberships flow all the way to the JWT (via the `groups` claim) and
 Materialize can automatically translate them into SQL role memberships on
 each login. Enable it via the `oidc_group_role_sync_enabled` system
-parameter; see [Enable role mapping](/self-managed-deployments/sso/advanced/operations/#enable-role-mapping)
+parameter; see [Enable role mapping](/self-managed-deployments/sso/advanced/role-mapping/)
 for details and the naming convention.
 
 ## What happens when users sign in

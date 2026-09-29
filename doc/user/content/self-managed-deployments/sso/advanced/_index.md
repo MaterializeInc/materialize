@@ -1,7 +1,8 @@
 ---
-title: "Advanced SSO"
+title: "Advanced SSO (OIDC, SAML and SCIM)"
 description: "Configure OIDC, SAML, SCIM, and role mapping for Self-Managed Materialize with the advanced SSO stack."
 disable_list: true
+mermaid: true
 menu:
   main:
     parent: "sm-sso"
@@ -12,7 +13,7 @@ menu:
 {{< public-preview />}}
 
 Self-Managed Materialize supports OIDC sign-in directly, as described in
-[Configure OIDC](/self-managed-deployments/sso/oidc/). For **SAML**, **SCIM
+[Simple SSO (OIDC)](/self-managed-deployments/sso/oidc/). For **SAML**, **SCIM
 provisioning**, or **federation through an IdP-agnostic proxy**, Materialize
 provides an additional Terraform-managed stack that sits in front of
 Materialize and acts as the OIDC issuer.
@@ -118,5 +119,6 @@ Work through these pages in order:
 1. **[Prerequisites](/self-managed-deployments/sso/advanced/prerequisites/)**: license key, DNS, cert-manager, and Polis requirements
 2. **Install**: either [add the stack to an existing installation](/self-managed-deployments/sso/advanced/existing-installation/), or deploy a new one on [Azure](/self-managed-deployments/sso/advanced/install-on-azure/), [GCP](/self-managed-deployments/sso/advanced/install-on-gcp/), or [AWS](/self-managed-deployments/sso/advanced/install-on-aws/)
 3. **[Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/)**: direct OIDC, SAML via Polis, and SCIM provisioning
-4. **[Operations](/self-managed-deployments/sso/advanced/operations/)**: day-2 tasks such as rotating credentials, adding OAuth2 clients, and managing identities
-5. **[Troubleshooting](/self-managed-deployments/sso/advanced/troubleshooting/)**: common errors and fixes
+4. **[Enable role mapping](/self-managed-deployments/sso/advanced/role-mapping/)**: grant Materialize roles from IdP groups
+5. **[Operations](/self-managed-deployments/sso/advanced/operations/)**: day-2 tasks such as rotating credentials, adding OAuth2 clients, and managing identities
+6. **[Troubleshooting](/self-managed-deployments/sso/advanced/troubleshooting/)**: common errors and fixes
