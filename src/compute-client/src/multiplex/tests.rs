@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -229,6 +228,18 @@ fn create_dataflow(index_ids: &[GlobalId], subscribe_ids: &[GlobalId]) -> Comput
     )
 }
 
+/// Builds an unbounded `CreateDataflow` exporting `index_id`, which the multiplexer routes to
+/// maintenance and records as a published index.
+fn maintained_index(index_id: GlobalId) -> ComputeCommand {
+    create_dataflow_with(
+        &[index_id],
+        &[],
+        &[],
+        Antichain::from_elem(Timestamp::from(0u64)),
+        Antichain::new(),
+    )
+}
+
 /// Builds a `Peek` command with the given uuid targeting an index.
 fn peek(uuid: Uuid, literal: Option<Vec<Row>>) -> ComputeCommand {
     let map_filter_project = match MapFilterProject::new(0)
@@ -375,19 +386,23 @@ async fn create_routes_to_interactive_and_compaction_is_not_capped() {
     let beyond = Antichain::from_elem(Timestamp::from(200u64));
 
     h.mux
+        .send(maintained_index(source))
+        .await
+        .expect("send source");
+    h.mux
         .send(interactive_import_of(source, export, &as_of))
         .await
         .expect("send create");
 
     let seen = timeline(&h);
-    assert_eq!(seen.len(), 1, "the create alone: {seen:?}");
+    assert_eq!(seen.len(), 2, "the two creates alone: {seen:?}");
     assert!(
         matches!(
-            &seen[0],
+            &seen[1],
             (Runtime::Interactive, ComputeCommand::CreateDataflow(_))
         ),
-        "expected the create to interactive, got {:?}",
-        seen[0]
+        "expected the importing create to interactive, got {:?}",
+        seen[1]
     );
 
     // The controller now says its own readers are done with `source` beyond the `as_of`. Both
@@ -574,8 +589,8 @@ async fn routing_excludes_copy_to_and_subscribe_and_unbounded() {
 
     // A durable (non-transient), bounded, sinkless dataflow routes to maintenance: the shape
     // of a `REFRESH AT` materialized view, whose `until` is set to its last refresh even
-    // though the collection itself is durable. Routing it to interactive would make its
-    // frontier reports get dropped by the `is_transient()` gate in `filter_response`.
+    // though the collection itself is durable. Routing it to interactive would trip the
+    // assertion in `recv` that interactive reports frontiers only for transient ids.
     let mut h = harness();
     let cmd = create_dataflow_with(&[GlobalId::User(25)], &[], &[], as_of, bounded);
     h.mux.send(cmd).await.expect("send");
@@ -640,6 +655,7 @@ async fn maintained_compaction_is_broadcast_to_both() {
     let mut h = harness();
     let id = GlobalId::User(7);
     let ten = Antichain::from_elem(Timestamp::from(10u64));
+    h.mux.send(maintained_index(id)).await.expect("send");
 
     h.mux
         .send(ComputeCommand::AllowCompaction {
@@ -670,6 +686,91 @@ async fn maintained_compaction_is_broadcast_to_both() {
         2,
         "the drop is broadcast as well"
     );
+}
+
+/// Only published indexes are broadcast. A maintained sink, the shape of a materialized view's
+/// persist sink, has no arrangement for interactive to import, so its compactions and its drop stay
+/// on maintenance. So does a compaction for an index whose drop was already forwarded.
+#[mz_ore::test(tokio::test)]
+async fn compaction_of_an_unpublished_collection_is_not_broadcast() {
+    let mut h = harness();
+    let sink = GlobalId::User(8);
+    let index = GlobalId::User(9);
+    let ten = Antichain::from_elem(Timestamp::from(10u64));
+
+    h.mux
+        .send(create_dataflow_with(
+            &[],
+            &[sink],
+            &[],
+            Antichain::from_elem(Timestamp::from(0u64)),
+            Antichain::new(),
+        ))
+        .await
+        .expect("send sink");
+    h.mux.send(maintained_index(index)).await.expect("send");
+    for id in [sink, index] {
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id,
+                frontier: Antichain::new(),
+            })
+            .await
+            .expect("send drop");
+    }
+    h.mux
+        .send(ComputeCommand::AllowCompaction {
+            id: index,
+            frontier: ten.clone(),
+        })
+        .await
+        .expect("send late compaction");
+
+    assert_eq!(compactions_for(&h, sink), vec![Antichain::new()]);
+    assert!(
+        compactions_in(inter_commands(&h), sink).is_empty(),
+        "a sink's compaction must not reach interactive"
+    );
+    assert_eq!(
+        compactions_in(inter_commands(&h), index),
+        vec![Antichain::new()],
+        "only the index's drop reaches interactive, not the compaction after it"
+    );
+}
+
+/// Logging indexes are published without a `CreateDataflow`, so `CreateInstance` records them.
+#[mz_ore::test(tokio::test)]
+async fn logging_index_compaction_is_broadcast() {
+    use mz_persist_types::PersistLocation;
+
+    use crate::logging::{LogVariant, LoggingConfig, TimelyLog};
+    use crate::protocol::command::InstanceConfig;
+
+    let mut h = harness();
+    let id = GlobalId::System(3);
+    let ten = Antichain::from_elem(Timestamp::from(10u64));
+    h.mux
+        .send(ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            logging: LoggingConfig {
+                index_logs: [(LogVariant::Timely(TimelyLog::Operates), id)].into(),
+                ..Default::default()
+            },
+            expiration_offset: None,
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
+            arrangement_dictionary_compression: false,
+            initial_config: Default::default(),
+        })))
+        .await
+        .expect("send");
+    h.mux
+        .send(ComputeCommand::AllowCompaction {
+            id,
+            frontier: ten.clone(),
+        })
+        .await
+        .expect("send");
+
+    assert_eq!(compactions_in(inter_commands(&h), id), vec![ten]);
 }
 
 #[mz_ore::test(tokio::test)]
@@ -816,49 +917,16 @@ async fn frontiers_forwarded_from_owning_runtime() {
     assert!(matches!(got, Some(ComputeResponse::Frontiers(g, _)) if g == id));
 }
 
+/// Only the runtime that hosts a collection may report its frontier. A report from interactive for
+/// a maintained id means the runtimes disagree about who hosts it.
 #[mz_ore::test(tokio::test)]
-async fn frontiers_dropped_from_non_owning_runtime() {
-    // Only the runtime that hosts a collection may report its frontier. A report for a maintained
-    // id from the interactive runtime is for a collection it does not host, and forwarding it
-    // would let the controller see the collection's frontier regress.
+#[should_panic(expected = "interactive runtime reported frontiers for non-transient collection")]
+async fn frontiers_from_interactive_for_a_maintained_id_are_a_bug() {
     let mut h = harness();
-    // A maintained id: never recorded as a transient owner, so maintenance owns it.
-    let id = GlobalId::System(42);
-    // The interactive runtime reports the empty frontier first, then maintenance reports a real,
-    // finite frontier. The interactive report must be dropped.
     h.inter_tx
-        .send(ComputeResponse::Frontiers(
-            id,
-            crate::protocol::response::FrontiersResponse {
-                write_frontier: Some(Antichain::new()),
-                input_frontier: None,
-                output_frontier: None,
-            },
-        ))
-        .expect("send empty frontier from interactive");
-    h.maint_tx.send(frontiers(id, 100)).expect("send maint");
-
-    // Exactly one frontier for `id` reaches the controller, and it is maintenance's. Both channels
-    // hold a message, so `recv` picks a runtime at random; draining past the first response is
-    // what makes the filter's drop observable rather than a coin flip.
-    let got = h.mux.recv().await.expect("recv");
-    match got {
-        Some(ComputeResponse::Frontiers(g, f)) => {
-            assert_eq!(g, id);
-            assert_eq!(
-                f.write_frontier,
-                Some(Antichain::from_elem(Timestamp::from(100u64))),
-                "interactive's empty frontier was dropped; maintenance's forwarded"
-            );
-        }
-        other => panic!("expected maintenance frontier, got {other:?}"),
-    }
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), h.mux.recv())
-            .await
-            .is_err(),
-        "interactive's non-transient frontier must not be forwarded at all"
-    );
+        .send(frontiers(GlobalId::System(42), 1))
+        .expect("send frontiers");
+    let _ = h.mux.recv().await;
 }
 
 #[mz_ore::test(tokio::test)]
