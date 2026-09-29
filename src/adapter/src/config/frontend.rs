@@ -423,10 +423,7 @@ fn ld_config(
     // `NO_PROXY` env vars and routes through a configured proxy. No exposure
     // today (our cloud pods set no proxy vars, self-managed never builds an LD
     // client), but worth knowing if proxy vars ever appear on a pod.
-    let transport = launchdarkly_sdk_transport::HyperTransport::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .read_timeout(read_timeout)
-        .build_https()
+    let transport = mz_dyncfg_launchdarkly::https_transport(Duration::from_secs(10), read_timeout)
         .expect("failed to create HTTPS transport");
 
     let cse_transport = MetricsTransport {
