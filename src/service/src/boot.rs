@@ -17,7 +17,7 @@
 #[macro_export]
 macro_rules! emit_boot_diagnostics {
     ($build_info:expr $(,)?) => {{
-        use $crate::boot::r#private::sysinfo::{System, SystemExt, CpuExt, CpuRefreshKind};
+        use $crate::boot::r#private::sysinfo::{System, CpuRefreshKind};
         use $crate::boot::r#private::tracing::info;
         use $crate::boot::r#private::tracing::level_filters::LevelFilter;
         use $crate::boot::r#private::cgroup;
@@ -30,7 +30,7 @@ macro_rules! emit_boot_diagnostics {
         let os = os_info::get();
         let mut system = System::new();
         system.refresh_memory();
-        system.refresh_cpu_specifics(CpuRefreshKind::new().with_frequency());
+        system.refresh_cpu_specifics(CpuRefreshKind::nothing().with_frequency());
         let cpus = system.cpus();
         let limits = cgroup::detect_limits();
         info!(
@@ -40,7 +40,7 @@ macro_rules! emit_boot_diagnostics {
             build.version = build_info.version,
             build.sha = build_info.sha,
             cpus.logical = cpus.len(),
-            cpus.physical = %system.physical_core_count().display_or("<unknown>"),
+            cpus.physical = %System::physical_core_count().display_or("<unknown>"),
             cpu0.brand = cpus[0].brand(),
             cpu0.frequency = cpus[0].frequency(),
             memory.total = system.total_memory(),
