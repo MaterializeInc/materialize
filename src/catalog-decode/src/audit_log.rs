@@ -26,11 +26,8 @@
 //! variant and catches drift when either side gains a new variant, field,
 //! or serde attribute.
 
-use mz_expr_derive::sqlfunc;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::{Datum, Row, RowPacker};
-
-use crate::EvalError;
 
 /// Reshapes proto `audit_log_event_v1::Details` JSON from `mz_catalog_raw`
 /// (e.g. `{"IdFullNameV1": {"id": "u1", "name": {...}}}`) into the shape
@@ -40,8 +37,7 @@ use crate::EvalError;
 /// See the module docstring for the mechanism and the reciprocal side. Rule
 /// changes must be paired with tests; the property test at
 /// `src/catalog/tests/audit_log_details.rs` is the safety net.
-#[sqlfunc]
-fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalError> {
+pub fn details(a: JsonbRef<'_>) -> Result<Jsonb, String> {
     /// `(variant, path, field, sub_variant)`: `#[serde(flatten)]` sites.
     /// `sub_variant` sets the context for rules on the hoisted content
     /// when the flattened struct itself has a `#[serde(flatten)]`.
@@ -472,43 +468,39 @@ fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalErr
         Ok(entries)
     }
 
-    let parse = || -> Result<Jsonb, String> {
-        let Datum::Map(dict) = a.into_datum() else {
-            return Err("expected object".into());
-        };
-        let mut iter = dict.iter();
-        let (variant, inner) = iter
-            .next()
-            .ok_or_else(|| "empty details enum".to_string())?;
-        if iter.next().is_some() {
-            return Err("details enum had multiple keys".into());
-        }
-        let mut row = Row::default();
-        // `ResetAllV1` is the only variant `as_json` maps to null (the
-        // proto `Empty` payload serializes to `{}`).
-        if variant == "ResetAllV1" {
-            row.packer().push(Datum::JsonNull);
-            return Ok(Jsonb::from_row(row));
-        }
-        let Datum::Map(_) = inner else {
-            return Err(format!("expected inner object for variant {variant}"));
-        };
-        rewrite(inner, variant, "", &mut row.packer())?;
-        Ok(Jsonb::from_row(row))
+    let Datum::Map(dict) = a.into_datum() else {
+        return Err("expected object".into());
     };
-
-    parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))
+    let mut iter = dict.iter();
+    let (variant, inner) = iter
+        .next()
+        .ok_or_else(|| "empty details enum".to_string())?;
+    if iter.next().is_some() {
+        return Err("details enum had multiple keys".into());
+    }
+    let mut row = Row::default();
+    // `ResetAllV1` is the only variant `as_json` maps to null (the
+    // proto `Empty` payload serializes to `{}`).
+    if variant == "ResetAllV1" {
+        row.packer().push(Datum::JsonNull);
+        return Ok(Jsonb::from_row(row));
+    }
+    let Datum::Map(_) = inner else {
+        return Err(format!("expected inner object for variant {variant}"));
+    };
+    rewrite(inner, variant, "", &mut row.packer())?;
+    Ok(Jsonb::from_row(row))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Round-trip a JSON `input` through `parse_catalog_audit_log_details` and
+    /// Round-trip a JSON `input` through `details` and
     /// assert the resulting JSON parses equal to `expected`.
     fn check(input: &str, expected: &str) {
         let input: Jsonb = input.parse().expect("valid input JSONB");
-        let actual = parse_catalog_audit_log_details(input.as_ref())
+        let actual = details(input.as_ref())
             .expect("helper succeeded")
             .to_string();
         let actual_value: serde_json::Value =
@@ -518,11 +510,11 @@ mod tests {
         assert_eq!(actual_value, expected_value);
     }
 
-    /// Run `parse_catalog_audit_log_details` on `input` and assert it returns
-    /// a `InvalidCatalogJson` error containing `expected_substr`.
+    /// Run `details` on `input` and assert it returns an error containing
+    /// `expected_substr`.
     fn check_err(input: &str, expected_substr: &str) {
         let input: Jsonb = input.parse().expect("valid input JSONB");
-        let err = parse_catalog_audit_log_details(input.as_ref()).expect_err("helper should error");
+        let err = details(input.as_ref()).expect_err("helper should error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains(expected_substr),

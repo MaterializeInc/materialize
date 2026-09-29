@@ -54,6 +54,7 @@
 /src/build-info                     @MaterializeInc/testing @SangJunBak @DAlperin
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
+/src/catalog-decode                 @MaterializeInc/adapter
 /src/ccsr                           @MaterializeInc/adapter @MaterializeInc/cluster
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/cluster

@@ -92,6 +92,15 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  # Each `module` block is its own dependency, so without a group every module
+  # sourced from the same repository gets a separate PR. The modules of one
+  # release must move together, so group all updates, including major ones,
+  # across all roots into a single PR.
+  groups:
+    terraform:
+      applies-to: version-updates
+      patterns:
+        - "*"
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:

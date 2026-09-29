@@ -274,7 +274,7 @@ def msftp(
 
 def setup_ai_tools(instance: Instance) -> None:
     """Transfer local Claude Code and Codex configs to a scratch instance
-    and install the materialize-docs skill."""
+    and install the mz-docs skill."""
     import io
     import pathlib
     import tarfile
@@ -323,7 +323,7 @@ def setup_ai_tools(instance: Instance) -> None:
         instance,
         "cd materialize && "
         "NPM_CONFIG_UPDATE_NOTIFIER=false "
-        "npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill materialize-docs 2>/dev/null || true",
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill mz-docs 2>/dev/null || true",
         quiet=True,
     )
 
@@ -331,7 +331,7 @@ def setup_ai_tools(instance: Instance) -> None:
         instance,
         "cd materialize && "
         "NPM_CONFIG_UPDATE_NOTIFIER=false "
-        "npx -q -y skills add MaterializeInc/agent-skills -g -a codex --copy -y --skill materialize-docs 2>/dev/null || true",
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a codex --copy -y --skill mz-docs 2>/dev/null || true",
         quiet=True,
     )
 
