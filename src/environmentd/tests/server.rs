@@ -55,7 +55,7 @@ use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
-use rand::RngCore;
+use rand::Rng;
 use rdkafka::ClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;

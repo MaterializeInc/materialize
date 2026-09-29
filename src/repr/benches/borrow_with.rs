@@ -25,7 +25,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{DatumVec, Row};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 /// Rows per iteration.
 const BATCH: usize = 1024;

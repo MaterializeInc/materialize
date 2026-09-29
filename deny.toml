@@ -110,6 +110,12 @@ skip = [
     { name = "miniz_oxide", version = "0.8.9" },
     # reqsign-core is on 0.7, while opendal still pulls 0.6.
     { name = "asyncband", version = "0.6.7" },
+    # rand 0.9 is still used by apache-avro, governor, iceberg, k8s-controller,
+    # launchdarkly-server-sdk, mysql_async, opentelemetry_sdk, proptest,
+    # rand_distr, retry-policies, tokio-postgres, tower-sessions-core,
+    # tungstenite and turmoil. rand_core 0.9 is also used by imbl.
+    { name = "rand", version = "0.9.4" },
+    { name = "rand_core", version = "0.9.3" },
     # Used by junit-report
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
@@ -191,8 +197,6 @@ skip = [
     # Pulled by launchdarkly-server-sdk 3.x via launchdarkly-sdk-transport /
     # eventsource-client (proxy/timeout/rustls stack and the SDK's RNG path).
     # NB: tower 0.4.13 is already skipped above (mz-deploy).
-    { name = "rand", version = "0.10.1" },
-    { name = "rand_core", version = "0.10.1" },
     { name = "getrandom", version = "0.4.2" },
     { name = "cpufeatures", version = "0.3.0" },
 ]

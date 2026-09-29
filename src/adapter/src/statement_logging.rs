@@ -470,7 +470,7 @@ pub struct StatementLoggingFrontend {
     /// Shared throttling state for rate-limiting statement logging.
     pub throttling_state: Arc<ThrottlingState>,
     /// Reproducible RNG for statement sampling (only used in tests).
-    pub reproducible_rng: Arc<Mutex<rand_chacha::ChaCha8Rng>>,
+    pub reproducible_rng: Arc<Mutex<rand::rngs::ChaCha8Rng>>,
     /// Cached human version string from build info.
     pub build_info_human_version: String,
     /// Function to get current time for statement logging.
@@ -776,7 +776,7 @@ pub(crate) fn effective_sample_rate(session: &Session, system_vars: &SystemVars)
 /// If `reproducible_rng` is `None`, uses the thread-local RNG.
 pub(crate) fn should_sample_statement(
     sample_rate: f64,
-    reproducible_rng: Option<&mut rand_chacha::ChaCha8Rng>,
+    reproducible_rng: Option<&mut rand::rngs::ChaCha8Rng>,
 ) -> bool {
     let distribution = Bernoulli::new(sample_rate).unwrap_or_else(|_| {
         soft_panic_or_log!("statement_logging_sample_rate is out of range [0, 1]");

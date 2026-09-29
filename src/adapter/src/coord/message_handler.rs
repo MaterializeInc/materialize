@@ -34,7 +34,7 @@ use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
 use opentelemetry::trace::TraceContextExt;
-use rand::{Rng, SeedableRng, rngs};
+use rand::{RngExt, SeedableRng, rngs};
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;

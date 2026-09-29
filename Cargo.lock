@@ -3327,7 +3327,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -3718,7 +3718,7 @@ dependencies = [
  "launchdarkly-sdk-transport",
  "log",
  "pin-project",
- "rand 0.10.2",
+ "rand 0.10.3",
  "tokio",
 ]
 
@@ -4452,7 +4452,7 @@ dependencies = [
  "idna",
  "ipnet",
  "jni",
- "rand 0.10.2",
+ "rand 0.10.3",
  "thiserror 2.0.21",
  "tinyvec",
  "tokio",
@@ -4472,7 +4472,7 @@ dependencies = [
  "jni",
  "once_cell",
  "prefix-trie",
- "rand 0.10.2",
+ "rand 0.10.3",
  "ring",
  "thiserror 2.0.21",
  "tinyvec",
@@ -4497,7 +4497,7 @@ dependencies = [
  "ndk-context",
  "once_cell",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "resolv-conf",
  "smallvec",
  "system-configuration",
@@ -5094,7 +5094,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -6269,8 +6269,7 @@ dependencies = [
  "prometheus",
  "prost",
  "qcell",
- "rand 0.9.4",
- "rand_chacha 0.9.0",
+ "rand 0.10.3",
  "semver",
  "serde",
  "serde_json",
@@ -6403,7 +6402,7 @@ dependencies = [
  "flate2",
  "itertools 0.14.0",
  "mz-ore",
- "rand 0.9.4",
+ "rand 0.10.3",
  "regex",
  "serde",
  "serde_json",
@@ -6586,7 +6585,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "proptest-derive",
- "rand 0.9.4",
+ "rand 0.10.3",
  "semver",
  "serde",
  "serde_json",
@@ -6722,7 +6721,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-server-core",
- "rand 0.9.4",
+ "rand 0.10.3",
  "schemars 1.2.2",
  "semver",
  "serde",
@@ -6744,7 +6743,7 @@ dependencies = [
  "mz-cluster-client",
  "mz-ore",
  "mz-service",
- "rand 0.9.4",
+ "rand 0.10.3",
  "regex",
  "timely",
  "tokio",
@@ -6893,7 +6892,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost",
- "rand 0.9.4",
+ "rand 0.10.3",
  "scopeguard",
  "serde",
  "smallvec",
@@ -7257,7 +7256,7 @@ dependencies = [
  "predicates 3.1.4",
  "prometheus",
  "proptest",
- "rand 0.9.4",
+ "rand 0.10.3",
  "rdkafka",
  "rdkafka-sys",
  "regex",
@@ -7342,7 +7341,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "regex",
  "regex-syntax",
  "seahash",
@@ -7531,7 +7530,7 @@ dependencies = [
  "mz-ssh-util",
  "num_cpus",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "rdkafka",
  "serde",
  "serde_json",
@@ -7803,7 +7802,7 @@ dependencies = [
  "mz-prof-http",
  "mz-server-core",
  "prometheus",
- "rand 0.9.4",
+ "rand 0.10.3",
  "reqwest 0.12.28",
  "rustls",
  "semver",
@@ -7861,7 +7860,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "proptest-derive",
- "rand 0.9.4",
+ "rand 0.10.3",
  "scopeguard",
  "sentry",
  "sentry-panic",
@@ -7939,7 +7938,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
@@ -7991,7 +7990,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "semver",
  "serde",
  "serde_json",
@@ -8329,7 +8328,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "regex",
  "regex-syntax",
  "ryu",
@@ -8479,7 +8478,7 @@ dependencies = [
  "os_info",
  "pin-project",
  "prometheus",
- "rand 0.9.4",
+ "rand 0.10.3",
  "semver",
  "sentry-tracing",
  "serde",
@@ -8722,7 +8721,7 @@ dependencies = [
  "mz-ore",
  "openssh",
  "openssh-mux-client",
- "rand 0.9.4",
+ "rand 0.10.3",
  "scopeguard",
  "serde",
  "serde_json",
@@ -9002,7 +9001,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "rdkafka",
  "regex",
  "reqsign-core",
@@ -9027,7 +9026,7 @@ dependencies = [
  "chrono",
  "mz-kafka-util",
  "mz-ore",
- "rand 0.9.4",
+ "rand 0.10.3",
  "rdkafka",
  "tokio",
  "tokio-postgres",
@@ -9086,7 +9085,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-reflect",
- "rand 0.9.4",
+ "rand 0.10.3",
  "rdkafka",
  "regex",
  "reqwest 0.12.28",
@@ -9128,7 +9127,7 @@ dependencies = [
  "mz-ore",
  "num-traits",
  "proptest",
- "rand 0.9.4",
+ "rand 0.10.3",
  "serde",
  "smallvec",
  "tempfile",
@@ -9153,7 +9152,7 @@ dependencies = [
  "mz-postgres-client",
  "mz-repr",
  "postgres-protocol",
- "rand 0.9.4",
+ "rand 0.10.3",
  "serde",
  "tokio",
  "tracing",
@@ -9224,7 +9223,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.10.3",
  "serde",
  "timely",
  "tokio",
@@ -10651,7 +10650,7 @@ dependencies = [
  "hmac 0.13.0",
  "md-5 0.11.0",
  "memchr",
- "rand 0.10.2",
+ "rand 0.10.3",
  "sha2 0.11.0",
  "stringprep",
 ]
@@ -11188,7 +11187,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -11212,7 +11211,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.5",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -11266,9 +11265,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -12045,7 +12044,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -12104,7 +12103,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -12382,7 +12381,7 @@ version = "0.49.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3ed398494bb8fc412a11a182c1883a10ae147587b8f6314abd222d1d626f31b"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.10.3",
  "sentry-types",
  "serde",
  "serde_json",
@@ -12430,7 +12429,7 @@ checksum = "1c18bf7b159bdfc7c8f97816f476b4947a1937fb6bea9d38d3479e58631614ac"
 dependencies = [
  "debugid",
  "hex",
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -13257,7 +13256,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -13276,7 +13275,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -14178,7 +14177,7 @@ dependencies = [
  "http 1.4.2",
  "httparse",
  "log",
- "rand 0.10.2",
+ "rand 0.10.3",
  "sha1 0.11.0",
  "thiserror 2.0.21",
 ]
@@ -14295,7 +14294,7 @@ dependencies = [
  "dyn-clone",
  "futures",
  "pin-project",
- "rand 0.10.2",
+ "rand 0.10.3",
  "reqwest 0.13.5",
  "serde",
  "serde_json",

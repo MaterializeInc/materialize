@@ -44,7 +44,7 @@ use mz_timely_util::column_pager::{
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnMerger;
 use mz_timely_util::columnar::merge_batcher::{FetchIter, merge_chains};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use timely::container::PushInto;
 
 type Data = (u64, u64);
