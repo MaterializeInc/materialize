@@ -7,16 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The publisher half: the publication point's owner-facing API and the attachment of an
-//! arrangement to it.
+//! The publisher half: the publication point's owner-facing API and the attachment of a
+//! trace to it.
 
 use std::sync::{Arc, Mutex};
 
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Trace, TraceReader};
 use mz_timely_util::shared_trace::{Shared, SharedReader, SharedSpine};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
+use timely::worker::Worker;
 
 /// Why a publication point refused an `as_of`.
 ///
@@ -57,7 +58,7 @@ where
     Tr::Time: TotalOrder,
 {
     /// Creates a publication point. It starts unattached: an empty chain with `since` and `upper`
-    /// at the minimum time and no writer, until one attaches via [`PublishArrangement::adopt`].
+    /// at the minimum time and no writer, until one attaches via [`adopt_trace`].
     ///
     /// A reader may mint handles and build imports over it before that happens, but they produce
     /// nothing (the import frontier stays at the minimum) until attachment seeds them. Attachment
@@ -138,50 +139,42 @@ where
     }
 }
 
-/// Publishes an [`Arranged`] arrangement through a publication point on its owning worker.
+/// Attaches `trace` to `point`, created by [`Published::new`]. `worker` must be the worker that
+/// maintains `trace`.
 ///
-/// Materialize cannot add inherent methods to differential's foreign `Arranged` type, so it exposes
-/// them as this extension trait instead.
-pub(crate) trait PublishArrangement<Tr: TraceReader> {
-    /// Attaches this arrangement's trace to `point`, created by [`Published::new`].
-    ///
-    /// From here on the trace mirrors its chain and frontiers into the point after every mutation,
-    /// and applies the point's holds to its own compaction. Attachment is late-binding: a reader may
-    /// build handles and imports over `point` before this arrangement is rendered, and they are
-    /// seeded with the arrangement's contents now.
-    ///
-    /// `on_seal` fires once per publish on which the published `upper` advances, after the state
-    /// lock is released and `upper` reflects the advance. A fast-path peek parked on this
-    /// arrangement's seal is re-examined only through this callback, so it must observe the
-    /// advanced `upper`. See the lost-wakeup contract on
-    /// `crate::sharing::ArrangementSharingRegistry::notify`.
-    fn adopt<F: Fn() + 'static>(&self, point: &Published<Tr>, on_seal: F);
-}
-
-impl<'scope, Inner> PublishArrangement<SharedSpine<Inner>>
-    for Arranged<'scope, TraceAgent<SharedSpine<Inner>>>
-where
+/// From here on the trace mirrors its chain and frontiers into the point after every mutation,
+/// and applies the point's holds to its own compaction. Attachment is late-binding: a reader may
+/// build handles and imports over `point` before the trace is rendered, and they are seeded with
+/// the trace's contents now.
+///
+/// `on_seal` fires once per publish on which the published `upper` advances, after the state
+/// lock is released and `upper` reflects the advance. A fast-path peek parked on this
+/// arrangement's seal is re-examined only through this callback, so it must observe the
+/// advanced `upper`. See the lost-wakeup contract on
+/// `crate::sharing::ArrangementSharingRegistry::notify`.
+pub(crate) fn adopt_trace<Inner, F>(
+    trace: &TraceAgent<SharedSpine<Inner>>,
+    worker: &Worker,
+    point: &Published<SharedSpine<Inner>>,
+    on_seal: F,
+) where
     Inner: Trace + 'static,
     Inner::Time: TotalOrder,
+    F: Fn() + 'static,
 {
-    fn adopt<F: Fn() + 'static>(&self, point: &Published<SharedSpine<Inner>>, on_seal: F) {
-        let scope = self.stream.scope();
-        // Seed the standing hold at the trace's own compaction frontier. The importing runtime may
-        // not have applied any compaction for this collection yet, and until it has, this is the
-        // frontier the trace may compact to: the controller offers no `as_of` below a collection's
-        // own `since`, so no importer can need a frontier below it. Without this seed a point created
-        // before attachment holds at the minimum time and stops the arrangement compacting at all.
-        let since = self.trace.clone().get_logical_compaction().to_owned();
-        point.note_standing_hold(&since);
+    // Seed the standing hold at the trace's own compaction frontier. The importing runtime may
+    // not have applied any compaction for this collection yet, and until it has, this is the
+    // frontier the trace may compact to: the controller offers no `as_of` below a collection's
+    // own `since`, so no importer can need a frontier below it. Without this seed a point created
+    // before attachment holds at the minimum time and stops the arrangement compacting at all.
+    let since = trace.clone().get_logical_compaction().to_owned();
+    point.note_standing_hold(&since);
 
-        // A reader moving a hold wakes the arrange operator, whose `exert` applies it to the trace.
-        let activator = scope
-            .worker()
-            .sync_activator_for(self.trace.operator().address.to_vec());
-        self.trace.trace_box_unstable().borrow().trace().attach(
-            Arc::clone(&point.shared),
-            activator,
-            on_seal,
-        );
-    }
+    // A reader moving a hold wakes the arrange operator, whose `exert` applies it to the trace.
+    let activator = worker.sync_activator_for(trace.operator().address.to_vec());
+    trace.trace_box_unstable().borrow().trace().attach(
+        Arc::clone(&point.shared),
+        activator,
+        on_seal,
+    );
 }

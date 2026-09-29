@@ -17,7 +17,7 @@
 //!
 //! * [`Published`] is a publication point plus the *standing hold*, a logical hold with no reader
 //!   behind it that tracks the frontier the importing runtime has applied.
-//! * [`PublishArrangement::adopt`] attaches an arrangement's trace to a point on the owning worker.
+//! * [`adopt_trace`] attaches an arrangement's trace to a point on the owning worker.
 //! * [`SharedReader`] is the `Clone + Send` reader, implementing
 //!   [`TraceReader`] so it drives compaction and cursors
 //!   like any trace handle, from any thread. [`SharedReader::import_frontier_core`] replays the
@@ -38,7 +38,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::shared_trace::SharedReader;
 
-pub(crate) use self::publish::{Diagnostics, PublishArrangement, Published};
+pub(crate) use self::publish::{Diagnostics, Published, adopt_trace};
 
 use crate::typedefs::{ErrSpine, RowRowSpine};
 

@@ -18,10 +18,11 @@ use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
+use mz_timely_util::shared_trace::SharedSpine;
 
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::cursor::Navigable;
-use differential_dataflow::trace::{BatchReader, TraceReader};
+use differential_dataflow::trace::{BatchReader, Trace, TraceReader};
 use timely::progress::Antichain;
 
 use crate::extensions::arrange::MzArrange;
@@ -141,15 +142,22 @@ impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
 /// the maintenance create-then-adopt path. The publication closes when the trace drops, and the
 /// trace lives only as long as an agent does (production keeps one in the trace manager), so callers
 /// keep `arranged.trace` or a clone alive for the life of the test. Creates a [`Published::new`] sized to the arrangement's
-/// own scope, installs `arranged`'s publisher into it via [`PublishArrangement::adopt`], and returns
+/// own scope, installs `arranged`'s publisher into it via [`adopt_trace`], and returns
 /// the now-backed point.
-fn adopt_fresh<'a, Tr: TraceReader>(arranged: &Arranged<'a, TraceAgent<Tr>>) -> Published<Tr>
+fn adopt_fresh<'a, Inner>(
+    arranged: &Arranged<'a, TraceAgent<SharedSpine<Inner>>>,
+) -> Published<SharedSpine<Inner>>
 where
-    Tr::Time: timely::order::TotalOrder,
-    Arranged<'a, TraceAgent<Tr>>: PublishArrangement<Tr>,
+    Inner: Trace + 'static,
+    Inner::Time: timely::order::TotalOrder,
 {
     let published = Published::new();
-    PublishArrangement::adopt(arranged, &published, || {});
+    adopt_trace(
+        &arranged.trace,
+        arranged.stream.scope().worker(),
+        &published,
+        || {},
+    );
     published
 }
 
