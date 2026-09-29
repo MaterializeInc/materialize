@@ -29,7 +29,6 @@ import {
 } from "@chakra-ui/react";
 import React, { useState } from "react";
 import {
-  FieldError,
   FieldErrors,
   SubmitHandler,
   useController,
@@ -130,23 +129,23 @@ const DurationRangeErrorMessages = ({
     return null;
   }
 
-  if (Object.keys(durationRangeError).length > 0) {
-    const errorFields = Object.values(durationRangeError) as FieldError[];
-    return (
-      <>
-        {errorFields.map((error, index) => {
-          return (
-            <FormErrorMessage key={index} mt="0">
-              {error?.message}
-            </FormErrorMessage>
-          );
-        })}
-      </>
-    );
-  }
+  // The schema's range refine reports on `durationRange` itself, while the
+  // per-bound checks report on `minDuration` and `maxDuration`.
+  const messages = durationRangeError.message
+    ? [durationRangeError.message]
+    : [
+        durationRangeError.minDuration?.message,
+        durationRangeError.maxDuration?.message,
+      ].filter((message) => message !== undefined);
 
   return (
-    <FormErrorMessage mt="0">{durationRangeError.message}</FormErrorMessage>
+    <>
+      {messages.map((message) => (
+        <FormErrorMessage key={message} mt="0">
+          {message}
+        </FormErrorMessage>
+      ))}
+    </>
   );
 };
 
