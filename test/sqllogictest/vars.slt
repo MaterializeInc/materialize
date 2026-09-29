@@ -878,3 +878,31 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET emit_trace_id_notice TO true
 ----
 db error: ERROR: unrecognized configuration parameter "emit_trace_id_notice"
+
+# Setting an identifier list to '' clears it.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = 'a'
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = ''
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SELECT '[' || current_setting('disabled_metric_sinks') || ']'
+----
+[]
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = 'a', ''
+----
+db error: ERROR: parameter "disabled_metric_sinks" cannot have value "a","": empty identifier
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET disabled_metric_sinks
+----
+COMPLETE 0
