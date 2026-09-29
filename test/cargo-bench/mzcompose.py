@@ -49,6 +49,7 @@ from materialize.cargo_bench.compare import (
 from materialize.cargo_bench.targets import (
     BenchTarget,
     BuiltBench,
+    alignment_rustflags,
     bench_executables,
     bench_targets,
     cargo_build_args,
@@ -211,8 +212,11 @@ def build_benches(
         # An unrestricted `cargo bench --no-run` would build every bench
         # target in the whole workspace instead of nothing.
         return [], []
+    extra_args, build_env = alignment_rustflags(env)
     try:
-        output = spawn.capture(cargo_build_args(targets), cwd=cwd, env=env)
+        output = spawn.capture(
+            cargo_build_args(targets) + extra_args, cwd=cwd, env=build_env
+        )
         return bench_executables(output.splitlines(), manifests), []
     except subprocess.CalledProcessError:
         pass
@@ -221,7 +225,9 @@ def build_benches(
     failures: list[TargetFailure] = []
     for target in targets:
         try:
-            output = spawn.capture(cargo_build_args([target]), cwd=cwd, env=env)
+            output = spawn.capture(
+                cargo_build_args([target]) + extra_args, cwd=cwd, env=build_env
+            )
             built.extend(bench_executables(output.splitlines(), manifests))
         except subprocess.CalledProcessError as e:
             print(
