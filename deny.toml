@@ -124,8 +124,10 @@ skip = [
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
     { name = "quick-xml", version = "0.41.0" },
-    # Used by sentry
-    { name = "reqwest", version = "0.13.3" },
+    # Used by iceberg, iceberg-catalog-rest, libduckdb-sys (build), segment, and
+    # the iceberg connection code in mz-storage-types, whose client crosses into
+    # iceberg's API.
+    { name = "reqwest", version = "0.12.28" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
