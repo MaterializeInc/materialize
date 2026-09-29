@@ -31,6 +31,9 @@
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
+      For `real` and `double precision` inputs, see [aggregate
+      precision](../types/float/#aggregate-precision).
+
   - signature: 'bool_and(x: T) -> T'
     description: _NULL_ if all values of `x` are _NULL_, otherwise true if all values of `x` are true, otherwise false.
 
@@ -85,6 +88,9 @@
 
       Returns `bigint` if `x` is `int` or `smallint`, `numeric` if `x` is `bigint` or `uint8`,
       `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
+
+      For `real` and `double precision` inputs, see [aggregate
+      precision](../types/float/#aggregate-precision).
 
   - signature: 'variance(x: T) -> U'
     description: |
