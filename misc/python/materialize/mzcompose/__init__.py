@@ -111,6 +111,7 @@ def get_minimal_system_parameters(
         "enable_exclude_constraints_option": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
+        "enable_frontend_transaction_completion": "true",
         "enable_introspection_subscribes": "true",
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",

@@ -191,6 +191,10 @@ async fn main() -> ExitCode {
         .entry(ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string())
         .or_insert_with(|| "true".to_string());
 
+    system_parameter_defaults
+        .entry("enable_frontend_transaction_completion".to_string())
+        .or_insert_with(|| "true".to_string());
+
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
