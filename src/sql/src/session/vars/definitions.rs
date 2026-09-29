@@ -2343,6 +2343,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_frontend_transaction_completion, // changes take effect for new sessions
+        desc: "Complete session-owned read-only transactions without a coordinator round trip.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_replacement_materialized_views,
         desc: "Whether to enable replacement materialized views.",
         default: true,
