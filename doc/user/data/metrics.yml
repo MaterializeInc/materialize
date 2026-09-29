@@ -3051,6 +3051,10 @@ metrics:
   - table_name
   source: src/storage/src/metrics/source/postgres.rs
   visibility: internal
+- name: mz_prepared_statement_redescribes_total
+  help: The total number of times a prepared statement or portal was described again to check that its description is still valid.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.
   labels:

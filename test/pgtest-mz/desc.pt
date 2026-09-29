@@ -79,3 +79,289 @@ ReadyForQuery
 BindComplete
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
+
+# The remaining tests check that a prepared statement is described again when
+# session state that its description depends on changes.
+
+send
+Query {"query": "DROP SCHEMA IF EXISTS s1 CASCADE"}
+Query {"query": "DROP SCHEMA IF EXISTS s2 CASCADE"}
+Query {"query": "CREATE SCHEMA s1"}
+Query {"query": "CREATE SCHEMA s2"}
+Query {"query": "CREATE TABLE s1.u (a INT)"}
+Query {"query": "INSERT INTO s1.u VALUES (1), (2)"}
+Query {"query": "CREATE TABLE s2.u (b TEXT, c TEXT)"}
+Query {"query": "SET search_path = s1"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP SCHEMA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP SCHEMA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE SCHEMA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE SCHEMA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 2"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+# Repeated executions of a prepared statement bind fresh parameters.
+send
+Parse {"name": "r", "query": "SELECT a FROM u WHERE a = $1"}
+Bind {"statement": "r", "values": ["1"]}
+Execute
+Sync
+Bind {"statement": "r", "values": ["2"]}
+Execute
+Sync
+Bind {"statement": "r", "values": ["3"]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+BindComplete
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+BindComplete
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}
+
+# Changing search_path resolves the statement to a table with a different
+# result type.
+send
+Parse {"name": "sp", "query": "SELECT * FROM u"}
+Bind {"statement": "sp"}
+Execute
+Sync
+Query {"query": "SET search_path = s2"}
+Bind {"statement": "sp"}
+Execute
+Sync
+Query {"query": "SET search_path = s1"}
+Bind {"statement": "sp"}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+BindComplete
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}
+
+# A statement prepared under a SET that its transaction rolls back.
+send
+Query {"query": "BEGIN"}
+Query {"query": "SET search_path = s2"}
+Parse {"name": "rb", "query": "SELECT * FROM u"}
+Sync
+Query {"query": "ROLLBACK"}
+Bind {"statement": "rb"}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+
+# A statement prepared under a SET LOCAL, which its transaction discards.
+send
+Query {"query": "BEGIN"}
+Query {"query": "SET LOCAL search_path = s2"}
+Parse {"name": "sl", "query": "SELECT * FROM u"}
+Sync
+Query {"query": "COMMIT"}
+Bind {"statement": "sl"}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+
+# A statement prepared in a transaction whose DDL rolls back. Inside the
+# transaction, u names the renamed s1.w.
+send
+Query {"query": "CREATE TABLE s1.w (d TEXT, e TEXT)"}
+Query {"query": "BEGIN"}
+Query {"query": "ALTER TABLE s1.u RENAME TO u_old"}
+Query {"query": "ALTER TABLE s1.w RENAME TO u"}
+Parse {"name": "ddl", "query": "SELECT * FROM u"}
+Describe {"variant": "S", "name": "ddl"}
+Sync
+Query {"query": "ROLLBACK"}
+Bind {"statement": "ddl"}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"ALTER TABLE"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"ALTER TABLE"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ParameterDescription {"parameters":[]}
+RowDescription {"fields":[{"name":"d"},{"name":"e"}]}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
+
+# FETCH describes as the cursor it names, so replacing the cursor changes it.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR SELECT 1"}
+Parse {"name": "f", "query": "FETCH ALL c"}
+Sync
+Query {"query": "CLOSE c"}
+Query {"query": "DECLARE c CURSOR FOR SELECT 'a', 'b'"}
+Bind {"statement": "f"}
+Execute
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# EXECUTE describes as the prepared statement it names, so replacing that
+# statement changes it.
+send
+Query {"query": "PREPARE inner_stmt AS SELECT 1"}
+Parse {"name": "e", "query": "EXECUTE inner_stmt"}
+Sync
+Query {"query": "DEALLOCATE inner_stmt"}
+Query {"query": "PREPARE inner_stmt AS SELECT 'a', 'b'"}
+Bind {"statement": "e"}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}

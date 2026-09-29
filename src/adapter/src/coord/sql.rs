@@ -85,10 +85,7 @@ impl Coordinator {
             .collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql, Some(&stmt), now);
-        let state_revision = StateRevision {
-            catalog_revision: catalog.transient_revision(),
-            session_state_revision: session.state_revision(),
-        };
+        let state_revision = session.state_revision(catalog);
         session.set_portal(
             name,
             desc,
@@ -168,10 +165,10 @@ impl Coordinator {
         Ok(())
     }
 
-    /// If the current catalog/session revisions don't match the given revisions, re-describe the
-    /// statement and ensure its result type has not changed. Return `Some((c, s))` with the new
-    /// (valid) catalog and session state revisions if its plan has changed. Return `None` if the
-    /// revisions match. Return an error if the plan has changed.
+    /// If the current catalog/session revisions don't match the given revisions, or a transaction
+    /// with DDL is open, re-describe the statement and ensure its result type has not changed.
+    /// Return `Some(revision)` with the new (valid) state revision if it re-described the
+    /// statement. Return `None` if the revisions match. Return an error if the plan has changed.
     fn verify_statement_revision(
         catalog: &Catalog,
         session: &Session,
@@ -179,11 +176,11 @@ impl Coordinator {
         desc: &StatementDesc,
         old_state_revision: StateRevision,
     ) -> Result<Option<StateRevision>, AdapterError> {
-        let current_state_revision = StateRevision {
-            catalog_revision: catalog.transient_revision(),
-            session_state_revision: session.state_revision(),
-        };
-        if old_state_revision != current_state_revision {
+        let current_state_revision = session.state_revision(catalog);
+        // Equal revisions do not cover a transaction's DDL, see `StateRevision`.
+        let in_ddl_transaction = session.transaction().catalog_state().is_some();
+        if old_state_revision != current_state_revision || in_ddl_transaction {
+            session.metrics().prepared_statement_redescribes().inc();
             let current_desc = Self::describe(
                 catalog,
                 session,

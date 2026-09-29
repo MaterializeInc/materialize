@@ -430,6 +430,8 @@ pub struct SessionVars {
     mz_version: MzVersion,
     /// Information about the user associated with this Session.
     user: User,
+    /// See [`SessionVars::revision`].
+    revision: u64,
 }
 
 impl SessionVars {
@@ -469,7 +471,17 @@ impl SessionVars {
             vars,
             mz_version: MzVersion::new(build_info, helm_chart_version),
             user,
+            revision: 0,
         }
+    }
+
+    /// A counter that changes whenever the value of any variable, including the
+    /// user metadata, may have changed.
+    ///
+    /// Equal revisions of the same [`SessionVars`] imply equal values. Differing
+    /// revisions do not imply differing values.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     fn expect_value<V: Value>(&self, var: &VarDefinition) -> &V {
@@ -542,6 +554,7 @@ impl SessionVars {
     /// which ends the transaction before resetting, so there is no commit left
     /// to promote a staged value. System/role/startup defaults are preserved.
     pub fn reset_all(&mut self) {
+        self.revision += 1;
         let names: Vec<_> = self.vars.keys().copied().collect();
         for name in names {
             self.vars[name].reset_durable();
@@ -616,6 +629,7 @@ impl SessionVars {
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
+        self.revision += 1;
         self.vars
             .get_mut(name)
             .map(|v| {
@@ -640,6 +654,7 @@ impl SessionVars {
             self.check_read_only(name)?;
         }
 
+        self.revision += 1;
         self.vars
             .get_mut(name)
             // Note: visibility is checked when persisting a role default.
@@ -683,6 +698,7 @@ impl SessionVars {
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
+        self.revision += 1;
         self.vars
             .get_mut(name)
             .map(|v| {
@@ -745,6 +761,12 @@ impl SessionVars {
             if before != after {
                 changed.insert(var.name(), after);
             }
+        }
+        // A transaction that set no variable leaves every value unchanged, so the
+        // revision stays put. Otherwise committing, rolling back, or discarding a
+        // `SET LOCAL` can change a value.
+        if !updates.is_empty() {
+            self.revision += 1;
         }
         self.vars.extend(updates);
         changed
@@ -935,15 +957,18 @@ impl SessionVars {
 
     /// Sets the internal metadata associated with the user.
     pub fn set_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
+        self.revision += 1;
         self.user.internal_metadata = Some(metadata);
     }
 
     /// Sets the external metadata associated with the user.
     pub fn set_external_user_metadata(&mut self, metadata: ExternalUserMetadata) {
+        self.revision += 1;
         self.user.external_metadata = Some(metadata);
     }
 
     pub fn set_cluster(&mut self, cluster: String) {
+        self.revision += 1;
         let var = self
             .vars
             .get_mut(UncasedStr::new(CLUSTER.name()))
@@ -953,6 +978,7 @@ impl SessionVars {
     }
 
     pub fn set_local_transaction_isolation(&mut self, transaction_isolation: IsolationLevel) {
+        self.revision += 1;
         let var = self
             .vars
             .get_mut(UncasedStr::new(TRANSACTION_ISOLATION.name()))

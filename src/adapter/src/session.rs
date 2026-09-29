@@ -11,7 +11,6 @@
 
 #![warn(missing_docs)]
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::mem;
@@ -52,7 +51,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 use crate::client::RecordFirstRowStream;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
@@ -117,11 +116,7 @@ pub struct Session {
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle>,
-    /// Incremented when session state that is relevant to prepared statement planning changes.
-    /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
-    /// need to be tracked, because prepared statements can't depend on other prepared statements.
-    /// TODO: We might want to track changes also to session variables.
-    /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
+    /// See [`StateRevision::session_state_revision`].
     state_revision: u64,
 }
 
@@ -466,9 +461,16 @@ impl Session {
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
     pub fn clear_transaction(&mut self) -> TransactionStatus {
+        // Ending a transaction with DDL discards its view of the catalog. On
+        // rollback that view never reaches the catalog, so no catalog revision
+        // records the change.
+        if self.portals.keys().any(|name| is_sql_nameable(name))
+            || self.transaction.catalog_state().is_some()
+        {
+            self.state_revision += 1;
+        }
         self.portals.clear();
         self.pcx = None;
-        self.state_revision += 1;
         mem::take(&mut self.transaction)
     }
 
@@ -647,6 +649,7 @@ impl Session {
         state_revision: StateRevision,
         now: EpochMillis,
     ) {
+        let state_revision = self.bump_for_insertion(&name, state_revision);
         let logging = PreparedStatementLoggingInfo::still_to_log(
             raw_sql,
             stmt.as_ref(),
@@ -664,15 +667,35 @@ impl Session {
         self.prepared_statements.insert(name, statement);
     }
 
+    /// Bumps the state revision for inserting a prepared statement or portal named `name`, and
+    /// returns `verified`, the revision the entry's description was verified at, adjusted to
+    /// the bump.
+    fn bump_for_insertion(&mut self, name: &str, mut verified: StateRevision) -> StateRevision {
+        if is_sql_nameable(name) {
+            // A description can only depend on its own entry through a self-reference such as
+            // `EXECUTE s` prepared as `s`, which execution rejects. So an entry verified
+            // against the state just before its insertion is also valid just after it.
+            if verified.session_state_revision == self.state_revision {
+                verified.session_state_revision += 1;
+            }
+            self.state_revision += 1;
+        }
+        verified
+    }
+
     /// Removes the prepared statement associated with `name`.
     ///
     /// Returns whether a statement previously existed.
     pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
+        if is_sql_nameable(name) {
+            self.state_revision += 1;
+        }
         self.prepared_statements.remove(name).is_some()
     }
 
     /// Removes all prepared statements.
     pub fn remove_all_prepared_statements(&mut self) {
+        self.state_revision += 1;
         self.prepared_statements.clear();
     }
 
@@ -728,7 +751,7 @@ impl Session {
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
-        self.state_revision += 1;
+        let state_revision = self.bump_for_insertion(&portal_name, state_revision);
         let param_types = desc.param_types.clone();
         self.portals.insert(
             portal_name,
@@ -754,7 +777,9 @@ impl Session {
     ///
     /// If there is no such portal, this method does nothing. Returns whether that portal existed.
     pub fn remove_portal(&mut self, portal_name: &str) -> bool {
-        self.state_revision += 1;
+        if is_sql_nameable(portal_name) {
+            self.state_revision += 1;
+        }
         self.portals.remove(portal_name).is_some()
     }
 
@@ -769,8 +794,8 @@ impl Session {
     ///
     /// If there is no such portal, returns `None`.
     ///
-    /// Note: When using the returned `PortalRefMut`, there is no need to increment
-    /// `Session::state_revision`, because the portal's meaning is not changed.
+    /// Note: Changes through the returned `PortalRefMut` need not bump the state revision,
+    /// because they do not change the portal's description.
     pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<PortalRefMut<'_>> {
         self.portals.get_mut(portal_name).map(|p| PortalRefMut {
             stmt: &p.stmt,
@@ -794,27 +819,27 @@ impl Session {
         result_formats: Vec<Format>,
         state_revision: StateRevision,
     ) -> Result<String, AdapterError> {
-        self.state_revision += 1;
-
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
         for i in 0usize.. {
             let name = format!("<unnamed portal {}>", i);
-            match self.portals.entry(name.clone()) {
-                Entry::Occupied(_) => continue,
-                Entry::Vacant(entry) => {
-                    entry.insert(Portal {
-                        stmt: stmt.map(Arc::new),
-                        desc,
-                        state_revision,
-                        parameters,
-                        result_formats,
-                        state: PortalState::NotStarted,
-                        logging,
-                        lifecycle_timestamps: None,
-                    });
-                    return Ok(name);
-                }
+            if self.portals.contains_key(&name) {
+                continue;
             }
+            let state_revision = self.bump_for_insertion(&name, state_revision);
+            self.portals.insert(
+                name.clone(),
+                Portal {
+                    stmt: stmt.map(Arc::new),
+                    desc,
+                    state_revision,
+                    parameters,
+                    result_formats,
+                    state: PortalState::NotStarted,
+                    logging,
+                    lifecycle_timestamps: None,
+                },
+            );
+            return Ok(name);
         }
 
         coord_bail!("unable to create a new portal");
@@ -824,7 +849,7 @@ impl Session {
     /// dropped.
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
-        self.prepared_statements.clear();
+        self.remove_all_prepared_statements();
         self.vars.reset_all();
     }
 
@@ -879,6 +904,7 @@ impl Session {
 
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
+        self.state_revision += 1;
         self.role_metadata = Some(RoleMetadata::new(role_id));
     }
 
@@ -937,10 +963,13 @@ impl Session {
         }
     }
 
-    /// Return the state_revision of the session, which can be used by dependent objects for knowing
-    /// when to re-plan due to session state changes.
-    pub fn state_revision(&self) -> u64 {
-        self.state_revision
+    /// Returns the current revision of the state that statement descriptions depend on.
+    pub fn state_revision(&self, catalog: &Catalog) -> StateRevision {
+        StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: self.state_revision,
+            session_vars_revision: self.vars.revision(),
+        }
     }
 }
 
@@ -1000,7 +1029,7 @@ pub struct Portal {
 
 /// A mutable reference to a portal, capturing its state and associated metadata. Importantly, it
 /// does _not_ give _mutable_ access to `stmt` and `desc`, which means that you do not need to
-/// increment `Session::state_revision` when modifying fields through a `PortalRefMut`, because the
+/// bump the session's state revision when modifying fields through a `PortalRefMut`, because the
 /// portal's meaning is not changed.
 pub struct PortalRefMut<'a> {
     /// The statement that is bound to this portal.
@@ -1024,12 +1053,31 @@ pub struct PortalRefMut<'a> {
 /// Points to a revision of catalog state and session state. When the current revisions are not the
 /// same as the revisions when a prepared statement or a portal was described, we need to check
 /// whether the description is still valid.
+///
+/// Equal revisions imply that describing a statement again yields the same description, except
+/// while a transaction with DDL is open: its view of the catalog changes without bumping any
+/// revision. Descriptions do not depend on the transaction's wall time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StateRevision {
-    /// A revision of the catalog.
+    /// A revision of the catalog, see `Catalog::transient_revision`.
     pub catalog_revision: u64,
-    /// A revision of the session state.
+    /// A revision of the session state other than its variables. It changes when a prepared
+    /// statement or portal that SQL can name is added, replaced, or removed, when the role
+    /// metadata changes, and when a transaction with DDL ends. Creating, replacing, or removing
+    /// the unnamed prepared statement or portal, or ending any other transaction, leaves it
+    /// unchanged.
     pub session_state_revision: u64,
+    /// A revision of the session variables, see `SessionVars::revision`.
+    pub session_vars_revision: u64,
+}
+
+/// Whether SQL statements such as `EXECUTE` and `FETCH` can refer to the prepared statement or
+/// portal `name`, so that their descriptions can depend on it.
+///
+/// The parser rejects zero-length identifiers, so only the unnamed prepared statement and portal
+/// of the extended protocol are out of reach.
+fn is_sql_nameable(name: &str) -> bool {
+    !name.is_empty()
 }
 
 /// Execution states of a portal.
