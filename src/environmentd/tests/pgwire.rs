@@ -877,6 +877,270 @@ fn test_prepared_indexed_execution_context() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Retain the same pgwire handle across execution contexts.
+fn test_prepared_indexed_cluster_and_transaction_changes() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    let mut admin = server.connect(postgres::NoTls).unwrap();
+    let original_cluster: String = admin.query_one("SHOW cluster", &[]).unwrap().get(0);
+    for sql in [
+        "CREATE TABLE prepared_targets (id int, value int)",
+        "INSERT INTO prepared_targets VALUES (1, 11), (2, 22)",
+        "CREATE INDEX prepared_targets_id ON prepared_targets (id)",
+        "CREATE CLUSTER prepared_target SIZE 'scale=1,workers=1'",
+    ] {
+        admin.batch_execute(sql).unwrap();
+    }
+    let generic_count = || -> u64 {
+        server
+            .metrics_registry()
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "mz_prepared_query_events_total")
+            .flat_map(|family| family.get_metric())
+            .filter(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == "event" && label.value() == "generic_execute")
+            })
+            .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+            .sum()
+    };
+    for templates in [false, true] {
+        system
+            .batch_execute(&format!(
+                "ALTER SYSTEM SET enable_prepared_query_templates = {templates}"
+            ))
+            .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let stmt = client
+            .prepare("SELECT value / $2 FROM prepared_targets WHERE id = $1")
+            .unwrap();
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&1_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        assert_eq!(generic_count() - before, u64::from(templates));
+
+        client
+            .batch_execute("BEGIN; SET LOCAL cluster = prepared_target")
+            .unwrap();
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&2_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            22
+        );
+        assert_eq!(generic_count(), before, "the selected cluster has no index");
+        client.batch_execute("ROLLBACK").unwrap();
+        assert_eq!(
+            client
+                .query_one("SHOW cluster", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            original_cluster
+        );
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&1_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        assert_eq!(generic_count() - before, u64::from(templates));
+
+        admin.batch_execute("CREATE INDEX prepared_targets_other IN CLUSTER prepared_target ON prepared_targets (id)").unwrap();
+        client
+            .batch_execute("SET cluster = prepared_target")
+            .unwrap();
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&2_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            22
+        );
+        assert_eq!(generic_count() - before, u64::from(templates));
+
+        let old_config: String = system
+            .query_one("SHOW enable_eager_delta_joins", &[])
+            .unwrap()
+            .get(0);
+        system
+            .batch_execute(&format!(
+                "ALTER SYSTEM SET enable_eager_delta_joins = {}",
+                old_config != "on"
+            ))
+            .unwrap();
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&1_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        assert_eq!(generic_count() - before, u64::from(templates));
+        system
+            .batch_execute(&format!(
+                "ALTER SYSTEM SET enable_eager_delta_joins = '{old_config}'"
+            ))
+            .unwrap();
+
+        client.batch_execute("BEGIN").unwrap();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&2_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            22
+        );
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&1_i32, &0_i32])
+                .unwrap_db_error()
+                .code(),
+            &SqlState::DIVISION_BY_ZERO
+        );
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&2_i32, &1_i32])
+                .unwrap_db_error()
+                .code(),
+            &SqlState::IN_FAILED_SQL_TRANSACTION
+        );
+        assert_eq!(
+            generic_count(),
+            before,
+            "aborted transactions must not execute a cached program"
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&1_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        admin
+            .batch_execute("DROP INDEX prepared_targets_other")
+            .unwrap();
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Reuse historical reads and preserve AS OF errors.
+fn test_prepared_indexed_as_of_changes() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_index_options".into(), "true".into())
+        .with_system_parameter_default("enable_logical_compaction_window".into(), "true".into())
+        .start_blocking();
+    let mut admin = server.connect(postgres::NoTls).unwrap();
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    for sql in [
+        "CREATE TABLE prepared_history (id int, value int)",
+        "CREATE INDEX prepared_history_id ON prepared_history (id) WITH (RETAIN HISTORY FOR '1h')",
+        "INSERT INTO prepared_history VALUES (1, 11), (2, 101)",
+    ] {
+        admin.batch_execute(sql).unwrap();
+    }
+    let timestamp = |client: &mut postgres::Client| -> String {
+        client
+            .query_one(
+                "SELECT mz_now()::text FROM prepared_history WHERE id = 1",
+                &[],
+            )
+            .unwrap()
+            .get(0)
+    };
+    let first = timestamp(&mut admin);
+    admin
+        .batch_execute("UPDATE prepared_history SET value = 22 WHERE id = 1")
+        .unwrap();
+    let second = timestamp(&mut admin);
+    assert!(second.parse::<u64>().unwrap() > first.parse::<u64>().unwrap());
+    let generic_count = || -> u64 {
+        server
+            .metrics_registry()
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "mz_prepared_query_events_total")
+            .flat_map(|family| family.get_metric())
+            .filter(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == "event" && label.value() == "generic_execute")
+            })
+            .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+            .sum()
+    };
+    for reuse in [false, true] {
+        system
+            .batch_execute(&format!(
+                "ALTER SYSTEM SET enable_prepared_query_reuse = {reuse}"
+            ))
+            .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let stmt = client.prepare_typed(
+            "SELECT value, mz_now()::text FROM prepared_history WHERE id = $1 AS OF $2::text::mz_timestamp",
+            &[Type::INT4, Type::TEXT],
+        ).unwrap();
+        assert_eq!(stmt.params(), &[Type::INT4, Type::TEXT]);
+        // AS OF does not support parameter binding on the ordinary path either.
+        let error = client.query_one(&stmt, &[&1_i32, &first]).unwrap_db_error();
+        assert_eq!(error.code(), &SqlState::UNDEFINED_PARAMETER);
+        assert_eq!(error.message(), "there is no parameter $2");
+        let old = client
+            .prepare(&format!(
+                "SELECT value, mz_now()::text FROM prepared_history WHERE id = $1 AS OF {first}"
+            ))
+            .unwrap();
+        let new = client
+            .prepare(&format!(
+                "SELECT value, mz_now()::text FROM prepared_history WHERE id = $1 AS OF {second}"
+            ))
+            .unwrap();
+        let before = generic_count();
+        for (stmt, time, expected) in [(&old, &first, 11), (&new, &second, 22), (&old, &first, 11)]
+        {
+            let row = client.query_one(stmt, &[&1_i32]).unwrap();
+            assert_eq!(row.get::<_, i32>(0), expected);
+            assert_eq!(&row.get::<_, String>(1), time);
+            assert_eq!(
+                client.query_one(stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+                101
+            );
+            assert!(client.query(stmt, &[&None::<i32>]).unwrap().is_empty());
+        }
+        let invalid = client
+            .prepare("SELECT value FROM prepared_history WHERE id = $1 AS OF NULL::mz_timestamp")
+            .unwrap();
+        let error = client.query_one(&invalid, &[&1_i32]).unwrap_db_error();
+        assert!(error.message().contains("non-null"), "{error}");
+        assert_eq!(
+            client.query_one(&new, &[&1_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
+        assert_eq!(
+            generic_count(),
+            before,
+            "AS OF must use the explicit custom fallback"
+        );
+    }
+}
+
+#[mz_ore::test]
 fn test_read_many_rows() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
