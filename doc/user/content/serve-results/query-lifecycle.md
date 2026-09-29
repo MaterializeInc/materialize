@@ -18,6 +18,9 @@ what latency to expect and what to change when a query is slow.
 | [Fast path: storage](#fast-path-storage) | A few rows from object storage | Tens to hundreds of milliseconds |
 | [Slow path](#slow-path) | A temporary dataflow built for the query | Seconds or longer, grows with the data read |
 
+Queries that reduce to a constant, such as `SELECT 1`, are answered without
+reading any data or using a cluster.
+
 The examples on this page use the following tables:
 
 ```mzsql
@@ -72,7 +75,7 @@ query scans, so a filter that is not on the index key scans the full index.
 
 The query reads a small number of rows directly from object storage, without
 building a dataflow. This applies to a source, table, or materialized view that
-has **no index** in the active cluster, when the query:
+has **no index** in the active cluster, when the query meets both conditions:
 
 - Only projects columns or applies scalar functions, with no filter or
   `ORDER BY`.
@@ -125,8 +128,8 @@ run it:
 
 | Query type | `EXPLAIN` output |
 |------------|------------------|
-| Fast path: index | Starts with `Explained Query (fast path):` and contains `Index Lookup` or `Indexed` |
-| Fast path: storage | Starts with `Explained Query (fast path):` and contains `ReadStorage` |
+| Fast path: index | Starts with `Explained Query (fast path):`, and reads with `→Index Lookup` (point lookup) or `→Indexed` (full index scan) |
+| Fast path: storage | Starts with `Explained Query (fast path):`, and reads with `→ReadStorage` |
 | Slow path | Starts with `Explained Query:` |
 
 ```mzsql

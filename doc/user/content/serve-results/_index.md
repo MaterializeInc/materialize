@@ -24,7 +24,7 @@ To serve results, you can:
 
 - [Use BI/data collaboration tools](/serve-results/bi-tools/)
 
-- [Sink results to to external systems](/export-data/)
+- [Sink results to external systems](/export-data/)
 
 - [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
 
