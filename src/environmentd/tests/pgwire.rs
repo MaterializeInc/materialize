@@ -1141,7 +1141,7 @@ fn test_prepared_indexed_as_of_changes() {
 }
 
 #[mz_ore::test]
-#[allow(clippy::disallowed_methods)] // Synchronize a warm execution with cluster teardown.
+#[allow(clippy::disallowed_methods)] // Synchronize a warm execution with cluster or index teardown.
 fn test_prepared_indexed_drop_after_registration() {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1155,7 +1155,7 @@ fn test_prepared_indexed_drop_after_registration() {
         }
     }
 
-    for reuse in [false, true] {
+    for (reuse, drop_cluster) in [false, true].into_iter().cartesian_product([false, true]) {
         let server = test_util::TestHarness::default()
             .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
             .start_blocking();
@@ -1226,22 +1226,42 @@ fn test_prepared_indexed_drop_after_registration() {
             u64::from(reuse),
             "the racing execution must be a warm template hit"
         );
-        admin
-            .batch_execute("DROP CLUSTER prepared_race CASCADE")
-            .unwrap();
+        let drop_sql = if drop_cluster {
+            "DROP CLUSTER prepared_race CASCADE"
+        } else {
+            "DROP INDEX prepared_race_id"
+        };
+        admin.batch_execute(drop_sql).unwrap();
         fail::remove(failpoint);
         resume_tx.send(()).unwrap();
         let (mut client, stmt, result) = done_rx
             .recv_timeout(Duration::from_secs(30))
-            .expect("dropped-cluster execution completed");
-        let error = result.unwrap_db_error();
-        assert_eq!(error.code(), &SqlState::UNDEFINED_OBJECT, "{error}");
-        for sql in [
-            "CREATE CLUSTER prepared_race SIZE 'scale=1,workers=1'",
-            "CREATE INDEX prepared_race_id IN CLUSTER prepared_race ON prepared_race_rows (id)",
-        ] {
-            admin.batch_execute(sql).unwrap();
+            .expect("execution completed after dependency teardown");
+        if drop_cluster {
+            let error = result.unwrap_db_error();
+            assert_eq!(error.code(), &SqlState::UNDEFINED_OBJECT, "{error}");
+            admin
+                .batch_execute("CREATE CLUSTER prepared_race SIZE 'scale=1,workers=1'")
+                .unwrap();
+        } else {
+            // The in-flight read hold keeps the index available for this execution.
+            assert_eq!(result.unwrap().get::<_, i32>(0), 22);
+            let before = hits();
+            assert_eq!(
+                client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+                11
+            );
+            assert_eq!(
+                hits(),
+                before,
+                "a new execution must stop using the dropped index"
+            );
         }
+        admin
+            .batch_execute(
+                "CREATE INDEX prepared_race_id IN CLUSTER prepared_race ON prepared_race_rows (id)",
+            )
+            .unwrap();
         assert_eq!(
             client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
             22
