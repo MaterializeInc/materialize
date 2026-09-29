@@ -8872,6 +8872,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-ore",
+ "mz-persist",
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
