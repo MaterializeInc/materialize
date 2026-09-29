@@ -227,3 +227,22 @@ The level of support for these tools will improve as we extend the coverage of `
 
 Check out the [integrations page](/developer-tools/integrations/) for a list of ORM frameworks
 that are known to work well with Materialize.
+
+### SQLAlchemy
+
+To connect with [SQLAlchemy](https://www.sqlalchemy.org/), specify the `psycopg2` driver in the connection URL (`postgresql+psycopg2://`):
+
+```python
+#!/usr/bin/env python3
+
+import sqlalchemy
+
+engine = sqlalchemy.create_engine(
+    "postgresql+psycopg2://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=require"
+)
+
+with engine.connect() as conn:
+    print(conn.execute(sqlalchemy.text("SELECT mz_version()")).scalar())
+```
+
+SQLAlchemy 2.1 and later use `psycopg3` for plain `postgresql://` URLs. Connecting to Materialize that way fails with `Expected a keyword at the beginning of a statement, found identifier "savepoint"`. To use `psycopg3` anyway, pass `use_native_hstore=False` to `create_engine`.
