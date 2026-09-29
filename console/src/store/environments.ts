@@ -137,9 +137,7 @@ export interface EnabledEnvironment extends RegionInfo {
 export type Environment = UnknownEnvironment | LoadedEnvironment;
 
 export type LoadedEnvironment =
-  | DisabledEnvironment
-  | CreatingEnvironment
-  | EnabledEnvironment;
+  DisabledEnvironment | CreatingEnvironment | EnabledEnvironment;
 
 export const maybeEnvironmentForRegion = atomFamily(
   ({ regionId }: { regionId: string | undefined }) =>

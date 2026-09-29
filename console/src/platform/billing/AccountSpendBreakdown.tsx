@@ -526,19 +526,18 @@ const UnifiedLedger = ({
     const sum = totals.reduce((acc, total) => acc + total, 0);
     return {
       grandTotal: sum,
-      ledgerRows: accounts.map(
-        (account, ix): LedgerRow => ({
-          kind: "account",
-          account,
-          total: totals[ix],
-          share: sum > 0 ? totals[ix] / sum : 0,
-          trend: series.get(account.external_customer_id) ?? [],
-          color: colorFor.get(account.external_customer_id) ?? fallbackColor,
-          clusters: account.clusters.map(
-            (cluster): LedgerRow => ({ kind: "cluster", cluster }),
-          ),
-        }),
-      ),
+      ledgerRows: accounts.map((account, ix): LedgerRow => ({
+        kind: "account",
+        account,
+        total: totals[ix],
+        share: sum > 0 ? totals[ix] / sum : 0,
+        trend: series.get(account.external_customer_id) ?? [],
+        color: colorFor.get(account.external_customer_id) ?? fallbackColor,
+        clusters: account.clusters.map((cluster): LedgerRow => ({
+          kind: "cluster",
+          cluster,
+        })),
+      })),
     };
   }, [accounts, series, colorFor, fallbackColor]);
 
