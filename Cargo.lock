@@ -793,6 +793,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "asyncband"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2d85fd3d291fabcc40c7232c92c280ec1754fd7b5d7ea769f143222143e179a"
+
+[[package]]
 name = "asynchronous-codec"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4994,7 +5000,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.3",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -5969,16 +5975,6 @@ checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
 dependencies = [
  "cfg-if",
  "digest 0.11.3",
-]
-
-[[package]]
-name = "mea"
-version = "0.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c709842c4ce65cb91e2666ad5319dfc1efc3af0d34f02075eddca9000d9f8afb"
-dependencies = [
- "hashbrown 0.17.1",
- "slab",
 ]
 
 [[package]]
@@ -9732,7 +9728,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a43405d217dfdfb543f58847336d3af672897dd1939bb7dcf314b63cf364f1c9"
 dependencies = [
  "anyhow",
- "asyncband",
+ "asyncband 0.6.7",
  "base64 0.23.1",
  "bytes",
  "futures",
@@ -9792,7 +9788,7 @@ version = "0.59.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9064ed464286bffbea5955d470082a1e72b9b89f1e8f7a61b9e303c55ec08e4f"
 dependencies = [
- "asyncband",
+ "asyncband 0.6.7",
  "base64 0.23.1",
  "bytes",
  "http 1.4.2",
@@ -11602,20 +11598,19 @@ dependencies = [
 
 [[package]]
 name = "reqsign-core"
-version = "3.3.1"
+version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff052daffb0599681c50f85c59e7236438976efe991ab864edd9f3b235501a0f"
+checksum = "85fed85c436b6b920e4b36310f699a77771a91e38ae483df48447bd7d162671c"
 dependencies = [
  "anyhow",
+ "asyncband 0.7.2",
  "base64 0.23.1",
  "bytes",
- "futures",
  "hex",
  "hmac 0.13.0",
  "http 1.4.2",
  "jiff",
  "log",
- "mea",
  "percent-encoding",
  "rsa",
  "serde",
@@ -12840,9 +12835,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.16.1"
+version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
+checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 dependencies = [
  "serde",
 ]
