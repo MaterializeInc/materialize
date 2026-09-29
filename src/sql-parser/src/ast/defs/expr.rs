@@ -356,12 +356,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
-                    // A prefix operator binds tighter than `COLLATE` and the
-                    // binary operators but looser than the postfix `::`/`[…]`
-                    // forms, and `- <number>` lexes as a negative literal, so a
-                    // low-precedence or numeric-leftmost operand must be
-                    // parenthesized to keep the prefix operator's scope.
-                    if prefix_operand_needs_parens(expr1.as_ref()) {
+                    if prefix_operand_needs_parens(op, expr1.as_ref()) {
                         f.write_str("(");
                         f.write_node(&expr1);
                         f.write_str(")");
@@ -867,16 +862,32 @@ fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
     }
 }
 
-/// Whether the operand of a prefix operator (`-`/`+`/`~`) must be parenthesized
-/// to round-trip. A prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE` and
-/// the binary/comparison operators, but *looser* than the postfix `::`/`[…]`
-/// forms — and `- <number>` additionally lexes as a negative literal. So peel
-/// the tight postfixes (`::`/`[…]`); if the chain bottoms out at a numeric
-/// literal the sign would fold into it, and if it bottoms out at anything other
-/// than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a binary op, …) the
-/// prefix op would re-associate — both need parens. (`a + b COLLATE c` reparses
-/// as `a + (b COLLATE c)`; `- x COLLATE c` as `(- x) COLLATE c`.)
-fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
+/// Whether the operand of a prefix operator (an `Op` with no second operand)
+/// must be parenthesized so the printed expression reparses to the same tree.
+/// Both printers (`AstDisplay` and `mz-sql-pretty`) must use it, so they agree.
+pub fn prefix_operand_needs_parens<T: AstInfo>(op: &Op, operand: &Expr<T>) -> bool {
+    if unary_prec(op) == prec::PREFIX {
+        bare_prefix_operand_needs_parens(operand)
+    } else {
+        // An `Other`-level prefix (`~`, a namespaced `OPERATOR(...)`) reparses
+        // its operand at `Other`, so the operand re-associates exactly when its
+        // left spine exposes that level or looser, as for the right operand of
+        // a binary operator.
+        left_edge(operand) <= prec::OTHER
+    }
+}
+
+/// Whether the operand of a bare prefix `-`/`+` must be parenthesized to
+/// round-trip. Such a prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE`
+/// and the binary/comparison operators, but *looser* than the postfix
+/// `::`/`[…]` forms, and `- <number>` additionally lexes as a negative literal.
+/// So peel the tight postfixes (`::`/`[…]`). If the chain bottoms out at a
+/// numeric literal, the sign would fold into it, and if it bottoms out at
+/// anything other than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a
+/// binary op, …), the prefix op would re-associate. Both need parens.
+/// (`a + b COLLATE c` reparses as `a + (b COLLATE c)`, and `- x COLLATE c` as
+/// `(- x) COLLATE c`.)
+fn bare_prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
     let mut e = operand;
     let mut saw_postfix = false;
     loop {
@@ -1384,6 +1395,7 @@ impl<T: AstInfo> Function<T> {
                 | r#""map""#
                 | r#""normalize""#
                 | r#""nullif""#
+                | r#""operator""#
                 | r#""position""#
                 | r#""row""#
                 | r#""substring""#
