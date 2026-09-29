@@ -338,14 +338,18 @@ impl Context {
             timeout_seconds: Some(1),
             ..Default::default()
         };
+        // Readiness drives load balancer rotation: a balancerd at its
+        // connection high watermark fails `/api/readyz` and must leave the
+        // Service endpoints within seconds, so this probe is tighter than the
+        // liveness probe below.
         let readiness_probe = Probe {
             http_get: Some(HTTPGetAction {
                 port: IntOrString::Int(self.config.balancerd_internal_http_port.into()),
                 path: Some("/api/readyz".into()),
                 ..Default::default()
             }),
-            failure_threshold: Some(3),
-            period_seconds: Some(10),
+            failure_threshold: Some(2),
+            period_seconds: Some(2),
             success_threshold: Some(1),
             timeout_seconds: Some(1),
             ..Default::default()
