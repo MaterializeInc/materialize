@@ -323,14 +323,23 @@ updates:
   # arrives as one PR instead of several that each fail on their own. A
   # dependency joins the first group it matches, so the families come before
   # `simple`. The families take major updates too, which is where they break
-  # apart.
+  # apart. @storybook/react-vite peer-depends on vite across the storybook and
+  # vite groups, so a vite major can fail storybook until storybook catches up.
   groups:
-    typescript:
+    # typescript-eslint peer-depends on both typescript and eslint, so the
+    # three move together.
+    typescript-and-eslint:
       applies-to: version-updates
       patterns:
         - "typescript"
         - "typescript-eslint"
         - "@typescript-eslint/*"
+        - "eslint"
+        - "@eslint/*"
+        - "eslint-plugin-*"
+        - "eslint-config-*"
+        - "@tanstack/eslint-plugin-query"
+        - "globals"
     vite:
       applies-to: version-updates
       patterns:
@@ -343,15 +352,6 @@ updates:
         - "vite-tsconfig-paths"
         - "vite-bundle-analyzer"
         - "jsdom"
-    eslint:
-      applies-to: version-updates
-      patterns:
-        - "eslint"
-        - "@eslint/*"
-        - "eslint-plugin-*"
-        - "eslint-config-*"
-        - "@tanstack/eslint-plugin-query"
-        - "globals"
     forms:
       applies-to: version-updates
       patterns:
@@ -381,11 +381,30 @@ updates:
       patterns:
         - "jotai"
         - "jotai-*"
+    visx:
+      applies-to: version-updates
+      patterns:
+        - "@visx/*"
+    emotion:
+      applies-to: version-updates
+      patterns:
+        - "@emotion/*"
     storybook:
       applies-to: version-updates
       patterns:
         - "storybook"
         - "@storybook/*"
+    react:
+      applies-to: version-updates
+      patterns:
+        - "react"
+        - "react-dom"
+        - "@types/react"
+        - "@types/react-dom"
+    tanstack-query:
+      applies-to: version-updates
+      patterns:
+        - "@tanstack/react-query*"
     # msw, downshift, and @frontegg/* tighten types in minor releases that
     # existing code relies on, and @intercom/* is on 0.0.x, where any release
     # can break. Each comes as its own PR rather than breaking the whole group.
