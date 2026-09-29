@@ -366,7 +366,7 @@ pub enum Command {
         /// If statement logging is enabled, contains all info needed for installing watch sets
         /// and logging the statement execution.
         watch_set: Option<WatchSetCreation>,
-        tx: oneshot::Sender<Result<(), AdapterError>>,
+        tx: oneshot::Sender<(Result<(), AdapterError>, mz_ore::metrics::phase::PhaseGuard)>,
     },
 
     /// Unregister and retire a pending peek that was registered but then
@@ -563,6 +563,7 @@ impl Command {
 
 #[derive(Debug)]
 pub struct Response<T> {
+    pub qps_resume: mz_ore::metrics::phase::PhaseGuard,
     pub result: Result<T, AdapterError>,
     pub session: Session,
     pub otel_ctx: OpenTelemetryContext,

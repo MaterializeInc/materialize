@@ -363,6 +363,30 @@ fn test_reused_prepared_select_context() {
         assert!(before_sql_compiler.iter().all(|count| *count > 0));
         let before_hits = prepared_count("template_hit");
         let before_generic = prepared_count("generic_execute");
+        let phase_count = |phase: &str| -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_adapter_qps_phase_seconds")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    [("phase", phase), ("outcome", "returned"), ("kind", "wall")]
+                        .iter()
+                        .all(|(name, value)| {
+                            metric
+                                .get_label()
+                                .iter()
+                                .any(|label| label.name() == *name && label.value() == *value)
+                        })
+                })
+                .map(|metric| metric.get_histogram().get_sample_count())
+                .sum()
+        };
+        let before_instantiation = phase_count("frontend_instantiate");
+        let optimizer_phases =
+            || ["optimizer_dispatch", "optimizer_work", "optimizer_resume"].map(&phase_count);
+        let before_optimizer_phases = optimizer_phases();
         for (key, value) in [(1_i32, "one"), (3, "three"), (2, "two"), (1, "one")] {
             let suffix = format!("-{key}");
             let row = client.query_one(&stmt, &[&key, &suffix, &1_i64]).unwrap();
@@ -391,6 +415,15 @@ fn test_reused_prepared_select_context() {
             assert_eq!(compilation_counts(), before_compilation);
             assert_eq!(prepared_count("template_hit"), before_hits + 6);
             assert_eq!(prepared_count("generic_execute"), before_generic + 6);
+            let expected_instantiations = match mz_ore::metrics::phase::Mode::from_env() {
+                mz_ore::metrics::phase::Mode::Off => 0,
+                mz_ore::metrics::phase::Mode::Wall | mz_ore::metrics::phase::Mode::Poll => 6,
+            };
+            assert_eq!(
+                phase_count("frontend_instantiate"),
+                before_instantiation + expected_instantiations
+            );
+            assert_eq!(optimizer_phases(), before_optimizer_phases);
             assert_eq!(
                 after, before,
                 "warm changing-parameter executions must skip the optimizer"
@@ -2725,7 +2758,26 @@ fn test_session_owned_read_completion() {
                 })
                 .map(|m| u64::cast_lossy(m.get_counter().value()))
                 .sum();
-            (local, commits, template_hits)
+            let local_phases: u64 = metrics
+                .iter()
+                .filter(|m| m.name() == "mz_adapter_qps_phase_seconds")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    [
+                        ("phase", "local_completion_total"),
+                        ("outcome", "returned"),
+                        ("kind", "wall"),
+                    ]
+                    .iter()
+                    .all(|(name, value)| {
+                        m.get_label()
+                            .iter()
+                            .any(|label| label.name() == *name && label.value() == *value)
+                    })
+                })
+                .map(|m| m.get_histogram().get_sample_count())
+                .sum();
+            (local, commits, template_hits, local_phases)
         };
 
         // Warm up the collection and protocol paths before measuring completion routing.
@@ -2761,6 +2813,18 @@ fn test_session_owned_read_completion() {
             );
         }
         let after = counts();
+        if enabled && mz_ore::metrics::phase::Mode::from_env() != mz_ore::metrics::phase::Mode::Off
+        {
+            assert!(
+                after.3 >= before.3 + 8,
+                "local completion phases must be observed"
+            );
+        } else {
+            assert_eq!(
+                after.3, before.3,
+                "inactive completion phases must stay empty"
+            );
+        }
         assert_eq!(
             after.2,
             before.2 + 4,
