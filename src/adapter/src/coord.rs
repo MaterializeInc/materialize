@@ -5333,6 +5333,7 @@ pub fn serve(
                     trigger,
                     exclude_collections,
                     cluster_stability: BTreeMap::new(),
+                    hydration_times: Default::default(),
                 }
             });
 
