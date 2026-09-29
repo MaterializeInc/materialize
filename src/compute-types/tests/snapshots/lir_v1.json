@@ -286,6 +286,7 @@
       "SumInt16": "UNIT",
       "SumInt32": "UNIT",
       "SumInt64": "UNIT",
+      "SumInterval": "UNIT",
       "SumNumeric": "UNIT",
       "SumUInt16": "UNIT",
       "SumUInt32": "UNIT",
