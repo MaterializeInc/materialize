@@ -62,6 +62,7 @@ use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode, listen,
 };
+use openssl::error::ErrorStack;
 use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use proxy_header::{ProxiedAddress, ProxyHeader};
@@ -322,7 +323,8 @@ impl BalancerService {
             .cfg
             .internal_tls
             .then(internal_tls_connector)
-            .transpose()?;
+            .transpose()
+            .context("building internal TLS connector")?;
 
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
         let limiter = ConnectionLimiter::new(&self.cfg.metrics_registry, self.configs.clone());
@@ -492,8 +494,8 @@ impl mz_server_core::Server for InternalHttpServer {
     }
 }
 
-/// Builds the connector for TLS to environmentd, shared by every upstream connection.
-fn internal_tls_connector() -> Result<SslConnector, anyhow::Error> {
+/// Builds the connector for TLS to environmentd.
+fn internal_tls_connector() -> Result<SslConnector, ErrorStack> {
     let mut builder = SslConnector::builder(SslMethod::tls())?;
     // environmentd doesn't yet have a cert we trust, so for now disable verification.
     builder.set_verify(SslVerifyMode::NONE);
