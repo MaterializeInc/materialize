@@ -58,6 +58,20 @@ pub enum TimestampContext {
 }
 
 impl TimestampContext {
+    /// Returns the timestamp that must be reached before this read can complete.
+    pub(crate) fn timestamp_to_linearize(&self) -> Option<(&Timeline, &Timestamp)> {
+        // The oracle result belongs to this transaction. A result cached from an
+        // earlier transaction would not establish its real-time bound.
+        match self {
+            Self::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                oracle_ts: Some(oracle_ts),
+            } if chosen_ts > oracle_ts => Some((timeline, chosen_ts)),
+            _ => None,
+        }
+    }
+
     /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
     pub fn from_timeline_context(
         chosen_ts: Timestamp,
