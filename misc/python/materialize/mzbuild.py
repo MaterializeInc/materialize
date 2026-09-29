@@ -47,7 +47,7 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.docker import image_registry
+from materialize.docker import ghcr_enabled, image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -1143,8 +1143,9 @@ class ResolvedImage:
             spec = self.spec()
             if spec.startswith(GHCR_PREFIX):
                 spec = spec.removeprefix(GHCR_PREFIX)
-            docker_tag = f"docker.io/{spec}"
-            ghcr_tag = f"{GHCR_PREFIX}{spec}"
+            tags = [f"docker.io/{spec}"]
+            if ghcr_enabled():
+                tags.append(f"{GHCR_PREFIX}{spec}")
             cmd: Sequence[str] = [
                 "docker",
                 "buildx",
@@ -1153,16 +1154,13 @@ class ResolvedImage:
                 "-f",
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
-                "-t",
-                docker_tag,
-                "-t",
-                ghcr_tag,
+                *(arg for tag in tags for arg in ("-t", tag)),
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
                 "--load",
             ]
 
-        if token := os.getenv("GITHUB_GHCR_TOKEN"):
+        if ghcr_enabled() and (token := os.getenv("GITHUB_GHCR_TOKEN")):
             spawn.runv(
                 [
                     "docker",
@@ -1178,10 +1176,10 @@ class ResolvedImage:
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
         if push:
-            # Push to both registries in parallel. With the docker driver,
+            # Push to all registries in parallel. With the docker driver,
             # the image is already in the local daemon after --load, so
             # docker push is the same mechanism buildx --push uses internally.
-            pending = [docker_tag, ghcr_tag]
+            pending = tags
             for sleep_time in [5, 10, 20, 40, 60, None]:
                 procs = [
                     subprocess.Popen(
@@ -1236,14 +1234,17 @@ class ResolvedImage:
         return self.acquired
 
     def is_published_if_necessary(self) -> bool:
-        """Report whether the image exists on DockerHub & GHCR if it is publishable."""
+        """Report whether the image exists on DockerHub (and GHCR, if enabled)
+        if it is publishable."""
         if not self.publish:
             return False
         spec = self.spec()
         if spec.startswith(GHCR_PREFIX):
             spec = spec.removeprefix(GHCR_PREFIX)
         ghcr_spec = f"{GHCR_PREFIX}{spec}"
-        if is_docker_image_pushed(spec) and is_ghcr_image_pushed(ghcr_spec):
+        if is_docker_image_pushed(spec) and (
+            not ghcr_enabled() or is_ghcr_image_pushed(ghcr_spec)
+        ):
             ui.say(f"{spec} already exists")
             return True
         return False
@@ -1253,7 +1254,8 @@ class ResolvedImage:
 
         Each element is True (public), False (private/absent), or None (could
         not determine). Non-publishable images are reported as public on both,
-        since they are never pushed and so the check does not apply to them.
+        and all images as public on GHCR while it is disabled, since the check
+        does not apply to a registry the image is never pushed to.
         """
         if not self.publish:
             return (True, True)
@@ -1261,7 +1263,10 @@ class ResolvedImage:
         if spec.startswith(GHCR_PREFIX):
             spec = spec.removeprefix(GHCR_PREFIX)
         ghcr_spec = f"{GHCR_PREFIX}{spec}"
-        return (is_docker_image_public(spec), is_ghcr_image_public(ghcr_spec))
+        return (
+            is_docker_image_public(spec),
+            is_ghcr_image_public(ghcr_spec) if ghcr_enabled() else True,
+        )
 
     def run(
         self,
@@ -1817,7 +1822,8 @@ def publish_multiarch_images(
 ) -> None:
     """Publishes a set of docker images under a given tag."""
     always_push_tags = ("latest", "unstable")
-    if ghcr_token := os.getenv("GITHUB_GHCR_TOKEN"):
+    ghcr_token = os.getenv("GITHUB_GHCR_TOKEN") if ghcr_enabled() else None
+    if ghcr_token:
         spawn.runv(
             [
                 "docker",

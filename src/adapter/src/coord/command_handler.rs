@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -110,11 +109,9 @@ fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
 }
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a command in a size-bounded, heap-allocated future.
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();
             }
@@ -193,8 +190,7 @@ impl Coordinator {
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                        .await;
+                    Box::pin(self.handle_execute(portal_name, session, tx, outer_ctx_extra)).await;
                 }
 
                 Command::StartCopyFromStdin {
@@ -662,8 +658,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(debug_span!("handle_command"))
-        .boxed_local()
+        .instrument(debug_span!("handle_command"));
+        crate::coord::box_dispatcher(future)
     }
 
     fn handle_role_can_login(
