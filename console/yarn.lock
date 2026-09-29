@@ -12250,7 +12250,7 @@ __metadata:
     prettier: "npm:^3.9.9"
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
-    react-hook-form: "npm:^7.53.1"
+    react-hook-form: "npm:^7.89.0"
     react-intersection-observer: "npm:^10.0.3"
     react-oidc-context: "npm:^3.3.1"
     react-refresh: "npm:^0.19.0"
@@ -13801,12 +13801,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-hook-form@npm:^7.53.1":
-  version: 7.53.1
-  resolution: "react-hook-form@npm:7.53.1"
+"react-hook-form@npm:^7.89.0":
+  version: 7.89.0
+  resolution: "react-hook-form@npm:7.89.0"
   peerDependencies:
+    "@types/react": "*"
     react: ^16.8.0 || ^17 || ^18 || ^19
-  checksum: 10c0/dd2466359a633f873755b366d367d51ab17100566b687fb3b098f704232bc6ab1c79d29f879151e492880ca5eeac35e9425fbe5a309e2a55f7a4b5baf7826e8d
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/efeefbacb6ded5e1c0eb0b740cab9e839b9b8018f692fe538f68295a0a655b42d1530a6aa00a47e34a272e429bd752f3ea8c8799b182ed8cf299a9966e90332a
   languageName: node
   linkType: hard
 
