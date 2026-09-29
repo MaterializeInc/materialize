@@ -92,18 +92,15 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // worker is `sink_id.hashed() % peers`, so two incarnations usually land on different
         // workers, and `Worker::reconcile` has no cross-worker barrier: on a restart the new one can
         // register before the other worker drops the old. User sinks keep a durable `GlobalId`, so
-        // both land on one worker that drops before it re-creates, and never collide. So
-        // registration is fallible, retried until the predecessor drops.
+        // both incarnations hash to the same worker, which unregisters the old collector before
+        // registering the new: `Worker::reconcile` clears a non-retained dataflow's sink token
+        // (dropping this guard) before applying the replacement `CreateDataflow`, so they never
+        // collide. Registration is fallible, retried until the predecessor drops.
         let registration = Rc::new(RefCell::new((worker_id == active_worker_id).then(|| {
-            PendingRegistration {
-                label: self.label.clone(),
-                collector: SinkCollector::new(&self.label, Arc::clone(&state)),
-                handle: None,
-                logged: false,
-                terminated: false,
-                first_collision: None,
-                escalated: false,
-            }
+            PendingRegistration::new(
+                self.label.clone(),
+                SinkCollector::new(&self.label, Arc::clone(&state)),
+            )
         })));
         let registration_op = Rc::clone(&registration);
         let registry = compute_state.metrics_registry.clone();
@@ -135,8 +132,15 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
             // frontier, so a sink with a slow input would publish no series until it happened to be
             // scheduled, and a scrape in that gap sees fewer sinks than exist. A collision retries
             // through the activation path below.
+            //
+            // NOTE: these retries ride on operator activations, so they stop if both inputs close
+            // before a collision clears (e.g. a constant-folded source): timely drops the operator
+            // closure, leaving the token holding a handle-less `PendingRegistration`, so the sink
+            // never publishes. A collision outlasting a finite source isn't expected for these
+            // curated sinks, so we accept the gap rather than pin an activation open until the
+            // handle is set.
             if let Some(registration) = registration_op.borrow_mut().as_mut() {
-                if !registration.try_register(&registry, &worker_metrics) {
+                if let Retry::Arm = registration.try_register(&registry, &worker_metrics) {
                     activator.activate_after(REGISTRATION_RETRY_INTERVAL);
                 }
             }
@@ -171,7 +175,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
                         return;
                     };
 
-                    if !registration.try_register(&registry, &worker_metrics) {
+                    if let Retry::Arm = registration.try_register(&registry, &worker_metrics) {
                         // The input may be quiescent, so nothing else would reschedule us.
                         activator.activate_after(REGISTRATION_RETRY_INTERVAL);
                     }
@@ -245,6 +249,15 @@ const REGISTRATION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// isn't dropping, so soft-panic once to surface it, then keep retrying in case it clears.
 const REGISTRATION_ESCALATE_AFTER: Duration = Duration::from_secs(60);
 
+/// Whether a registration attempt left a collision the caller must arm a retry for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    /// Arm a retry activation [`REGISTRATION_RETRY_INTERVAL`] from now.
+    Arm,
+    /// Nothing to arm: registered, permanently abandoned, or a retry is already armed.
+    Skip,
+}
+
 /// Active-worker collector registration that tolerates a transient descriptor-id collision with an
 /// incarnation of this sink that has not been torn down yet.
 ///
@@ -257,30 +270,59 @@ struct PendingRegistration {
     logged: bool,
     /// Set once a non-collision error soft-panicked, so we stop retrying.
     terminated: bool,
-    /// When the current collision streak began, for the escalation bound.
+    /// When the collision streak began, for the escalation bound.
     first_collision: Option<Instant>,
-    /// Set once the escalation soft-panic has fired, so it fires once per streak.
+    /// Set once the escalation soft-panic has fired, so it fires only once.
     escalated: bool,
+    /// Earliest instant a new attempt may run. `Some` means a retry is already armed, so
+    /// activations before it are no-ops. This paces attempts to one per
+    /// [`REGISTRATION_RETRY_INTERVAL`] regardless of how often the input reschedules the operator.
+    next_attempt: Option<Instant>,
 }
 
 impl PendingRegistration {
-    /// Attempts to register the collector, returning `false` while the caller should keep retrying.
+    fn new(label: String, collector: SinkCollector) -> Self {
+        PendingRegistration {
+            label,
+            collector,
+            handle: None,
+            logged: false,
+            terminated: false,
+            first_collision: None,
+            escalated: false,
+            next_attempt: None,
+        }
+    }
+
+    /// Attempts to register the collector, at most once per [`REGISTRATION_RETRY_INTERVAL`].
+    ///
+    /// Returns [`Retry::Arm`] only when a fresh collision was just seen and the caller must arm a
+    /// retry activation; [`Retry::Skip`] once registered, permanently abandoned, or while a retry
+    /// armed by an earlier collision is still pending. The gate matters because a busy input
+    /// reschedules the operator far more often than the retry interval, and each bare attempt
+    /// clones the collector and takes the registry write lock.
     ///
     /// An `AlreadyReg` collision retries until the predecessor drops the `Desc` id; after
     /// [`REGISTRATION_ESCALATE_AFTER`] it soft-panics once to surface a predecessor that never
     /// drops, then keeps retrying. Any other error is a logic error, so it soft-panics and stops.
-    fn try_register(&mut self, registry: &MetricsRegistry, metrics: &WorkerMetrics) -> bool {
+    fn try_register(&mut self, registry: &MetricsRegistry, metrics: &WorkerMetrics) -> Retry {
         if self.handle.is_some() || self.terminated {
-            return true;
+            return Retry::Skip;
+        }
+        let now = Instant::now();
+        if let Some(next) = self.next_attempt {
+            if now < next {
+                return Retry::Skip;
+            }
         }
         match registry.try_register_collector_with_dropper(self.collector.clone()) {
             Ok(handle) => {
                 self.handle = Some(handle);
-                true
+                self.next_attempt = None;
+                Retry::Skip
             }
             Err(prometheus::Error::AlreadyReg) => {
                 metrics.inc_metric_sink_registration_retries();
-                let now = Instant::now();
                 let first = *self.first_collision.get_or_insert(now);
                 // Only the first failure logs; the counter carries the ongoing signal.
                 if !self.logged {
@@ -299,7 +341,8 @@ impl PendingRegistration {
                         REGISTRATION_ESCALATE_AFTER
                     );
                 }
-                false
+                self.next_attempt = Some(now + REGISTRATION_RETRY_INTERVAL);
+                Retry::Arm
             }
             Err(err) => {
                 self.terminated = true;
@@ -307,7 +350,7 @@ impl PendingRegistration {
                     "metric sink {} collector registration failed: {err}",
                     self.label
                 );
-                true
+                Retry::Skip
             }
         }
     }
@@ -1340,17 +1383,12 @@ mod tests {
             1
         );
 
-        let mut registration = PendingRegistration {
-            label: LABEL.to_string(),
-            collector: SinkCollector::new(LABEL, Arc::new(Mutex::new(SinkState::default()))),
-            handle: None,
-            logged: false,
-            terminated: false,
-            first_collision: None,
-            escalated: false,
-        };
+        let mut registration = PendingRegistration::new(
+            LABEL.to_string(),
+            SinkCollector::new(LABEL, Arc::new(Mutex::new(SinkState::default()))),
+        );
 
-        assert!(!registration.try_register(&registry, &metrics));
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Arm);
         assert_eq!(counter_total(&registry, RETRIES), 1.0);
         // The failed attempt registered nothing, so the incumbent is still the only series.
         assert_eq!(
@@ -1358,11 +1396,18 @@ mod tests {
             1
         );
 
-        assert!(!registration.try_register(&registry, &metrics));
+        // A retry is armed, so an activation before the interval elapses attempts nothing.
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Skip);
+        assert_eq!(counter_total(&registry, RETRIES), 1.0);
+
+        // Clearing `next_attempt` stands in for the retry interval elapsing.
+        registration.next_attempt = None;
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Arm);
         assert_eq!(counter_total(&registry, RETRIES), 2.0);
 
         drop(incumbent);
-        assert!(registration.try_register(&registry, &metrics));
+        registration.next_attempt = None;
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Skip);
         assert_eq!(counter_total(&registry, RETRIES), 2.0);
         assert_eq!(
             companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
@@ -1370,7 +1415,7 @@ mod tests {
         );
 
         // Already registered: a further activation is a no-op, not a second registration.
-        assert!(registration.try_register(&registry, &metrics));
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Skip);
         assert_eq!(counter_total(&registry, RETRIES), 2.0);
 
         // Dropping the registration is what frees the `Desc` id for the next incarnation.
@@ -1381,10 +1426,23 @@ mod tests {
         );
     }
 
-    /// The guard follows the sink token, not the operator closure: dropping the operator's `Rc`
-    /// clone (what timely does when the inputs close) must not unregister; only the token's may.
+    /// The registration follows the sink token, not the operator closure. Builds a real timely
+    /// operator with `render_sink`'s wiring (register at build time, keep only a clone of the
+    /// registration in the operator closure, return the original as the sink token) around a
+    /// constant input that closes at once. When timely retires the operator and drops its closure
+    /// the collector's series must survive, because the token still holds the registration; only
+    /// dropping the token unregisters. Building a real operator, rather than dropping an `Rc` by
+    /// hand, is what proves the closure does not carry the registering handle.
+    ///
+    /// It stops short of driving `render_sink` itself, which would need a full `ComputeState`.
     #[mz_ore::test]
-    fn registration_survives_operator_closure_drop() {
+    fn registration_survives_input_close_in_dataflow() {
+        use differential_dataflow::input::Input;
+        use timely::WorkerConfig;
+        use timely::communication::Allocator;
+        use timely::dataflow::channels::pact::Pipeline;
+        use timely::worker::Worker as TimelyWorker;
+
         const LABEL: &str = "mz_curated_example";
         const FRONTIER: &str = "mz_compute_metric_sink_frontier_ms";
         const SINK_LABEL: &str = "sink";
@@ -1393,38 +1451,72 @@ mod tests {
         let metrics =
             ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
 
-        let token = Rc::new(RefCell::new(Some(PendingRegistration {
-            label: LABEL.to_string(),
-            collector: SinkCollector::new(LABEL, Arc::new(Mutex::new(SinkState::default()))),
-            handle: None,
-            logged: false,
-            terminated: false,
-            first_collision: None,
-            escalated: false,
-        })));
-        // The operator closure holds a clone of the same `Rc`.
-        let operator = Rc::clone(&token);
-        assert!(
-            operator
-                .borrow_mut()
-                .as_mut()
-                .expect("active worker")
-                .try_register(&registry, &metrics)
+        let mut worker = TimelyWorker::new(
+            WorkerConfig::default(),
+            Allocator::Thread(Default::default()),
+            Some(Instant::now()),
         );
+
+        // `MetricsRegistry` and `WorkerMetrics` are cheap shared handles, so the clones the operator
+        // registers through and the originals the assertions scrape are the same registry.
+        let registry_op = registry.clone();
+        let metrics_op = metrics.clone();
+        let registration = worker.dataflow::<Timestamp, _, _>(move |scope| {
+            // Dropping the input handle immediately closes the input, standing in for a
+            // constant-folded source whose frontier closes as soon as the dataflow starts.
+            let (_input, collection) = scope.new_collection::<Row, Diff>();
+            let registration = Rc::new(RefCell::new(Some(PendingRegistration::new(
+                LABEL.to_string(),
+                SinkCollector::new(LABEL, Arc::new(Mutex::new(SinkState::default()))),
+            ))));
+            let registration_op = Rc::clone(&registration);
+
+            let scope_for_activator = scope.clone();
+            let mut op = OperatorBuilder::new("MetricSinkTest".to_string(), scope.clone());
+            let mut input = op.new_input(collection.inner, Pipeline);
+            let operator_info = op.operator_info();
+            op.build(move |_caps| {
+                let activator = scope_for_activator.activator_for(operator_info.address);
+                if let Some(reg) = registration_op.borrow_mut().as_mut() {
+                    if let Retry::Arm = reg.try_register(&registry_op, &metrics_op) {
+                        activator.activate_after(REGISTRATION_RETRY_INTERVAL);
+                    }
+                }
+                move |_frontiers| {
+                    input.for_each(|_, _| {});
+                }
+            });
+
+            registration
+        });
+
+        // The build-time attempt registered the collector.
         assert_eq!(
             companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
             1
         );
 
-        // Inputs close: the operator closure drops. The registration must survive.
-        drop(operator);
+        // Step until timely retires the operator and drops its closure, releasing its `Rc` clone.
+        for _ in 0..100 {
+            if Rc::strong_count(&registration) == 1 {
+                break;
+            }
+            worker.step();
+        }
+        assert_eq!(
+            Rc::strong_count(&registration),
+            1,
+            "the operator closure should have dropped once its input closed"
+        );
+
+        // The registration rode on the token, not the closure, so the series is still live.
         assert_eq!(
             companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
             1
         );
 
         // Dropping the token is what unregisters.
-        drop(token);
+        drop(registration);
         assert_eq!(
             companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
             0
