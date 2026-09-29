@@ -72,22 +72,35 @@ const CREATE_NETWORK_POLICY_STR: &str = "CREATENETWORKPOLICY";
 /// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
 pub const PUBLIC_ROLE_OID: Oid = Oid(0);
 
+/// A bit flag representing all the privileges that can be granted to a role.
+///
+/// Modeled after:
+/// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
+///
+/// The lower 32 bits are used for different privilege types.
+///
+/// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
+/// right by 32 bits (Currently unimplemented in Materialize).
+///
+/// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
+/// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
+/// privileges that PostgreSQL may add in the future.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+#[serde(from = "AclModeSerde", into = "AclModeSerde")]
+pub struct AclMode(u64);
+
 bitflags! {
-    /// A bit flag representing all the privileges that can be granted to a role.
-    ///
-    /// Modeled after:
-    /// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
-    ///
-    /// The lower 32 bits are used for different privilege types.
-    ///
-    /// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
-    /// right by 32 bits (Currently unimplemented in Materialize).
-    ///
-    /// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
-    /// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
-    /// privileges that PostgreSQL may add in the future.
-    #[derive(Serialize, Deserialize)]
-    pub struct AclMode: u64 {
+    impl AclMode: u64 {
         // PostgreSQL compatible privileges.
         const INSERT = 1 << 0;
         const SELECT = 1 << 1;
@@ -104,6 +117,37 @@ bitflags! {
 
         // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
         // reserved for grant options.
+    }
+}
+
+/// The serde representation of [`AclMode`], `{"bits": <u64>}`, as derived by bitflags 1.
+#[derive(Serialize, Deserialize)]
+struct AclModeSerde {
+    bits: u64,
+}
+
+impl From<AclModeSerde> for AclMode {
+    fn from(AclModeSerde { bits }: AclModeSerde) -> Self {
+        AclMode::from_bits_retain(bits)
+    }
+}
+
+impl From<AclMode> for AclModeSerde {
+    fn from(acl_mode: AclMode) -> Self {
+        AclModeSerde {
+            bits: acl_mode.bits(),
+        }
+    }
+}
+
+// Matches the `Debug` output that bitflags 1 derived, for example `INSERT | SELECT`.
+impl fmt::Debug for AclMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            f.write_str("(empty)")
+        } else {
+            bitflags::parser::to_writer(self, f)
+        }
     }
 }
 
@@ -238,14 +282,12 @@ impl fmt::Display for AclMode {
 impl RustType<ProtoAclMode> for AclMode {
     fn into_proto(&self) -> ProtoAclMode {
         ProtoAclMode {
-            acl_mode: self.bits,
+            acl_mode: self.bits(),
         }
     }
 
     fn from_proto(proto: ProtoAclMode) -> Result<Self, TryFromProtoError> {
-        Ok(AclMode {
-            bits: proto.acl_mode,
-        })
+        Ok(AclMode::from_bits_retain(proto.acl_mode))
     }
 }
 
@@ -255,7 +297,7 @@ impl Arbitrary for AclMode {
     type Strategy = BoxedStrategy<AclMode>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::bits::BitSetStrategy::masked(AclMode::all().bits)
+        proptest::bits::BitSetStrategy::masked(AclMode::all().bits())
             .prop_map(|bits| AclMode::from_bits(bits).expect("invalid proptest implementation"))
             .boxed()
     }
@@ -326,7 +368,7 @@ impl MzAclItem {
         Ok(MzAclItem {
             grantee,
             grantor,
-            acl_mode: AclMode { bits: acl_mode },
+            acl_mode: AclMode::from_bits_retain(acl_mode),
         })
     }
 
@@ -585,7 +627,7 @@ impl AclItem {
         Ok(AclItem {
             grantee,
             grantor,
-            acl_mode: AclMode { bits: acl_mode },
+            acl_mode: AclMode::from_bits_retain(acl_mode),
         })
     }
 
@@ -1007,6 +1049,17 @@ fn test_mz_acl_item_binary() {
 #[mz_ore::test]
 fn test_mz_acl_item_binary_size() {
     assert_eq!(26, MzAclItem::binary_size());
+}
+
+#[mz_ore::test]
+fn test_acl_mode_serde_and_debug() {
+    let acl_mode = AclMode::INSERT | AclMode::SELECT;
+    let json = serde_json::to_string(&acl_mode).unwrap();
+    assert_eq!(json, r#"{"bits":3}"#);
+    assert_eq!(serde_json::from_str::<AclMode>(&json).unwrap(), acl_mode);
+
+    assert_eq!(format!("{acl_mode:?}"), "INSERT | SELECT");
+    assert_eq!(format!("{:?}", AclMode::empty()), "(empty)");
 }
 
 #[mz_ore::test]
