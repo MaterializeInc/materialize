@@ -346,17 +346,19 @@ const EnvironmentRoutes = () => {
           />
         )}
 
-        <Route path="freshness">
-          <Route
-            index
-            path="*"
-            element={
-              <BaseLayout>
-                <FreshnessRoutes />
-              </BaseLayout>
-            }
-          />
-        </Route>
+        {flags["freshness-page-CNS164"] && (
+          <Route path="freshness">
+            <Route
+              index
+              path="*"
+              element={
+                <BaseLayout>
+                  <FreshnessRoutes />
+                </BaseLayout>
+              }
+            />
+          </Route>
+        )}
         <Route path="query-history">
           <Route
             index
