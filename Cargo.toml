@@ -392,7 +392,7 @@ indicatif = "0.18.4"
 insta = { version = "1.47.2", features = ["json", "serde"] }
 ipnet = "2.12.0"
 itertools = "0.14.0"
-jemalloc_pprof = "0.8.2"
+jemalloc_pprof = "0.9.0"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 junit-report = "0.8.3"
 k8s-controller = "0.12.0"
@@ -526,8 +526,8 @@ tempfile = "3.27.0"
 termcolor = "1.4.1"
 thiserror = "2.0.18"
 tiberius = { version = "0.12", default-features = false, features = ["chrono", "native-tls", "sql-browser-tokio", "tds73"] }
-tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
-tikv-jemallocator = { version = "0.6", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
+tikv-jemallocator = { version = "0.7", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
 timely = "0.31.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
