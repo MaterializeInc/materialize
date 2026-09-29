@@ -403,12 +403,16 @@ def create_clusterd_service(
         "enable_unified_cluster", "false"
     ) == "true"
     # For the same reason `enable_compute_interactive_runtime` never reaches
-    # it, so the second runtime has to be configured here. An image without
-    # the option ignores the variable and stays single-runtime.
+    # it, so the second runtime is configured here, keyed off the parameter
+    # and defaulting to the CI default. An image without the option ignores
+    # the variable and stays single-runtime.
+    interactive_compute = (additional_system_parameter_defaults or {}).get(
+        "enable_compute_interactive_runtime", "true"
+    ) == "true"
     return Clusterd(
         image=clusterd_image,
         unified_cluster=unified_cluster,
-        interactive_compute=True,
+        interactive_compute=interactive_compute,
     )
 
 
