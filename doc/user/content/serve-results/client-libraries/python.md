@@ -176,7 +176,7 @@ with conn.cursor() as cur:
             print(row)
 ```
 
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
+`cur` iterates over the fetched rows, which have the [`SUBSCRIBE` output format](/sql/subscribe/#output). When a row of a subscribed view is **updated**, two rows show up in the output:
 
 ```python
     ...
@@ -225,8 +225,7 @@ ORM frameworks tend to run complex introspection queries that may use configurat
 
 The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize and join efforts with each community to make the integrations Just Work™️.
 
-Check out the [integrations page](/developer-tools/integrations/) for a list of ORM frameworks
-that are known to work well with Materialize.
+For other tools that work with Materialize, see [Tools and integrations](/developer-tools/integrations/).
 
 ### SQLAlchemy
 
