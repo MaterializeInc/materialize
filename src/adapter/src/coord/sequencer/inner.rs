@@ -2210,9 +2210,11 @@ impl Coordinator {
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
                 };
-                self.strict_serializable_reads_tx
-                    .send((conn_id, pending_read_txn))
-                    .expect("sending to strict_serializable_reads_tx cannot fail");
+                if let Some(pending_read_txn) = pending_read_txn.try_finish_read(&self.metrics) {
+                    self.strict_serializable_reads_tx
+                        .send((conn_id, pending_read_txn))
+                        .expect("sending to strict_serializable_reads_tx cannot fail");
+                }
                 return;
             }
             Ok((
