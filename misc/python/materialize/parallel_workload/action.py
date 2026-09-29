@@ -4366,11 +4366,8 @@ class AlterOwnerAction(Action):
         for cluster in clusters:
             candidates.append(("CLUSTER", str(cluster)))
         candidates.append(("SECRET", "materialize.public.pgpass"))
-        # NOTE: No CONNECTION target. Changing a connection's owner emits a
-        # Connection(Altered) implication, which re-alters every dependent
-        # sink's export connection. That re-alter can fail with InvalidAlter
-        # and panic the coordinator.
-        # See https://linear.app/materializeinc/issue/SQL-517
+        for conn in AlterConnectionAction.SET_CLAUSES:
+            candidates.append(("CONNECTION", f"materialize.public.{conn}"))
         kind, name = self.rng.choice(candidates)
         with role.lock:
             if role not in exe.db.roles:
@@ -4458,11 +4455,10 @@ class BroadPrivilegesAction(Action):
             targets: list[tuple[str, list[str]]] = [
                 ("SYSTEM", ["CREATEDB", "CREATECLUSTER", "CREATEROLE", "ALL"]),
                 ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
-                # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
-                # a Connection(Altered) implication, which re-alters every
-                # dependent sink's export connection. That re-alter can fail
-                # with InvalidAlter and panic the coordinator.
-                # See https://linear.app/materializeinc/issue/SQL-517
+                (
+                    f"CONNECTION materialize.public.{self.rng.choice(list(AlterConnectionAction.SET_CLAUSES))}",
+                    ["USAGE", "ALL"],
+                ),
             ]
             if exe.db.schemas:
                 targets.append(
@@ -4728,8 +4724,8 @@ class ValidateConnectionAction(Action):
 
 class AlterConnectionAction(Action):
     # The SET clause per connection, setting the option to the value the
-    # connection already has. That still exercises the full reconfiguration
-    # path (restarting dependent sources and sinks) without breaking them.
+    # connection already has. That still restarts dependent sinks without
+    # breaking them. Sources skip an unchanged connection.
     # NOTE: BROKER takes no `=` (it is parsed specially), HOST/URL do.
     SET_CLAUSES = {
         "kafka_conn": "BROKER 'kafka:9092'",
@@ -6560,12 +6556,7 @@ ddl_action_list = ActionList(
         (BroadPrivilegesAction, 2),
         (ShowAction, 4),
         (ValidateConnectionAction, 2),
-        # TODO: Reenable once altering a connection that sinks or sources depend
-        # on can no longer panic the coordinator. Re-altering a dependent sink's
-        # export connection after the txn fails with InvalidAlter, which
-        # unwrap_or_terminate turns into a panic.
-        # See https://linear.app/materializeinc/issue/SQL-517
-        # (AlterConnectionAction, 2),
+        (AlterConnectionAction, 2),
         (AlterSecretAction, 2),
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
