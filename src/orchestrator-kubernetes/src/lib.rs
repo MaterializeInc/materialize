@@ -1401,9 +1401,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 status,
                 restart_count,
                 healthy_since,
-                time: DateTime::from_timestamp_nanos(
-                    time.as_nanosecond().try_into().expect("must fit"),
-                ),
+                time: to_chrono(time),
             })
         }
 
@@ -1846,8 +1844,10 @@ fn topology_spread_min_domains(
     if soft || az_pinned { None } else { min_domains }
 }
 
-/// Reconstruct health across watch reconnects without counting time before a
-/// container restart. A fast restart need not produce an observed Ready flap.
+/// Returns the start of the pod's current healthy run: the later of its last
+/// Ready transition and the start of its containers.
+///
+/// Returns `None` if the pod is not Ready or any container is not running.
 fn pod_healthy_since(pod: &Pod) -> Option<DateTime<chrono::Utc>> {
     let status = pod.status.as_ref()?;
     let ready = status
@@ -1863,6 +1863,8 @@ fn pod_healthy_since(pod: &Pod) -> Option<DateTime<chrono::Utc>> {
     if containers.is_empty() {
         return None;
     }
+    // A container that restarts quickly need not flip the Ready condition, so
+    // the Ready transition alone can predate the current container run.
     for container in containers {
         let started = container
             .state
@@ -1874,7 +1876,11 @@ fn pod_healthy_since(pod: &Pod) -> Option<DateTime<chrono::Utc>> {
             .0;
         since = since.max(started);
     }
-    DateTime::from_timestamp_nanos(since.as_nanosecond().try_into().expect("must fit")).into()
+    Some(to_chrono(since))
+}
+
+fn to_chrono(ts: Timestamp) -> DateTime<chrono::Utc> {
+    DateTime::from_timestamp_nanos(ts.as_nanosecond().try_into().expect("must fit"))
 }
 
 #[cfg(test)]
@@ -1882,7 +1888,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
-    fn health_anchor_survives_reconnect_but_not_restart() {
+    fn pod_healthy_since_tracks_ready_and_container_start() {
         let mut pod: Pod = serde_json::from_value(serde_json::json!({
             "status": {
                 "conditions": [{"type": "Ready", "status": "True",
@@ -1897,7 +1903,6 @@ mod tests {
             .parse::<DateTime<chrono::Utc>>()
             .unwrap();
         assert_eq!(pod_healthy_since(&pod), Some(ready));
-        assert_eq!(pod_healthy_since(&pod.clone()), Some(ready));
 
         let status = pod.status.as_mut().unwrap();
         let container = &mut status.container_statuses.as_mut().unwrap()[0];

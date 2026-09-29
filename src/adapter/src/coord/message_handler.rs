@@ -1059,18 +1059,25 @@ impl Coordinator {
         //
         // NOTE: The 0dt stability gate detects flaps by watching a process's
         // status-change `time` advance between checks. That only works because we
-        // freeze `time` on no-op events, i.e. we return early here instead of
-        // rewriting the record when neither the status nor the restart count
+        // keep `time` frozen when neither the status nor the restart count
         // changed.
         if !status_changed && !restart_count_changed {
-            let mut status = old_process_status.clone();
-            status.healthy_since = event.healthy_since;
-            self.cluster_replica_statuses.ensure_cluster_status(
-                event.cluster_id,
-                event.replica_id,
-                event.process_id,
-                status,
-            );
+            // `healthy_since` can still move without a visible status change, for
+            // example when a watch reconnect hides a Ready -> NotReady -> Ready
+            // flap. The stability gate needs the later anchor to discount the
+            // unhealthy interval.
+            if event.healthy_since != old_process_status.healthy_since {
+                let status = ClusterReplicaProcessStatus {
+                    healthy_since: event.healthy_since,
+                    ..old_process_status.clone()
+                };
+                self.cluster_replica_statuses.ensure_cluster_status(
+                    event.cluster_id,
+                    event.replica_id,
+                    event.process_id,
+                    status,
+                );
+            }
             return;
         }
 

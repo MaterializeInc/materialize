@@ -500,7 +500,6 @@ impl Coordinator {
         };
 
         let mut all_healthy = true;
-        let mut healthy_since = Some(0);
         let mut max_status_change = None;
         let mut restart_counts = BTreeMap::new();
         for (replica_id, processes) in replicas {
@@ -508,18 +507,19 @@ impl Coordinator {
                 all_healthy = false;
             }
             for (process_id, process) in processes {
-                healthy_since =
-                    healthy_since
-                        .zip(process.healthy_since)
-                        .and_then(|(since, time)| {
-                            u64::try_from(time.timestamp_millis())
-                                .ok()
-                                .map(|time| since.max(time))
-                        });
                 max_status_change = max_status_change.max(Some(process.time));
                 restart_counts.insert((*replica_id, *process_id), process.restart_count);
             }
         }
+        let healthy_since = replicas
+            .values()
+            .flat_map(|processes| processes.values())
+            .map(|process| {
+                let since = process.healthy_since?;
+                u64::try_from(since.timestamp_millis()).ok()
+            })
+            .collect::<Option<Vec<_>>>()
+            .and_then(|all| all.into_iter().max());
 
         ClusterHealthSnapshot {
             all_healthy,
