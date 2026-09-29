@@ -1141,7 +1141,7 @@ fn test_prepared_indexed_as_of_changes() {
 }
 
 #[mz_ore::test]
-#[allow(clippy::disallowed_methods)] // Synchronize a warm execution with cluster teardown.
+#[allow(clippy::disallowed_methods)] // Synchronize a warm execution with cluster or index teardown.
 fn test_prepared_indexed_drop_after_registration() {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1155,7 +1155,7 @@ fn test_prepared_indexed_drop_after_registration() {
         }
     }
 
-    for reuse in [false, true] {
+    for (reuse, drop_cluster) in [false, true].into_iter().cartesian_product([false, true]) {
         let server = test_util::TestHarness::default()
             .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
             .start_blocking();
@@ -1226,22 +1226,42 @@ fn test_prepared_indexed_drop_after_registration() {
             u64::from(reuse),
             "the racing execution must be a warm template hit"
         );
-        admin
-            .batch_execute("DROP CLUSTER prepared_race CASCADE")
-            .unwrap();
+        let drop_sql = if drop_cluster {
+            "DROP CLUSTER prepared_race CASCADE"
+        } else {
+            "DROP INDEX prepared_race_id"
+        };
+        admin.batch_execute(drop_sql).unwrap();
         fail::remove(failpoint);
         resume_tx.send(()).unwrap();
         let (mut client, stmt, result) = done_rx
             .recv_timeout(Duration::from_secs(30))
-            .expect("dropped-cluster execution completed");
-        let error = result.unwrap_db_error();
-        assert_eq!(error.code(), &SqlState::UNDEFINED_OBJECT, "{error}");
-        for sql in [
-            "CREATE CLUSTER prepared_race SIZE 'scale=1,workers=1'",
-            "CREATE INDEX prepared_race_id IN CLUSTER prepared_race ON prepared_race_rows (id)",
-        ] {
-            admin.batch_execute(sql).unwrap();
+            .expect("execution completed after dependency teardown");
+        if drop_cluster {
+            let error = result.unwrap_db_error();
+            assert_eq!(error.code(), &SqlState::UNDEFINED_OBJECT, "{error}");
+            admin
+                .batch_execute("CREATE CLUSTER prepared_race SIZE 'scale=1,workers=1'")
+                .unwrap();
+        } else {
+            // The in-flight read hold keeps the index available for this execution.
+            assert_eq!(result.unwrap().get::<_, i32>(0), 22);
+            let before = hits();
+            assert_eq!(
+                client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+                11
+            );
+            assert_eq!(
+                hits(),
+                before,
+                "a new execution must stop using the dropped index"
+            );
         }
+        admin
+            .batch_execute(
+                "CREATE INDEX prepared_race_id IN CLUSTER prepared_race ON prepared_race_rows (id)",
+            )
+            .unwrap();
         assert_eq!(
             client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
             22
@@ -1252,6 +1272,257 @@ fn test_prepared_indexed_drop_after_registration() {
             11
         );
         assert_eq!(hits() - before, u64::from(reuse));
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Synchronize privilege revocation with a registered read.
+fn test_prepared_indexed_authorization_changes() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    struct ResumePeek(mpsc::SyncSender<()>);
+    impl Drop for ResumePeek {
+        fn drop(&mut self) {
+            fail::remove("peek_after_register_before_issue");
+            let _ = self.0.try_send(());
+        }
+    }
+
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_rbac_checks".into(), "true".into())
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        let mut system = server.connect_internal(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE ROLE prepared_race_reader",
+            "CREATE TABLE prepared_auth_rows (id int, value int)",
+            "INSERT INTO prepared_auth_rows VALUES (1, 11), (2, 22)",
+            "CREATE INDEX prepared_auth_id ON prepared_auth_rows (id)",
+            "GRANT SELECT ON prepared_auth_rows TO prepared_race_reader",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let cluster: String = admin.query_one("SHOW cluster", &[]).unwrap().get(0);
+        let grant_usage = [
+            "GRANT USAGE ON DATABASE materialize TO prepared_race_reader".to_owned(),
+            "GRANT USAGE ON SCHEMA public TO prepared_race_reader".to_owned(),
+            format!(
+                "GRANT USAGE ON CLUSTER \"{}\" TO prepared_race_reader",
+                cluster.replace('"', "\"\""),
+            ),
+        ];
+        for sql in &grant_usage {
+            system.batch_execute(sql).unwrap();
+        }
+        let mut client = server
+            .pg_config()
+            .user("prepared_race_reader")
+            .connect(postgres::NoTls)
+            .unwrap();
+        let query = "SELECT value FROM prepared_auth_rows WHERE id = $1";
+        let stmt = client.prepare(query).unwrap();
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        let events = |event: &str| -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_prepared_query_events_total")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|label| label.name() == "event" && label.value() == event)
+                })
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum()
+        };
+        let before = events("template_hit");
+        let (reached_tx, reached_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        let armed = AtomicBool::new(true);
+        let resume_rx = Mutex::new(resume_rx);
+        let failpoint = "peek_after_register_before_issue";
+        fail::cfg_callback(failpoint, move || {
+            if armed.swap(false, Ordering::SeqCst) {
+                tokio::task::block_in_place(|| {
+                    let _ = reached_tx.send(());
+                    let _ = resume_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(30));
+                });
+            }
+        })
+        .unwrap();
+        let _resume = ResumePeek(resume_tx.clone());
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = client.query_one(&stmt, &[&2_i32]);
+            let _ = done_tx.send((client, stmt, result));
+        });
+        reached_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("warm execution reached registration");
+        assert_eq!(events("template_hit") - before, u64::from(reuse));
+        admin
+            .batch_execute("REVOKE SELECT ON prepared_auth_rows FROM prepared_race_reader")
+            .unwrap();
+        fail::remove(failpoint);
+        resume_tx.send(()).unwrap();
+        let (mut client, stmt, result) = done_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("already authorized execution completed");
+        // Revocation does not retroactively cancel the already authorized read.
+        assert_eq!(result.unwrap().get::<_, i32>(0), 22);
+        let before = events("generic_execute");
+        let error = client.query_one(&stmt, &[&1_i32]).unwrap_db_error();
+        assert_eq!(error.code(), &SqlState::INSUFFICIENT_PRIVILEGE);
+        assert_eq!(events("generic_execute"), before);
+        admin
+            .batch_execute("GRANT SELECT ON prepared_auth_rows TO prepared_race_reader")
+            .unwrap();
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        let before = events("template_hit");
+        assert_eq!(
+            client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
+        assert_eq!(events("template_hit") - before, u64::from(reuse));
+
+        system
+            .batch_execute("DROP OWNED BY prepared_race_reader")
+            .unwrap();
+        admin
+            .batch_execute("DROP ROLE prepared_race_reader")
+            .unwrap();
+        let before = events("generic_execute");
+        let error = client.query_one(&stmt, &[&1_i32]).unwrap_db_error();
+        assert!(error.message().contains("concurrently dropped"), "{error}");
+        assert_eq!(events("generic_execute"), before);
+        admin
+            .batch_execute("CREATE ROLE prepared_race_reader")
+            .unwrap();
+        admin
+            .batch_execute("GRANT SELECT ON prepared_auth_rows TO prepared_race_reader")
+            .unwrap();
+        for sql in &grant_usage {
+            system.batch_execute(sql).unwrap();
+        }
+        // A recreated name is not the identity authenticated by the old session.
+        let error = client.query_one(&stmt, &[&1_i32]).unwrap_db_error();
+        assert!(error.message().contains("concurrently dropped"), "{error}");
+        assert_eq!(events("generic_execute"), before);
+        let mut replacement = server
+            .pg_config()
+            .user("prepared_race_reader")
+            .connect(postgres::NoTls)
+            .unwrap();
+        let replacement_stmt = replacement.prepare(query).unwrap();
+        assert_eq!(
+            replacement
+                .query_one(&replacement_stmt, &[&2_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            22
+        );
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Exercise replica replacement through one prepared handle.
+fn test_prepared_indexed_replica_changes() {
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_replica_rows (id int, value int)",
+            "INSERT INTO prepared_replica_rows VALUES (1, 11), (2, 22)",
+            "CREATE CLUSTER prepared_serving SIZE 'scale=1,workers=1'",
+            "CREATE INDEX prepared_replica_id IN CLUSTER prepared_serving ON prepared_replica_rows (id)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("SET cluster = prepared_serving; SET statement_timeout = '30s'")
+            .unwrap();
+        let stmt = client
+            .prepare("SELECT value FROM prepared_replica_rows WHERE id = $1")
+            .unwrap();
+        let event = |event| {
+            test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_prepared_query_events_total",
+                &[("event", event)],
+            )
+        };
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        let before = event("template_hit");
+        assert_eq!(
+            client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
+        assert_eq!(event("template_hit") - before, u64::from(reuse));
+        admin
+            .batch_execute("ALTER CLUSTER prepared_serving SET (REPLICATION FACTOR 0)")
+            .unwrap();
+        let wait_for_replicas = |admin: &mut postgres::Client, expected| {
+            Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
+                let replicas: i64 = admin.query_one(
+                    "SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'prepared_serving'", &[]
+                ).unwrap().get(0);
+                if replicas == expected { Ok(()) } else { Err(replicas) }
+            }).expect("replica count converged");
+        };
+        wait_for_replicas(&mut admin, 0);
+        let before = event("generic_execute");
+        let error = client.query_one(&stmt, &[&1_i32]).unwrap_db_error();
+        assert_eq!(error.code(), &SqlState::FEATURE_NOT_SUPPORTED, "{error}");
+        assert_eq!(event("generic_execute"), before);
+        admin
+            .batch_execute("ALTER CLUSTER prepared_serving SET (REPLICATION FACTOR 1)")
+            .unwrap();
+        wait_for_replicas(&mut admin, 1);
+        assert_eq!(
+            client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
+        let before = event("template_hit");
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        assert_eq!(event("template_hit") - before, u64::from(reuse));
+
+        client
+            .batch_execute("SET cluster_replica = 'missing_replica'")
+            .unwrap();
+        let before = event("generic_execute");
+        let error = client.query_one(&stmt, &[&1_i32]).unwrap_db_error();
+        assert_eq!(error.code(), &SqlState::UNDEFINED_OBJECT, "{error}");
+        assert_eq!(event("generic_execute"), before);
+        client.batch_execute("RESET cluster_replica").unwrap();
+        assert_eq!(
+            client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
     }
 }
 
@@ -1624,6 +1895,95 @@ fn test_prepared_indexed_bounded_staleness() {
             assert!(oracle_timestamp.saturating_sub(timestamp) <= 172_800_000);
             assert!(timestamp < oracle_timestamp);
         }
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Keep a prepared handle across replacement of a referenced type.
+fn test_prepared_indexed_type_dependencies() {
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_type_rows (id int)",
+            "INSERT INTO prepared_type_rows VALUES (1), (2)",
+            "CREATE INDEX prepared_type_id ON prepared_type_rows (id)",
+            "CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = int)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let stmt = client
+            .prepare("SELECT ($2::text::prepared_list)[1] FROM prepared_type_rows WHERE id = $1")
+            .unwrap();
+        assert_eq!(stmt.params(), &[Type::INT4, Type::TEXT]);
+        let hits = || {
+            test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_prepared_query_events_total",
+                &[("event", "template_hit")],
+            )
+        };
+        let warm = |client: &mut postgres::Client| {
+            assert_eq!(
+                client
+                    .query_one(&stmt, &[&1_i32, &"{11,12}"])
+                    .unwrap()
+                    .get::<_, i32>(0),
+                11
+            );
+            let before = hits();
+            assert_eq!(
+                client
+                    .query_one(&stmt, &[&2_i32, &"{22,23}"])
+                    .unwrap()
+                    .get::<_, i32>(0),
+                22
+            );
+            assert_eq!(hits() - before, u64::from(reuse));
+            assert!(
+                client
+                    .query_one(&stmt, &[&1_i32, &"{NULL,1}"])
+                    .unwrap()
+                    .get::<_, Option<i32>>(0)
+                    .is_none()
+            );
+        };
+        warm(&mut client);
+        admin.batch_execute("DROP TYPE prepared_list").unwrap();
+        let before = hits();
+        let error = client
+            .query_one(&stmt, &[&1_i32, &"{11}"])
+            .unwrap_db_error();
+        assert!(error.message().contains("does not exist"), "{error}");
+        assert_eq!(
+            hits(),
+            before,
+            "a missing type must not execute the old template"
+        );
+
+        admin
+            .batch_execute("CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = int)")
+            .unwrap();
+        warm(&mut client);
+        admin.batch_execute("DROP TYPE prepared_list").unwrap();
+        admin
+            .batch_execute("CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = text)")
+            .unwrap();
+        let before = hits();
+        let error = client
+            .query_one(&stmt, &[&1_i32, &"{11}"])
+            .unwrap_db_error();
+        assert_eq!(error.message(), "cached plan must not change result type");
+        assert_eq!(hits(), before);
+
+        admin.batch_execute("DROP TYPE prepared_list").unwrap();
+        admin
+            .batch_execute("CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = int)")
+            .unwrap();
+        warm(&mut client);
     }
 }
 
