@@ -25,6 +25,7 @@ use mz_ore::str::separated;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::catalog::EnvironmentId;
+use tokio::sync::oneshot;
 use tracing::info;
 
 use crate::BUILD_INFO;
@@ -67,10 +68,13 @@ pub async fn preflight_0dt(
     }
 }
 
-/// Starts catch-up checks and promotion after successful adapter bootstrap.
+/// Starts catching up and promoting a read-only deployment.
 ///
-/// The ID baseline must come from the savepoint used to bootstrap the adapter.
-/// The catch-up timeout and administrative skip become active when this starts.
+/// An administrative skip is accepted right away and promotes without waiting
+/// for bootstrap. Otherwise, catch-up checks and the catch-up timeout start
+/// once `bootstrapped` yields the ID baseline, which must come from the
+/// savepoint used to bootstrap the adapter. The task exits if `bootstrapped`
+/// is dropped.
 pub fn spawn_catchup(
     CatchupConfig {
         boot_ts,
@@ -85,74 +89,89 @@ pub fn spawn_catchup(
         bootstrap_args,
     }: CatchupConfig,
     mut caught_up_receiver: trigger::Receiver,
-    (initial_next_user_item_id, initial_next_replica_id): (u64, u64),
+    bootstrapped: oneshot::Receiver<(u64, u64)>,
 ) {
     mz_ore::task::spawn(|| "deployment_catchup", async move {
-        info!(
-            %initial_next_user_item_id,
-            %initial_next_replica_id,
-            ?caught_up_max_wait,
-            "waiting for deployment to be caught up"
-        );
-
-        let mut caught_up_max_wait_fut = pin!(tokio::time::sleep(caught_up_max_wait));
-
         let mut skip_catchup = deployment_state.set_catching_up();
 
-        let mut check_ddl_changes_interval = tokio::time::interval(ddl_check_interval);
-        check_ddl_changes_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let initial_ids = tokio::select! {
+            biased;
 
-        let mut should_skip_catchup = false;
-        loop {
-            tokio::select! {
-                biased;
+            () = &mut skip_catchup => None,
+            result = bootstrapped => match result {
+                Ok(ids) => Some(ids),
+                Err(_) => return,
+            },
+        };
 
-                () = &mut skip_catchup => {
-                    info!("skipping waiting for deployment to catch up due to administrator request");
-                    should_skip_catchup = true;
-                    break;
-                }
-                () = &mut caught_up_receiver => {
-                    info!("deployment caught up");
-                    break;
-                }
-                () = &mut caught_up_max_wait_fut => {
-                    if panic_after_timeout {
-                        panic!("not caught up within {:?}", caught_up_max_wait);
+        if let Some((initial_next_user_item_id, initial_next_replica_id)) = initial_ids {
+            info!(
+                %initial_next_user_item_id,
+                %initial_next_replica_id,
+                ?caught_up_max_wait,
+                "waiting for deployment to be caught up"
+            );
+
+            let mut caught_up_max_wait_fut = pin!(tokio::time::sleep(caught_up_max_wait));
+
+            let mut check_ddl_changes_interval = tokio::time::interval(ddl_check_interval);
+            check_ddl_changes_interval
+                .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            let mut should_skip_catchup = false;
+            loop {
+                tokio::select! {
+                    biased;
+
+                    () = &mut skip_catchup => {
+                        info!("skipping waiting for deployment to catch up due to administrator request");
+                        should_skip_catchup = true;
+                        break;
                     }
-                    info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
-                    break;
-                }
-                _ = check_ddl_changes_interval.tick() => {
-                    check_ddl_changes(
-                        boot_ts,
-                        persist_client.clone(),
-                        environment_id.clone(),
-                        deploy_generation,
-                        Arc::clone(&catalog_metrics),
-                        bootstrap_args.clone(),
-                        initial_next_user_item_id,
-                        initial_next_replica_id,
-                    )
-                    .await;
+                    () = &mut caught_up_receiver => {
+                        info!("deployment caught up");
+                        break;
+                    }
+                    () = &mut caught_up_max_wait_fut => {
+                        if panic_after_timeout {
+                            panic!("not caught up within {:?}", caught_up_max_wait);
+                        }
+                        info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
+                        break;
+                    }
+                    _ = check_ddl_changes_interval.tick() => {
+                        check_ddl_changes(
+                            boot_ts,
+                            persist_client.clone(),
+                            environment_id.clone(),
+                            deploy_generation,
+                            Arc::clone(&catalog_metrics),
+                            bootstrap_args.clone(),
+                            initial_next_user_item_id,
+                            initial_next_replica_id,
+                        )
+                        .await;
+                    }
                 }
             }
-        }
 
-        // Check for DDL changes one last time before announcing as ready to
-        // promote.
-        if !should_skip_catchup {
-            check_ddl_changes(
-                boot_ts,
-                persist_client.clone(),
-                environment_id.clone(),
-                deploy_generation,
-                Arc::clone(&catalog_metrics),
-                bootstrap_args.clone(),
-                initial_next_user_item_id,
-                initial_next_replica_id,
-            )
-            .await;
+            // Check for DDL changes one last time before announcing as ready to
+            // promote.
+            if !should_skip_catchup {
+                check_ddl_changes(
+                    boot_ts,
+                    persist_client.clone(),
+                    environment_id.clone(),
+                    deploy_generation,
+                    Arc::clone(&catalog_metrics),
+                    bootstrap_args.clone(),
+                    initial_next_user_item_id,
+                    initial_next_replica_id,
+                )
+                .await;
+            }
+        } else {
+            info!("skipping bootstrap and catch-up due to administrator request");
         }
 
         // Announce that we're ready to promote.
@@ -393,26 +412,45 @@ mod tests {
         let (builder, config, handle) = setup().await;
         let mut openable = builder.with_deploy_generation(1).unwrap_build().await;
         assert!(preflight_0dt(openable.as_mut(), 1).await.unwrap());
-        let mut catalog = openable
-            .open_savepoint(config.boot_ts, &config.bootstrap_args)
-            .await
-            .unwrap();
-        let initial_ids = get_next_ids(catalog.as_mut()).await.unwrap();
         let (_trigger, receiver) = trigger::channel();
+        let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
         let metrics = Arc::clone(&config.catalog_metrics);
         let before = metrics.transactions_started.get();
+        let caught_up_max_wait = config.caught_up_max_wait;
+        let (boot_ts, bootstrap_args) = (config.boot_ts, config.bootstrap_args.clone());
 
         tokio::time::pause();
-        tokio::time::advance(2 * config.caught_up_max_wait).await;
+        spawn_catchup(config, receiver, bootstrapped_receiver);
+        tokio::time::advance(2 * caught_up_max_wait).await;
+        tokio::task::yield_now().await;
         assert_eq!(metrics.transactions_started.get(), before);
         assert_eq!(handle.status(), DeploymentStatus::Initializing);
-        assert!(handle.try_skip_catchup().is_err());
 
-        spawn_catchup(config, receiver, initial_ids);
-        tokio::task::yield_now().await;
-        assert_eq!(handle.status(), DeploymentStatus::Initializing);
+        let mut catalog = openable
+            .open_savepoint(boot_ts, &bootstrap_args)
+            .await
+            .unwrap();
+        bootstrapped
+            .send(get_next_ids(catalog.as_mut()).await.unwrap())
+            .unwrap();
         wait_ready(&handle).await;
         catalog.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn skip_before_bootstrap() {
+        let (_, config, handle) = setup().await;
+        let (_trigger, receiver) = trigger::channel();
+        let (_bootstrapped, bootstrapped_receiver) = oneshot::channel();
+        spawn_catchup(config, receiver, bootstrapped_receiver);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.try_skip_catchup().is_err() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        wait_ready(&handle).await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -425,12 +463,15 @@ mod tests {
             .open_savepoint(config.boot_ts, &config.bootstrap_args)
             .await
             .unwrap();
-        let initial_ids = get_next_ids(catalog.as_mut()).await.unwrap();
+        let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
+        bootstrapped
+            .send(get_next_ids(catalog.as_mut()).await.unwrap())
+            .unwrap();
         let (trigger, receiver) = trigger::channel();
         drop(trigger);
         config.caught_up_max_wait = Duration::ZERO;
         config.panic_after_timeout = true;
-        spawn_catchup(config, receiver, initial_ids);
+        spawn_catchup(config, receiver, bootstrapped_receiver);
         wait_ready(&handle).await;
         catalog.expire().await;
     }
