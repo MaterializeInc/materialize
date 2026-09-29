@@ -196,10 +196,15 @@ success, for data that exists, winning races and reporting live batch
 parts as missing. Sharing the instance eliminates the hazard by
 construction while still exercising the race path in tests.
 
-Opening the sibling is best-effort. On failure, persist logs a warning and
-runs without hedging for the process lifetime, visible in metrics as
-`hedges_skipped{reason="unavailable"}` and as `hedge_armed` staying 0.
-Persist startup must not regress for this feature.
+Opening the sibling is best-effort and runs off the startup path: a
+background task makes one attempt regardless of the flag, retries with
+exponential backoff only while hedging is enabled, and arms hedging once
+an attempt succeeds. Until then hedging is unavailable, visible in metrics
+as `hedges_skipped{reason="unavailable"}` and as `hedge_armed` staying 0,
+with a warning logged per failed attempt. Retrying matters because a
+blob-store or credential blip at process start would otherwise disarm
+hedging for the process lifetime, which is what happened to processes
+started during a regional outage of the credential service (AWS STS).
 
 ### Keeping the sibling warm
 
@@ -208,13 +213,13 @@ timeout, and fresh connects are sometimes slow exactly during the
 correlated events (see The Problem). So the design keeps the sibling's pool
 warm. A background task issues concurrent liveness gets on the sibling
 (fetching a reserved key that never exists, so each ping is a cheap
-not-found response) immediately at startup and then every 20 seconds, well
-inside hyper's eviction of connections idle for 90 seconds. (NOTE: that 90
-is coincidentally equal to, and unrelated to, the SDK's 90 second attempt
-timeout.) The number of concurrent pings follows the hedge concurrency
-cap, because HTTP/1.1 allows one in-flight request per connection: N
-concurrent pings open or refresh N sockets. (A raised cap grows the pool
-at the next cycle.)
+not-found response) as soon as the sibling is armed and then every 20
+seconds, well inside hyper's eviction of connections idle for 90 seconds.
+(NOTE: that 90 is coincidentally equal to, and unrelated to, the SDK's 90
+second attempt timeout.) The number of concurrent pings follows the hedge
+concurrency cap, because HTTP/1.1 allows one in-flight request per
+connection: N concurrent pings open or refresh N sockets. (A raised cap
+grows the pool at the next cycle.)
 
 How warm that keeps the pool is limited by S3 itself, which closes a
 keep-alive connection after about 6 seconds idle. This was measured
@@ -363,13 +368,15 @@ would-be fire rate at the candidate delay (the rate in Rollout is
 workload-dependent, dominated by part sizes and pod bandwidth).
 
 What the kill switch does not cover: `enabled = false` leaves the
-sibling idle (see Keeping the sibling warm), but its client and
-credential chain are constructed at process start regardless, which is
-what keeps enablement restart-free. The disabled standing costs are one
-extra SDK client's memory per process, one extra credential resolution,
-and a doubled blob-open (including the backend's own health-check get)
-at startup. Removing the sibling machinery is a rollback, not a flag
-flip.
+sibling idle, pending open retries included (see Pool isolation and
+Keeping the sibling warm; an attempt already in flight runs to
+completion, bounded by the blob client's timeouts), but its client and
+credential chain are constructed shortly after process start regardless,
+so that the sibling is usually open before hedging gets enabled. The
+disabled standing costs are at most one extra SDK client's memory per
+process, one extra credential resolution, and a doubled blob-open
+(including the backend's own health-check get), off the startup path.
+Removing the sibling machinery is a rollback, not a flag flip.
 
 ### Testing
 
@@ -384,7 +391,11 @@ Unit tests drive the race deterministically on tokio's paused test clock:
 - both legs failing, returning the primary's error verbatim,
 - budget exhaustion and refill, the concurrency cap, and release of the
   concurrency slot when a hedged get is dropped mid-race,
-- the warmer's cadence, and its absence for a same-instance sibling.
+- the warmer's cadence, and its absence for a same-instance sibling,
+- the sibling open retried until it succeeds, with hedging armed only then,
+  its backoff doubling up to the one-minute ceiling, retries only while
+  hedging is enabled, and dropping the wrapper stopping the retries and
+  cancelling an open in progress.
 
 The existing `Blob` conformance suite runs against `HedgedBlob` with the
 delay at zero and the primary's gets artificially slowed, so a hedge fires
@@ -448,7 +459,7 @@ New metrics, all prefixed `mz_persist_blob_` (elided in prose below):
 | `hedges_skipped` | counter, by `reason` | Hedges refused: `budget`, `concurrency`, or `unavailable`. |
 | `hedge_errors` | counter | Hedge legs (not primaries) that completed with an error. |
 | `hedge_warm_errors` | counter | Warm cycles that failed or timed out. |
-| `hedge_armed` | gauge | 1 if the process opened a sibling and can hedge. |
+| `hedge_armed` | gauge | 1 once the process has opened a sibling and can hedge. |
 | `hedge_rtt_latency` | gauge | Round-trip time of the last successful warm cycle. |
 
 Enabling hedging makes the old detection signals go quiet. The hung
@@ -466,14 +477,14 @@ legs of a hedged get plus the warmer's pings, so they can exceed the logical
 `hedge_errors` are the signals that the sibling's independent credential
 chain has rotted, which would otherwise silently turn the feature into a
 no-op. Both only move while hedging is enabled, so expect any rot to
-surface within the first warm cycles after enablement. `hedge_armed` only certifies
-that the sibling opened at process start. Neither counter is specific to
-credentials, though. The discriminator is whether the primary fails on the
-same process at the same time. Hedge errors alongside primary failures
-have a shared cause: a pod starved at its network limit, or a connection
-reset or credential outage hitting both clients at once. Hedge errors and
-warm errors without primary failures, across many processes, point at the
-sibling itself.
+surface within the first warm cycles after enablement. Neither counter is
+specific to credentials, though. The discriminator is whether the primary
+fails on the same process at the same time. Hedge errors alongside primary
+failures have a shared cause: a pod starved at its network limit, or a
+connection reset or credential outage hitting both clients at once. Hedge
+errors and warm errors without primary failures, across many processes,
+point at the sibling itself. `hedge_armed` certifies only that the sibling
+is open, not that it is warm.
 
 ## Alternatives
 
