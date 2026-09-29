@@ -1030,6 +1030,14 @@ metrics:
   - respond_immediately
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_frontend_transaction_completions_total
+  help: Read-only transaction completion attempts owned by the session.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_frontend_transaction_waits_total
+  help: Session-owned transaction completions that need a fresh oracle check.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_bucket
   help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
   labels:

@@ -410,6 +410,7 @@ impl Session {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
+                    completion_owner: TransactionCompletionOwner::Coordinator,
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
                     write_lock_guards: None,
@@ -443,6 +444,7 @@ impl Session {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
+                completion_owner: TransactionCompletionOwner::Session,
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
                 write_lock_guards: None,
@@ -478,6 +480,51 @@ impl Session {
         self.pcx = None;
         self.state_revision += 1;
         mem::take(&mut self.transaction)
+    }
+
+    /// Transfers transaction completion to the coordinator. Call before handing it any
+    /// transaction-scoped state, including on paths that can fail after installing resources.
+    pub(crate) fn require_coordinator_completion(&mut self) {
+        if let Some(txn) = self.transaction.inner_mut() {
+            txn.completion_owner = TransactionCompletionOwner::Coordinator;
+        }
+    }
+
+    /// Returns the obligations for a session-owned read-only completion.
+    pub(crate) fn read_only_completion(
+        &self,
+        mut action: EndTransactionAction,
+    ) -> Option<ReadOnlyCompletion> {
+        let txn = self.transaction.inner()?;
+        if txn.completion_owner != TransactionCompletionOwner::Session
+            || txn.write_lock_guards.is_some()
+        {
+            return None;
+        }
+        let timestamp = match &txn.ops {
+            TransactionOps::None => None,
+            TransactionOps::Peeks {
+                determination,
+                requires_linearization,
+                ..
+            } => matches!(requires_linearization, RequireLinearization::Required)
+                .then(|| determination.timestamp_context.clone()),
+            TransactionOps::Writes(_)
+            | TransactionOps::Subscribe
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => return None,
+        };
+        if matches!(self.transaction, TransactionStatus::Failed(_)) {
+            action = EndTransactionAction::Rollback;
+        }
+        Some(ReadOnlyCompletion {
+            action,
+            timestamp: if action == EndTransactionAction::Commit {
+                timestamp
+            } else {
+                None
+            },
+        })
     }
 
     /// Marks the current transaction as failed.
@@ -620,6 +667,7 @@ impl Session {
                 write_lock_guards: _,
                 access: _,
                 id: _,
+                completion_owner: _,
             }) => Some(determination.clone()),
             _ => None,
         }
@@ -641,6 +689,7 @@ impl Session {
                 write_lock_guards: _,
                 access: _,
                 id: _,
+                completion_owner: _,
             })
         )
     }
@@ -1637,6 +1686,7 @@ impl Default for TransactionStatus {
 /// State data for transactions.
 #[derive(Debug)]
 pub struct Transaction {
+    completion_owner: TransactionCompletionOwner,
     /// Plan context.
     pub pcx: PlanContext,
     /// Transaction operations.
@@ -1650,6 +1700,18 @@ pub struct Transaction {
     write_lock_guards: Option<WriteLocks>,
     /// Access mode (read only, read write).
     access: Option<TransactionAccessMode>,
+}
+
+#[derive(Debug, PartialEq)]
+enum TransactionCompletionOwner {
+    Session,
+    Coordinator,
+}
+
+/// Obligations that can be satisfied without transferring the session to the coordinator.
+pub(crate) struct ReadOnlyCompletion {
+    pub action: EndTransactionAction,
+    pub timestamp: Option<TimestampContext>,
 }
 
 impl Transaction {
@@ -2056,6 +2118,129 @@ impl Drop for GroupCommitWriteLocks {
                 locks = ?self.locks,
                 "dropping group commit write locks",
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_sql::session::vars::{SystemVars, VarInput};
+    use timely::progress::Antichain;
+
+    fn read_session() -> Session {
+        let mut session = Session::dummy();
+        session.start_transaction_single_stmt(Utc::now());
+        session
+            .add_transaction_ops(TransactionOps::Peeks {
+                determination: TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp {
+                        timeline: Timeline::EpochMilliseconds,
+                        chosen_ts: 10.into(),
+                        oracle_ts: Some(10.into()),
+                    },
+                    since: Antichain::from_elem(0.into()),
+                    upper: Antichain::new(),
+                    largest_not_in_advance_of_upper: Timestamp::MAX,
+                    oracle_read_ts: Some(10.into()),
+                    session_oracle_read_ts: None,
+                    real_time_recency_ts: None,
+                    constraints: Default::default(),
+                },
+                cluster_id: ClusterId::User(1),
+                requires_linearization: RequireLinearization::Required,
+            })
+            .expect("read transaction");
+        session
+    }
+
+    #[mz_ore::test]
+    fn read_completion_tracks_ownership_not_just_ops() {
+        let mut session = read_session();
+        let completion = session
+            .read_only_completion(EndTransactionAction::Commit)
+            .expect("local read");
+        assert_eq!(completion.action, EndTransactionAction::Commit);
+        assert!(completion.timestamp.is_some());
+        session.require_coordinator_completion();
+        assert!(
+            session
+                .read_only_completion(EndTransactionAction::Commit)
+                .is_none()
+        );
+        let _ = session.clear_transaction();
+        session.start_transaction_single_stmt(Utc::now());
+        assert!(
+            session
+                .read_only_completion(EndTransactionAction::Commit)
+                .is_some()
+        );
+    }
+
+    #[mz_ore::test]
+    fn completion_skips_timestamp_for_failed_and_rolled_back_reads() {
+        let session = read_session();
+        let rollback = session
+            .read_only_completion(EndTransactionAction::Rollback)
+            .expect("local read");
+        assert!(rollback.timestamp.is_none());
+        let session = session.fail_transaction();
+        let failed = session
+            .read_only_completion(EndTransactionAction::Commit)
+            .expect("failed local read");
+        assert_eq!(failed.action, EndTransactionAction::Rollback);
+        assert!(failed.timestamp.is_none());
+    }
+
+    #[mz_ore::test]
+    fn completion_rejects_resource_bearing_transactions() {
+        for ops in [
+            TransactionOps::Subscribe,
+            TransactionOps::Writes(Vec::new()),
+        ] {
+            let mut session = Session::dummy();
+            session.start_transaction_single_stmt(Utc::now());
+            session.add_transaction_ops(ops).expect("first operation");
+            assert!(
+                session
+                    .read_only_completion(EndTransactionAction::Commit)
+                    .is_none()
+            );
+            assert!(
+                session
+                    .fail_transaction()
+                    .read_only_completion(EndTransactionAction::Rollback)
+                    .is_none()
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn read_completion_preserves_transactional_parameter_changes() {
+        for action in [EndTransactionAction::Commit, EndTransactionAction::Rollback] {
+            let mut session = read_session();
+            session
+                .vars_mut()
+                .set_default("application_name", VarInput::Flat("session"))
+                .expect("default");
+            session
+                .vars_mut()
+                .set(
+                    &SystemVars::new(),
+                    "application_name",
+                    VarInput::Flat("local"),
+                    true,
+                )
+                .expect("local setting");
+            let completion = session.read_only_completion(action).expect("local read");
+            let _ = session.clear_transaction();
+            let params = session.vars_mut().end_transaction(completion.action);
+            assert_eq!(
+                params.get("application_name").map(String::as_str),
+                Some("session")
+            );
+            assert_eq!(session.vars().application_name(), "session");
+            assert!(matches!(session.transaction(), TransactionStatus::Default));
         }
     }
 }

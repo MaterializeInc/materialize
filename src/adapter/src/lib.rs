@@ -45,6 +45,7 @@ mod error;
 mod explain;
 mod frontend_peek;
 mod frontend_read_then_write;
+mod frontend_transaction;
 mod notice;
 mod optimize;
 mod util;
