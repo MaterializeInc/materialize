@@ -122,8 +122,9 @@ pub use statement::ddl::{
     validate_metric_sink_desc, validate_metric_sink_prefix, validate_user_metric_sink_prefix,
 };
 pub use statement::{
-    StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
-    resolve_cluster_for_materialized_view,
+    StatementAnalysis, StatementClassification, StatementContext, StatementDesc,
+    check_unsafe_functions, describe, describe_analyzed, plan, plan_analyzed_select,
+    plan_copy_from, resolve_cluster_for_materialized_view,
 };
 pub use with_options::TryFromValue;
 
@@ -886,6 +887,32 @@ pub struct ResetVariablePlan {
 pub struct SetTransactionPlan {
     pub local: bool,
     pub modes: Vec<TransactionMode>,
+}
+
+/// A typed SELECT whose parameters have not been bound.
+///
+/// Reuse requires the caller to validate the catalog and semantic session context
+/// used for analysis. This artifact owns no execution resources or catalog snapshot.
+#[derive(Clone, Debug)]
+pub struct AnalyzedSelect {
+    pub(crate) source: HirRelationExpr,
+    pub(crate) finishing: RowSetFinishing<HirScalarExpr, HirScalarExpr>,
+    pub(crate) select: SelectStatement<Aug>,
+}
+
+impl AnalyzedSelect {
+    /// Returns the typed relational expression with unbound parameters.
+    pub fn source(&self) -> &HirRelationExpr {
+        &self.source
+    }
+
+    pub fn finishing(&self) -> &RowSetFinishing<HirScalarExpr, HirScalarExpr> {
+        &self.finishing
+    }
+
+    pub fn has_as_of(&self) -> bool {
+        self.select.as_of.is_some()
+    }
 }
 
 /// A plan for select statements.

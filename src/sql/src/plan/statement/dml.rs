@@ -63,17 +63,14 @@ use crate::plan::{
     ExplainTimestampPlan, HirRelationExpr, side_effecting_func, transform_ast,
 };
 use crate::plan::{
-    CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
-    QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
+    AnalyzedSelect, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params,
+    Plan, PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
+    query,
 };
 use crate::plan::{CopyFromSource, with_options};
 use crate::session::vars::{self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF};
 
-// TODO(benesch): currently, describing a `SELECT` or `INSERT` query
-// plans the whole query to determine its shape and parameter types,
-// and then throws away that plan. If we were smarter, we'd stash that
-// plan somewhere so we don't have to recompute it when the query is
-// executed.
+// TODO: Retain INSERT analysis alongside its description, as for SELECT.
 
 pub fn describe_insert(
     scx: &StatementContext,
@@ -212,6 +209,29 @@ pub fn plan_select(
     Ok(Plan::Select(plan))
 }
 
+pub(super) fn analyze_select(
+    scx: &StatementContext,
+    select: SelectStatement<Aug>,
+) -> Result<(StatementDesc, Option<AnalyzedSelect>), PlanError> {
+    if let Some(desc) = side_effecting_func::describe_select_if_side_effecting(scx, &select)? {
+        return Ok((StatementDesc::new(Some(desc)), None));
+    }
+    let query::PlannedRootQuery {
+        expr,
+        desc,
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, select.query.clone(), QueryLifetime::OneShot)?;
+    Ok((
+        StatementDesc::new(Some(desc)),
+        Some(AnalyzedSelect {
+            source: expr,
+            finishing,
+            select,
+        }),
+    ))
+}
+
 fn plan_select_inner(
     scx: &StatementContext,
     select: SelectStatement<Aug>,
@@ -221,11 +241,38 @@ fn plan_select_inner(
     let when = query::plan_as_of(scx, select.as_of.clone())?;
     let lifetime = QueryLifetime::OneShot;
     let query::PlannedRootQuery {
-        mut expr,
+        expr,
         desc,
         finishing,
         scope: _,
     } = query::plan_root_query(scx, select.query.clone(), lifetime)?;
+    let plan = bind_analyzed_select(
+        scx,
+        AnalyzedSelect {
+            source: expr,
+            finishing,
+            select,
+        },
+        params,
+        copy_to,
+        when,
+    )?;
+    Ok((plan, desc))
+}
+
+pub(super) fn bind_analyzed_select(
+    scx: &StatementContext,
+    analyzed: AnalyzedSelect,
+    params: &Params,
+    copy_to: Option<CopyFormat>,
+    when: plan::QueryWhen,
+) -> Result<SelectPlan, PlanError> {
+    let AnalyzedSelect {
+        source: mut expr,
+        finishing,
+        select,
+    } = analyzed;
+    let lifetime = QueryLifetime::OneShot;
     expr.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
 
     // We need to concretize the `limit` and `offset` of the RowSetFinishing, so that we go from
@@ -284,7 +331,7 @@ fn plan_select_inner(
         select: Some(Box::new(select)),
     };
 
-    Ok((plan, desc))
+    Ok(plan)
 }
 
 pub fn describe_explain_plan(
