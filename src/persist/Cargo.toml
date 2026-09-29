@@ -53,7 +53,7 @@ prometheus.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
-rand = { workspace = true, features = ["small_rng"] }
+rand.workspace = true
 reqwest-0-13.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }

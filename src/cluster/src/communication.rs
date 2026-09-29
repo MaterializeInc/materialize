@@ -523,7 +523,7 @@ where
 #[cfg(test)]
 mod turmoil_tests {
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use tokio::sync::{mpsc, watch};
     use tokio::time::timeout;
 
