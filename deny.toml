@@ -162,9 +162,11 @@ skip = [
     { name = "arrow-schema", version = "57.2.0" },
     { name = "arrow-select", version = "57.2.0" },
     { name = "arrow-string", version = "57.1.0" },
-    # hyper-util, opendal 0.59, pem 4, reqsign 3.x and reqwest 0.13 are on
-    # base64 0.23, while the workspace is still on 0.22.
-    { name = "base64", version = "0.23.1" },
+    # base64 0.22 is still used by arrow, axum, eventsource-client, gcp_auth,
+    # headers, iceberg, jsonwebtoken, kube, mysql_common, parquet, pem 3,
+    # postgres-protocol, prost-reflect, reqwest 0.12, tonic, tower-http,
+    # tower-sessions-core and typespec.
+    { name = "base64", version = "0.22.1" },
     # The previous generation of the RustCrypto crates is still used by
     # apache-avro, aws-config, axum, azure_core, crc-fast, headers,
     # launchdarkly-server-sdk-evaluation, mysql_common, pest_meta, tungstenite,
