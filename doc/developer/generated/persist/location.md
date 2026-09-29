@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/location.rs
-revision: 83c55157ed
+revision: f3e5694be7
 ---
 
 # persist::location

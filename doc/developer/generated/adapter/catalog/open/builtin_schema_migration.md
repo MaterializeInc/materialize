@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open/builtin_schema_migration.rs
-revision: cb32836512
+revision: e2be59fc1a
 ---
 
 # adapter::catalog::open::builtin_schema_migration
@@ -24,6 +24,7 @@ A `Replacement` step at version `26.41.0-dev.0` covers `mz_internal.mz_object_de
 An `Evolution` step at version `26.43.0-dev.0` covers `mz_internal.mz_cluster_replica_metrics_history`, adding the `swap_bytes` column (nullable `uint8`) to the source's `RelationDesc`.
 A `Replacement` step at version `26.44.0-dev.0` covers `mz_internal.mz_object_global_ids`, reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView` over `mz_catalog_raw`.
 An `Evolution` step at version `26.43.0-dev.0` covers `mz_internal.mz_replica_hydration_history`, migrating its schema to record per-process resource usage.
+A `Replacement` step at version `26.45.0-dev.0` covers `mz_internal.mz_source_references`, reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView` backed by a query over `mz_catalog_raw`.
 When applying replacement migrations, `mz_storage_usage_by_shard`, `mz_object_hydration_history`, `mz_replica_hydration_history`, and `mz_object_arrangement_size_history` are excluded from data-destroying replacement plans. `mz_storage_usage_by_shard` retains billing data; the two hydration history tables cannot be rebuilt from any other source. All four tables participate in forced evolution (which keeps the shard and its rows) but not in forced replacement. `validate_migration_steps` asserts that any declared `Replacement` step for `mz_object_hydration_history`, `mz_replica_hydration_history`, or `mz_object_arrangement_size_history` is a deliberate, explicit choice rather than an accidental schema change. `validate_migration_steps` also asserts that `mz_cluster_replica_frontiers` is never declared as a migration target: the 0dt caught-up gate reads the leader's `mz_cluster_replica_frontiers` shard for the live frontiers it checks every collection against, so a `Replacement` step would hand the read-only environment a self-owned shard, causing the gate to compare itself against itself rather than against the leader.
 The `participates_in_forced_migration(builtin, mechanism)` function encapsulates which builtins take part in forced migrations: tables participate unless they are `mz_storage_usage_by_shard` (for any mechanism) or `mz_object_hydration_history` / `mz_replica_hydration_history` / `mz_object_arrangement_size_history` (for `Replacement`); materialized views always participate; sources participate unless they are `mz_catalog_raw`; logs, views, types, functions, indexes, and connections never participate.
 When the source and target versions differ and the source version is a dev build, `Migration::run` forces evolution-mode migration even without an explicit `force_migration` config, avoiding version-based filter failures in dev environments.
