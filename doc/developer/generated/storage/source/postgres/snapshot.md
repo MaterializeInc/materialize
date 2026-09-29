@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/postgres/snapshot.rs
-revision: 648a0e1461
+revision: 2774411110
 ---
 
 # mz-storage::source::postgres::snapshot

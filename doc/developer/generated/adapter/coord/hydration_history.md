@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: 9297cd2060
+revision: 6056c86333
 ---
 
 # `adapter::coord::hydration_history`
@@ -17,7 +17,7 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 **`ReplicaTarget`** — A replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage (each individually via `GROUP BY process_id`).
 
-**`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, `object_history_id` and `replica_history_id` table IDs, metrics handle, wall time, and a `cutoff` string (RFC 3339 timestamp). The two operations are:
+**`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, `object_history_id` and `replica_history_id` table IDs, metrics handle, wall time, and `object_cutoff` and `replica_cutoff` strings (RFC 3339 timestamps). The two operations are:
 - `collect` — appends one replica's completed object and replica episodes that their respective history tables are missing
 - `retain` — retracts one bounded batch of rows from each history table that have aged out of the retention window
 
@@ -35,8 +35,8 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 ## Retention
 
-`object_retention_sql` returns a bounded batch (`RETENTION_BATCH_SIZE` = 1000) of the oldest `mz_object_hydration_history` rows aged past the cutoff.
-`replica_retention_sql` returns the same bounded batch for `mz_replica_hydration_history`.
+`object_retention_sql` returns a bounded batch (`RETENTION_BATCH_SIZE` = 1000) of the oldest `mz_object_hydration_history` rows aged past `object_cutoff`.
+`replica_retention_sql` returns the same bounded batch for `mz_replica_hydration_history` rows aged past `replica_cutoff`.
 Both use a subquery so the `LIMIT` applies inside the relation expression rather than as a top-level `RowSetFinishing` that the OCC path cannot apply.
 
 ## Constants
