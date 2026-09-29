@@ -575,6 +575,8 @@ pub struct SuperuserAttribute(pub Option<bool>);
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
+    /// Cancellation notifications for session-owned completion waits.
+    pub frontend_cancel_rx: tokio::sync::watch::Receiver<()>,
     /// RoleId for the user.
     pub role_id: RoleId,
     /// The role's superuser attribute in the Catalog.
