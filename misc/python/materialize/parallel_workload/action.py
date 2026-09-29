@@ -2977,6 +2977,12 @@ class FlipFlagsAction(Action):
             "row_with_validate",
             "arrow",
         ]
+        self.flags_with_values["persist_shard_metrics"] = [
+            "none",
+            "summary",
+            "per_shard",
+            "both",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )
