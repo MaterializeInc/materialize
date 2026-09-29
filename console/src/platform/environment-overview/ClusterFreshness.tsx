@@ -39,7 +39,10 @@ import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
-import { absoluteClusterPath } from "~/platform/routeHelpers";
+import {
+  absoluteClusterPath,
+  absoluteFreshnessPath,
+} from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
@@ -163,7 +166,18 @@ const ClusterFreshnessTable = ({
                   <Text noOfLines={1}>{objectName}</Text>
                 </Td>
 
-                <Td>{tableText}</Td>
+                <Td>
+                  <TextLink
+                    as={Link}
+                    to={absoluteFreshnessPath(regionSlug, clusterId)}
+                    title={`Freshness details for ${clusterName}`}
+                    // The link text is a bare duration, which does not say
+                    // where the link goes when read on its own.
+                    aria-label={`Freshness details for ${clusterName}`}
+                  >
+                    {tableText}
+                  </TextLink>
+                </Td>
               </Tr>
             );
           },

@@ -150,6 +150,24 @@ export function buildLagHistoryQuery(
           "mz_object_fully_qualified_names as object_names",
           "lag_history.object_id",
           "object_names.id",
+        )
+        // Aggregated before the join on purpose. `mz_hydration_statuses` has a
+        // row per (object, replica), so joining it directly would multiply every
+        // bucket of the time series by the replica count.
+        .leftJoin(
+          cte
+            .selectFrom("mz_hydration_statuses")
+            .select(({ fn }) => [
+              "object_id",
+              fn.countAll<bigint>().as("total_replicas"),
+              sql<bigint>`count(*) FILTER (WHERE hydrated)`.as(
+                "hydrated_replicas",
+              ),
+            ])
+            .groupBy("object_id")
+            .as("hs"),
+          "hs.object_id",
+          "lag_history.object_id",
         );
 
       // orderBy and distinctOn inherently gives us the latest max lag per ID since it takes the first row by group
@@ -193,6 +211,9 @@ export function buildLagHistoryQuery(
         "object_names.database_name as databaseName",
         "object_names.schema_name as schemaName",
         "object_names.name as objectName",
+        "objects.type as objectType",
+        "hs.hydrated_replicas as hydratedReplicas",
+        "hs.total_replicas as totalReplicas",
       ]);
     })
     .selectFrom("lag_history");

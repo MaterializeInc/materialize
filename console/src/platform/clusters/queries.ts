@@ -896,6 +896,17 @@ export function useReplicaUtilizationHistory(
 
 export const LINE_MAX_COUNT = 10;
 
+/** An object's identity and hydration, invariant across the window. */
+export interface FreshnessObject {
+  objectId: string;
+  objectName: string | null;
+  schemaName: string | null;
+  databaseName: string | null;
+  objectType: string;
+  hydratedReplicas: number;
+  totalReplicas: number;
+}
+
 export function useClusterFreshness({
   lookbackMs,
   clusterId,
@@ -965,6 +976,9 @@ export function useClusterFreshness({
         },
       );
 
+      // TODO: Cap this the way `currentData` is capped by LINE_MAX_COUNT. One
+      // line per object is unbounded, and dragging a threshold over these lines
+      // re-renders every path on each pointer move.
       const lines = historicalData.reduce((acc, curr) => {
         const objects = Object.entries(curr.lag);
 
@@ -990,9 +1004,27 @@ export function useClusterFreshness({
         return acc;
       }, new Map<string, GraphLineSeries>());
 
+      // Per-object attributes, which do not vary across buckets. Kept out of
+      // the per-bucket points so a consumer can describe an object without
+      // walking the series to find a bucket that mentions it.
+      const objectsById = new Map<string, FreshnessObject>();
+      rows.forEach((row) => {
+        if (objectsById.has(row.objectId)) return;
+        objectsById.set(row.objectId, {
+          objectId: row.objectId,
+          objectName: row.objectName,
+          schemaName: row.schemaName,
+          databaseName: row.databaseName,
+          objectType: row.objectType,
+          hydratedReplicas: Number(row.hydratedReplicas ?? 0),
+          totalReplicas: Number(row.totalReplicas ?? 0),
+        });
+      });
+
       return {
         historicalData,
         currentData,
+        objectsById,
         lines: Array.from(lines.values()),
         startTime: historicalData.at(0)?.timestamp ?? 0,
         endTime: historicalData.at(-1)?.timestamp ?? 0,
