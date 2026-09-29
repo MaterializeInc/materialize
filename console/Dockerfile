@@ -39,6 +39,7 @@ FROM nginxinc/nginx-unprivileged:alpine@sha256:c3fed6436b61d2bf2201ec032c35c0008
 
 LABEL maintainer="support@materialize.com" \
     version="1.0" \
+    org.opencontainers.image.source="https://github.com/MaterializeInc/materialize" \
     description="Materialize Console"
 
 COPY --from=builder /app/dist /usr/share/nginx/html
