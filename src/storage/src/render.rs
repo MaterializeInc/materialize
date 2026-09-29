@@ -273,15 +273,11 @@ pub fn build_ingestion_dataflow(
                 Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
             };
 
-            // Only the OLTP sources hold a snapshotting export's frontier at the as_of for the
-            // length of its snapshot, so only their exports give the persist sink something to
-            // group behind the pin.
-            let oltp_source = matches!(
-                connection,
-                GenericSourceConnection::Postgres(_)
-                    | GenericSourceConnection::MySql(_)
-                    | GenericSourceConnection::SqlServer(_)
-            );
+            // Only Postgres keeps its remap upper still through a snapshot, so only its ceiling
+            // ends near where the frontier lands when the pin lifts. MySQL and SQL Server tick
+            // through theirs, which would hold the shard upper at the as_of for the whole replay.
+            // TODO: include them once their snapshots run concurrently with CDC.
+            let oltp_source = matches!(connection, GenericSourceConnection::Postgres(_));
 
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),

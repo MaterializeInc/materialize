@@ -518,9 +518,10 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
 /// it was opened for, so this wants to be at least one `timestamp_interval`. An update that outruns
 /// it writes a batch of its own instead, which costs a batch rather than correctness.
 ///
-/// Only applies to an export that is snapshotting in this dataflow incarnation, and only until the
-/// frontier moves off the time its snapshot occupies. Zero disables committing ahead, leaving
-/// descriptions derived from the frontier alone and every timestamp writing its own batch.
+/// Only applies to an export of a Postgres source (for now) that is snapshotting in this dataflow
+/// incarnation, and only until the frontier moves off the time its snapshot occupies. Zero disables
+/// committing ahead, leaving descriptions derived from the frontier alone and every timestamp
+/// writing its own batch.
 pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
     "storage_persist_sink_description_lookahead",
     Duration::ZERO,

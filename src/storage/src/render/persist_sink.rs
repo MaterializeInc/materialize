@@ -705,16 +705,21 @@ enum Mint {
 /// ceiling, which is what collapses a whole snapshot and the catch-up behind it into one
 /// description.
 ///
-/// A `lookahead` is given only while a snapshot pins the frontier, and commits a ceiling that far
-/// past `remap_upper`. Every reclocked update is stamped below the remap upper before it exists,
-/// so the ceiling leads every row that can still arrive, and the lead is what lets it reach the
-/// writers first, since a builder only takes updates at times it was opened for.
-///
-/// Committing is confined to a snapshot because a ceiling is binding. While it is outstanding no
-/// description is derived from the frontier either, so once the snapshot ends the shard upper waits
-/// for the frontier to reach the ceiling rather than advancing to where the frontier actually is. A
-/// collection that is keeping up lags the data by about one timestamp and so has nothing to group,
-/// and would pay that wait for nothing.
+/// * `current_upper`:
+///     The upper of the last minted description, initialized from the shard.
+///     Any data before this has already been processed.
+/// * `desired_frontier`:
+///     Data input frontier.
+///     This frontier advances when the reclocked data stream advances.
+/// * `remap_upper`:
+///     The frontier of the remap shard, which advances on each successful probe.
+/// * `committed` (Optional):
+///     This is the current value of the ceiling. If set, the upper of a minted description will be
+///     at or beyond this.
+/// * `lookahead` (Optional):
+///     If present, `desired_frontier` is pinned to `as_of` (e.g. due to snapshot), so we advance
+///     `committed` as `remap_upper` + `lookahead` to consolidate in-flight data into one shared
+///     batch.
 fn next_mint(
     current_upper: &Antichain<mz_repr::Timestamp>,
     desired_frontier: &Antichain<mz_repr::Timestamp>,
@@ -731,9 +736,19 @@ fn next_mint(
         return Some(Mint::Description(desired_frontier.clone()));
     }
 
+    // A bunch of checks that will return None (meaning there's no ceiling).
+    // If feature is not enabled or not snapshotting...
     let lookahead = lookahead?;
+
+    // If the data shard has advanced to empty frontier...
     let lower = *current_upper.as_option()?;
+
+    // If the remap shard has advanced to the empty frontier, or the add overflows because of
+    // a large lookahead value (see `description_lookahead`).
     let ceiling = remap_upper.as_option()?.checked_add(lookahead)?;
+
+    // lower can be beyond remap_upper + lookahead any time the current_upper jumps ahead of
+    // of the remap_upper the operator is tracking.
     (lower < ceiling && committed.is_none_or(|c| c < ceiling)).then_some(Mint::Ceiling(ceiling))
 }
 
@@ -888,18 +903,16 @@ fn write_batches<'scope>(
                     continue;
                 };
                 for next in data {
-                    // A commitment for a different lower belongs to a later description, so it
-                    // cannot widen the open builder, which is finished under its own.
-                    match commitment {
-                        Some(held) if held.lower == next.lower => {
-                            commitment = Some(Commitment {
-                                ceiling: held.ceiling.max(next.ceiling),
-                                ..held
-                            })
-                        }
-                        Some(_) => {}
-                        None => commitment = Some(next),
-                    }
+                    // The minter only commits while the source is snapshotting, which pins the
+                    // frontier. The description that retires the commitment moves the frontier for
+                    // good. Every commitment during that snapshot shares one lower.
+                    let held = commitment.get_or_insert(next);
+                    assert_eq!(
+                        held.lower,
+                        next.lower,
+                        "persist_sink {collection_id}/{shard_id}: commitment {next:?} while {held:?} is outstanding"
+                    );
+                    held.ceiling = held.ceiling.max(next.ceiling);
                 }
             }
 
@@ -924,9 +937,10 @@ fn write_batches<'scope>(
                                 .as_option()
                                 .expect("minted descriptions have a single-element lower");
 
-                            // The description that retires a commitment ends at or past its
-                            // ceiling, so rows landing between its arrival and its readiness can
-                            // still join the builder it will be finished under.
+                            // The description that retires a commitment ends at or past the
+                            // ceiling, so rows landing between the description arriving and the
+                            // description becoming ready can still join the builder that will
+                            // finish under that description.
                             if let Some(held) = commitment.filter(|held| held.lower == lower_ts)
                                 && let Some(upper_ts) = upper.as_option()
                             {
@@ -1108,9 +1122,16 @@ fn write_batches<'scope>(
                         );
                     }
 
-                    if commitment.is_some_and(|held| held.lower == lower)
+                    // If snapshotting, and the as_of = T, where T is greater than the minimum,
+                    // the minter emits a description covering `(0, T)` and `Commitment{lower:T}`.
+                    // The open builder must wait for the appropriate description.
+                    if let Some(held) = commitment.filter(|held| held.lower == lower)
                         && let Some(builder) = open_builder.take()
                     {
+                        assert!(
+                            !batch_upper.less_than(&held.ceiling),
+                            "persist_sink {collection_id}/{shard_id}: description upper {batch_upper:?} is below commitment ceiling {commitment:?}",
+                        );
                         commitment = None;
                         if collection_id.is_user() {
                             trace!(
@@ -2360,6 +2381,18 @@ mod tests {
                 &pinned,
                 &Antichain::new(),
                 Some(ts(16)),
+                Some(LOOKAHEAD)
+            ),
+            None
+        );
+        // A lower at the ceiling, as when the current upper jumps to an as_of ahead of the observed
+        // remap upper, leaves an empty range to commit.
+        assert_eq!(
+            next_mint(
+                &frontier(15),
+                &frontier(15),
+                &frontier(5),
+                None,
                 Some(LOOKAHEAD)
             ),
             None
