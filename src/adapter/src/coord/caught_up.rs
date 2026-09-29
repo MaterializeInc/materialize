@@ -33,6 +33,14 @@
 //! environmentd: the orchestrator reports when each replica process became
 //! healthy, and replicas report when each collection hydrated (see
 //! [`replica_hydration`]).
+//!
+//! That evidence has known limits. Storage collections contribute no hydration
+//! evidence. Replicas without introspection report nothing, and neither does
+//! any replica while `enable_introspection_subscribes` is off. A cluster with
+//! compute collections and no reporting replica therefore falls back to local
+//! observation. DDL that adds an object to a cluster restarts that cluster's
+//! streak once the new object hydrates, by design. We trust replica and
+//! orchestrator clocks, and only clamp evidence from the future to `now`.
 
 mod replica_hydration;
 
@@ -91,7 +99,7 @@ pub struct CaughtUpCheckContext {
 enum ClusterCaughtUpStatus {
     /// Genuinely hydrated and within lag. Subject to the stability gate.
     CaughtUp {
-        /// The compute collections that were required to be ready.
+        /// The compute collections whose hydration times seed the streak.
         compute_collections: BTreeSet<GlobalId>,
     },
     /// Excluded by the existing checks (no replicas, or hopelessly behind with
@@ -114,8 +122,7 @@ enum ClusterCaughtUpStatus {
 pub struct ClusterStabilityState {
     /// Beginning of the uninterrupted streak. Seeded from orchestrator and
     /// replica timestamps when available, otherwise measured with
-    /// environmentd's clock. This assumes bounded clock skew between
-    /// environmentd, the orchestrator, and replicas.
+    /// environmentd's clock.
     stable_since: Option<EpochMillis>,
     /// Max replica-process status-change time observed on the previous tick.
     ///
@@ -472,7 +479,7 @@ impl Coordinator {
                     compute_collections,
                 } => Some((
                     cluster_id,
-                    self.cluster_health(cluster_id, compute_collections, hydration_times),
+                    self.cluster_health(cluster_id, compute_collections, hydration_times, now),
                 )),
                 ClusterCaughtUpStatus::Ignored | ClusterCaughtUpStatus::NotCaughtUp => None,
             })
@@ -542,6 +549,33 @@ impl Coordinator {
         }
     }
 
+    /// Returns whether the caught-up check wants a hydration times subscribe
+    /// on the given replica.
+    ///
+    /// Only while the check is pending, and only on replicas with
+    /// introspection, because others have no hydration log to subscribe to.
+    pub(super) fn wants_hydration_times_subscribe(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> bool {
+        self.caught_up_check.is_some()
+            && self
+                .catalog()
+                .get_cluster_replica(cluster_id, replica_id)
+                .config
+                .compute
+                .logging
+                .enabled()
+    }
+
+    /// Returns the hydration times mirror, if the caught-up check is pending.
+    pub(super) fn hydration_times_mut(&mut self) -> Option<&mut ReplicaHydrationTimes> {
+        self.caught_up_check
+            .as_mut()
+            .map(|ctx| &mut ctx.hydration_times)
+    }
+
     /// Reads the current health of a cluster's replicas from the in-memory
     /// mirror of orchestrator-reported statuses, and when the given compute
     /// collections hydrated from the mirror of replica-reported hydration
@@ -554,6 +588,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         compute_collections: &BTreeSet<GlobalId>,
         hydration_times: &ReplicaHydrationTimes,
+        now: EpochMillis,
     ) -> ClusterHealthSnapshot {
         let Some(replicas) = self
             .cluster_replica_statuses
@@ -592,7 +627,7 @@ impl Coordinator {
             .collect::<Option<Vec<_>>>()
             .and_then(|all| all.into_iter().max());
         let replica_ids = replicas.keys().copied().collect();
-        let hydrated_since = hydration_times.hydrated_since(&replica_ids, compute_collections);
+        let hydrated_since = hydration_times.hydrated_since(&replica_ids, compute_collections, now);
 
         ClusterHealthSnapshot {
             all_healthy,
@@ -693,9 +728,10 @@ impl Coordinator {
         }
 
         let mut all_caught_up = true;
-        // Compute collections that are hydrated and within lag. Storage
-        // collections have no replica-reported hydration times, so the
-        // stability gate relies on replica health alone for those.
+        // Ready compute collections that replicas report hydration times for.
+        // We skip completed collections (empty write frontier) because they
+        // may have no dataflow, so no replica ever reports them, which would
+        // leave the whole cluster without hydration evidence.
         let mut ready_compute_collections = BTreeSet::new();
 
         let storage_frontiers = self
@@ -776,7 +812,9 @@ impl Coordinator {
                         || readiness != CollectionReadiness::Ready
                     {
                         all_caught_up = false;
-                    } else if matches!(collection_type, CollectionType::Compute) {
+                    } else if matches!(collection_type, CollectionType::Compute)
+                        && !write_frontier.is_empty()
+                    {
                         ready_compute_collections.insert(id);
                     }
                     continue;
@@ -841,6 +879,7 @@ impl Coordinator {
             );
             if readiness == CollectionReadiness::Ready
                 && matches!(collection_type, CollectionType::Compute)
+                && !write_frontier.is_empty()
             {
                 ready_compute_collections.insert(id);
             }
@@ -1244,6 +1283,34 @@ mod tests {
         let rehydrated = with_evidence(0, HydratedSince::Known(800));
         assert!(!state.observe(&rehydrated, 1_000, 1000).ready);
         assert!(state.observe(&rehydrated, 1_800, 1000).ready);
+    }
+
+    #[mz_ore::test]
+    fn pending_after_first_observation_is_no_evidence() {
+        let mut state = ClusterStabilityState::default();
+        assert!(
+            !state
+                .observe(&with_evidence(0, HydratedSince::Known(0)), 500, 1000)
+                .ready
+        );
+        // A replica reinstalled its subscribe mid-streak.
+        let pending = with_evidence(0, HydratedSince::Pending);
+        let observation = state.observe(&pending, 900, 1000);
+        assert_eq!(observation.stable_for_ms, Some(900));
+        assert_eq!(observation.blocked_by, Some(StabilityBlocker::WithinPeriod));
+        assert!(state.observe(&pending, 1_000, 1000).ready);
+    }
+
+    #[mz_ore::test]
+    fn later_healthy_since_restarts_streak() {
+        let mut state = ClusterStabilityState::default();
+        let hydrated = HydratedSince::Known(0);
+        assert!(!state.observe(&with_evidence(0, hydrated), 500, 1000).ready);
+        // A replica became healthy again without any locally observed
+        // disruption.
+        let restarted = with_evidence(800, hydrated);
+        assert!(!state.observe(&restarted, 1_000, 1000).ready);
+        assert!(state.observe(&restarted, 1_800, 1000).ready);
     }
 
     #[mz_ore::test]

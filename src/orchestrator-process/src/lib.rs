@@ -1210,6 +1210,9 @@ impl ProcessStateUpdater {
             process_id: u64::cast_from(self.i),
             status: status.into(),
             restart_count: process_state.restart_count,
+            // This is when we observed the transition. A process adopted after
+            // an environmentd restart therefore reports the adoption time, not
+            // its true start, which the `healthy_since` contract allows.
             healthy_since: matches!(status, ProcessStatus::Ready { .. }).then_some(status_time),
             time: status_time,
         });

@@ -1844,8 +1844,9 @@ fn topology_spread_min_domains(
     if soft || az_pinned { None } else { min_domains }
 }
 
-/// Returns the start of the pod's current healthy run: the later of its last
-/// Ready transition and the start of its containers.
+/// Returns the start of the pod's current healthy run, the later of its last
+/// Ready transition and the start of its containers, rounded up to the next
+/// whole second.
 ///
 /// Returns `None` if the pod is not Ready or any container is not running.
 fn pod_healthy_since(pod: &Pod) -> Option<DateTime<chrono::Utc>> {
@@ -1876,7 +1877,10 @@ fn pod_healthy_since(pod: &Pod) -> Option<DateTime<chrono::Utc>> {
             .0;
         since = since.max(started);
     }
-    Some(to_chrono(since))
+    // Kubernetes truncates these timestamps to whole seconds, so the run may
+    // have started up to a second after `since`. We report the end of that
+    // second because `healthy_since` must not be early.
+    Some(to_chrono(since) + chrono::Duration::seconds(1))
 }
 
 fn to_chrono(ts: Timestamp) -> DateTime<chrono::Utc> {
@@ -1902,7 +1906,8 @@ mod tests {
         let ready = "2026-09-25T12:00:00Z"
             .parse::<DateTime<chrono::Utc>>()
             .unwrap();
-        assert_eq!(pod_healthy_since(&pod), Some(ready));
+        let second = chrono::Duration::seconds(1);
+        assert_eq!(pod_healthy_since(&pod), Some(ready + second));
 
         let status = pod.status.as_mut().unwrap();
         let container = &mut status.container_statuses.as_mut().unwrap()[0];
@@ -1918,7 +1923,7 @@ mod tests {
             Some(serde_json::from_value(serde_json::json!("2026-09-25T12:10:00Z")).unwrap());
         assert_eq!(
             pod_healthy_since(&pod),
-            Some(ready + chrono::Duration::minutes(10))
+            Some(ready + chrono::Duration::minutes(10) + second)
         );
 
         pod.status.as_mut().unwrap().conditions.as_mut().unwrap()[0].status = "False".into();
