@@ -102,7 +102,10 @@ mod tests {
             config: v94::ReplicaSystemConfiguration,
             generation in 1u64..=u64::MAX,
         ) {
-            assert_key_migration(v94::StateUpdateKind::ReplicaSystemConfiguration(config), generation);
+            assert_key_migration(
+                v94::StateUpdateKind::ReplicaSystemConfiguration(config),
+                generation,
+            );
         }
 
         #[mz_ore::test]

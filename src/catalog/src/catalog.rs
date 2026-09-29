@@ -1944,6 +1944,15 @@ impl Catalog {
             | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::UnfinalizedShard(_)
             | StateUpdateKind::AuditLog(_) => false,
+            // These records affect only their deployment's planning projection.
+            // Replica membership remains planning-visible because foreign members
+            // can establish the existence of an explicitly targeted replica.
+            StateUpdateKind::ClusterRuntime(runtime) => {
+                runtime.deployment_generation == state.deployment_generation
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(config) => {
+                config.deployment_generation == state.deployment_generation
+            }
             // Client release can retire storage metadata after SQL has dropped
             // the collection. That cleanup does not change planning, but live
             // mappings (including foreign temporary items) and additions do.

@@ -31,7 +31,7 @@ completion gate is required. Escalate concrete protocol safety gaps, not
 overlapping writes that preserve correctness throughout.
 
 Stable ReplicaId integration and deployment-qualified persisted observations are
-published through `0b1e359a`. Continue their runtime verification. Membership keys,
+published through `aa3496d0`. Continue their runtime verification. Membership keys,
 scoped settings and plan owners distinguish deployment, while declarations and
 carried replicas keep their logical ID. Active reference frontiers exclude the
 pending deployment's rows for the same ID. Controller retirement must preserve
@@ -68,21 +68,24 @@ publication stalls that may exhaust reclamation grace. Establish the actual
 heartbeat/reclamation sequence without changing grace. Keep this separate from
 planning-snapshot absence, which now consults the live protection writer.
 
-M2 remains active. Same-version native warm promotion passed in CI 137278 at
-`4047bab4`. The next outcome is compatible-version writer coexistence and handover
-with the integrated stable-ID and compatibility changes.
-The outage, targeted DDL and bounded-throughput proofs remain closed. Continue
-concrete integration repairs without starting another acceptance campaign.
+M2 remains active. Continue integration and upstream reconciliation without
+reopening completed native handover, outage, targeted DDL or bounded-throughput
+proofs. Evidence and current CI status belong in the PR description.
 
-Compatible catalog replay, typed durable admission and Persist format-target
-propagation are published through `0b1e359a`. CI 137542 built both participating
-versions, but handover stopped before prewarming on a fixture image-tag parsing
-error. The fix and documentation-lint repair are published at `3dba4a73`.
-CI 137543 is the follow-up run. Catalog EXPLAIN/accounting snapshots and the MCP
-statement-identity fixture fix pass locally using CI-built binaries. The Kafka
-RTR transactional catalog conflict remains unexplained, with its statements intact.
-Demonstrate handover with these distinct participating binaries. Admission and
-retirement, not physical liveness, determine required versions. Preserve true
+The released-version upgrade smoke test hits the stable-builtin deletion guard:
+26.43's
+`mz_catalog.mz_cluster_replica_frontiers` Source becomes a View here. This is the
+deferred pre-feature conversion boundary, separate from native handover. Do not
+weaken the guard or silently skip the check. Use CI for all CPU/RAM-heavy builds
+and tests. Keep local work to editing, lightweight checks and evidence review.
+
+The next fixture corrections concern external-replica native startup, literal-ID
+bootstrap assumptions and asynchronous DROP metadata retirement. Preserve existing
+assertions and metric coverage outside the two literal-ID fixtures. Remaining
+publication stalls and missing hydration-history episodes require separate causes,
+not blanket fixture rewrites. Keep the earlier unexplained RTR conflict visible.
+
+Admission and retirement, not physical liveness, determine required versions. Preserve true
 binary identity separately from the authorized format target, including for
 read-only shard initialization and explicit upgrades. Participants follow committed admission
 changes live. Admission, retirement and format authorization remain atomic without

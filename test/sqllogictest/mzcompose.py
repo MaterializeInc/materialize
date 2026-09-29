@@ -24,7 +24,7 @@ from queue import Queue
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn, ui
 from materialize.cli.run import update_sqlite_repo
-from materialize.mzcompose import sanitizer_enabled
+from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -509,6 +509,21 @@ class SltRunStepConfig:
             f"--replica-size={replica_size}",
             f"--replicas={replicas}",
         ]
+        if file in {
+            "test/sqllogictest/id.slt",
+            "test/sqllogictest/alter-table.slt",
+        }:
+            # Literal ID references require a fresh user allocator. Optional metric
+            # plans reserve durable IDs before SQL runs, so exclude them here only.
+            # CLI defaults replace the environment's entire list, not individual keys.
+            parameters = get_default_system_parameters() | {
+                "enable_lgalloc": "false",
+                "enable_metric_sink": "false",
+            }
+            sqllogictest_config.append(
+                "--system-parameter-default="
+                + ";".join(f"{key}={value}" for key, value in parameters.items())
+            )
         command = [
             "sqllogictest",
             *([] if rewrite_results else self.flags),

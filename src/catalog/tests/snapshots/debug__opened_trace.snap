@@ -473,6 +473,7 @@ Trace {
                         id: User(
                             1,
                         ),
+                        deployment_generation: 0,
                     },
                     ClusterReplicaValue {
                         cluster_id: User(
@@ -511,6 +512,12 @@ Trace {
                 ),
             ),
         ],
+    },
+    cluster_replica_declarations: CollectionTrace {
+        values: [],
+    },
+    cluster_runtimes: CollectionTrace {
+        values: [],
     },
     comments: CollectionTrace {
         values: [],

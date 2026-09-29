@@ -1790,9 +1790,29 @@ async fn test_multi_subscriber_catalog() {
     )
     .await
     .expect("open_debug_read_only_catalog");
+    let foreign_storage = crate::durable::TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(1)
+        .unwrap_build()
+        .await
+        .open_read_only(&bootstrap_args)
+        .await
+        .expect("open foreign deployment follower");
+    let mut foreign_catalog = Catalog::open_committed(
+        Catalog::diagnostic_state_config(&writer_catalog.diagnostic_config),
+        foreign_storage,
+    )
+    .await
+    .expect("reconstruct foreign deployment follower")
+    .catalog;
+    assert_eq!(writer_catalog.state().deployment_generation(), 0);
+    assert_eq!(read_only_catalog.state().deployment_generation(), 0);
+    assert_eq!(foreign_catalog.state().deployment_generation(), 1);
     assert_err!(writer_catalog.resolve_database(db_name));
     assert_err!(read_only_catalog.resolve_database(db_name));
     let before_ddl = read_only_catalog.clone();
+    let writer_before_ddl = writer_catalog.clone();
+    let foreign_before_ddl = foreign_catalog.clone();
 
     let commit_ts = writer_catalog.current_upper().await;
     writer_catalog
@@ -1822,6 +1842,97 @@ async fn test_multi_subscriber_catalog() {
 
     assert_eq!(write_db, &read_db);
     assert!(!before_ddl.transient_revision_is_current());
+    assert!(!writer_before_ddl.transient_revision_is_current());
+    foreign_catalog
+        .sync_to_current_updates()
+        .await
+        .expect("follow shared definition in foreign deployment");
+    assert_ok!(foreign_catalog.resolve_database(db_name));
+    assert!(!foreign_before_ddl.transient_revision_is_current());
+
+    // The same committed maintenance invalidates the owning deployment's
+    // snapshots, but not a different deployment's planning projection.
+    let replica = writer_catalog
+        .user_cluster_replicas()
+        .next()
+        .expect("bootstrap user replica")
+        .clone();
+    let crate::memory::objects::ClusterVariant::Managed(managed) = &writer_catalog
+        .get_cluster(replica.cluster_id)
+        .config
+        .variant
+    else {
+        panic!("bootstrap user cluster must be managed");
+    };
+    let runtime = crate::durable::ClusterRuntime {
+        cluster_id: replica.cluster_id,
+        deployment_generation: 0,
+        realized_config: managed.realized_reconfiguration_target().into(),
+        reconfiguration: None,
+        burst: None,
+    };
+    let mut changed_runtime = runtime.clone();
+    changed_runtime.realized_config.arrangement_compression =
+        !runtime.realized_config.arrangement_compression;
+    let scoped_op = |value: Option<&str>| Op::UpdateScopedSystemParameters {
+        scoped: crate::config::ScopedParameters {
+            cluster: BTreeMap::new(),
+            replica: value
+                .map(|value| {
+                    BTreeMap::from([(
+                        replica.replica_id,
+                        BTreeMap::from([("max_query_result_size".into(), value.into())]),
+                    )])
+                })
+                .unwrap_or_default(),
+        },
+        prune_scope: crate::config::ScopedParametersScope {
+            clusters: BTreeSet::new(),
+            replicas: BTreeSet::from([replica.replica_id]),
+        },
+    };
+    for (case, op) in [
+        (
+            "initialize runtime",
+            Op::UpdateClusterRuntime {
+                runtime,
+                burst_audit: None,
+            },
+        ),
+        (
+            "replace runtime",
+            Op::UpdateClusterRuntime {
+                runtime: changed_runtime,
+                burst_audit: None,
+            },
+        ),
+        ("insert replica config", scoped_op(Some("1024"))),
+        ("replace replica config", scoped_op(Some("2048"))),
+        ("remove replica config", scoped_op(None)),
+    ] {
+        let writer_snapshot = writer_catalog.clone();
+        let local_snapshot = read_only_catalog.clone();
+        let foreign_snapshot = foreign_catalog.clone();
+        let ts = writer_catalog.current_upper().await;
+        writer_catalog
+            .transact(None, ts, None, vec![op])
+            .await
+            .expect(case);
+        assert!(!writer_snapshot.transient_revision_is_current(), "{case}");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect(case);
+        assert!(!local_snapshot.transient_revision_is_current(), "{case}");
+        foreign_catalog.sync_to_current_updates().await.expect(case);
+        assert!(foreign_snapshot.transient_revision_is_current(), "{case}");
+        assert_eq!(
+            foreign_snapshot.transient_revision(),
+            foreign_catalog.transient_revision(),
+            "{case}"
+        );
+    }
+    foreign_catalog.expire().await;
 
     let before_metadata = read_only_catalog.clone();
     let commit_ts = writer_catalog.current_upper().await;

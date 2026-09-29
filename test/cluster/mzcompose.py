@@ -2196,7 +2196,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
 
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     """
-    Test that compute reconciliation reuses existing dataflows.
+    Test that maintained dataflows survive an environmentd restart.
     """
 
     with ExitStack() as stack:
@@ -2211,32 +2211,95 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             user="mz_system",
         )
 
-        # Helper function to get reconciliation metrics for clusterd.
-        def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
-            metrics = c.exec(
-                process, "curl", "localhost:6878/metrics", capture=True
-            ).stdout
+        user_exports = {
+            "t1_primary_idx",
+            "v1_primary_idx",
+            "v2_primary_idx",
+            "rmv1_primary_idx",
+            *(f"mv{i}" for i in range(1, 6)),
+            *(f"rmv{i}" for i in range(1, 7)),
+        }
 
-            reused = 0
-            replaced = 0
-            for metric in metrics.splitlines():
-                if metric.startswith(
-                    "mz_compute_reconciliation_reused_dataflows_count_total"
-                ):
-                    reused += int(metric.split()[1])
-                elif metric.startswith(
-                    "mz_compute_reconciliation_replaced_dataflows_count_total"
-                ):
-                    replaced += int(metric.split()[1])
+        def snapshot_exports(
+            cluster: str, replica: str, required_exports: Collection[str] = ()
+        ) -> dict[str, int]:
+            # Catalog membership excludes query transients and metric sinks.
+            # Export IDs are GlobalIds, not the catalog IDs of the objects.
+            with c.sql_cursor(port=6877, user="mz_system") as cursor:
+                cursor.execute("SET auto_route_catalog_queries = false")
+                cursor.execute(
+                    sql.SQL("SET cluster = {}").format(sql.Identifier(cluster))
+                )
+                cursor.execute(
+                    sql.SQL("SET cluster_replica = {}").format(sql.Identifier(replica))
+                )
+                cursor.execute("SET statement_timeout = '30s'")
+                deadline = time.monotonic() + 60
+                while True:
+                    cursor.execute(
+                        """
+                        SELECT o.name, g.global_id, e.dataflow_id
+                        FROM (
+                            SELECT i.id, i.name, r.schema_id, i.cluster_id
+                            FROM mz_catalog.mz_indexes i
+                            JOIN mz_catalog.mz_relations r ON r.id = i.on_id
+                            UNION ALL
+                            SELECT id, name, schema_id, cluster_id FROM mz_catalog.mz_materialized_views
+                            WHERE %s = 'cluster1'
+                        ) o
+                        JOIN mz_catalog.mz_clusters c ON c.id = o.cluster_id
+                        JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
+                        LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+                        LEFT JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                        LEFT JOIN mz_introspection.mz_compute_exports e ON e.export_id = g.global_id
+                        WHERE c.name = %s AND (
+                            (%s = 'cluster1' AND d.name = 'materialize'
+                             AND s.name = 'public' AND o.name = ANY(%s::text[]))
+                            OR (%s = 'mz_catalog_server' AND o.id LIKE 's%%'
+                                AND e.export_id IS NOT NULL)
+                        )
+                        ORDER BY o.name, g.global_id
+                        """,
+                        (cluster, cluster, cluster, sorted(user_exports), cluster),
+                    )
+                    rows = cursor.fetchall()
+                    complete = (
+                        {name for name, _, _ in rows} == user_exports
+                        if cluster == "cluster1"
+                        else len({export_id for _, export_id, _ in rows}) > 10
+                    )
+                    complete &= set(required_exports) <= {
+                        export_id for _, export_id, _ in rows
+                    }
+                    if complete and all(
+                        export_id is not None and dataflow_id is not None
+                        for _, export_id, dataflow_id in rows
+                    ):
+                        snapshot = {
+                            export_id: dataflow_id for _, export_id, dataflow_id in rows
+                        }
+                        print(f"{cluster}.{replica} export snapshot: {snapshot}")
+                        return snapshot
+                    assert (
+                        time.monotonic() < deadline
+                    ), f"Incomplete exports on {cluster}.{replica}: {rows}, {required_exports=}"
+                    time.sleep(1)
 
-            return reused, replaced
+        def replica_processes() -> dict[str, str]:
+            processes = {
+                service: c.exec(
+                    service, "ps", "-C", "clusterd", "-o", "pid=,lstart=", capture=True
+                ).stdout.strip()
+                for service in ("clusterd1", "clusterd2")
+            }
+            assert all(processes.values()), processes
+            return processes
 
-        # Run a slow-path SELECT to allocate a transient ID. This ensures that
-        # after the restart dataflows get different internal transient IDs
-        # assigned, which is something we want reconciliation to be able to handle.
+        # Exercise a query before reconnecting. Maintained export continuity is
+        # independent of transient query IDs.
         c.sql("SELECT * FROM mz_views JOIN mz_indexes USING (id)")
 
-        # Set up a cluster and a number of dataflows that can be reconciled.
+        # Set up a cluster and a number of maintained dataflows.
         c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -2320,7 +2383,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             """)
 
         # Replace the `mz_catalog_server` replica with an unorchestrated one so we
-        # can test reconciliation of system indexes too.
+        # can test continuity of system indexes too.
         c.sql(
             """
             ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
@@ -2375,22 +2438,34 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         # This is done to trigger the bug described in database-issues#5113.
         time.sleep(10)
 
-        # Restart environmentd to trigger a reconciliation.
+        before = {
+            (cluster, replica): snapshot_exports(cluster, replica)
+            for cluster, replica in [
+                ("cluster1", "replica1"),
+                ("mz_catalog_server", "r1"),
+            ]
+        }
+
+        # Dataflow IDs are runtime-local, so both clusterd processes must stay
+        # running while only environmentd restarts.
+        processes = replica_processes()
         c.kill("materialized")
         c.up("materialized")
 
-        # Perform queries to ensure reconciliation has finished.
+        # Perform queries to ensure both clusters are ready after reconnecting.
         c.sql("""
             SET cluster = cluster1;
             SELECT * FROM v1; -- cluster1
             SHOW INDEXES;     -- mz_catalog_server
             """)
 
-        reused, replaced = fetch_reconciliation_metrics("clusterd1")
-        assert reused == 15 and replaced == 0, f"{reused=}, {replaced=}"
-
-        reused, replaced = fetch_reconciliation_metrics("clusterd2")
-        assert reused > 10 and replaced == 0, f"{reused=}, {replaced=}"
+        for (cluster, replica), baseline in before.items():
+            after = snapshot_exports(cluster, replica, baseline)
+            assert all(
+                after.get(export_id) == dataflow_id
+                for export_id, dataflow_id in baseline.items()
+            ), f"Export dataflows changed on {cluster}.{replica}: {baseline=}, {after=}"
+        assert replica_processes() == processes
 
 
 def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
@@ -2973,7 +3048,14 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         time.sleep(10)
         envd = c.invoke("logs", "materialized", capture=True)
         print(envd.stdout)
-        assert "replica task failed: recv error: timed out" in envd.stdout
+        assert (
+            "query replica connection failed: query connection lost: recv error: timed out"
+            in envd.stdout
+        )
+        assert (
+            "storage observation connection failed: recv error: timed out"
+            in envd.stdout
+        )
 
 
 class Metrics:
@@ -6798,20 +6880,23 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
     introspection data.
     """
 
-    with c.override(
-        Materialized(
-            additional_system_parameter_defaults={
-                "unsafe_enable_unsafe_functions": "true",
-                "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            },
-            support_external_clusterd=True,
+    with (
+        c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "unsafe_enable_unsafe_functions": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                },
+                support_external_clusterd=True,
+            ),
+            Testdrive(
+                no_reset=True,
+                default_timeout="10s",
+            ),
         ),
-        Testdrive(
-            no_reset=True,
-            default_timeout="10s",
-        ),
+        ExitStack() as stack,
     ):
-        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
+        c.up("materialized", Service("testdrive", idle=True))
 
         # Set up an unorchestrated replica with a couple dataflows.
         c.sql("""
@@ -6831,8 +6916,23 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
             """)
 
-        output = c.sql_query("SELECT id FROM mz_cluster_replicas WHERE name = 'test'")
-        replica_id = output[0][0]
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'test' AND r.name = 'test'""")
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    workers=2,
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *native_catalog_options(c),
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
 
         # Wait for the dataflows to be reported as hydrated.
         c.testdrive(dedent(f"""
@@ -8578,9 +8678,13 @@ def workflow_github_11322(c: Composition) -> None:
     # Drop the replacement without applying it.
     c.sql("DROP MATERIALIZED VIEW rp")
 
-    # Verify replacement's collection metadata has been removed.
-    collection_metadata = storage_collection_metadata()
-    assert collection_metadata[mv_id] == mv_shard
+    # Durable read protection releases asynchronously after DROP.
+    for _ in range(60):
+        collection_metadata = storage_collection_metadata()
+        assert collection_metadata[mv_id] == mv_shard
+        if rp_id not in collection_metadata:
+            break
+        time.sleep(1)
     assert rp_id not in collection_metadata
 
     c.kill("materialized")
@@ -8664,25 +8768,44 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
         assert "read_policy: LagWriteFrontier" in collection_state, collection_state
 
-    # Drop the staged replacement without applying it.
-    c.sql("DROP MATERIALIZED VIEW rp2")
-
-    # The finalization record is removed by the next catalog transaction after
-    # finalization completes, so inspect it immediately after the drop.
-    unfinalized = storage_metadata()["unfinalized_shards"]
-    assert mv_shard not in unfinalized, (
-        f"dropping the replacement marked the target's shard {mv_shard} for"
-        f" finalization. Unfinalized shards: {unfinalized}"
+    # Keep WAL entries observable: later catalog transactions acknowledge
+    # completed finalization and remove its record.
+    c.sql(
+        "ALTER SYSTEM SET enable_storage_shard_finalization = false",
+        port=6877,
+        user="mz_system",
     )
-
-    # A plain MV still owns its shard after bootstrap, so dropping it must
-    # enqueue that shard for finalization.
-    c.sql("DROP MATERIALIZED VIEW plain_mv")
-    unfinalized = storage_metadata()["unfinalized_shards"]
-    assert plain_mv_shard in unfinalized, (
-        f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
-        f" finalization. Unfinalized shards: {unfinalized}"
-    )
+    try:
+        # Drop the staged replacement without applying it, then a plain MV
+        # whose shard must be enqueued for finalization after bootstrap.
+        for name, dropped_id in (("rp2", rp2_id), ("plain_mv", plain_mv_id)):
+            c.sql(f"DROP MATERIALIZED VIEW {name}")
+            # Durable read protection releases asynchronously after DROP.
+            for _ in range(60):
+                metadata = storage_metadata()
+                collection_metadata = metadata["collection_metadata"]
+                unfinalized = metadata["unfinalized_shards"]
+                assert collection_metadata[mv_id] == mv_shard
+                assert mv_shard not in unfinalized, (
+                    f"dropping {name} marked the target's shard {mv_shard} for"
+                    f" finalization. Unfinalized shards: {unfinalized}"
+                )
+                if dropped_id not in collection_metadata and (
+                    name != "plain_mv" or plain_mv_shard in unfinalized
+                ):
+                    break
+                time.sleep(1)
+            assert dropped_id not in collection_metadata, collection_metadata
+        assert plain_mv_shard in unfinalized, (
+            f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
+            f" finalization. Unfinalized shards: {unfinalized}"
+        )
+    finally:
+        c.sql(
+            "ALTER SYSTEM RESET enable_storage_shard_finalization",
+            port=6877,
+            user="mz_system",
+        )
 
     c.sql(
         "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"

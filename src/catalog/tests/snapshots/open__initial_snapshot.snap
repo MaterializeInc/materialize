@@ -671,6 +671,7 @@ Snapshot {
             id: User(
                 1,
             ),
+            deployment_generation: 0,
         }: ClusterReplicaValue {
             cluster_id: User(
                 1,
@@ -702,6 +703,8 @@ Snapshot {
             ),
         },
     },
+    cluster_replica_declarations: {},
+    cluster_runtimes: {},
     introspection_sources: {},
     id_allocator: {
         IdAllocKey {

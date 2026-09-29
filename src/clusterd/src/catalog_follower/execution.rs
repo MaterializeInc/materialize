@@ -690,7 +690,10 @@ impl ReplicaEnactment {
                     .collect()
             };
             for id in plan.export_ids() {
-                let window = grants.get(&id).map(|hold| {
+                let index = plan.index_exports.contains_key(&id);
+                // A storage export can also be another plan's input in this batch.
+                // Its input grant must not become an unadvanced index window.
+                let window = grants.get(&id).filter(|_| index).map(|hold| {
                     let mut hold = hold.clone();
                     let frontier = hold.since().join(&as_of);
                     hold.try_downgrade(frontier).expect("joined window");
@@ -715,7 +718,7 @@ impl ReplicaEnactment {
                         },
                         execution: source_holds.clone(),
                         window,
-                        index: plan.index_exports.contains_key(&id),
+                        index,
                         retired: false,
                         scheduled: as_of.is_empty(),
                         writes_allowed: as_of.is_empty()
