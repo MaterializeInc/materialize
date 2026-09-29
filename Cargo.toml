@@ -475,8 +475,8 @@ reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "
 # The Azure SDK implements its HTTP transport for reqwest 0.13 only, while
 # iceberg's public API still uses reqwest 0.12.
 reqwest-0-13 = { package = "reqwest", version = "0.13.5", default-features = false, features = ["charset", "http2", "native-tls-vendored", "system-proxy"] }
-reqwest-middleware = { version = "0.4.2", features = ["json"] }
-reqwest-retry = "0.8.0"
+reqwest-middleware = { version = "0.5.2", features = ["json"] }
+reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
