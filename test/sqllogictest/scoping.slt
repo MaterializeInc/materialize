@@ -274,7 +274,7 @@ query error column "q.a" does not exist
 SELECT * FROM sq_t AS q, LATERAL (SELECT q.a FROM (SELECT) AS q) x
 
 query error column "q.a" does not exist
-SELECT (SELECT q.a) FROM sq_t AS q2, (SELECT) AS q GROUP BY q2.a
+SELECT a FROM sq_t AS q WHERE EXISTS (SELECT (SELECT q.a) FROM sq_t AS q2, (SELECT) AS q GROUP BY q2.a)
 
 # A non-lateral sibling subquery cannot see the zero-arity alias, so the
 # reference binds to the outer q, per PostgreSQL.
@@ -323,6 +323,32 @@ SELECT a FROM sq_t AS q WHERE EXISTS (SELECT q.* FROM (SELECT) AS q)
 query error column "q" does not exist
 SELECT q FROM (SELECT) AS q
 
+# Whole-row and field references do not bind past the zero-column alias to an
+# outer relation of the same name either.
+query error column "q" does not exist
+SELECT (SELECT q FROM (SELECT) AS q) FROM sq_t AS q
+
+query error column "q" does not exist
+SELECT (SELECT (q).a FROM (SELECT) AS q) FROM sq_t AS q
+
 # DELETE ... USING also detects duplicate zero-column aliases.
 statement error table name "sq_t" specified more than once
 DELETE FROM sq_t USING (SELECT) AS sq_t
+
+# With enable_zero_arity_alias_scoping off, zero-column aliases are invisible to
+# name resolution, so q.a binds to the outer q.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_zero_arity_alias_scoping = false
+----
+COMPLETE 0
+
+query I rowsort
+SELECT q.a FROM sq_t AS q WHERE EXISTS (SELECT 1 FROM (SELECT FROM generate_series(1,1)) AS q WHERE q.a > 0)
+----
+1
+2
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_zero_arity_alias_scoping
+----
+COMPLETE 0

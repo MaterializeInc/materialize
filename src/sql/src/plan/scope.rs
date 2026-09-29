@@ -289,18 +289,19 @@ impl Scope {
     /// If no tables with the given name are in scope, returns an empty
     /// iterator.
     ///
-    /// NOTE(benesch): The return value conflates "no such table" and a table
-    /// that exists but has no columns, as both produce an empty vector.
-    /// Callers that care can check `zero_arity_table_names` to distinguish
-    /// the two.
+    /// NOTE: The return value conflates "no such table" and a table that
+    /// exists but has no columns, as both produce an empty vector. Callers
+    /// that care can check `zero_arity_table_names` to distinguish the two.
     pub fn items_from_table<'a>(
         &'a self,
         outer_scopes: &'a [Scope],
         table: &PartialItemName,
     ) -> Result<Vec<(ColumnRef, &'a ScopeItem)>, PlanError> {
+        let zero_arity_level = self.innermost_zero_arity_table_level(outer_scopes, table);
         let mut seen_level = None;
         let items: Vec<_> = self
             .all_items(outer_scopes)
+            .filter(|c| zero_arity_level.map_or(true, |level| c.lat_level <= level))
             .filter_map(move |c| match c.inner {
                 ScopeCursorInner::Item { column, item }
                     if item.is_from_table(table)
@@ -448,10 +449,6 @@ impl Scope {
         name_manager: &mut NameManager,
     ) -> Result<(ColumnRef, Arc<str>), PlanError> {
         let mut seen_at_level = None;
-        // A zero-arity relation contributes no items, so the item scan below
-        // cannot find it. It must still shadow same-named relations at
-        // farther lateral levels, so refuse to match items beyond the
-        // closest zero-arity relation with this name.
         let zero_arity_level = self.innermost_zero_arity_table_level(outer_scopes, table_name);
         self.resolve_internal(
             outer_scopes,
@@ -485,6 +482,10 @@ impl Scope {
     /// Returns the closest lateral level at which `table` matches the name of
     /// a zero-arity relation, if any. Lateral levels are counted as in
     /// `all_items`.
+    ///
+    /// A zero-arity relation contributes no items, so an item scan cannot find
+    /// it, but it must still shadow same-named relations at farther lateral
+    /// levels. Lookups by table name therefore refuse items beyond this level.
     fn innermost_zero_arity_table_level(
         &self,
         outer_scopes: &[Scope],
