@@ -95,6 +95,9 @@ skip = [
     { name = "rustix", version = "0.38.44" },
     # Used by bindgen
     { name = "itertools", version = "0.13.0" },
+    # Used by launchdarkly-server-sdk-evaluation, prost-build, prost-derive and
+    # timely
+    { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
     # Held back by mysql_async `v0.36.1`
