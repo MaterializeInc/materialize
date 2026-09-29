@@ -1663,6 +1663,39 @@ impl Catalog {
                 item,
                 owner_id,
             } => {
+                // Statements exempt from DDL serialization (see
+                // `must_serialize_ddl`), such as CREATE SECRET, transact after
+                // off-thread work, so a concurrent DROP ... CASCADE may have
+                // removed the item's target database or schema.
+                // `resolve_full_name` below and the in-memory apply of the new
+                // item both panic on a missing entry.
+                if name.qualifiers.schema_spec != SchemaSpecifier::Temporary {
+                    if let ResolvedDatabaseSpecifier::Id(database_id) =
+                        &name.qualifiers.database_spec
+                    {
+                        if state.try_get_database(database_id).is_none() {
+                            return Err(AdapterError::ConcurrentDependencyDrop {
+                                dependency_kind: "database",
+                                dependency_id: database_id.to_string(),
+                            });
+                        }
+                    }
+                    let conn_id = session.map_or(&SYSTEM_CONN_ID, |session| session.conn_id());
+                    if state
+                        .try_get_schema(
+                            &name.qualifiers.database_spec,
+                            &name.qualifiers.schema_spec,
+                            conn_id,
+                        )
+                        .is_none()
+                    {
+                        return Err(AdapterError::ConcurrentDependencyDrop {
+                            dependency_kind: "schema",
+                            dependency_id: name.qualifiers.schema_spec.to_string(),
+                        });
+                    }
+                }
+
                 state.check_unstable_dependencies(&item)?;
 
                 match &item {
@@ -4235,6 +4268,82 @@ mod tests {
             let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
             assert_eq!(inc_t2.name(), all_t2.name());
             assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Regression test for SQL-518.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_create_item_into_dropped_database_or_schema() {
+        use mz_catalog::memory::objects::Secret;
+        use mz_ore::assert_contains;
+        use mz_sql::names::{DatabaseId, SchemaId, SchemaSpecifier};
+
+        Catalog::with_debug(|mut catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+
+            let (id, global_id) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id");
+
+            let make_secret_op = |database_spec, schema_spec| Op::CreateItem {
+                id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec,
+                        schema_spec,
+                    },
+                    item: "sec".to_string(),
+                },
+                item: CatalogItem::Secret(Secret {
+                    create_sql: "CREATE SECRET sec AS 'x'".to_string(),
+                    global_id,
+                }),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+            };
+
+            // Ids that have never been allocated stand in for a database and
+            // schema dropped between staging and the finishing transaction.
+            let oracle_write_ts = catalog.current_upper().await;
+            let err = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![make_secret_op(
+                        ResolvedDatabaseSpecifier::Id(DatabaseId::User(u64::MAX)),
+                        SchemaSpecifier::Id(SchemaId::User(u64::MAX)),
+                    )],
+                )
+                .await
+                .map(|_| ())
+                .expect_err("create into missing database must fail");
+            assert_contains!(err.to_string(), "database");
+            assert_contains!(err.to_string(), "was dropped");
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let err = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![make_secret_op(
+                        database_spec,
+                        SchemaSpecifier::Id(SchemaId::User(u64::MAX)),
+                    )],
+                )
+                .await
+                .map(|_| ())
+                .expect_err("create into missing schema must fail");
+            assert_contains!(err.to_string(), "schema");
+            assert_contains!(err.to_string(), "was dropped");
 
             catalog.expire().await;
         })
