@@ -46,24 +46,25 @@ pub struct CatchupConfig {
     pub bootstrap_args: BootstrapArgs,
 }
 
-/// Returns whether this deployment should boot in read-only mode.
+/// Returns the actual leader generation if this deployment should boot in
+/// read-only mode.
 pub async fn preflight_0dt(
     openable_adapter_storage: &mut dyn OpenableDurableCatalogState,
     deploy_generation: u64,
-) -> Result<bool, CatalogError> {
+) -> Result<Option<u64>, CatalogError> {
     if !openable_adapter_storage.is_initialized().await? {
         info!("catalog not initialized; booting with writes allowed");
-        return Ok(false);
+        return Ok(None);
     }
 
     let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
     info!(%catalog_generation, %deploy_generation, "catalog initialized");
     if catalog_generation < deploy_generation {
         info!("this deployment is a new generation; booting in read only mode");
-        Ok(true)
+        Ok(Some(catalog_generation))
     } else if catalog_generation == deploy_generation {
         info!("this deployment is the current generation; booting with writes allowed");
-        Ok(false)
+        Ok(None)
     } else {
         exit!(0, "this deployment has been fenced out");
     }
@@ -405,7 +406,7 @@ mod tests {
             boot_ts,
             environment_id,
             persist_client,
-            deploy_generation: 1,
+            deploy_generation: 7,
             deployment_state,
             catalog_metrics: metrics,
             caught_up_max_wait: Duration::from_secs(1),
@@ -429,8 +430,9 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn catchup_starts_after_bootstrap() {
         let (builder, config, handle) = setup().await;
-        let mut openable = builder.with_deploy_generation(1).unwrap_build().await;
-        assert!(preflight_0dt(openable.as_mut(), 1).await.unwrap());
+        let mut openable = builder.with_deploy_generation(7).unwrap_build().await;
+        // Generation numbers can skip. Compare against the actual catalog leader.
+        assert_eq!(preflight_0dt(openable.as_mut(), 7).await.unwrap(), Some(0));
         let (_trigger, receiver) = trigger::channel();
         let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
         let metrics = Arc::clone(&config.catalog_metrics);
@@ -476,7 +478,7 @@ mod tests {
     async fn caught_up_before_task_starts() {
         let (builder, mut config, handle) = setup().await;
         let mut catalog = builder
-            .with_deploy_generation(1)
+            .with_deploy_generation(7)
             .unwrap_build()
             .await
             .open_savepoint(config.boot_ts, &config.bootstrap_args)
@@ -506,7 +508,7 @@ mod tests {
             .await
             .unwrap();
         let mut catalog = builder
-            .with_deploy_generation(1)
+            .with_deploy_generation(7)
             .unwrap_build()
             .await
             .open_savepoint(config.boot_ts, &config.bootstrap_args)
