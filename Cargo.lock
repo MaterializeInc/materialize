@@ -4640,11 +4640,9 @@ dependencies = [
  "headers",
  "http 1.5.0",
  "hyper",
- "hyper-rustls",
  "hyper-util",
  "pin-project-lite",
  "tokio",
- "tokio-rustls",
  "tower-service",
 ]
 
@@ -5484,7 +5482,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-http-proxy",
- "hyper-rustls",
  "hyper-timeout",
  "hyper-util",
  "log",
@@ -6178,6 +6175,7 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-dyncfg",
+ "mz-dyncfg-launchdarkly",
  "mz-expr",
  "mz-kafka-util",
  "mz-license-keys",
@@ -7089,11 +7087,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "humantime",
+ "hyper-rustls",
  "launchdarkly-sdk-transport",
  "launchdarkly-server-sdk",
  "mz-build-info",
  "mz-dyncfg",
  "mz-ore",
+ "rustls",
  "tokio",
  "tracing",
 ]
