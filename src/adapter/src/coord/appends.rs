@@ -1376,15 +1376,22 @@ pub type BuiltinTableAppendNotify = Pin<Box<dyn Future<Output = ()> + Send + Syn
 
 /// Completion handle for a builtin-table append response barrier.
 pub struct BuiltinTableAppendCompletion {
-    notify: BuiltinTableAppendNotify,
+    notify: Option<BuiltinTableAppendNotify>,
 }
 
 impl BuiltinTableAppendCompletion {
     pub fn new(notify: BuiltinTableAppendNotify) -> Self {
-        Self { notify }
+        Self {
+            notify: Some(notify),
+        }
     }
 
-    pub fn into_notify(self) -> BuiltinTableAppendNotify {
+    /// No work remains, so callers need not schedule a response barrier.
+    pub fn completed() -> Self {
+        Self { notify: None }
+    }
+
+    pub fn into_notify(self) -> Option<BuiltinTableAppendNotify> {
         self.notify
     }
 }
