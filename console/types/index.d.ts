@@ -15,6 +15,9 @@ declare module "*.svg?react" {
   export default Icon;
 }
 
+// Stylesheet-only package, imported for its side effect.
+declare module "@fontsource/roboto-mono";
+
 declare module "*.png" {
   const src: string;
   export default src;
