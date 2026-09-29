@@ -75,7 +75,7 @@ pub const PUBLIC_ROLE_OID: Oid = Oid(0);
 /// A bit flag representing all the privileges that can be granted to a role.
 ///
 /// Modeled after:
-/// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
+/// <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101>
 ///
 /// The lower 32 bits are used for different privilege types.
 ///
