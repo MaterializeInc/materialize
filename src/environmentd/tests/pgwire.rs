@@ -1633,6 +1633,95 @@ fn test_prepared_indexed_bounded_staleness() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Keep a prepared handle across replacement of a referenced type.
+fn test_prepared_indexed_type_dependencies() {
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_type_rows (id int)",
+            "INSERT INTO prepared_type_rows VALUES (1), (2)",
+            "CREATE INDEX prepared_type_id ON prepared_type_rows (id)",
+            "CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = int)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let stmt = client
+            .prepare("SELECT ($2::text::prepared_list)[1] FROM prepared_type_rows WHERE id = $1")
+            .unwrap();
+        assert_eq!(stmt.params(), &[Type::INT4, Type::TEXT]);
+        let hits = || {
+            test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_prepared_query_events_total",
+                &[("event", "template_hit")],
+            )
+        };
+        let warm = |client: &mut postgres::Client| {
+            assert_eq!(
+                client
+                    .query_one(&stmt, &[&1_i32, &"{11,12}"])
+                    .unwrap()
+                    .get::<_, i32>(0),
+                11
+            );
+            let before = hits();
+            assert_eq!(
+                client
+                    .query_one(&stmt, &[&2_i32, &"{22,23}"])
+                    .unwrap()
+                    .get::<_, i32>(0),
+                22
+            );
+            assert_eq!(hits() - before, u64::from(reuse));
+            assert!(
+                client
+                    .query_one(&stmt, &[&1_i32, &"{NULL,1}"])
+                    .unwrap()
+                    .get::<_, Option<i32>>(0)
+                    .is_none()
+            );
+        };
+        warm(&mut client);
+        admin.batch_execute("DROP TYPE prepared_list").unwrap();
+        let before = hits();
+        let error = client
+            .query_one(&stmt, &[&1_i32, &"{11}"])
+            .unwrap_db_error();
+        assert!(error.message().contains("does not exist"), "{error}");
+        assert_eq!(
+            hits(),
+            before,
+            "a missing type must not execute the old template"
+        );
+
+        admin
+            .batch_execute("CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = int)")
+            .unwrap();
+        warm(&mut client);
+        admin.batch_execute("DROP TYPE prepared_list").unwrap();
+        admin
+            .batch_execute("CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = text)")
+            .unwrap();
+        let before = hits();
+        let error = client
+            .query_one(&stmt, &[&1_i32, &"{11}"])
+            .unwrap_db_error();
+        assert_eq!(error.message(), "cached plan must not change result type");
+        assert_eq!(hits(), before);
+
+        admin.batch_execute("DROP TYPE prepared_list").unwrap();
+        admin
+            .batch_execute("CREATE TYPE prepared_list AS LIST (ELEMENT TYPE = int)")
+            .unwrap();
+        warm(&mut client);
+    }
+}
+
+#[mz_ore::test]
 fn test_read_many_rows() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
