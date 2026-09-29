@@ -116,6 +116,9 @@ skip = [
     # tungstenite and turmoil. rand_core 0.9 is also used by imbl.
     { name = "rand", version = "0.9.4" },
     { name = "rand_core", version = "0.9.3" },
+    # Used by tokio-postgres (MaterializeInc/rust-postgres fork)
+    { name = "phf", version = "0.13.1" },
+    { name = "phf_shared", version = "0.13.1" },
     # Used by junit-report
     { name = "quick-xml", version = "0.31.0" },
     # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
