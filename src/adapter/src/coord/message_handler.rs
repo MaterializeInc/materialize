@@ -828,7 +828,8 @@ impl Coordinator {
         // committing to the catalog, so are guaranteed to see the connection's
         // most recent version.
         if plan_validity.check(self.catalog()).is_err() {
-            self.handle_execute_inner(original_stmt, params, ctx).await;
+            self.handle_execute_inner(original_stmt, None, params, ctx)
+                .await;
             return;
         }
 

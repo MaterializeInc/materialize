@@ -1682,13 +1682,15 @@ async fn execute_stmt<S: ResultSender>(
             .unwrap_or(0)
     ];
 
-    let desc = prep_stmt.desc().clone();
+    let desc = prep_stmt.shared_desc();
+    let query = prep_stmt.query();
     let logging = Arc::clone(prep_stmt.logging());
     let stmt_ast = prep_stmt.stmt().cloned();
     let state_revision = prep_stmt.state_revision;
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
+        query,
         stmt_ast,
         logging,
         params,
@@ -1702,7 +1704,7 @@ async fn execute_stmt<S: ResultSender>(
         .session()
         // We do not need to verify here because `client.execute` verifies below.
         .get_portal_unverified(EMPTY_PORTAL)
-        .map(|portal| portal.desc.clone())
+        .map(|portal| portal.desc.as_ref().clone())
         .expect("unnamed portal should be present");
 
     let res = client
