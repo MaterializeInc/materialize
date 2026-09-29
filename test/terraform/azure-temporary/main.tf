@@ -13,16 +13,16 @@ locals {
   materialize_instance_name      = "main"
 
   vnet_config = {
-    address_space                      = "20.0.0.0/16"
-    aks_subnet_cidr                    = "20.0.0.0/20"
-    postgres_subnet_cidr               = "20.0.16.0/24"
+    address_space                      = "10.0.0.0/16"
+    aks_subnet_cidr                    = "10.0.0.0/20"
+    postgres_subnet_cidr               = "10.0.16.0/24"
     enable_api_server_vnet_integration = true
-    api_server_subnet_cidr             = "20.0.32.0/27"
+    api_server_subnet_cidr             = "10.0.32.0/27"
   }
 
   aks_config = {
     kubernetes_version         = "1.34"
-    service_cidr               = "20.1.0.0/16"
+    service_cidr               = "10.1.0.0/16"
     enable_azure_monitor       = false
     log_analytics_workspace_id = null
   }
@@ -136,7 +136,7 @@ module "aks" {
   api_server_subnet_id               = module.networking.api_server_subnet_id
 
   # Default node pool with autoscaling (runs all workloads except Materialize)
-  default_node_pool_vm_size             = "Standard_D4pds_v6"
+  default_node_pool_vm_size             = "Standard_D4ps_v5"
   default_node_pool_enable_auto_scaling = true
   default_node_pool_min_count           = 2
   default_node_pool_max_count           = 5
