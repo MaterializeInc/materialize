@@ -50,9 +50,6 @@ skip = [
     # TODO: Required for Rust nightly upgrade
     { name = "http", version = "0.2.9" },
 
-    # TODO: Required for Rust nightly upgrade
-    { name = "http-body", version = "0.4.5" },
-
     # There are many external crates that rely on 0.10.5. Upgrading them should
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
@@ -61,20 +58,6 @@ skip = [
     { name = "toml_edit", version = "0.19.14" },
     { name = "toml_datetime", version = "0.6.11" },
     { name = "winnow", version = "0.5.4" },
-
-    # There are some crates in our dependency tree that have yet to upgrade to
-    # `hyper 1.*`. As of now these are:
-    #     * `aws-config`
-    #     * `aws-smithy-runtime`
-    #     * `eventsource-client`
-    #     * `launchdarkly-server-sdk`
-    # Until they upgrade we'll need to duplicate some related hyper deps.
-
-    { name = "hyper", version = "0.14.27" },
-
-    { name = "h2", version = "0.3.26" },
-
-    { name = "hyper-tls", version = "0.5.0" },
 
     { name = "memmap2", version = "0.5.4" },
 
@@ -100,8 +83,6 @@ skip = [
     { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # Held back by mysql_async `v0.36.1`
-    { name = "socket2", version = "0.5.10" },
     # kube-client and reqwest still pull 0.6.
     { name = "tower-http", version = "0.6.11" },
     # tokio-tungstenite still pulls 0.29.
@@ -348,13 +329,6 @@ ignore = [
     "RUSTSEC-2023-0071",
     # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
     "RUSTSEC-2026-0253",
-    # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our
-    # `h2 0.4` is patched, but `h2 0.3` is also in the tree via `hyper 0.14`,
-    # which `mz-aws-util` keeps to override the DNS resolver of the AWS SDK
-    # (`aws-smithy-runtime/connector-hyper-0-14-x`). The `h2 0.3` line has no
-    # patched release, so this cannot be resolved by a version bump. That
-    # client only talks to AWS endpoints, and the advisory is low severity.
-    "RUSTSEC-2026-0258",
 ]
 
 # Must be manually kept in sync with about.toml.
