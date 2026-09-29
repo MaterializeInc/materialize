@@ -3224,30 +3224,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@lezer/common@npm:^1.0.0, @lezer/common@npm:^1.1.0, @lezer/common@npm:^1.2.0":
-  version: 1.2.3
-  resolution: "@lezer/common@npm:1.2.3"
-  checksum: 10c0/fe9f8e111080ef94037a34ca2af1221c8d01c1763ba5ecf708a286185c76119509a5d19d924c8842172716716ddce22d7834394670c4a9432f0ba9f3b7c0f50d
-  languageName: node
-  linkType: hard
-
-"@lezer/common@npm:^1.3.0, @lezer/common@npm:^1.5.0, @lezer/common@npm:^1.5.3":
+"@lezer/common@npm:^1.0.0, @lezer/common@npm:^1.1.0, @lezer/common@npm:^1.2.0, @lezer/common@npm:^1.3.0, @lezer/common@npm:^1.5.0, @lezer/common@npm:^1.5.3":
   version: 1.5.3
   resolution: "@lezer/common@npm:1.5.3"
   checksum: 10c0/f06d64cd72ad95295f6bc65187188081e61fb655c48923c9c283b514e3183450003795a1c0b58dc0844da5075c748068d879f90d7eaedeea48c99d73f9b6e214
   languageName: node
   linkType: hard
 
-"@lezer/highlight@npm:^1.0.0":
-  version: 1.1.6
-  resolution: "@lezer/highlight@npm:1.1.6"
-  dependencies:
-    "@lezer/common": "npm:^1.0.0"
-  checksum: 10c0/a67a727b83ee03774e696f06fb0e966de9c743be76b4281830b187b2d3e160fd356d4bb4519fd21af7e094d0a827761587a46e105be461883aac8531b665b816
-  languageName: node
-  linkType: hard
-
-"@lezer/highlight@npm:^1.2.4":
+"@lezer/highlight@npm:^1.0.0, @lezer/highlight@npm:^1.2.4":
   version: 1.2.4
   resolution: "@lezer/highlight@npm:1.2.4"
   dependencies:
@@ -15544,14 +15528,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"style-mod@npm:^4.0.0, style-mod@npm:^4.1.0":
-  version: 4.1.2
-  resolution: "style-mod@npm:4.1.2"
-  checksum: 10c0/ad4d870b3642b0e42ecc7be0e106dd14b7af11985e34fee8de34e5e38c3214bfc96fa7055acea86d75a3a59ddea3f6a8c6641001a66494d7df72d09685e3fadb
-  languageName: node
-  linkType: hard
-
-"style-mod@npm:^4.1.4":
+"style-mod@npm:^4.0.0, style-mod@npm:^4.1.0, style-mod@npm:^4.1.4":
   version: 4.1.4
   resolution: "style-mod@npm:4.1.4"
   checksum: 10c0/e588c4f10b6c226482ac6d508f074af645cc1f22e6573f8d8bdc0a98412b4c6ea474ecd88625d966c7f1a929ae861d3db0d7b2f8fa5b4652ef2e877211c4391d
