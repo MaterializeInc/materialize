@@ -2274,6 +2274,10 @@ metrics:
   - worker_id
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_persist_per_shard_metrics_regex_invalid
+  help: count of metrics scrapes that found persist_per_shard_metrics_enable_regex invalid and so kept no per-shard series
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds_bucket
   help: histogram of (approximate) latency between sending a diff and applying it
   labels:
