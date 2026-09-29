@@ -290,13 +290,11 @@ SELECT id FROM mz_catalog.mz_materialized_views WHERE name = 'arr_mv'
     AND labels -> 'id' = '${arr-mv-id}'
 true
 
-# Dataflows exporting only transient ids (the replica's introspection subscribes, the
-# metric sinks themselves) are not counted: counting its own arrangements would feed the
-# sink's output back into its input on every logging tick. These run on every replica, so
-# this would find them if they leaked into any series.
+# Every series is attributable. The sink used to fold dataflows with no catalog export
+# into an `unattributable` bucket, which is what put its own arrangements on its input.
 > SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name LIKE 'mz_metric_sink_curated_arrangement_%'
-    AND labels -> 'id' = 'unattributable'
+    AND labels -> 'id' NOT IN (SELECT export_id FROM mz_introspection.mz_compute_exports)
 0
 
 # No series carries a transient id. Those are re-minted on every re-render, so labelling
@@ -318,7 +316,7 @@ true
        JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
        JOIN (SELECT dataflow_id, min(export_id) AS export_id
                FROM mz_introspection.mz_compute_exports
-               WHERE export_id NOT LIKE 't%' GROUP BY dataflow_id) ex
+               WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%' GROUP BY dataflow_id) ex
          ON ex.dataflow_id = dod.dataflow_id)
 true
 
@@ -376,6 +374,55 @@ true
 > DROP TABLE arr_t
 
 > DROP TABLE err_t
+
+#
+# `INTROSPECTION DEBUGGING` registers the loggers before the logging dataflow is built, so
+# that dataflow's own operators get log rows, where a default replica's have none. Its
+# exports are introspection source indexes (`si<N>`), which are not transient, so only the
+# sink's `si%` filter keeps their arrangements out of the feedback loop.
+#
+> CREATE CLUSTER dbg_c (SIZE '${arg.default-replica-size}', INTROSPECTION DEBUGGING = true)
+
+> SET cluster = dbg_c
+
+> CREATE TABLE dbg_t (x int)
+
+> INSERT INTO dbg_t VALUES (0), (1), (2)
+
+> CREATE INDEX dbg_ix IN CLUSTER dbg_c ON dbg_t (x)
+
+# Proves the sink publishes here at all, so the zero below is the filter and not silence.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+# Both dataflows the sink must not measure are visible on this replica. The logging one is
+# visible only because debugging is on, so this also proves the option took effect, and a
+# rename of either turns the next assertion red instead of silently vacuous.
+> SELECT
+    (SELECT count(*) FROM mz_introspection.mz_dataflows
+       WHERE name = 'Dataflow: logging') > 0
+    AND
+    (SELECT count(*) FROM mz_introspection.mz_dataflows
+       WHERE name LIKE 'Dataflow: metric-sink-%') > 0
+true
+
+# Neither contributes a series. Keyed on the dataflow name, not on the `t%`/`si%` prefixes
+# the sink filters on, so a filter that stops covering one of them fails here rather than
+# passing a check written from the same rule.
+> SELECT count(*)
+  FROM mz_introspection.mz_cluster_prometheus_metrics m
+  JOIN mz_introspection.mz_compute_exports e ON e.export_id = m.labels -> 'id'
+  JOIN mz_introspection.mz_dataflows d ON d.id = e.dataflow_id
+  WHERE m.metric_name LIKE 'mz_metric_sink_curated_arrangement_%'
+    AND (d.name = 'Dataflow: logging' OR d.name LIKE 'Dataflow: metric-sink-%')
+0
+
+> RESET cluster
+
+> DROP CLUSTER dbg_c CASCADE
+
+> DROP TABLE dbg_t CASCADE
 
 # Replica churn drives the coordinator's curated metric-sink install and
 # teardown (`install_metric_sinks` / `drop_metric_sinks`): the curated sinks
@@ -492,7 +539,7 @@ true
        JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
        JOIN (SELECT dataflow_id, min(export_id) AS export_id
                FROM mz_introspection.mz_compute_exports
-               WHERE export_id NOT LIKE 't%' GROUP BY dataflow_id) ex
+               WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%' GROUP BY dataflow_id) ex
          ON ex.dataflow_id = dod.dataflow_id)
 true
 

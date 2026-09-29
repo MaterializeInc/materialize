@@ -109,18 +109,23 @@ const CURATED: &[CuratedMetricSink] = &[
         // from rendering the 8-level hierarchy, which would otherwise show up as tuning advice for
         // the sink's own dataflow in `mz_expected_group_size_advice`.
         //
-        // NOTE: only dataflows with a non-transient export are counted, and the join against `oe`
-        // drops every other operator before any arrangement this sink owns. Counting this sink's
-        // own arrangements, or those of the logging dataflows that index the raw logs, is a
-        // feedback loop: each change to the sink's arrangements changes their logged size, which
-        // the sink reads on the next logging tick, so the whole dataflow re-runs every tick for
-        // the replica's lifetime (SQL-730). For the same reason each raw log is joined through its
-        // own index: a union of the logs would be arranged, with the sink's rows in it.
+        // NOTE: counting an arrangement this sink reads is a feedback loop. Every change to it
+        // changes its logged size, the sink reads that on the next logging tick, and the dataflow
+        // re-runs every tick for the replica's lifetime (SQL-730). `NOT LIKE 't%'` keeps out the
+        // sink's own dataflow and the replica's introspection subscribes. `NOT LIKE 'si%'` keeps
+        // out the logging dataflow: `si<N>` names only the introspection source indexes it
+        // exports, and a plain system index prints `s<N>`. Only that filter excludes it under
+        // `INTROSPECTION DEBUGGING`, which registers the loggers before the logging dataflow is
+        // built, so its own operators get log rows. The cost is that transient dataflows'
+        // arrangements go unreported, so these families sum below what the replica holds.
+        //
+        // `f` joins each raw log separately to reuse its `(operator_id, worker_id)` index
+        // (`LogVariant::index_by`). One union would arrange all three logs' rows afresh.
         source_sql: "
 WITH ex AS (
     SELECT dataflow_id, min(export_id) AS export_id
     FROM mz_introspection.mz_compute_exports
-    WHERE export_id NOT LIKE 't%'
+    WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%'
     GROUP BY dataflow_id OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
 ),
 oe AS (
@@ -147,7 +152,7 @@ SELECT metric_name, 'gauge'::text AS metric_type,
        CASE metric_name
            WHEN 'arrangement_size_bytes' THEN 'arrangement heap size in bytes'
            WHEN 'arrangement_records' THEN 'number of records in arrangement heaps'
-           ELSE 'number of batches in arrangements'
+           WHEN 'arrangement_batches' THEN 'number of batches in arrangements'
        END AS help
 FROM f
 GROUP BY metric_name, export_id",
