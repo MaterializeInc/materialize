@@ -111,6 +111,7 @@ On promotion, the new generation restarts, no longer in read-only mode:
 
 ### More Writers
 TODO
+
 These other components write to Persist but are not drivers of its design:
 - Sinks: only record progress
 - Builtin tables during 0dt upgrade: because the new generation can't modify `txn-wal`. (doc says it's a temporary hack?)
@@ -121,13 +122,32 @@ These other components write to Persist but are not drivers of its design:
 - Expression cache
 - Builtin schema migration shard
 - Dropped-shard cleanup
+
 ## Readers
 TODO
+
+_Claude says: leased vs. critical readers, since holds, heartbeats, and what happens when a reader loses its lease._
+
 ### Reading a Snapshot
 - Get all _batches_ for the shard, up to the _time_ we want to read.
 - In parallel, read all the _parts_ for all the _runs_ in those batches.
+
 TODO
+
 ### Interlude on Future Work: Consolidate on Read
 TODO
+
 ## Consensus
 TODO
+
+_Claude says: Shard state is stored as a log of diffs plus periodic rollups, updated by compare-and-set. Every operation on a shard (appends, heartbeats, compaction, GC) goes through that one compare-and-set, per PER-38._
+
+## Compaction
+TODO
+
+_Claude says: writers trigger it after writing. Include physical vs. logical compaction, incremental compaction, and how one slow reader holds back compaction for everyone (PER-42)._
+
+## Garbage Collection
+TODO
+
+_Claude says: state GC and blob GC. GC is turned off in cloud, and dropped shards leave orphaned blobs (about 200 TB at one customer)._
