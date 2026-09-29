@@ -337,6 +337,92 @@ fn test_statement_logging_immediate() {
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
+fn test_statement_logging_prepared_indexed_reuse() {
+    for reuse in [false, true] {
+        let harness = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string());
+        let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
+        for sql in [
+            "CREATE TABLE prepared_logging (id int, value int)",
+            "INSERT INTO prepared_logging VALUES (1, 11), (2, 22)",
+            "CREATE INDEX prepared_logging_id ON prepared_logging (id)",
+        ] {
+            client.batch_execute(sql).unwrap();
+        }
+        let sql = "SELECT value / $2 FROM prepared_logging WHERE id = $1";
+        let stmt = client.prepare(sql).unwrap();
+        let generic_count = || -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_prepared_query_events_total")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|label| label.name() == "event" && label.value() == "generic_execute")
+                })
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum()
+        };
+        let before = generic_count();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&1_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&2_i32, &1_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            22
+        );
+        let error = client.query_one(&stmt, &[&1_i32, &0_i32]).unwrap_err();
+        assert_eq!(
+            error.as_db_error().unwrap().code(),
+            &SqlState::DIVISION_BY_ZERO
+        );
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&2_i32, &2_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        assert_eq!(generic_count() - before, if reuse { 4 } else { 0 });
+        client.batch_execute("DEALLOCATE ALL").unwrap();
+
+        let mut observer = server.connect_internal(postgres::NoTls).unwrap();
+        Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
+            let row = observer.query_one(
+                "SELECT count(*), count(DISTINCT e.id), count(DISTINCT p.id),
+                        count(*) FILTER (WHERE e.finished_status = 'success'),
+                        count(*) FILTER (WHERE e.finished_status = 'error'
+                          AND e.error_message LIKE '%division by zero%'),
+                        count(*) FILTER (WHERE e.finished_at IS NOT NULL)
+                 FROM mz_internal.mz_statement_execution_history e
+                 JOIN mz_internal.mz_prepared_statement_history p ON e.prepared_statement_id = p.id
+                 JOIN (SELECT DISTINCT sql_hash, sql FROM mz_internal.mz_sql_text) s ON p.sql_hash = s.sql_hash
+                 WHERE s.sql = $1",
+                &[&sql],
+            ).unwrap();
+            let actual: Vec<i64> = (0..6).map(|column| row.get(column)).collect();
+            if actual == [4, 4, 1, 3, 1, 4] {
+                Ok(())
+            } else {
+                Err(actual)
+            }
+        }).expect("each prepared execution must have its own completed log record");
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_basic() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     client.execute("SELECT 1", &[]).unwrap();
