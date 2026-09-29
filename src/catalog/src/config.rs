@@ -292,7 +292,7 @@ impl ReplicaCatalogConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BuiltinItemMigrationConfig {
     pub persist_client: PersistClient,
     pub read_only: bool,

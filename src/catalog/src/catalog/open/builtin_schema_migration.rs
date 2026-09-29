@@ -600,18 +600,90 @@ pub(super) async fn run(
     txn: &mut Transaction<'_>,
     config: BuiltinItemMigrationConfig,
 ) -> Result<MigrationResult, Error> {
+    let prepared = prepare(build_info, deploy_generation, txn, config).await?;
+    let replaced_items = prepared.apply(txn);
+    Ok(MigrationResult {
+        replaced_items,
+        cleanup_action: prepared.into_cleanup(),
+    })
+}
+
+/// Persist migration work that can be staged again after catalog contention.
+/// Reuse requires unchanged migration inputs. Cleanup is valid only after commit.
+pub(super) struct PreparedMigration {
+    inputs: MigrationInputs,
+    result: MigrationRunResult,
+}
+
+#[derive(PartialEq, Eq)]
+struct MigrationInputs {
+    version: Option<Version>,
+    migration_shard: Option<ShardId>,
+    objects: BTreeMap<SystemObjectDescription, (SystemObjectUniqueIdentifier, Option<ShardId>)>,
+}
+
+impl MigrationInputs {
+    fn capture(txn: &Transaction<'_>) -> Self {
+        let metadata = txn.get_collection_metadata();
+        Self {
+            version: get_migration_version(txn),
+            migration_shard: txn.get_builtin_migration_shard(),
+            objects: txn
+                .get_system_object_mappings()
+                .map(|mapping| {
+                    let shard = metadata.get(&mapping.unique_identifier.global_id).copied();
+                    (mapping.description, (mapping.unique_identifier, shard))
+                })
+                .collect(),
+        }
+    }
+}
+
+impl PreparedMigration {
+    pub(super) fn matches(&self, txn: &Transaction<'_>) -> bool {
+        self.inputs == MigrationInputs::capture(txn)
+    }
+
+    pub(super) fn apply(&self, txn: &mut Transaction<'_>) -> BTreeSet<CatalogItemId> {
+        assert!(self.matches(txn), "migration inputs changed before staging");
+        self.result.apply(txn);
+        txn.get_system_object_mappings()
+            .map(|mapping| mapping.unique_identifier)
+            .filter(|ids| self.result.new_shards.contains_key(&ids.global_id))
+            .map(|ids| ids.catalog_id)
+            .collect()
+    }
+
+    pub(super) fn into_cleanup(self) -> BoxFuture<'static, ()> {
+        self.result.cleanup_action
+    }
+}
+
+pub(super) async fn prepare(
+    build_info: &BuildInfo,
+    deploy_generation: u64,
+    txn: &Transaction<'_>,
+    config: BuiltinItemMigrationConfig,
+) -> Result<PreparedMigration, Error> {
     // Sanity check to ensure we're not touching durable state in read-only mode.
     assert_eq!(config.read_only, txn.is_savepoint());
+    let inputs = MigrationInputs::capture(txn);
 
     // Tests may provide a dummy build info that confuses the migration step selection logic. Skip
     // migrations if we observe this build info.
     if *build_info == DUMMY_BUILD_INFO {
-        return Ok(MigrationResult::default());
+        return Ok(PreparedMigration {
+            inputs,
+            result: MigrationRunResult::default(),
+        });
     }
 
     let Some(durable_version) = get_migration_version(txn) else {
         // New catalog; nothing to do.
-        return Ok(MigrationResult::default());
+        return Ok(PreparedMigration {
+            inputs,
+            result: MigrationRunResult::default(),
+        });
     };
     let build_version = build_info.semver_version();
 
@@ -654,19 +726,7 @@ pub(super) async fn run(
         })
     })?;
 
-    result.apply(txn);
-
-    let replaced_items = txn
-        .get_system_object_mappings()
-        .map(|m| m.unique_identifier)
-        .filter(|ids| result.new_shards.contains_key(&ids.global_id))
-        .map(|ids| ids.catalog_id)
-        .collect();
-
-    Ok(MigrationResult {
-        replaced_items,
-        cleanup_action: result.cleanup_action,
-    })
+    Ok(PreparedMigration { inputs, result })
 }
 
 /// Result produced by `Migration::run`.

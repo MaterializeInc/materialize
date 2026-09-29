@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Turmoil-based tests for builtin schema migrations.
+//! Boundary and turmoil-based tests for builtin schema migrations.
 
 #![allow(clippy::unwrap_used)]
 
@@ -26,6 +26,185 @@ use semver::Version;
 use tracing::info;
 
 use super::*;
+
+/// Persist work belongs to the migration inputs, not the catalog transaction that
+/// happened to prepare it. Only the successful catalog commit permits cleanup.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn prepared_migration_reuse_requires_unchanged_inputs() {
+    use crate::catalog::migrate::set_migration_version;
+    use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+
+    let mut source_version = latest_migration_version();
+    source_version.patch += 1;
+    source_version.pre = semver::Prerelease::new("dev.0").unwrap();
+    let mut target_version = source_version.clone();
+    target_version.patch += 1;
+    let build_info = BuildInfo {
+        version: leak(target_version.to_string()).as_str(),
+        ..DUMMY_BUILD_INFO
+    };
+    let mut cache = PersistClientCache::new_no_metrics();
+    cache.cfg.build_version = target_version.clone();
+    let persist = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+    let mut storage = TestCatalogStateBuilder::new(persist.clone())
+        .with_version(target_version.clone())
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let object = SystemObjectDescription {
+        schema_name: MZ_INTERNAL_SCHEMA.into(),
+        object_type: CatalogItemType::Table,
+        object_name: "mz_type_pg_metadata".into(),
+    };
+    let (_, builtin) = BUILTIN_LOOKUP.get(&object).unwrap();
+    // A different real relation descriptor requires replacement, rather than an
+    // empty preparation or the DUMMY_BUILD_INFO migration bypass.
+    let old_fingerprint = evolve_builtin_desc(builtin).fingerprint();
+    let descriptions: BTreeSet<_> = MIGRATIONS
+        .iter()
+        .map(|step| step.object.clone())
+        .chain(std::iter::once(object.clone()))
+        .collect();
+    let mappings: Vec<_> = descriptions
+        .into_iter()
+        .enumerate()
+        .map(|(index, description)| SystemObjectMapping {
+            unique_identifier: SystemObjectUniqueIdentifier {
+                catalog_id: CatalogItemId::System(mz_ore::cast::usize_to_u64(index) + 1),
+                global_id: GlobalId::System(mz_ore::cast::usize_to_u64(index) + 1),
+                fingerprint: if description == object {
+                    old_fingerprint.clone()
+                } else {
+                    BUILTIN_LOOKUP[&description].1.fingerprint()
+                },
+            },
+            description,
+        })
+        .collect();
+    let mapping = mappings
+        .iter()
+        .find(|m| m.description == object)
+        .unwrap()
+        .clone();
+    let ids = &mapping.unique_identifier;
+    let old_shard = ShardId::new();
+    storage.sync_to_current_updates().await.unwrap();
+    let mut txn = storage.transaction().await.unwrap();
+    txn.set_system_object_mappings(mappings).unwrap();
+    txn.insert_collection_metadata(BTreeMap::from([(ids.global_id, old_shard)]))
+        .unwrap();
+    txn.set_builtin_migration_shard(ShardId::new()).unwrap();
+    set_migration_version(&mut txn, source_version.clone()).unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+
+    let txn = storage.transaction().await.unwrap();
+    let prepared = prepare(
+        &build_info,
+        1,
+        &txn,
+        BuiltinItemMigrationConfig {
+            persist_client: persist,
+            read_only: false,
+            force_migration: Some("replacement".into()),
+        },
+    )
+    .await
+    .unwrap();
+    drop(txn);
+
+    let mut txn = storage.transaction().await.unwrap();
+    txn.set_config("unrelated_publication".into(), Some(1))
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+
+    // Each candidate changes just one captured input. Dropping it leaves the
+    // durable source intact for the next candidate and for the eventual commit.
+    for changed in [
+        "version",
+        "catalog_id",
+        "global_id",
+        "fingerprint",
+        "collection_shard",
+        "migration_shard",
+    ] {
+        let mut txn = storage.transaction().await.unwrap();
+        assert!(prepared.matches(&txn));
+        let mut changed_mapping = mapping.clone();
+        match changed {
+            "version" => set_migration_version(&mut txn, target_version.clone()).unwrap(),
+            "catalog_id" | "global_id" | "fingerprint" => {
+                match changed {
+                    "catalog_id" => {
+                        changed_mapping.unique_identifier.catalog_id =
+                            CatalogItemId::System(u64::MAX)
+                    }
+                    "global_id" => {
+                        changed_mapping.unique_identifier.global_id = GlobalId::System(u64::MAX)
+                    }
+                    "fingerprint" => {
+                        changed_mapping.unique_identifier.fingerprint = builtin.fingerprint()
+                    }
+                    _ => unreachable!(),
+                }
+                txn.set_system_object_mappings(vec![changed_mapping])
+                    .unwrap();
+            }
+            "collection_shard" => {
+                txn.delete_collection_metadata(BTreeSet::from([ids.global_id]));
+                txn.insert_collection_metadata(BTreeMap::from([(ids.global_id, ShardId::new())]))
+                    .unwrap();
+            }
+            "migration_shard" => txn.set_builtin_migration_shard(ShardId::new()).unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !prepared.matches(&txn),
+            "reused preparation after changing {changed}"
+        );
+    }
+
+    let mut txn = storage.transaction().await.unwrap();
+    assert_eq!(prepared.apply(&mut txn), BTreeSet::from([ids.catalog_id]));
+    let new_shard = txn.get_collection_metadata()[&ids.global_id];
+    assert_ne!(
+        new_shard, old_shard,
+        "preparation must actually replace a shard"
+    );
+    drop(txn);
+
+    let mut txn = storage.transaction().await.unwrap();
+    assert_eq!(txn.get_collection_metadata()[&ids.global_id], old_shard);
+    assert_eq!(prepared.apply(&mut txn), BTreeSet::from([ids.catalog_id]));
+    assert_eq!(txn.get_collection_metadata()[&ids.global_id], new_shard);
+    set_migration_version(&mut txn, target_version.clone()).unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    prepared.into_cleanup().await;
+
+    let txn = storage.transaction().await.unwrap();
+    assert_eq!(txn.get_config("unrelated_publication".into()), Some(1));
+    assert_eq!(get_migration_version(&txn), Some(target_version));
+    assert_eq!(txn.get_collection_metadata()[&ids.global_id], new_shard);
+    assert!(txn.get_unfinalized_shards().contains(&old_shard));
+    assert_eq!(
+        txn.get_system_object_mappings()
+            .find(|m| m.description == object)
+            .unwrap()
+            .unique_identifier
+            .fingerprint,
+        builtin.fingerprint(),
+    );
+}
 
 #[mz_ore::test]
 fn hydration_history_forced_migration_policy() {

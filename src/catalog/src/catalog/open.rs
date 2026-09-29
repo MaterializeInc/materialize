@@ -248,6 +248,9 @@ impl Catalog {
         let boot_ts = config.boot_ts;
         let mut updates = Vec::new();
         let mut reconciled = None;
+        let mut prepared_migration: Option<builtin_schema_migration::PreparedMigration> = None;
+        let mut migrated_storage_collections_0dt = BTreeSet::new();
+        let mut last_seen_version_override = None;
         loop {
             updates.extend(storage.sync_to_current_updates().await?);
             fail::fail_point!(&format!(
@@ -305,47 +308,110 @@ impl Catalog {
                     }),
                 ));
             }
-            let separate_replay = writable
+            let mut separate_replay = writable
                 && txn.get_config("catalog_read_protection_enabled".into()) == Some(1)
-                && get_migration_version(&txn) == Some(config.build_info.semver_version())
                 && config
                     .builtin_item_migration_config
                     .force_migration
                     .is_none();
             if separate_replay && reconciled.is_none() {
-                // Keep durable reconciliation's CAS window independent of SQL
-                // parsing and optimization while replicas publish metadata.
+                // Retry durable reconciliation without repeating SQL planning or
+                // unchanged Persist migration work while replicas publish metadata.
                 let collections = reconcile_bootstrap_state(&config, &mut txn)?;
-                // Retired-index bounds can add retractions to the replay input.
-                txn.finalize_index_compaction_bounds();
-                let mut own_updates = txn.get_and_commit_op_updates();
-                fail::fail_point!(&format!(
-                    "catalog_initialize_before_commit_{}",
-                    config.environment_id.organization_id()
-                ));
-                match txn.commit_with_upper(boot_ts).await {
-                    Ok(upper) => {
-                        for update in &mut own_updates {
-                            update.ts = upper
-                                .step_back()
-                                .expect("committed upper has a predecessor");
+                let last_seen_version = get_migration_version(&txn);
+                let upgrading = last_seen_version != Some(config.build_info.semver_version());
+                let mut system_config = seed_system_vars(&config)?;
+                for parameter in txn.get_system_configurations() {
+                    match system_config.set(&parameter.name, VarInput::Flat(&parameter.value)) {
+                        Ok(_) | Err(VarError::UnknownParameter(_)) => (),
+                        Err(error) => return Err(Error::from(error).into()),
+                    }
+                }
+                if upgrading
+                    && !config.skip_migrations
+                    && migrate::requires_post_planning_migration(&system_config)
+                {
+                    // These rewrites need the planned catalog. Keep their marker
+                    // and all migration changes in the same transaction.
+                    separate_replay = false;
+                    reconciled = Some(collections);
+                } else {
+                    let replaced_items = if get_migration_version(&txn)
+                        != Some(config.build_info.semver_version())
+                    {
+                        if !config.skip_migrations {
+                            migrate::migrate_ast_items(&mut txn).map_err(|error| {
+                                Error::new(ErrorKind::FailedCatalogMigration {
+                                    last_seen_version: get_migration_version(&txn).map_or_else(
+                                        || "new".into(),
+                                        |version| version.to_string(),
+                                    ),
+                                    this_version: config.build_info.version,
+                                    cause: error.to_string(),
+                                })
+                            })?;
                         }
-                        updates.extend(own_updates);
-                        reconciled = Some(collections);
-                        continue;
+                        if prepared_migration
+                            .as_ref()
+                            .is_none_or(|migration| !migration.matches(&txn))
+                        {
+                            prepared_migration = Some(
+                                builtin_schema_migration::prepare(
+                                    config.build_info,
+                                    deploy_generation,
+                                    &txn,
+                                    config.builtin_item_migration_config.clone(),
+                                )
+                                .await?,
+                            );
+                        }
+                        let replaced_items = prepared_migration
+                            .as_ref()
+                            .expect("prepared migration")
+                            .apply(&mut txn);
+                        set_migration_version(&mut txn, config.build_info.semver_version())?;
+                        replaced_items
+                    } else {
+                        prepared_migration = None;
+                        BTreeSet::new()
+                    };
+                    // Retired-index bounds can add retractions to the replay input.
+                    txn.finalize_index_compaction_bounds();
+                    let mut own_updates = txn.get_and_commit_op_updates();
+                    fail::fail_point!(&format!(
+                        "catalog_initialize_before_commit_{}",
+                        config.environment_id.organization_id()
+                    ));
+                    match txn.commit_with_upper(boot_ts).await {
+                        Ok(upper) => {
+                            for update in &mut own_updates {
+                                update.ts = upper
+                                    .step_back()
+                                    .expect("committed upper has a predecessor");
+                            }
+                            updates.extend(own_updates);
+                            // Cleanup may release migration protection only after its
+                            // replacement/finalization records have committed.
+                            if let Some(migration) = prepared_migration.take() {
+                                migration.into_cleanup().await;
+                            }
+                            migrated_storage_collections_0dt = replaced_items;
+                            last_seen_version_override = Some(last_seen_version);
+                            reconciled = Some(collections);
+                            continue;
+                        }
+                        Err(
+                            error @ crate::durable::CatalogError::Durable(
+                                crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                            ),
+                        ) => {
+                            info!(%error, "retrying bootstrap catalog reconciliation");
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
                     }
-                    Err(
-                        error @ crate::durable::CatalogError::Durable(
-                            crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
-                        ),
-                    ) => {
-                        info!(%error, "retrying bootstrap catalog reconciliation");
-                        continue;
-                    }
-                    Err(error) => return Err(error.into()),
                 }
             }
-
             let reconciled = match reconciled {
                 Some(collections) => collections,
                 None => reconcile_bootstrap_state(&config, &mut txn)?,
@@ -358,7 +424,7 @@ impl Catalog {
                 "catalog_initialize_before_replay_{}",
                 config.environment_id.organization_id()
             ));
-            let (result, cleanup) = Self::initialize_state_from_updates(
+            let (mut result, cleanup) = Self::initialize_state_from_updates(
                 config,
                 updates,
                 &mut txn,
@@ -369,11 +435,17 @@ impl Catalog {
                 .as_ref()
                 .is_none_or(|before| txn.current_snapshot() != *before)
             {
-                // Birth, upgrade and state-changing migrations retain their
-                // atomic write. Same-version replay leaves peer updates queued.
+                // Caller-owned migrations and post-planning rewrites retain their
+                // atomic write. Read-only replay leaves peer updates queued.
                 upper = txn.commit_with_upper(boot_ts).await?;
             }
             cleanup.await;
+            result
+                .migrated_storage_collections_0dt
+                .extend(migrated_storage_collections_0dt);
+            if let Some(version) = last_seen_version_override {
+                result.last_seen_version = version;
+            }
             // Reconstruction may have left newer peer updates queued. Only the
             // captured transaction prefix (or our successful commit) is applied.
             let position = (!is_savepoint).then_some(CatalogPosition {
@@ -412,10 +484,7 @@ impl Catalog {
         let deploy_generation = bootstrap.as_ref().map(|(generation, _)| *generation);
         let reconciled_collections = bootstrap.map(|(_, collections)| collections);
 
-        let mut system_configuration = SystemVars::new().set_unsafe(config.unsafe_mode);
-        if config.all_features {
-            system_configuration.enable_all_feature_flags_by_default();
-        }
+        let system_configuration = seed_system_vars(&config)?;
 
         let mut state = CatalogState {
             database_by_name: imbl::OrdMap::new(),
@@ -520,23 +589,6 @@ impl Catalog {
         updates.extend(op_updates);
 
         let mut builtin_table_updates = Vec::new();
-
-        // Seed the in-memory catalog with values that don't come from the durable catalog.
-        {
-            // Set defaults from configuration passed in the provided `system_parameter_defaults`
-            // map.
-            for (name, value) in config.system_parameter_defaults {
-                match state.set_system_configuration_default(&name, VarInput::Flat(&value)) {
-                    Ok(_) => (),
-                    Err(Error {
-                        kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                    }) => {
-                        warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
-                    }
-                    Err(e) => return Err(e.into()),
-                };
-            }
-        }
 
         // Make life easier by consolidating all updates, so that we end up with only positive
         // diffs.
@@ -1127,15 +1179,21 @@ impl Catalog {
     }
 }
 
-impl CatalogState {
-    /// Set the default value for `name`, which is the value it will be reset to.
-    fn set_system_configuration_default(
-        &mut self,
-        name: &str,
-        value: VarInput,
-    ) -> Result<(), Error> {
-        Ok(Arc::make_mut(&mut self.system_configuration).set_default(name, value)?)
+fn seed_system_vars(config: &StateConfig) -> Result<SystemVars, Error> {
+    let mut vars = SystemVars::new().set_unsafe(config.unsafe_mode);
+    if config.all_features {
+        vars.enable_all_feature_flags_by_default();
     }
+    for (name, value) in &config.system_parameter_defaults {
+        match vars.set_default(name, VarInput::Flat(value)) {
+            Ok(()) => (),
+            Err(VarError::UnknownParameter(name)) => {
+                warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(vars)
 }
 
 /// Prepares bootstrap's durable identity and builtin reconciliation without

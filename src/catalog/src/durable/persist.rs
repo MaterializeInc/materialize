@@ -1428,6 +1428,7 @@ impl UnopenedPersistCatalogState {
         let promoted;
         let protected;
         let cleanup_owners;
+        let deferred_admission_updates;
         // Admit this generation with a compare-and-append.
         loop {
             self.sync_to_current_upper().await?;
@@ -1499,6 +1500,14 @@ impl UnopenedPersistCatalogState {
             );
             let promoting = prewarming_plan_build.is_none()
                 && durable_generation.is_some_and(|generation| generation < admitted_generation);
+            let defer_admission = matches!(self.mode, Mode::Writable)
+                && !protection_enabled
+                && self
+                    .update_applier
+                    .configs
+                    .get(USER_VERSION_KEY)
+                    .is_some_and(|version| *version < crate::durable::upgrade::CATALOG_VERSION);
+            let mut admission_updates = Vec::new();
             let admission = if matches!(self.mode, Mode::Writable) {
                 let previous = self.update_applier.deployment_admission.as_ref();
                 let mut admission = match previous {
@@ -1521,12 +1530,12 @@ impl UnopenedPersistCatalogState {
                 )?;
                 if previous != Some(&admission) {
                     if let Some(previous) = previous {
-                        fence_updates.push((
+                        admission_updates.push((
                             StateUpdateKind::DeploymentAdmission(previous.clone()),
                             Diff::MINUS_ONE,
                         ));
                     }
-                    fence_updates.push((
+                    admission_updates.push((
                         StateUpdateKind::DeploymentAdmission(admission.clone()),
                         Diff::ONE,
                     ));
@@ -1535,6 +1544,9 @@ impl UnopenedPersistCatalogState {
             } else {
                 None
             };
+            if !defer_admission {
+                fence_updates.append(&mut admission_updates);
+            }
             // Recollect on every CAS attempt. Only the successful attempt's
             // snapshot grants cleanup authority, not subsequent publications.
             let owners = if protection_enabled && promoting {
@@ -1571,6 +1583,7 @@ impl UnopenedPersistCatalogState {
             }
             promoted = promoting;
             cleanup_owners = owners;
+            deferred_admission_updates = admission_updates;
             self.fenceable_token = current_fenceable_token;
             break;
         }
@@ -1636,6 +1649,15 @@ impl UnopenedPersistCatalogState {
         // Perform data migrations.
         if is_initialized && !read_only && !join {
             commit_ts = upgrade(&mut self, commit_ts).await?;
+        }
+        if !deferred_admission_updates.is_empty() {
+            // Historical decoders must see only their own schema. The exclusive
+            // fence is already durable, but admission must wait for the upgrade.
+            // Publish under that fence and upper before exposing the opened catalog.
+            commit_ts = self
+                .compare_and_append(deferred_admission_updates, commit_ts)
+                .await
+                .map_err(|e| e.unwrap_fence_error())?;
         }
 
         debug!(

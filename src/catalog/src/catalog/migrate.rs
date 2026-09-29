@@ -123,24 +123,8 @@ pub(crate) struct MigrateResult {
     pub(crate) post_item_updates: Vec<(StateUpdateKind, Timestamp, Diff)>,
 }
 
-/// Migrates all user items and loads them into `state`.
-///
-/// Returns the builtin updates corresponding to all user items.
-pub(crate) async fn migrate(
-    state: &mut CatalogState,
-    tx: &mut Transaction<'_>,
-    local_expr_cache: &mut LocalExpressionCache,
-    item_updates: Vec<StateUpdate>,
-    _now: NowFn,
-    _boot_ts: Timestamp,
-) -> Result<MigrateResult, anyhow::Error> {
-    let catalog_version = get_migration_version(tx).unwrap_or(Version::new(0, 0, 0));
-
-    info!(
-        "migrating statements from catalog version {:?}",
-        catalog_version
-    );
-
+/// Stages idempotent item migrations that do not require SQL planning.
+pub(crate) fn migrate_ast_items(tx: &mut Transaction<'_>) -> Result<(), anyhow::Error> {
     rewrite_ast_items(tx, |tx, _id, stmt| {
         // Add per-item AST migrations below.
         //
@@ -158,7 +142,34 @@ pub(crate) async fn migrate(
         ast_rewrite_small_commit_intervals(stmt)?;
         ast_rewrite_strip_builtin_version_pins(stmt)?;
         Ok(())
-    })?;
+    })
+}
+
+/// Whether item migration needs a planned catalog before it can commit.
+pub(crate) fn requires_post_planning_migration(
+    system_config: &mz_sql::session::vars::SystemVars,
+) -> bool {
+    system_config.force_source_table_syntax()
+}
+
+/// Migrates all user items and loads them into `state`.
+///
+/// Returns the builtin updates corresponding to all user items.
+pub(crate) async fn migrate(
+    state: &mut CatalogState,
+    tx: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
+    item_updates: Vec<StateUpdate>,
+    _now: NowFn,
+    _boot_ts: Timestamp,
+) -> Result<MigrateResult, anyhow::Error> {
+    let catalog_version = get_migration_version(tx).unwrap_or(Version::new(0, 0, 0));
+
+    info!(
+        "migrating statements from catalog version {:?}",
+        catalog_version
+    );
+    migrate_ast_items(tx)?;
 
     // Load items into catalog. We make sure to consolidate the old updates with the new updates to
     // avoid trying to apply unmigrated items.
@@ -221,6 +232,8 @@ pub(crate) async fn migrate(
         let _catalog_version = catalog_version.clone();
         // Add per-item, post-planning AST migrations below. Most
         // migrations should be in the above `rewrite_ast_items` block.
+        // Reflect additions in `requires_post_planning_migration` so bootstrap
+        // keeps them atomic with the migration version marker.
         //
         // Each migration should be a function that takes `item` (the AST
         // representing the creation SQL for the item) as input. Any

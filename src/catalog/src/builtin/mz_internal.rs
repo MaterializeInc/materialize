@@ -9462,11 +9462,22 @@ WHERE length(id) > 0
             entity_name: "source_statistics",
             description: "Aggregated source ingestion statistics",
             links: &const {
-                [OntologyLink {
-                    name: "statistics_of_source",
-                    target: "source",
-                    properties: LinkProperties::measures("id", "id", "ingestion_statistics"),
-                }]
+                [
+                    OntologyLink {
+                        name: "statistics_of_source",
+                        target: "source",
+                        properties: LinkProperties::measures("id", "id", "ingestion_statistics"),
+                    },
+                    OntologyLink {
+                        name: "on_replica",
+                        target: "replica",
+                        properties: LinkProperties::fk_nullable(
+                            "replica_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                ]
             },
             column_semantic_types: &const {
                 [

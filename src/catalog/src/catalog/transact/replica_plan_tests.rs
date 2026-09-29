@@ -78,6 +78,108 @@ async fn open_protected_catalog_with_storage(
     .expect("open protected catalog")
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)]
+async fn upgrade_preserves_migration_marker_contract() {
+    use std::sync::Arc;
+
+    for post_planning in [false, true] {
+        let (catalog, persist, organization) = protected_catalog().await;
+        let mut config = Catalog::diagnostic_state_config(&catalog.diagnostic_config);
+        config.skip_migrations = false;
+        catalog.expire().await;
+        let mut peer = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .join()
+            .await
+            .expect("join bootstrap peer");
+        peer.sync_to_current_updates()
+            .await
+            .expect("consume snapshot");
+        let old_version = semver::Version::parse("0.0.0-dev.0").expect("valid prior version");
+        let mut tx = peer.transaction().await.expect("prepare upgrade");
+        crate::catalog::migrate::set_migration_version(&mut tx, old_version.clone())
+            .expect("set prior migration marker");
+        tx.upsert_system_config(
+            "force_source_table_syntax",
+            if post_planning { "on" } else { "off" }.into(),
+        )
+        .expect("configure post-planning migration");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("commit upgrade fixture");
+        let peer = Arc::new(tokio::sync::Mutex::new(peer));
+        let observed = Arc::new(std::sync::Mutex::new(None));
+        let point = format!("catalog_initialize_before_replay_{organization}");
+        let handle = tokio::runtime::Handle::current();
+        fail::cfg_callback(&point, {
+            let peer = Arc::clone(&peer);
+            let observed = Arc::clone(&observed);
+            move || {
+                *observed.lock().expect("observation mutex") =
+                    Some(tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            let mut peer = peer.lock().await;
+                            peer.sync_to_current_updates()
+                                .await
+                                .expect("refresh migration observer");
+                            let tx = peer.transaction().await.expect("read uncommitted marker");
+                            crate::catalog::migrate::get_migration_version(&tx)
+                        })
+                    }));
+            }
+        })
+        .expect("install migration rendezvous");
+        let mut storage = crate::durable::TestCatalogStateBuilder::new(persist)
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(
+                mz_ore::now::SYSTEM_TIME().into(),
+                &crate::catalog::test_bootstrap_args(),
+            )
+            .await
+            .expect("open migration catalog");
+        let result = Catalog::initialize_state(config, &mut storage)
+            .await
+            .expect("initialize migrated catalog");
+        fail::remove(&point);
+        if post_planning {
+            assert_eq!(
+                *observed.lock().expect("observation mutex"),
+                Some(Some(old_version.clone()))
+            );
+        }
+        assert_eq!(result.last_seen_version, Some(old_version));
+        assert_eq!(
+            result.state.system_config().force_source_table_syntax(),
+            post_planning
+        );
+        {
+            let mut peer = peer.lock().await;
+            peer.sync_to_current_updates()
+                .await
+                .expect("refresh committed migration");
+            let tx = peer.transaction().await.expect("read committed marker");
+            assert_eq!(
+                crate::catalog::migrate::get_migration_version(&tx),
+                Some(mz_build_info::DUMMY_BUILD_INFO.semver_version())
+            );
+        }
+        drop(result);
+        storage.expire().await;
+        Arc::try_unwrap(peer)
+            .expect("rendezvous released peer")
+            .into_inner()
+            .expire()
+            .await;
+    }
+}
+
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn catalog_positions_use_actual_commit_upper() {
@@ -583,10 +685,16 @@ async fn savepoint_catalog_has_no_position_certificate() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)]
-async fn protected_bootstrap_absorbs_publication_without_replay_cas() {
+async fn protected_bootstrap_absorbs_publication() {
     use std::sync::{Arc, Mutex};
 
-    for phase in ["before_transaction", "before_commit", "before_replay"] {
+    for (phase, upgrade) in [
+        ("before_transaction", false),
+        ("before_commit", false),
+        ("before_commit", true),
+        ("before_replay", false),
+        ("before_replay", true),
+    ] {
         let (catalog, persist, organization) = protected_catalog().await;
         catalog.expire().await;
         let mut peer = crate::durable::TestCatalogStateBuilder::new(persist.clone())
@@ -630,6 +738,18 @@ async fn protected_bootstrap_absorbs_publication_without_replay_cas() {
         } else {
             None
         };
+        if upgrade {
+            // Exercise version-changing bootstrap with compatible builtin schemas.
+            let mut tx = peer.transaction().await.expect("prepare migration marker");
+            crate::catalog::migrate::set_migration_version(
+                &mut tx,
+                semver::Version::parse("0.0.0-dev.0").expect("older migration version"),
+            )
+            .expect("set migration marker");
+            let _ = tx.get_and_commit_op_updates();
+            let ts = tx.upper();
+            tx.commit(ts).await.expect("commit migration marker");
+        }
         let peer = Arc::new(tokio::sync::Mutex::new(peer));
         let publication = Arc::new(Mutex::new(None));
         let point = format!("catalog_initialize_{phase}_{organization}");

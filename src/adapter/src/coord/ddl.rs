@@ -1110,6 +1110,8 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        self.cluster_replica_statuses
+            .remove_cluster_replica_statuses(&cluster_id, &replica_id);
         self.drop_introspection_subscribes(replica_id);
         self.drop_metric_sinks(replica_id);
 

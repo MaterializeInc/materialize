@@ -30,12 +30,12 @@ output ownership per deployment. No generic per-output fence or all-output
 completion gate is required. Escalate concrete protocol safety gaps, not
 overlapping writes that preserve correctness throughout.
 
-Finish the stable ReplicaId integration. Membership keys, scoped settings and
-plan owners distinguish deployment, while declarations and carried replicas keep
-their logical ID. Complete deployment-qualified persisted observations and their
-writer cleanup. Active reference frontiers must not include the pending
-deployment's rows for the same ID. Controller retirement must preserve peer
-memberships without changing the established single-deployment MV behavior.
+Stable ReplicaId integration and deployment-qualified persisted observations are
+published through `0b1e359a`. Continue their runtime verification. Membership keys,
+scoped settings and plan owners distinguish deployment, while declarations and
+carried replicas keep their logical ID. Active reference frontiers exclude the
+pending deployment's rows for the same ID. Controller retirement must preserve
+peer memberships without changing the established single-deployment MV behavior.
 Equal names are not correspondence.
 
 Filter current status to the active deployment, not history. Historical
@@ -68,17 +68,23 @@ publication stalls that may exhaust reclamation grace. Establish the actual
 heartbeat/reclamation sequence without changing grace. Keep this separate from
 planning-snapshot absence, which now consults the live protection writer.
 
-M2 remains active. The next end-to-end outcome is same-version native prewarming
-and warm promotion, then compatible-version writer coexistence and handover.
+M2 remains active. Same-version native warm promotion passed in CI 137278 at
+`4047bab4`. The next outcome is compatible-version writer coexistence and handover
+with the integrated stable-ID and compatibility changes.
 The outage, targeted DDL and bounded-throughput proofs remain closed. Continue
 concrete integration repairs without starting another acceptance campaign.
 
 Compatible catalog replay, typed durable admission and Persist format-target
-propagation are integrated locally. Finish combined verification and demonstrate
-handover with distinct participating binaries. Admission and retirement, not
-physical liveness, determine required versions. Preserve true binary identity
-separately from the authorized format target, including for read-only shard
-initialization and explicit upgrades. Participants follow committed admission
+propagation are published through `0b1e359a`. CI 137542 built both participating
+versions, but handover stopped before prewarming on a fixture image-tag parsing
+error. The fix and documentation-lint repair are published at `3dba4a73`.
+CI 137543 is the follow-up run. Catalog EXPLAIN/accounting snapshots and the MCP
+statement-identity fixture fix pass locally using CI-built binaries. The Kafka
+RTR transactional catalog conflict remains unexplained, with its statements intact.
+Demonstrate handover with these distinct participating binaries. Admission and
+retirement, not physical liveness, determine required versions. Preserve true
+binary identity separately from the authorized format target, including for
+read-only shard initialization and explicit upgrades. Participants follow committed admission
 changes live. Admission, retirement and format authorization remain atomic without
 a separate membership registry. After durable retirement, zombies may fail on
 newer formats. Do not add pre-publication initialization or orphan-cleanup

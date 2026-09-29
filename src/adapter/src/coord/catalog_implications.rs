@@ -1380,8 +1380,6 @@ impl Coordinator {
                 fail::fail_point!("after_catalog_drop_replica");
 
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
-                    self.cluster_replica_statuses
-                        .remove_cluster_replica_statuses(&cluster_id, &replica_id);
                     self.drop_replica(cluster_id, replica_id);
                 }
             }
