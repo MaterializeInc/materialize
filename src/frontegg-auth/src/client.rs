@@ -39,7 +39,7 @@ impl Client {
             .retry_bounds(Duration::from_millis(200), Duration::from_secs(2))
             .build_with_total_retry_duration(Duration::from_secs(30));
 
-        let client = reqwest::Client::builder()
+        let client = reqwest_0_13::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .expect("must build Client");

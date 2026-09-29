@@ -19,7 +19,7 @@ pub enum Error {
     #[error("invalid token format: {0}")]
     InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
     #[error("authentication token exchange failed: {0}")]
-    ReqwestError(Arc<reqwest::Error>),
+    ReqwestError(Arc<reqwest_0_13::Error>),
     #[error("middleware programming error: {0}")]
     MiddlewareError(Arc<anyhow::Error>),
     #[error("authentication token missing claims")]
@@ -54,8 +54,8 @@ impl From<tokio::time::error::Elapsed> for Error {
     }
 }
 
-impl From<reqwest::Error> for Error {
-    fn from(value: reqwest::Error) -> Self {
+impl From<reqwest_0_13::Error> for Error {
+    fn from(value: reqwest_0_13::Error) -> Self {
         Error::ReqwestError(Arc::new(value))
     }
 }
