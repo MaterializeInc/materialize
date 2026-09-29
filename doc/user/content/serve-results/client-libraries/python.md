@@ -244,4 +244,4 @@ with engine.connect() as conn:
     print(conn.execute(sqlalchemy.text("SELECT mz_version()")).scalar())
 ```
 
-SQLAlchemy 2.1 and later use `psycopg3` for plain `postgresql://` URLs. Connecting to Materialize that way fails with `Expected a keyword at the beginning of a statement, found identifier "savepoint"`. To use `psycopg3` anyway, pass `use_native_hstore=False` to `create_engine`.
+The URL names the `psycopg2` driver explicitly because SQLAlchemy 2.1 and later use `psycopg3` for plain `postgresql://` URLs, and connecting to Materialize through `psycopg3` fails. The error is `Explicit rollback() forbidden within a Transaction context`, caused by `Expected a keyword at the beginning of a statement, found identifier "savepoint"`. (If you need `psycopg3`, for example for SQLAlchemy's `asyncio` support, pass `use_native_hstore=False` to `create_engine` or `create_async_engine`.)
