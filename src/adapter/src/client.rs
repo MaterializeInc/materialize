@@ -307,6 +307,7 @@ impl Client {
             occ_write_semaphore,
             group_commit_notifier,
             read_only,
+            frontend_cancel_rx,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -329,6 +330,8 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
+            enable_frontend_transaction_completion: false,
+            frontend_cancel_rx,
         };
 
         let session = client.session();
@@ -467,6 +470,11 @@ Issue a SQL query to get started. Need help?
             }
         }
 
+        let enable_frontend_transaction_completion =
+            mz_sql::session::vars::ENABLE_FRONTEND_TRANSACTION_COMPLETION
+                .require(catalog.system_vars())
+                .is_ok();
+        client.enable_frontend_transaction_completion = enable_frontend_transaction_completion;
         Ok(client)
     }
 
@@ -648,6 +656,8 @@ pub struct SessionClient {
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
+    enable_frontend_transaction_completion: bool,
+    frontend_cancel_rx: tokio::sync::watch::Receiver<()>,
 }
 
 impl SessionClient {
@@ -1059,6 +1069,17 @@ impl SessionClient {
         &mut self,
         action: EndTransactionAction,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if self.enable_frontend_transaction_completion {
+            if let Some(completion) = self.session().read_only_completion(action) {
+                return crate::frontend_transaction::complete_read_only_transaction(
+                    self.session.as_mut().expect("session invariant violated"),
+                    &mut self.peek_client,
+                    &mut self.frontend_cancel_rx,
+                    completion,
+                )
+                .await;
+            }
+        }
         let res = self
             .send(|tx, session| Command::Commit {
                 action,
@@ -1493,6 +1514,7 @@ impl SessionClient {
             return Ok(None);
         }
 
+        self.session().require_coordinator_completion();
         let conn_id = self.session().conn_id().clone();
         let statement_timeout = *self.session().vars().statement_timeout();
         let inner_client = self.inner().clone();
