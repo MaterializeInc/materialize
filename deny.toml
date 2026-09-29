@@ -192,8 +192,6 @@ skip = [
     { name = "pem", version = "4.0.0" },
     # Held back by mz-timely-util; iceberg and the persist crates use 0.13.
     { name = "lz4_flex", version = "0.12.1" },
-    # Used by dynfmt; iceberg/typetag pulls in v0.4.
-    { name = "erased-serde", version = "0.3.26" },
     # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
     # while native-tls still pulls older versions.
     { name = "core-foundation", version = "0.10.1" },

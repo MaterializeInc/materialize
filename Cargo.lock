@@ -3394,16 +3394,15 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "dynfmt"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c298552016db86f0d49e5de09818dd86c536f66095013cc415f4f85744033f"
+checksum = "a0190d4a4c42bc9acca391f32d9c37db37d7608190a698a78d59a996043d9a7b"
 dependencies = [
- "erased-serde 0.3.26",
- "lazy_static",
+ "erased-serde",
  "regex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3652,15 +3651,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1a6df962265a53221f29081896c412ef325c17fa7d638cd9578febe53d3c82c"
 dependencies = [
  "typeid",
-]
-
-[[package]]
-name = "erased-serde"
-version = "0.3.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6984864d65d092d9e9ada107007a846a09f75d2e24046bcce9a38d14aa52052"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -14380,7 +14370,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be2212c8a9b9bcfca32024de14998494cf9a5dfa59ea1b829de98bac374b86bf"
 dependencies = [
- "erased-serde 0.4.10",
+ "erased-serde",
  "inventory",
  "once_cell",
  "serde",
