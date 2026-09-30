@@ -655,6 +655,43 @@ mod tests {
         assert_server_ok(rustls_connect(&config, "localhost", addr).await).await;
     }
 
+    /// Both connectors validate an endpoint whose certificate chains to a
+    /// public CA. Needs external network access, so it only runs when
+    /// MZ_TLS_UTIL_TEST_EXTERNAL_CAS is set, as the Nightly
+    /// `cargo-test-tls-external` step does.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn external_public_ca_endpoint() {
+        if std::env::var_os("MZ_TLS_UTIL_TEST_EXTERNAL_CAS").is_none() {
+            return;
+        }
+        const HOST: &str = "s3.amazonaws.com";
+        let addr = tokio::net::lookup_host((HOST, 443))
+            .await
+            .unwrap()
+            .next()
+            .expect("no address for host");
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+
+        // Completing a verify-full handshake is the assertion.
+        drop(rustls_connect(&config, HOST, addr).await);
+
+        // NOTE: the vendored openssl's default verify paths live under its
+        // build-time OPENSSLDIR, which does not exist at runtime. Without
+        // SSL_CERT_FILE `make_tls` trusts no public CA, so point it at the
+        // system bundle. This runs after the rustls leg because
+        // rustls-native-certs also honors SSL_CERT_FILE.
+        if std::env::var_os("SSL_CERT_FILE").is_none() {
+            let bundle = openssl_probe::probe()
+                .cert_file
+                .expect("no system CA bundle found, set SSL_CERT_FILE");
+            // SAFETY: see `verify_full_trusts_default_store`.
+            unsafe { std::env::set_var("SSL_CERT_FILE", bundle) };
+        }
+        drop(openssl_connect(&config, HOST, addr).await);
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
     async fn ssl_modes_verify_the_same_as_openssl() {
