@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/metrics.rs
-revision: db15d3b2dc
+revision: c5ab29133e
 ---
 
 # persist::metrics

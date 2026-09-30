@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/cache.rs
-revision: 11e6a79394
+revision: c5ab29133e
 ---
 
 # persist-client::cache

@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/id_gen.rs
-revision: 4267863081
+revision: aafb0ea1df
 ---
 
 # mz-ore::id_gen
