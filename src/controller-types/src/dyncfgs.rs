@@ -81,7 +81,7 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
 // next provisioned.
 pub const ENABLE_UNIFIED_CLUSTER: Config<bool> = Config::new(
     "enable_unified_cluster",
-    false,
+    true,
     "Host storage objects on the compute Timely cluster instead of a separate storage cluster.",
     ParameterScope::Replica,
 );
