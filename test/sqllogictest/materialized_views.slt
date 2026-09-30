@@ -1582,6 +1582,23 @@ mvi2  every  10:00:00  mz_now()  NULL
 mvi3  at  NULL  NULL  mz_now()
 mvi3  at  NULL  NULL  mz_now()::[s46␠AS␠"pg_catalog"."text"]::[s22␠AS␠"pg_catalog"."int8"]␠+␠2000
 
+# A dropped materialized view retracts its rows.
+statement ok
+CREATE MATERIALIZED VIEW mv_retract WITH (REFRESH EVERY '1 hour', REFRESH AT '3000-01-01 00:00') AS SELECT 1
+
+query I
+SELECT count(*) FROM mz_internal.mz_materialized_view_refresh_strategies WHERE materialized_view_id LIKE 'u%'
+----
+36
+
+statement ok
+DROP MATERIALIZED VIEW mv_retract
+
+query I
+SELECT count(*) FROM mz_internal.mz_materialized_view_refresh_strategies WHERE materialized_view_id LIKE 'u%'
+----
+34
+
 statement ok
 CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
