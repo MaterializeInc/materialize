@@ -697,8 +697,7 @@ async fn assert_readiness(internal_http: SocketAddr, expected: u16) {
 }
 
 /// At the high watermark balancerd reports not ready while staying live and keeping its
-/// connections. Readiness returns once connections drop below the low watermark and the dwell
-/// has passed.
+/// connections. Readiness returns once connections drop below the low watermark.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_connection_watermarks_drive_readiness() {
@@ -735,11 +734,12 @@ async fn test_connection_watermarks_drive_readiness() {
         "established connections are kept while out of rotation",
     );
 
-    // Below the low watermark readiness returns only once the dwell has passed.
-    drop(first);
+    // At the low watermark the state is kept; below it readiness returns.
     drop(second);
-    assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 0.0).await;
+    assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 1.0).await;
     assert_readiness(balancer.internal_http, 503).await;
+    drop(first);
+    assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 0.0).await;
     assert_readiness(balancer.internal_http, 200).await;
 }
 

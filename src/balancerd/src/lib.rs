@@ -439,7 +439,7 @@ impl BalancerService {
                 warn!("internal_http server exited");
             });
         }
-        // Lets the dwell expire and config changes take effect without connection activity.
+        // Lets config changes take effect without connection activity.
         // Detached so that it does not keep `serve` from returning once the listeners are gone.
         spawn(|| "connection_watermark_tick", async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -677,12 +677,12 @@ struct ConnectionLimiter {
     /// Whether connections are currently being refused, so that reaching and clearing the limit
     /// are logged once each rather than once per connection.
     limited: AtomicBool,
-    /// Whether `/api/readyz` reports ready. Mirrors `out_of_rotation_since` for lock-free reads.
+    /// Whether `/api/readyz` reports ready. Mirrors `out_of_rotation` for lock-free reads.
     accepting: Arc<AtomicBool>,
-    /// When balancerd left load balancer rotation, `None` while in rotation. Transitions and the
-    /// connection count they act on are read under this lock, so the last evaluation after a
-    /// count change sees that change.
-    out_of_rotation_since: Mutex<Option<tokio::time::Instant>>,
+    /// Whether balancerd is out of load balancer rotation. Transitions and the connection count
+    /// they act on are read under this lock, so the last evaluation after a count change sees
+    /// that change.
+    out_of_rotation: Mutex<bool>,
     /// The last watermark misconfiguration warned about, so it is logged once per change.
     last_watermark_warning: Mutex<Option<String>>,
     rejected: IntCounter,
@@ -692,12 +692,6 @@ struct ConnectionLimiter {
     _high_watermark: ComputedIntGauge,
     _low_watermark: ComputedIntGauge,
 }
-
-/// Minimum time out of load balancer rotation before the low watermark can bring balancerd back.
-///
-/// Deregistering and re-registering a target takes tens of seconds on AWS, so a quick swing from
-/// the low to the high watermark must not cost a round trip through both.
-const WATERMARK_DWELL: Duration = Duration::from_secs(30);
 
 /// Validated connection watermarks, see [`configured_watermarks`].
 #[derive(Debug, Clone, Copy)]
@@ -801,7 +795,7 @@ impl ConnectionLimiter {
             active: AtomicU32::new(0),
             limited: AtomicBool::new(false),
             accepting,
-            out_of_rotation_since: Mutex::new(None),
+            out_of_rotation: Mutex::new(false),
             last_watermark_warning: Mutex::new(None),
             rejected,
             watermark_transitions,
@@ -821,12 +815,16 @@ impl ConnectionLimiter {
     ///
     /// Runs on every acquire and release and on a periodic tick. Doing it in the probe handler
     /// would make the state depend on who polls and how often.
+    ///
+    /// There is no minimum time out of rotation. How long `/api/readyz` must fail before a pod
+    /// actually leaves, and how long it must pass before it returns, is up to the health check
+    /// thresholds of whatever reads it, which lets short bursts pass without a round trip.
     fn evaluate_watermarks(&self) {
         let watermarks = self.watermarks();
-        let mut since = self.out_of_rotation_since.lock().expect("lock poisoned");
+        let mut out_of_rotation = self.out_of_rotation.lock().expect("lock poisoned");
         let active = usize::cast_from(self.active.load(Ordering::SeqCst));
-        let accepting = match (watermarks, *since) {
-            (Some(w), None) if active >= w.high => {
+        let accepting = match (watermarks, *out_of_rotation) {
+            (Some(w), false) if active >= w.high => {
                 warn!(
                     "leaving load balancer rotation: {active} active connections reached the \
                     high watermark of {}",
@@ -834,7 +832,7 @@ impl ConnectionLimiter {
                 );
                 false
             }
-            (Some(w), Some(left)) if active < w.low && left.elapsed() >= WATERMARK_DWELL => {
+            (Some(w), true) if active < w.low => {
                 info!(
                     "returning to load balancer rotation: {active} active connections, below \
                     the low watermark of {}",
@@ -842,9 +840,9 @@ impl ConnectionLimiter {
                 );
                 true
             }
-            // Watermarks unset or invalidated while out of rotation restore readiness without
-            // waiting out the dwell, since off must behave as if they had never been set.
-            (None, Some(_)) => {
+            // Watermarks unset or invalidated while out of rotation restore readiness at once,
+            // since off must behave as if they had never been set.
+            (None, true) => {
                 info!(
                     "returning to load balancer rotation: connection watermarks no longer in effect"
                 );
@@ -852,7 +850,7 @@ impl ConnectionLimiter {
             }
             _ => return,
         };
-        *since = (!accepting).then(tokio::time::Instant::now);
+        *out_of_rotation = !accepting;
         self.accepting.store(accepting, Ordering::Relaxed);
         self.watermark_transitions.inc();
     }
@@ -2219,8 +2217,8 @@ mod tests {
         assert!(limiter.acquire().is_some());
     }
 
-    #[mz_ore::test(tokio::test(start_paused = true))]
-    async fn test_connection_watermarks() {
+    #[mz_ore::test]
+    fn test_connection_watermarks() {
         let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
         let set = |low: Option<usize>, high: Option<usize>, max: u32| {
             let mut updates = ConfigUpdates::default();
@@ -2266,18 +2264,12 @@ mod tests {
         );
         drop(second);
         assert!(
-            !limiter.accepting(),
-            "below the low watermark but within the dwell"
-        );
-        tokio::time::advance(WATERMARK_DWELL).await;
-        limiter.evaluate_watermarks();
-        assert!(
             limiter.accepting(),
-            "below the low watermark after the dwell"
+            "below the low watermark readiness returns at once"
         );
         assert_eq!(limiter.watermark_transitions.get(), 2);
 
-        // Disabling the watermarks while out of rotation restores readiness without the dwell.
+        // Disabling the watermarks while out of rotation restores readiness.
         let _fourth = limiter.acquire().expect("under the limit");
         let _fifth = limiter.acquire().expect("under the limit");
         assert!(!limiter.accepting(), "at the high watermark again");
