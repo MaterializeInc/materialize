@@ -36,11 +36,11 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::vec::Map;
-use timely::dataflow::operators::{CapabilitySet, Concat};
-use timely::dataflow::{Scope, StreamVec};
+use timely::dataflow::Scope;
+use timely::dataflow::operators::CapabilitySet;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::healthcheck::HealthReporter;
 use crate::metrics::source::sql_server::SqlServerSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
@@ -63,7 +63,6 @@ pub(crate) fn render<'scope>(
     metrics: SqlServerSourceMetrics,
 ) -> (
     StackedCollection<'scope, Lsn, (u64, Result<SourceMessage, DataflowError>)>,
-    StreamVec<'scope, Lsn, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -71,17 +70,13 @@ pub(crate) fn render<'scope>(
 
     let (data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
 
-    // Captures DefiniteErrors that affect the entire source, including all outputs
-    let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
-
-    let (button, transient_errors) = builder.build_fallible(move |caps| {
+    let health = config.health.clone();
+    let report_transient =
+        move |err| super::report_error(&health, ReplicationError::Transient(Rc::new(err)));
+    let button = builder.build_fallible_with(report_transient, move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
-            let [
-                data_cap_set,
-                definite_error_cap_set,
-            ]: &mut [_; 2] = caps.try_into().unwrap();
+            let [data_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
             let connection_config = source
                 .connection
@@ -186,8 +181,7 @@ pub(crate) fn render<'scope>(
                             capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
                             data_output,
                             data_cap_set,
-                            definite_error_handle,
-                            definite_error_cap_set,
+                            &config.health,
                         ).await;
                     return Ok(());
                 } else {
@@ -497,8 +491,7 @@ pub(crate) fn render<'scope>(
                                     }),
                                 data_output,
                                 data_cap_set,
-                                definite_error_handle,
-                                definite_error_cap_set,
+                                &config.health,
                             )
                             .await;
                             return Ok(());
@@ -552,8 +545,7 @@ pub(crate) fn render<'scope>(
                                     }),
                                 data_output,
                                 data_cap_set,
-                                definite_error_handle,
-                                definite_error_cap_set,
+                                &config.health,
                             )
                             .await;
                             return Ok(());
@@ -598,13 +590,7 @@ pub(crate) fn render<'scope>(
         }))
     });
 
-    let error_stream = definite_errors.concat(transient_errors.map(ReplicationError::Transient));
-
-    (
-        data_stream.as_collection(),
-        error_stream,
-        button.press_on_drop(),
-    )
+    (data_stream.as_collection(), button.press_on_drop())
 }
 
 async fn handle_data_event(
@@ -762,14 +748,13 @@ fn decode(
     }
 }
 
-/// Helper method to return a "definite" error upstream.
+/// Helper method to return a "definite" error upstream, and report it as the source's status.
 async fn return_definite_error(
     err: DefiniteError,
     outputs: impl Iterator<Item = u64>,
     data_handle: StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
     data_capset: &CapabilitySet<Lsn>,
-    errs_handle: AsyncOutputHandle<Lsn, CapacityContainerBuilder<Vec<ReplicationError>>>,
-    errs_capset: &CapabilitySet<Lsn>,
+    health: &HealthReporter,
 ) {
     for output_idx in outputs {
         let update = (
@@ -787,10 +772,7 @@ async fn return_definite_error(
         let size = update.fuel_size();
         data_handle.give_fueled(&data_capset[0], update, size).await;
     }
-    errs_handle.give(
-        &errs_capset[0],
-        ReplicationError::DefiniteError(Rc::new(err)),
-    );
+    super::report_error(health, ReplicationError::DefiniteError(Rc::new(err)));
 }
 
 /// Provides an implemntation of [`SqlServerCdcMetrics`] that will update [`SqlServerSourceMetrics`]`

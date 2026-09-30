@@ -28,13 +28,13 @@ use mz_storage_types::sources::{
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::source::RawSourceCreationConfig;
 use crate::source::types::{Probe, SourceMessage, SourceRender, StackedCollection};
 
@@ -70,6 +70,18 @@ impl SourceOutputInfo {
             None => panic!("resume_upper has at least one value"),
         }
     }
+}
+
+/// Reports an ingestion error as a halting status, which restarts the dataflow.
+fn report_error(health: &HealthReporter, err: ReplicationError) {
+    let update = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
+    // TODO(sql_server2): If the error has anything to do with SSH
+    // connections we should use the SSH status namespace.
+    health.report(HealthStatusMessage {
+        id: None,
+        namespace: SqlServerSourceConnection::STATUS_NAMESPACE,
+        update,
+    });
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -174,7 +186,7 @@ impl SourceRender for SqlServerSourceConnection {
             .metrics
             .get_sql_server_source_metrics(config.id, config.worker_id);
 
-        let (repl_updates, repl_errs, repl_token) = replication::render(
+        let (repl_updates, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
@@ -182,7 +194,7 @@ impl SourceRender for SqlServerSourceConnection {
             metrics,
         );
 
-        let (progress_errs, progress_probes, progress_token) = progress::render(
+        let (progress_probes, progress_token) = progress::render(
             scope.clone(),
             config.clone(),
             self.connection.clone(),
@@ -215,22 +227,6 @@ impl SourceRender for SqlServerSourceConnection {
                 update: HealthStatusUpdate::Running,
             });
         }
-
-        let health_errs = repl_errs.concat(progress_errs).map(move |err| {
-            // This update will cause the dataflow to restart
-            let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string, None);
-            // TODO(sql_server2): If the error has anything to do with SSH
-            // connections we should use the SSH status namespace.
-            let namespace = Self::STATUS_NAMESPACE;
-
-            HealthStatusMessage {
-                id: None,
-                namespace: namespace.clone(),
-                update,
-            }
-        });
-        config.health.report_stream(health_errs);
 
         (
             data_collections,
