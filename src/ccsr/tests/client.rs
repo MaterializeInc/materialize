@@ -445,14 +445,66 @@ fn test_invalid_tls_config_returns_error() {
 
     // Verify that invalid TLS material is caught at construction time, not at
     // ClientConfig::build() time (where it previously caused a panic via .unwrap()).
-    let err = Identity::from_pkcs12_der(vec![0xDE, 0xAD], "".into());
-    assert!(err.is_err(), "garbage PKCS#12 should be rejected");
+    let err = Identity::from_pem(b"not a key", b"not a certificate");
+    assert!(err.is_err(), "garbage PEM identity should be rejected");
 
     let err = Certificate::from_pem(b"not a certificate");
     assert!(err.is_err(), "garbage PEM cert should be rejected");
 
     let err = Certificate::from_der(&[0xDE, 0xAD]);
     assert!(err.is_err(), "garbage DER cert should be rejected");
+}
+
+/// Returns a PEM-encoded PKCS #8 key and a self-signed certificate for it.
+fn self_signed_pem() -> (Vec<u8>, Vec<u8>) {
+    use openssl::asn1::Asn1Time;
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::PKey;
+    use openssl::x509::{X509, X509NameBuilder};
+
+    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+    let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+    let mut name = X509NameBuilder::new().unwrap();
+    name.append_entry_by_text("CN", "ccsr-test").unwrap();
+    let name = name.build();
+    let mut cert = X509::builder().unwrap();
+    cert.set_version(2).unwrap();
+    cert.set_subject_name(&name).unwrap();
+    cert.set_issuer_name(&name).unwrap();
+    cert.set_pubkey(&key).unwrap();
+    cert.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+        .unwrap();
+    cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
+        .unwrap();
+    cert.sign(&key, MessageDigest::sha256()).unwrap();
+    (
+        key.private_key_to_pem_pkcs8().unwrap(),
+        cert.build().to_pem().unwrap(),
+    )
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_pem_identity() {
+    use mz_ccsr::tls::Certificate;
+
+    let (key, cert) = self_signed_pem();
+    let ident = Identity::from_pem(&key, &cert).unwrap();
+    assert_eq!(format!("{ident:?}"), "Identity { .. }");
+    mz_ccsr::ClientConfig::new(reqwest::Url::parse("https://localhost").unwrap())
+        .add_root_certificate(Certificate::from_pem(&cert).unwrap())
+        .identity(ident)
+        .build()
+        .unwrap();
+
+    let (other_key, _) = self_signed_pem();
+    let err = Identity::from_pem(&other_key, &cert).unwrap_err();
+    assert!(
+        err.to_string().contains("KeyMismatch"),
+        "unexpected error: {err}"
+    );
 }
 
 #[mz_ore::test]

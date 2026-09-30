@@ -9,24 +9,51 @@
 
 //! TLS certificates and identities.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
-use mz_tls_util::pkcs12der_from_pem;
-use zeroize::Zeroize;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
+
+/// An error constructing a [`Certificate`] or [`Identity`].
+#[derive(Debug, thiserror::Error)]
+pub enum TlsError {
+    #[error("invalid PEM: {0}")]
+    Pem(#[from] rustls::pki_types::pem::Error),
+    #[error("no certificate found in PEM input")]
+    NoCertificate,
+    #[error("no private key found in PEM input")]
+    NoPrivateKey,
+    #[error("invalid certificate: {0}")]
+    Certificate(rustls::CertificateError),
+    #[error("invalid TLS identity: {0}")]
+    Identity(rustls::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+}
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 ///
+/// Holds the PEM-encoded private key and certificate chain. The buffer is
+/// zeroized on drop.
+///
 /// [Serde]: serde
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Identity {
-    der: Vec<u8>,
-    pass: String,
+    pem: Vec<u8>,
+}
+
+impl fmt::Debug for Identity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Identity").finish_non_exhaustive()
+    }
 }
 
 impl Zeroize for Identity {
     fn zeroize(&mut self) {
-        self.der.zeroize();
-        self.pass.zeroize();
+        self.pem.zeroize();
     }
 }
 
@@ -37,22 +64,42 @@ impl Drop for Identity {
 }
 
 impl Identity {
-    /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
-    pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
-        let (der, pass) = pkcs12der_from_pem(key, cert)?.into_parts();
-        Ok(Identity { der, pass })
-    }
+    /// Constructs an identity from a PEM-formatted private key and certificate
+    /// chain, leaf certificate first.
+    ///
+    /// The key may be PKCS #8, PKCS #1 (RSA) or SEC1 (EC). Returns an error if
+    /// the key does not match the leaf certificate.
+    pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, TlsError> {
+        let mut pem = Zeroizing::new(Vec::with_capacity(key.len() + cert.len() + 1));
+        pem.extend_from_slice(key);
+        pem.push(b'\n');
+        pem.extend_from_slice(cert);
 
-    /// Wraps [`reqwest::Identity::from_pkcs12_der`].
-    pub fn from_pkcs12_der(der: Vec<u8>, pass: String) -> Result<Self, reqwest::Error> {
-        let _ = reqwest::Identity::from_pkcs12_der(&der, &pass)?;
-        Ok(Identity { der, pass })
+        // Mirror `reqwest::Identity::from_pem`, which uses the last private
+        // key in the buffer.
+        let mut keys = PrivateKeyDer::pem_slice_iter(&pem).collect::<Result<Vec<_>, _>>()?;
+        let key = keys.pop().ok_or(TlsError::NoPrivateKey)?;
+        keys.iter_mut().for_each(Zeroize::zeroize);
+        let certs = CertificateDer::pem_slice_iter(&pem).collect::<Result<Vec<_>, _>>()?;
+        if certs.is_empty() {
+            return Err(TlsError::NoCertificate);
+        }
+
+        // reqwest only checks that the key matches the certificate when the
+        // client is built, so check here to report the error up front.
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        rustls::sign::CertifiedKey::from_der(certs, key, &provider).map_err(TlsError::Identity)?;
+        let _ = reqwest::Identity::from_pem(&pem)?;
+
+        Ok(Identity {
+            pem: std::mem::take(&mut *pem),
+        })
     }
 }
 
 impl From<Identity> for reqwest::Identity {
     fn from(id: Identity) -> Self {
-        reqwest::Identity::from_pkcs12_der(&id.der, &id.pass).expect("known to be a valid identity")
+        reqwest::Identity::from_pem(&id.pem).expect("known to be a valid identity")
     }
 }
 
@@ -65,16 +112,27 @@ pub struct Certificate {
 }
 
 impl Certificate {
-    /// Wraps [`reqwest::Certificate::from_pem`].
-    pub fn from_pem(pem: &[u8]) -> native_tls::Result<Certificate> {
-        Ok(Certificate {
-            der: native_tls::Certificate::from_pem(pem)?.to_der()?,
-        })
+    /// Constructs a certificate from the first certificate in a PEM-formatted
+    /// buffer.
+    pub fn from_pem(pem: &[u8]) -> Result<Certificate, TlsError> {
+        let der = CertificateDer::pem_slice_iter(pem)
+            .next()
+            .ok_or(TlsError::NoCertificate)??;
+        Self::from_der(&der)
     }
 
-    /// Wraps [`reqwest::Certificate::from_der`].
-    pub fn from_der(der: &[u8]) -> native_tls::Result<Certificate> {
-        let _ = native_tls::Certificate::from_der(der)?;
+    /// Constructs a certificate from a DER-formatted buffer.
+    pub fn from_der(der: &[u8]) -> Result<Certificate, TlsError> {
+        // Parse the certificate as a trust anchor, as the verifier does when
+        // the client is built.
+        rustls::RootCertStore::empty()
+            .add(CertificateDer::from_slice(der).into_owned())
+            .map_err(|e| match e {
+                rustls::Error::InvalidCertificate(e) => TlsError::Certificate(e),
+                e => TlsError::Certificate(rustls::CertificateError::Other(rustls::OtherError(
+                    Arc::new(e),
+                ))),
+            })?;
         Ok(Certificate { der: der.into() })
     }
 }
