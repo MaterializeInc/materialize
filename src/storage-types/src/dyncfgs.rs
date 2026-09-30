@@ -502,6 +502,35 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     ParameterScope::Environment,
 );
 
+/// How far ahead of the remap upper the source `persist_sink` commits a ceiling while a
+/// snapshotting export holds its frontier pinned, so that it can group updates into one batch.
+///
+/// The persist sink mints descriptions based on the data frontier. During a snapshot, that frontier
+/// does not progress. Providing a lookahead instructs the minter to commit to a ceiling based
+/// on the remap upper, which is used by the batch writers to group updates into a batch.
+/// The minter honors the ceiling by minting descriptions at or beyond it. The whole snapshot and
+/// the CDC events that were captured concurrently, up to the ceiling, become one description,
+/// appended once.
+///
+/// Because the reclock stamps every update below the remap upper, the ceiling is ahead of the data
+/// by at least the lookahead even if the export has seen no data. It still has to reach the writers
+/// ahead of the rows stamped under the newest binding, since a builder only takes updates at times
+/// it was opened for, so this wants to be at least one `timestamp_interval`. An update that outruns
+/// it writes a batch of its own instead, which costs a batch rather than correctness.
+///
+/// Only applies to an export of a Postgres source (for now) that is snapshotting in this dataflow
+/// incarnation, and only until the frontier moves off the time its snapshot occupies. Zero disables
+/// committing ahead, leaving descriptions derived from the frontier alone and every timestamp
+/// writing its own batch.
+pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
+    "storage_persist_sink_description_lookahead",
+    Duration::ZERO,
+    "Determines how far past the remap upper the source persist sink will commit to a ceiling \
+    in order to group data into one batch and one description. Zero leaves every timestamp \
+    writing its own batch. Other values below the tick interval are clamped to the tick interval.",
+    ParameterScope::Environment,
+);
+
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
@@ -557,6 +586,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
