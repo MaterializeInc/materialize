@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use k8s_openapi::jiff::{SignedDuration, Timestamp};
 use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
@@ -36,7 +37,7 @@ use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
 use super::Error;
 use super::matching_image_from_environmentd_image_ref;
@@ -45,6 +46,7 @@ use crate::tls::issuer_ref_defined;
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_cloud_resources::crd::{ManagedResource, recommended_k8s_labels};
+use mz_ore::error::ErrorExt;
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
@@ -350,14 +352,30 @@ impl Resources {
         })
     }
 
+    /// Promotes this generation's environmentd to leader, then points the
+    /// public service at it.
+    ///
+    /// `promoting_since` is when the rollout committed to promoting this
+    /// generation. Until `PROMOTION_PENDING_GRACE` has passed since then, an
+    /// environmentd that cannot yet confirm leadership is retried rather than
+    /// reported as an error.
     #[instrument]
     pub async fn promote_services(
         &self,
         client: &Client,
         namespace: &str,
+        promoting_since: Timestamp,
     ) -> Result<Option<Action>, Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let retry_action = Action::requeue(Duration::from_secs(rand::random_range(5..10)));
+        // The public service points at the previous generation, which the
+        // promotion fences out, until it is applied below. Every retry here
+        // therefore delays the cutover, so retry quickly.
+        let retry_action = Action::requeue(Duration::from_millis(rand::random_range(1000..2000)));
+        let pending = |reason: String| -> Result<Option<Action>, Error> {
+            check_promotion_pending(promoting_since, Timestamp::now(), &reason)?;
+            info!("environmentd has not yet become the leader, retrying: {reason}");
+            Ok(Some(retry_action.clone()))
+        };
 
         let promote_url = reqwest::Url::parse(&format!(
             "{}/api/leader/promote",
@@ -366,16 +384,28 @@ impl Resources {
         .unwrap();
 
         let Some(http_client) = self.get_http_client(client.clone(), namespace).await else {
-            return Ok(Some(retry_action));
+            return pending("no HTTP client for environmentd".into());
         };
 
         trace!("promoting new environmentd to leader");
-        let response = http_client.post(promote_url).send().await?;
-        let response: BecomeLeaderResponse = response.error_for_status()?.json().await?;
-        if let BecomeLeaderResult::Failure { message } = response.result {
-            return Err(Error::Anyhow(anyhow::anyhow!(
-                "failed to promote new environmentd: {message}"
-            )));
+        let response = match http_client.post(promote_url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                match response.text().await {
+                    Ok(body) => PromoteResponse::classify(status, &body),
+                    Err(e) => PromoteResponse::NotYet(describe_request_error(e)),
+                }
+            }
+            Err(e) => PromoteResponse::NotYet(describe_request_error(e)),
+        };
+        match response {
+            PromoteResponse::Accepted => {}
+            PromoteResponse::NotYet(reason) => return pending(reason),
+            PromoteResponse::Rejected(reason) => {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "failed to promote new environmentd: {reason}"
+                )));
+            }
         }
 
         // A successful POST to the promotion endpoint only indicates
@@ -394,23 +424,17 @@ impl Resources {
             self.connection_info.environmentd_url,
         ))
         .unwrap();
-        match http_client.get(status_url.clone()).send().await {
-            Ok(response) => {
-                let response: GetLeaderStatusResponse = response.json().await?;
-                if response.status != DeploymentStatus::IsLeader {
-                    trace!(
-                        "environmentd is still promoting (status: {:?}), retrying...",
-                        response.status
-                    );
-                    return Ok(Some(retry_action));
-                } else {
-                    trace!("environmentd is ready");
+        match http_client.get(status_url).send().await {
+            Ok(response) => match response.json::<GetLeaderStatusResponse>().await {
+                Ok(GetLeaderStatusResponse {
+                    status: DeploymentStatus::IsLeader,
+                }) => trace!("environmentd is ready"),
+                Ok(GetLeaderStatusResponse { status }) => {
+                    return pending(format!("leader status is {status:?}"));
                 }
-            }
-            Err(e) => {
-                trace!("failed to connect to environmentd, retrying... ({e})");
-                return Ok(Some(retry_action));
-            }
+                Err(e) => return pending(describe_request_error(e)),
+            },
+            Err(e) => return pending(describe_request_error(e)),
         }
 
         trace!("applying environmentd public service");
@@ -1558,7 +1582,163 @@ enum BecomeLeaderResult {
     Failure { message: String },
 }
 
+/// environmentd's answer to a `POST /api/leader/promote` request.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PromoteResponse {
+    /// environmentd accepted the promotion, or is already promoting or the
+    /// leader.
+    Accepted,
+    /// environmentd cannot act on the promotion yet. Retrying can succeed.
+    NotYet(String),
+    /// environmentd rejected the promotion in a way retrying will not fix.
+    Rejected(String),
+}
+
+impl PromoteResponse {
+    /// Classifies the status and body environmentd returned.
+    ///
+    /// environmentd answers 400 only while it is initializing or catching up,
+    /// which environmentd's `http` tests check against its handler. Promotion
+    /// reboots environmentd as the leader, and the rebooted process initializes
+    /// before it reports `IsLeader`, so a 400 during a promotion is transient.
+    pub fn classify(status: StatusCode, body: &str) -> Self {
+        let parsed = serde_json::from_str::<BecomeLeaderResponse>(body).map(|r| r.result);
+        let describe = || match &parsed {
+            Ok(BecomeLeaderResult::Failure { message }) => format!("{status}: {message}"),
+            _ => format!("{status}: {body}"),
+        };
+        match (status, &parsed) {
+            (status, Ok(BecomeLeaderResult::Success)) if status.is_success() => {
+                PromoteResponse::Accepted
+            }
+            (StatusCode::BAD_REQUEST, _) => PromoteResponse::NotYet(describe()),
+            _ => PromoteResponse::Rejected(describe()),
+        }
+    }
+}
+
+/// How long after a rollout commits to promotion the new generation may keep
+/// failing to confirm leadership before orchestratord reports it as an error.
+///
+/// While environmentd reboots as the leader, requests to it fail to connect
+/// until its pod passes the readiness probe again, then are refused with a
+/// 400 until the rebooted process has opened the catalog as the leader. In 44
+/// sampled production and staging errors from that window, every one fell
+/// within 12 seconds of the promotion.
+const PROMOTION_PENDING_GRACE: Duration = Duration::from_secs(120);
+
+/// Returns an error once a promotion that began at `promoting_since` has been
+/// pending for longer than [`PROMOTION_PENDING_GRACE`].
+fn check_promotion_pending(
+    promoting_since: Timestamp,
+    now: Timestamp,
+    reason: &str,
+) -> Result<(), Error> {
+    let elapsed = now.duration_since(promoting_since);
+    if SignedDuration::try_from(PROMOTION_PENDING_GRACE).is_ok_and(|grace| elapsed >= grace) {
+        return Err(Error::Anyhow(anyhow::anyhow!(
+            "environmentd did not become the leader within {}s of promotion: {reason}",
+            PROMOTION_PENDING_GRACE.as_secs(),
+        )));
+    }
+    Ok(())
+}
+
+/// Describes a request error with its causes but without its URL.
+///
+/// The URL names the per-generation service. Leaving it out keeps
+/// per-environment names out of the message, which otherwise split one cause
+/// across a Sentry issue per hostname.
+fn describe_request_error(e: reqwest::Error) -> String {
+    e.without_url().display_with_causes().to_string()
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct SkipCatchupError {
     message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INITIALIZING_BODY: &str =
+        r#"{"result":{"Failure":{"message":"cannot promote leader while initializing"}}}"#;
+
+    #[mz_ore::test]
+    fn classify_promote_response() {
+        assert_eq!(
+            PromoteResponse::classify(StatusCode::OK, r#"{"result":"Success"}"#),
+            PromoteResponse::Accepted,
+        );
+        assert_eq!(
+            PromoteResponse::classify(StatusCode::BAD_REQUEST, INITIALIZING_BODY),
+            PromoteResponse::NotYet(
+                "400 Bad Request: cannot promote leader while initializing".into()
+            ),
+        );
+        assert_eq!(
+            PromoteResponse::classify(StatusCode::BAD_REQUEST, "not json"),
+            PromoteResponse::NotYet("400 Bad Request: not json".into()),
+        );
+        assert_eq!(
+            PromoteResponse::classify(
+                StatusCode::OK,
+                r#"{"result":{"Failure":{"message":"nope"}}}"#
+            ),
+            PromoteResponse::Rejected("200 OK: nope".into()),
+        );
+        assert_eq!(
+            PromoteResponse::classify(StatusCode::OK, "not json"),
+            PromoteResponse::Rejected("200 OK: not json".into()),
+        );
+        assert_eq!(
+            PromoteResponse::classify(StatusCode::INTERNAL_SERVER_ERROR, "boom"),
+            PromoteResponse::Rejected("500 Internal Server Error: boom".into()),
+        );
+        assert_eq!(
+            PromoteResponse::classify(StatusCode::UNAUTHORIZED, ""),
+            PromoteResponse::Rejected("401 Unauthorized: ".into()),
+        );
+    }
+
+    #[mz_ore::test]
+    fn promotion_pending_errors_only_after_grace() {
+        let since = Timestamp::from_second(1_000).unwrap();
+        let grace = SignedDuration::try_from(PROMOTION_PENDING_GRACE).unwrap();
+        let after = |d: SignedDuration| since.checked_add(d).unwrap();
+
+        assert!(check_promotion_pending(since, since, "r").is_ok());
+        assert!(check_promotion_pending(since, after(-grace), "r").is_ok());
+        assert!(
+            check_promotion_pending(since, after(grace - SignedDuration::from_secs(1)), "r")
+                .is_ok()
+        );
+        let err = check_promotion_pending(since, after(grace), "connection refused")
+            .expect_err("pending for the whole grace period");
+        assert!(
+            err.to_string().ends_with(": connection refused"),
+            "error names the last failure: {err}"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // makes a network request
+    async fn request_error_description_omits_url() {
+        // Nothing listens on port 1, so the connection is refused.
+        let url = "http://127.0.0.1:1/api/leader/promote";
+        let err = reqwest::Client::new()
+            .post(url)
+            .send()
+            .await
+            .expect_err("connection refused");
+        assert!(err.to_string().contains(url));
+
+        let description = describe_request_error(err);
+        assert!(
+            description.starts_with("error sending request: "),
+            "{description}"
+        );
+        assert!(!description.contains("127.0.0.1"), "{description}");
+    }
 }
