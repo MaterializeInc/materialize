@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-alpine AS builder
+# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# digest for security fixes.
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS builder
 
 WORKDIR /app
 
