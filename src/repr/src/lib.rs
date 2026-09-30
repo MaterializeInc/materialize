@@ -32,6 +32,7 @@ mod row;
 mod scalar;
 
 pub mod adt;
+pub mod batch;
 pub mod bytes;
 pub mod catalog_item_id;
 pub mod explain;

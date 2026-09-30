@@ -53,6 +53,7 @@ use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
 use crate::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, PackedNumeric};
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
+use crate::batch::{DatumBatch, Kind, Strings, TypedVec};
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
@@ -905,7 +906,75 @@ enum DatumColumnDecoder {
     AclItem(FixedSizeBinaryArray),
 }
 
+/// The values of `array` at `rows`, with its nulls, as a batch.
+fn batch_from_array<E, T>(
+    array: &dyn Array,
+    rows: &[usize],
+    value: impl Fn(usize) -> T,
+    wrap: impl FnOnce(Vec<T>) -> TypedVec,
+) -> DatumBatch<E> {
+    let mut values = Vec::with_capacity(rows.len());
+    let kinds = if array.null_count() == 0 {
+        values.extend(rows.iter().map(|&row| value(row)));
+        None
+    } else {
+        let mut kinds = Vec::with_capacity(rows.len());
+        for &row in rows {
+            if array.is_valid(row) {
+                values.push(value(row));
+                kinds.push(Kind::Value);
+            } else {
+                kinds.push(Kind::Null);
+            }
+        }
+        Some(kinds)
+    };
+    DatumBatch::from_parts(wrap(values), kinds, Vec::new())
+}
+
 impl DatumColumnDecoder {
+    /// The column at `rows` as a batch, or `None` when this column's type has no batch form.
+    fn batch<E>(&self, rows: &[usize]) -> Option<DatumBatch<E>> {
+        fn strings(values: Vec<&str>) -> TypedVec {
+            let mut strings = Strings::default();
+            for value in values {
+                strings.push(value);
+            }
+            TypedVec::String(strings)
+        }
+        Some(match self {
+            DatumColumnDecoder::Bool(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::Bool)
+            }
+            DatumColumnDecoder::I16(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::Int16)
+            }
+            DatumColumnDecoder::I32(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::Int32)
+            }
+            DatumColumnDecoder::I64(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::Int64)
+            }
+            DatumColumnDecoder::U16(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::UInt16)
+            }
+            DatumColumnDecoder::U32(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::UInt32)
+            }
+            DatumColumnDecoder::U64(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::UInt64)
+            }
+            DatumColumnDecoder::F32(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::Float32)
+            }
+            DatumColumnDecoder::F64(a) => {
+                batch_from_array(a, rows, |i| a.value(i), TypedVec::Float64)
+            }
+            DatumColumnDecoder::String(a) => batch_from_array(a, rows, |i| a.value(i), strings),
+            _ => return None,
+        })
+    }
+
     fn get<'a>(&'a self, idx: usize, packer: &'a mut RowPacker) {
         let datum = match self {
             DatumColumnDecoder::Bool(array) => array
@@ -1352,6 +1421,29 @@ impl RowColumnarDecoder {
     // used inside `SourceDataEncoder`.
     pub fn null_count(&self) -> usize {
         self.nullability.as_ref().map_or(0, |n| n.null_count())
+    }
+
+    /// The columns at `rows` as batches, for the columns `demanded` selects.
+    ///
+    /// A column that is not demanded gets an empty placeholder, which the
+    /// caller must not read. Returns `None` when a demanded column's type has
+    /// no batch form.
+    pub fn batches<E>(
+        &self,
+        rows: &[usize],
+        demanded: impl Fn(usize) -> bool,
+    ) -> Option<Vec<DatumBatch<E>>> {
+        self.decoders
+            .iter()
+            .enumerate()
+            .map(|(index, (_, _, decoder))| {
+                if demanded(index) {
+                    decoder.batch(rows)
+                } else {
+                    Some(DatumBatch::new(TypedVec::Bool(Vec::new())))
+                }
+            })
+            .collect()
     }
 }
 
