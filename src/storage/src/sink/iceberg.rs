@@ -158,6 +158,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tracing::{debug, info};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::{Stage, StageLogger};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
 use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
@@ -3017,11 +3018,13 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        stages: &StageLogger,
     ) -> (
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
         let scope = batches.scope();
+        let worker = scope.worker();
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -3093,18 +3096,22 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             .clone();
 
         let connection_for_minter = self.clone();
-        let (batch_descriptions, table_ready, mint_status, mint_button) = mint_batch_descriptions(
-            format!("{sink_id}-iceberg-mint"),
-            sink_id,
-            batches.clone(),
-            sink,
-            connection_for_minter,
-            storage_state.storage_configuration.clone(),
-            Arc::clone(&iceberg_schema),
-        );
+        let (batch_descriptions, table_ready, mint_status, mint_button) =
+            stages.export(worker, sink_id, Stage::Sink, || {
+                mint_batch_descriptions(
+                    format!("{sink_id}-iceberg-mint"),
+                    sink_id,
+                    batches.clone(),
+                    sink,
+                    connection_for_minter,
+                    storage_state.storage_configuration.clone(),
+                    Arc::clone(&iceberg_schema),
+                )
+            });
 
+        // Writing data files is where updates are encoded to Parquet, so it is the Encode stage.
         let connection_for_writer = self.clone();
-        let (datafiles, write_status, write_button) = match sink.envelope {
+        let encode = || match sink.envelope {
             SinkEnvelope::Upsert => write_data_files::<UpsertEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
                 batches,
@@ -3139,22 +3146,26 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 unreachable!("Iceberg sink only supports Upsert and Append envelopes")
             }
         };
+        let (datafiles, write_status, write_button) =
+            stages.export(worker, sink_id, Stage::Encode, encode);
 
         let connection_for_committer = self.clone();
-        let (commit_status, commit_button) = commit_to_iceberg(
-            format!("{sink_id}-commit-to-iceberg"),
-            sink_id,
-            sink.version,
-            datafiles,
-            batch_descriptions,
-            table_ready,
-            Rc::clone(&write_frontier),
-            connection_for_committer,
-            storage_state.storage_configuration.clone(),
-            write_handle,
-            Arc::clone(&metrics),
-            statistics,
-        );
+        let (commit_status, commit_button) = stages.export(worker, sink_id, Stage::Sink, || {
+            commit_to_iceberg(
+                format!("{sink_id}-commit-to-iceberg"),
+                sink_id,
+                sink.version,
+                datafiles,
+                batch_descriptions,
+                table_ready,
+                Rc::clone(&write_frontier),
+                connection_for_committer,
+                storage_state.storage_configuration.clone(),
+                write_handle,
+                Arc::clone(&metrics),
+                statistics,
+            )
+        });
 
         let running_status = Some(HealthStatusMessage {
             id: None,

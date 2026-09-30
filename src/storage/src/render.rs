@@ -217,6 +217,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::{Stage, StageLogger};
 use crate::source::RawSourceCreationConfig;
 use crate::storage_state::StorageState;
 
@@ -243,6 +244,13 @@ pub fn build_ingestion_dataflow(
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
         let root_scope = root_scope.with_label();
+        let worker = root_scope.worker();
+        let stages = StageLogger::new(
+            worker,
+            root_scope.addr()[0],
+            primary_source_id,
+            description.source_exports.keys().copied(),
+        );
 
         // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
         // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
@@ -296,6 +304,7 @@ pub fn build_ingestion_dataflow(
                 config: storage_state.storage_configuration.clone(),
                 remap_collection_id: description.remap_collection_id,
                 busy_signal: Arc::clone(&busy_signal),
+                stage_logger: stages.clone(),
             };
 
             let (outputs, source_health, source_tokens) = match connection {
@@ -357,7 +366,9 @@ pub fn build_ingestion_dataflow(
             health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
                 let export = &description.source_exports[&export_id];
-                let source_data = ok.map(Ok).concat(err.map(Err));
+                let source_data = stages.export(worker, export_id, Stage::Export, || {
+                    ok.map(Ok).concat(err.map(Err))
+                });
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
@@ -372,60 +383,66 @@ pub fn build_ingestion_dataflow(
                     export_id,
                     primary_source_id
                 );
-                let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
-                    mz_scope,
-                    export_id,
-                    export.storage_metadata.clone(),
-                    source_data,
-                    storage_state,
-                    metrics,
-                    Arc::clone(&busy_signal),
-                );
-                upper_streams.push(upper_stream);
-                tokens.extend(sink_tokens);
+                stages.export(worker, export_id, Stage::PersistSink, || {
+                    let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
+                        mz_scope,
+                        export_id,
+                        export.storage_metadata.clone(),
+                        source_data,
+                        storage_state,
+                        metrics,
+                        Arc::clone(&busy_signal),
+                    );
+                    upper_streams.push(upper_stream);
+                    tokens.extend(sink_tokens);
 
-                let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
-                    let halt_status =
-                        HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
-                    HealthStatusMessage {
-                        id: None,
-                        namespace: StatusNamespace::Internal,
-                        update: halt_status,
-                    }
+                    let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
+                        let halt_status = HealthStatusUpdate::halting(
+                            err.display_with_causes().to_string(),
+                            None,
+                        );
+                        HealthStatusMessage {
+                            id: None,
+                            namespace: StatusNamespace::Internal,
+                            update: halt_status,
+                        }
+                    });
+                    health_streams.push(sink_health.leave(root_scope));
                 });
-                health_streams.push(sink_health.leave(root_scope));
             }
 
             mz_scope
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
-            let health_stream = root_scope.concatenate(health_streams);
-            let health_token = crate::healthcheck::health_operator(
-                root_scope,
-                storage_state.now.clone(),
-                resume_uppers
-                    .iter()
-                    .filter_map(|(id, frontier)| {
-                        // If the collection isn't closed, then we will remark it as Starting as
-                        // the dataflow comes up.
-                        (!frontier.is_empty()).then_some(*id)
-                    })
-                    .collect(),
-                primary_source_id,
-                "source",
-                health_stream,
-                crate::healthcheck::DefaultWriter {
-                    command_tx: storage_state.internal_cmd_tx.clone(),
-                    updates: Rc::clone(&storage_state.shared_status_updates),
-                },
-                storage_state
-                    .storage_configuration
-                    .parameters
-                    .record_namespaced_errors,
-                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                    .get(storage_state.storage_configuration.config_set()),
-            );
+            let health_token = stages.shared(worker, Stage::Healthcheck, || {
+                let health_stream = root_scope.concatenate(health_streams);
+                crate::healthcheck::health_operator(
+                    root_scope,
+                    storage_state.now.clone(),
+                    resume_uppers
+                        .iter()
+                        .filter_map(|(id, frontier)| {
+                            // If the collection isn't closed, then we will remark it as Starting
+                            // as the dataflow comes up.
+                            (!frontier.is_empty()).then_some(*id)
+                        })
+                        .collect(),
+                    primary_source_id,
+                    "source",
+                    health_stream,
+                    crate::healthcheck::DefaultWriter {
+                        command_tx: storage_state.internal_cmd_tx.clone(),
+                        updates: Rc::clone(&storage_state.shared_status_updates),
+                    },
+                    storage_state
+                        .storage_configuration
+                        .parameters
+                        .record_namespaced_errors,
+                    dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                        .get(storage_state.storage_configuration.config_set()),
+                )
+            });
             tokens.push(health_token);
 
             storage_state
@@ -447,10 +464,11 @@ pub fn build_export_dataflow(
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         let scope = scope.with_label();
+        let stages = StageLogger::new(scope.worker(), scope.addr()[0], id, [id]);
 
         let mut tokens = vec![];
         let (health_stream, sink_tokens) =
-            crate::render::sinks::render_sink(scope, storage_state, id, &description);
+            crate::render::sinks::render_sink(scope, storage_state, id, &description, &stages);
         tokens.extend(sink_tokens);
 
         // Note that sinks also have only 1 active worker, which simplifies the work that

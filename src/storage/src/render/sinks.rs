@@ -29,6 +29,7 @@ use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
 
 use crate::healthcheck::HealthStatusMessage;
+use crate::logging::{Stage, StageLogger};
 use crate::storage_state::StorageState;
 
 /// The concrete trace type produced internally when arranging a sink's input.
@@ -54,6 +55,7 @@ pub(crate) fn render_sink<'scope>(
     storage_state: &mut StorageState,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
+    stages: &StageLogger,
 ) -> (
     StreamVec<'scope, (), HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -70,28 +72,33 @@ pub(crate) fn render_sink<'scope>(
     let outer_scope = scope.clone();
 
     scope.scoped(&name, |scope| {
+        let worker = scope.worker();
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
         let (ok_collection, err_collection, persist_tokens) =
-            persist_source::persist_source::<_, persist_source::RowVecBuilder<Timestamp>>(
-                scope,
-                sink.from,
-                Arc::clone(&storage_state.persist_clients),
-                &storage_state.txns_ctx,
-                sink.from_storage_metadata.clone(),
-                None,
-                Some(sink.as_of.clone()),
-                snapshot_mode,
-                timely::progress::Antichain::new(),
-                None,
-                None,
-                async {},
-                error_handler,
-            );
+            stages.export(worker, sink_id, Stage::Export, || {
+                persist_source::persist_source::<_, persist_source::RowVecBuilder<Timestamp>>(
+                    scope,
+                    sink.from,
+                    Arc::clone(&storage_state.persist_clients),
+                    &storage_state.txns_ctx,
+                    sink.from_storage_metadata.clone(),
+                    None,
+                    Some(sink.as_of.clone()),
+                    snapshot_mode,
+                    timely::progress::Antichain::new(),
+                    None,
+                    None,
+                    async {},
+                    error_handler,
+                )
+            });
         tokens.extend(persist_tokens);
 
-        let batches = arrange_sink_input(&*sink_render, ok_collection.as_collection());
+        let batches = stages.export(worker, sink_id, Stage::Arrange, || {
+            arrange_sink_input(&*sink_render, ok_collection.as_collection())
+        });
         let key_is_synthetic = sink_render.get_key_indices().is_none()
             && sink_render.get_relation_key_indices().is_none();
 
@@ -102,6 +109,7 @@ pub(crate) fn render_sink<'scope>(
             batches,
             key_is_synthetic,
             err_collection.as_collection(),
+            stages,
         );
         tokens.extend(sink_tokens);
         (health.leave(outer_scope), tokens)
@@ -238,6 +246,9 @@ pub(crate) trait SinkRender<'scope> {
     /// true the arrangement's key is a per-row hash used only for worker
     /// distribution — the sink should treat the key as absent when producing
     /// output.
+    ///
+    /// The sink attributes its operators to the [`Stage::Encode`] and [`Stage::Sink`] stages of
+    /// `sink_id` through `stages`.
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
@@ -246,6 +257,7 @@ pub(crate) trait SinkRender<'scope> {
         batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        stages: &StageLogger,
     ) -> (
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,

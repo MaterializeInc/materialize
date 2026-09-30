@@ -85,6 +85,7 @@ use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::Stage;
 use crate::source::types::Probe;
 use crate::source::types::{FuelSize, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
@@ -157,50 +158,72 @@ impl SourceRender for MySqlSourceConnection {
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
-            scope.clone(),
-            config.clone(),
-            self.clone(),
-            source_outputs.clone(),
-            metrics.snapshot_metrics.clone(),
-        );
+        let stages = &config.stage_logger;
+        let worker = scope.worker();
 
-        let (repl_updates, repl_err, repl_token) = replication::render(
-            scope.clone(),
-            config.clone(),
-            self.clone(),
-            source_outputs,
-            rewinds,
-            metrics,
-        );
+        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) =
+            stages.shared(worker, Stage::ReaderSnapshot, || {
+                snapshot::render(
+                    scope.clone(),
+                    config.clone(),
+                    self.clone(),
+                    source_outputs.clone(),
+                    metrics.snapshot_metrics.clone(),
+                )
+            });
 
-        let (stats_err, probe_stream, stats_token) = statistics::render(
-            scope.clone(),
-            config.clone(),
-            self,
-            resume_uppers,
-            snapshot_err.clone().concat(repl_err.clone()),
-        );
+        // The statistics operator tracks upstream replication progress, so it belongs to the
+        // replication reader.
+        let (repl_updates, repl_err, repl_token, stats_err, probe_stream, stats_token) = stages
+            .shared(worker, Stage::ReaderReplication, || {
+                let (repl_updates, repl_err, repl_token) = replication::render(
+                    scope.clone(),
+                    config.clone(),
+                    self.clone(),
+                    source_outputs,
+                    rewinds,
+                    metrics,
+                );
 
-        let updates = snapshot_updates.concat(repl_updates);
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                |((output, data), time, diff): (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    _,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(output);
-                    (output, (data, time, diff))
-                },
-            );
-        let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
-        }
+                let (stats_err, probe_stream, stats_token) = statistics::render(
+                    scope.clone(),
+                    config.clone(),
+                    self,
+                    resume_uppers,
+                    snapshot_err.clone().concat(repl_err.clone()),
+                );
+                (
+                    repl_updates,
+                    repl_err,
+                    repl_token,
+                    stats_err,
+                    probe_stream,
+                    stats_token,
+                )
+            });
+
+        let data_collections = stages.shared(worker, Stage::Partition, || {
+            let updates = snapshot_updates.concat(repl_updates);
+            let partition_count = u64::cast_from(config.source_exports.len());
+            let data_streams: Vec<_> = updates
+                .inner
+                .partition::<CapacityContainerBuilder<_>, _, _>(
+                    partition_count,
+                    |((output, data), time, diff): (
+                        (usize, Result<SourceMessage, DataflowError>),
+                        _,
+                        Diff,
+                    )| {
+                        let output = u64::cast_from(output);
+                        (output, (data, time, diff))
+                    },
+                );
+            let mut data_collections = BTreeMap::new();
+            for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+                data_collections.insert(*id, data_stream.as_collection());
+            }
+            data_collections
+        });
 
         let export_ids = config.source_exports.keys().copied();
         let health_init = export_ids

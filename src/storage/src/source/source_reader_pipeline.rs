@@ -65,6 +65,7 @@ use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
+use crate::logging::{Stage, StageLogger};
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
 use crate::source::reclock::ReclockOperator;
@@ -119,6 +120,8 @@ pub struct RawSourceCreationConfig {
     // A semaphore that should be acquired by async operators in order to signal that upstream
     // operators should slow down.
     pub busy_signal: Arc<Semaphore>,
+    /// Logs the ingestion dataflow's stages.
+    pub stage_logger: StageLogger,
 }
 
 /// Reduced version of [`RawSourceCreationConfig`] that is used when rendering
@@ -197,24 +200,31 @@ where
 
     let timestamp_desc = source_connection.timestamp_desc();
 
-    let (remap_collection, remap_token) = remap_operator(
-        scope,
-        storage_state,
-        config.clone(),
-        probed_upper_rx,
-        timestamp_desc,
-    );
-    // Need to broadcast the remap changes to all workers.
-    let remap_collection = remap_collection.inner.broadcast().as_collection();
-    tokens.push(remap_token);
+    let stages = &config.stage_logger;
+    let worker = scope.worker();
 
-    let committed_upper = reclock_committed_upper(
-        remap_collection.clone(),
-        config.as_of.clone(),
-        committed_upper,
-        id,
-        Arc::clone(&source_metrics),
-    );
+    let (remap_collection, remap_token, committed_upper) =
+        stages.shared(worker, Stage::Remap, || {
+            let (remap_collection, remap_token) = remap_operator(
+                scope,
+                storage_state,
+                config.clone(),
+                probed_upper_rx,
+                timestamp_desc,
+            );
+            // Need to broadcast the remap changes to all workers.
+            let remap_collection = remap_collection.inner.broadcast().as_collection();
+
+            let committed_upper = reclock_committed_upper(
+                remap_collection.clone(),
+                config.as_of.clone(),
+                committed_upper,
+                id,
+                Arc::clone(&source_metrics),
+            );
+            (remap_collection, remap_token, committed_upper)
+        });
+    tokens.push(remap_token);
 
     let mut reclocked_exports = BTreeMap::new();
 
@@ -230,23 +240,26 @@ where
         );
 
         for (id, export) in exports {
-            let (reclock_pusher, reclocked) =
-                reclock(remap_collection.clone(), config.as_of.clone());
-            export
-                .inner
-                .map(move |(result, from_time, diff)| {
-                    let result = match result {
-                        Ok(msg) => Ok(SourceOutput {
-                            key: msg.key,
-                            value: msg.value,
-                            metadata: msg.metadata,
-                            from_time: from_time.clone(),
-                        }),
-                        Err(err) => Err(err),
-                    };
-                    (result, from_time, diff)
-                })
-                .capture_into(PusherCapture(reclock_pusher));
+            let reclocked = stages.export(worker, id, Stage::Reclock, || {
+                let (reclock_pusher, reclocked) =
+                    reclock(remap_collection.clone(), config.as_of.clone());
+                export
+                    .inner
+                    .map(move |(result, from_time, diff)| {
+                        let result = match result {
+                            Ok(msg) => Ok(SourceOutput {
+                                key: msg.key,
+                                value: msg.value,
+                                metadata: msg.metadata,
+                                from_time: from_time.clone(),
+                            }),
+                            Err(err) => Err(err),
+                        };
+                        (result, from_time, diff)
+                    })
+                    .capture_into(PusherCapture(reclock_pusher));
+                reclocked
+            });
             reclocked_exports2.insert(id, reclocked);
         }
 
@@ -303,81 +316,87 @@ where
 
     let mut health_streams = vec![];
 
+    let stages = &config.stage_logger;
+    let worker = scope.worker();
+
     for (id, export) in exports {
-        let name = format!("SourceGenericStats({})", id);
-        let mut builder = OperatorBuilderRc::new(name, scope.clone());
+        stages.export(worker, id, Stage::Export, || {
+            let name = format!("SourceGenericStats({})", id);
+            let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-        let (health_output, derived_health) = builder.new_output();
-        let mut health_output =
-            OutputBuilder::<_, CapacityContainerBuilder<_>>::from(health_output);
-        health_streams.push(derived_health);
+            let (health_output, derived_health) = builder.new_output();
+            let mut health_output =
+                OutputBuilder::<_, CapacityContainerBuilder<_>>::from(health_output);
+            health_streams.push(derived_health);
 
-        let (output, new_export) = builder.new_output();
-        let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
+            let (output, new_export) = builder.new_output();
+            let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
 
-        let mut input = builder.new_input(export.inner, Pipeline);
-        export_collections.insert(id, new_export.as_collection());
+            let mut input = builder.new_input(export.inner, Pipeline);
+            export_collections.insert(id, new_export.as_collection());
 
-        let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
-        let source_statistics = config
-            .statistics
-            .get(&id)
-            .expect("statistics initialized")
-            .clone();
+            let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
+            let source_statistics = config
+                .statistics
+                .get(&id)
+                .expect("statistics initialized")
+                .clone();
 
-        builder.build(move |mut caps| {
-            let mut health_cap = Some(caps.remove(0));
+            builder.build(move |mut caps| {
+                let mut health_cap = Some(caps.remove(0));
 
-            move |frontiers| {
-                let mut last_status = None;
-                let mut health_output = health_output.activate();
+                move |frontiers| {
+                    let mut last_status = None;
+                    let mut health_output = health_output.activate();
 
-                if frontiers[0].is_empty() {
-                    health_cap = None;
-                    return;
-                }
-                let health_cap = health_cap.as_mut().unwrap();
+                    if frontiers[0].is_empty() {
+                        health_cap = None;
+                        return;
+                    }
+                    let health_cap = health_cap.as_mut().unwrap();
 
-                input.for_each(|cap, data| {
-                    for (message, _, _) in data.iter() {
-                        match message {
-                            Ok(message) => {
-                                source_statistics.inc_messages_received_by(1);
-                                let key_len = u64::cast_from(message.key.byte_len());
-                                let value_len = u64::cast_from(message.value.byte_len());
-                                bytes_read_counter.inc_by(key_len + value_len);
-                                source_statistics.inc_bytes_received_by(key_len + value_len);
-                            }
-                            Err(error) => {
-                                // All errors coming into the data stream are definite.
-                                // Downstream consumers of this data will preserve this
-                                // status.
-                                let hint = match error {
-                                    DataflowError::SourceError(e) if e.hint.is_some() => {
-                                        e.hint.as_deref().map(str::to_string)
+                    input.for_each(|cap, data| {
+                        for (message, _, _) in data.iter() {
+                            match message {
+                                Ok(message) => {
+                                    source_statistics.inc_messages_received_by(1);
+                                    let key_len = u64::cast_from(message.key.byte_len());
+                                    let value_len = u64::cast_from(message.value.byte_len());
+                                    bytes_read_counter.inc_by(key_len + value_len);
+                                    source_statistics.inc_bytes_received_by(key_len + value_len);
+                                }
+                                Err(error) => {
+                                    // All errors coming into the data stream are definite.
+                                    // Downstream consumers of this data will preserve this
+                                    // status.
+                                    let hint = match error {
+                                        DataflowError::SourceError(e) if e.hint.is_some() => {
+                                            e.hint.as_deref().map(str::to_string)
+                                        }
+                                        _ => Some(
+                                            "retracting the errored value may resume the source"
+                                                .to_string(),
+                                        ),
+                                    };
+                                    let update =
+                                        HealthStatusUpdate::stalled(error.to_string(), hint);
+                                    let status = HealthStatusMessage {
+                                        id: Some(id),
+                                        namespace: C::STATUS_NAMESPACE.clone(),
+                                        update,
+                                    };
+                                    if last_status.as_ref() != Some(&status) {
+                                        last_status = Some(status.clone());
+                                        health_output.session(&health_cap).give(status);
                                     }
-                                    _ => Some(
-                                        "retracting the errored value may resume the source"
-                                            .to_string(),
-                                    ),
-                                };
-                                let update = HealthStatusUpdate::stalled(error.to_string(), hint);
-                                let status = HealthStatusMessage {
-                                    id: Some(id),
-                                    namespace: C::STATUS_NAMESPACE.clone(),
-                                    update,
-                                };
-                                if last_status.as_ref() != Some(&status) {
-                                    last_status = Some(status.clone());
-                                    health_output.session(&health_cap).give(status);
                                 }
                             }
                         }
-                    }
-                    let mut output = output.activate();
-                    output.session(&cap).give_container(data);
-                });
-            }
+                        let mut output = output.activate();
+                        output.session(&cap).give_container(data);
+                    });
+                }
+            });
         });
     }
 
@@ -391,20 +410,22 @@ where
     // `Retained<Retained<…>>` chain, overflowing the recursion limit.
     // `InspectCore` has no such bound, so the cascade never starts. We
     // iterate the container by hand to recover the per-item callback.
-    probe_stream.broadcast().inspect_container(move |event| {
-        if let Ok((_, data)) = event {
-            for probe in data {
-                // We don't care if the receiver is gone
-                let _ = probed_upper_tx.send(Some(probe.clone()));
+    stages.shared(worker, Stage::Remap, || {
+        probe_stream.broadcast().inspect_container(move |event| {
+            if let Ok((_, data)) = event {
+                for probe in data {
+                    // We don't care if the receiver is gone
+                    let _ = probed_upper_tx.send(Some(probe.clone()));
+                }
             }
-        }
+        });
     });
 
-    (
-        export_collections,
-        health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
-        tokens,
-    )
+    let health = stages.shared(worker, Stage::Healthcheck, || {
+        health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams)
+    });
+
+    (export_collections, health, tokens)
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -444,6 +465,7 @@ where
         config: _,
         remap_collection_id,
         busy_signal: _,
+        stage_logger: _,
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();
