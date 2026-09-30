@@ -739,6 +739,7 @@ impl crate::coord::Coordinator {
                 tx: self.internal_cmd_tx.clone(),
                 metrics: self.metrics.clone(),
             },
+            Arc::clone(&self.peek_registry),
             catalog,
             Arc::clone(&self.controller.storage_collections),
             Arc::clone(&self.transient_id_gen),
@@ -850,137 +851,96 @@ impl crate::coord::Coordinator {
         pending_peek
     }
 
-    /// Implements a slow-path peek: ships its transient dataflow, peeks the
-    /// dataflow's index, and registers the pending peek. This is called from the
-    /// command handler for `ExecuteSlowPathPeek`.
+    /// Implements a slow-path peek: ships its transient dataflow and peeks the
+    /// dataflow's index. This is called from the command handler for
+    /// `ExecuteSlowPathPeek`.
     ///
-    /// On an error return nothing is registered, and the caller logs the
-    /// statement's end. Once registered, `handle_peek_notification` logs it.
+    /// `peek`'s lifecycle ends the statement's logging on every path, including
+    /// an error return.
     pub(crate) fn implement_slow_path_peek(
         &mut self,
+        peek: crate::peek_client::PeekHandle,
         dataflow_plan: PeekDataflowPlan,
         determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         intermediate_result_type: SqlRelationType,
-        source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
         watch_set: Option<WatchSetCreation>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        // Install watch sets for statement lifecycle logging if enabled.
-        // This must happen _before_ creating ExecuteContextExtra, so that if it fails,
-        // we don't have an ExecuteContextExtra that needs to be retired (the frontend
-        // will handle logging for the error case).
-        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
-        if let Some(ws) = watch_set {
-            self.install_peek_watch_sets(conn_id.clone(), ws)
-                .map_err(|e| {
-                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e)
-                })?;
-        }
+        let issue = || {
+            if let Some(ws) = watch_set {
+                self.install_peek_watch_sets(conn_id, ws)
+                    .map_err(AdapterError::concurrent_dependency_drop_from_compute_lookup_error)?;
+            }
 
-        let source_arity = intermediate_result_type.arity();
-        let timestamp = determination.timestamp_context.timestamp_or_default();
+            let (index_id, read_hold, map_filter_project) = self.create_transient_peek_target(
+                dataflow_plan,
+                intermediate_result_type.arity(),
+                compute_instance,
+            )?;
 
-        let (index_id, read_hold, map_filter_project) =
-            self.create_transient_peek_target(dataflow_plan, source_arity, compute_instance)?;
+            // At this stage we don't know column names for the result because we
+            // only know the peek's result type as a bare SqlRelationType.
+            let peek_result_column_names =
+                (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+            let peek_result_desc =
+                RelationDesc::new(intermediate_result_type, peek_result_column_names);
 
-        // Endpoints for sending and receiving peek responses.
-        let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
-
-        // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
-        // small but unlikely chance that it's not unique to completed peeks.
-        let mut uuid = Uuid::new_v4();
-        while self.pending_peeks.contains_key(&uuid) {
-            uuid = Uuid::new_v4();
-        }
-
-        // At this stage we don't know column names for the result because we
-        // only know the peek's result type as a bare SqlRelationType.
-        let peek_result_column_names =
-            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
-        let peek_result_desc =
-            RelationDesc::new(intermediate_result_type, peek_result_column_names);
-
-        let peek_result = self
-            .controller
-            .compute
-            .peek(
+            let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
+            let issued = self.controller.compute.peek(
                 compute_instance,
                 PeekTarget::Index { id: index_id },
                 None,
-                uuid,
-                timestamp,
+                peek.uuid,
+                determination.timestamp_context.timestamp_or_default(),
                 peek_result_desc,
                 finishing.clone(),
                 map_filter_project,
                 read_hold,
                 target_replica,
                 rows_tx,
-                None,
-            )
-            .map_err(AdapterError::concurrent_dependency_drop_from_peek_error);
-        if let Err(e) = peek_result {
-            // Drop the transient dataflow shipped above to avoid leaking it.
+                Some(Arc::clone(&peek.lifecycle)),
+            );
+
+            // Drop the dataflow now that the peek is queued. This is required:
+            // `add_collection` installs implied/warmup holds owned by the controller
+            // and only released via `drop_collections`, so without this call the
+            // transient dataflow's `since` would stay pinned at `as_of` forever. The
+            // peek's own read hold keeps the collection alive on the cluster until
+            // the response arrives. This also cleans up when the peek fails to
+            // issue or its lifecycle is already retired.
             self.drop_compute_collections(vec![(compute_instance, index_id)]);
-            return Err(e);
-        }
 
-        // Register the pending peek only after compute.peek() succeeds. If it
-        // fails (e.g. concurrent replica/cluster drop), inserting first would
-        // leak entries in these maps and misattribute statement execution reasons.
-        self.pending_peeks.insert(
-            uuid,
-            PendingPeek {
-                conn_id: conn_id.clone(),
-                cluster_id: compute_instance,
-                depends_on: source_ids,
-                ctx_extra: ExecuteContextGuard::new(
-                    statement_logging_id,
-                    self.internal_cmd_tx.clone(),
-                ),
-                is_fast_path: false,
-            },
-        );
-        self.client_pending_peeks
-            .entry(conn_id)
-            .or_default()
-            .insert(uuid, compute_instance);
+            issued.map_err(AdapterError::concurrent_dependency_drop_from_peek_error)?;
+            Ok::<_, AdapterError>(rows_rx)
+        };
+        let rows_rx = match issue() {
+            Ok(rows_rx) => rows_rx,
+            Err(error) => {
+                peek.lifecycle
+                    .complete(PeekNotification::Error(error.to_string()));
+                return Err(error);
+            }
+        };
 
-        let duration_histogram = self.metrics.row_set_finishing_seconds();
-
-        // Drop the dataflow now that the peek is queued. This is required:
-        // `add_collection` installs implied/warmup holds owned by the controller
-        // and only released via `drop_collections`, so without this call the
-        // transient dataflow's `since` would stay pinned at `as_of` forever. The
-        // peek's own read hold keeps the collection alive on the cluster until
-        // the response arrives.
-        self.drop_compute_collections(vec![(compute_instance, index_id)]);
-
-        let persist_client = self.persist_client.clone();
-        let peek_stash_read_batch_size_bytes =
-            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
-                .get(self.catalog().system_config().dyncfgs());
-        let peek_stash_read_memory_budget_bytes =
-            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
-                .get(self.catalog().system_config().dyncfgs());
-
+        let dyncfgs = self.catalog().system_config().dyncfgs();
         let peek_response_stream = crate::peek_client::create_peek_response_stream(
             rows_rx,
             finishing,
             max_result_size,
             max_query_result_size,
-            duration_histogram,
-            persist_client,
-            peek_stash_read_batch_size_bytes,
-            peek_stash_read_memory_budget_bytes,
+            self.metrics.row_set_finishing_seconds(),
+            self.persist_client.clone(),
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES.get(dyncfgs),
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.get(dyncfgs),
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
-            rows: Box::pin(peek_response_stream),
+            rows: Box::pin(peek.guard_stream(peek_response_stream)),
             instance_id: compute_instance,
             strategy: StatementExecutionStrategy::Standard,
         })

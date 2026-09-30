@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,7 +67,7 @@ use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
 };
 use crate::optimize::peek;
-use crate::peek_client::{ExecutionLogging, TakeOver};
+use crate::peek_client::{ExecutionLogging, PeekCancelSafety, TakeOver};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
@@ -84,18 +83,18 @@ impl PeekClient {
     /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
     ///
     /// `logging` holds the end-of-execution obligation for this statement. The
-    /// caller retires it, this function only takes the statement over and, at
-    /// the dispatch sites that hand execution off, defuses the slot.
-    ///
-    /// `connection_closed` resolves when the client goes away. Waiting for the optimizer gives up
-    /// then, as it does on a statement timeout.
+    /// caller retires it unless dispatch transfers it to the peek lifecycle
+    /// or a coordinator-owned non-peek operation.
     pub(crate) async fn try_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
         logging: &mut ExecutionLogging,
-        connection_closed: impl Future<Output = ()> + Send,
+        cancel_safety: &PeekCancelSafety,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let cancellation_epoch = self
+            .connection_peeks(session.conn_id())
+            .cancellation_epoch();
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -210,8 +209,16 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_peek_inner(session, catalog, stmt, params, logging, connection_closed)
-            .await
+        self.try_peek_inner(
+            session,
+            catalog,
+            stmt,
+            params,
+            logging,
+            cancellation_epoch,
+            cancel_safety,
+        )
+        .await
     }
 
     /// Executes a coordinator-owned `SELECT`, pinned to `replica_id`, and
@@ -222,12 +229,8 @@ impl PeekClient {
     /// statement-logged. This calls into the coordinator, so awaiting it on the
     /// coordinator's main loop deadlocks.
     ///
-    /// NOTE: Dropping the returned future does not cancel the peek, since
-    /// there is no connection to cancel it with. A peek dropped after its issue
-    /// keeps its read holds until the replica answers or goes away. One dropped
-    /// between its registration with the coordinator and its issue leaves the
-    /// registration behind, since only a response, a cancel of its connection,
-    /// or a drop of its inputs retires it.
+    /// Dropping the returned future retires its frontend-owned peek and
+    /// requests compute cancellation if the peek has already been issued.
     pub(crate) async fn background_peek(
         &mut self,
         sql: &str,
@@ -270,6 +273,10 @@ impl PeekClient {
         session.start_transaction_single_stmt(mz_ore::now::to_datetime((catalog.config().now)()));
 
         let mut logging = ExecutionLogging::adopt(None, self);
+        let cancellation_epoch = self
+            .connection_peeks(session.conn_id())
+            .cancellation_epoch();
+        let cancel_safety = PeekCancelSafety::new();
         let response = self
             .try_peek_inner(
                 &mut session,
@@ -277,8 +284,8 @@ impl PeekClient {
                 Some(Arc::new(stmt)),
                 Params::empty(),
                 &mut logging,
-                // A background peek has no client connection.
-                futures::future::pending(),
+                cancellation_epoch,
+                &cancel_safety,
             )
             .await?;
 
@@ -314,11 +321,8 @@ impl PeekClient {
     /// This is encapsulated in an inner function so that the outer function can still do statement
     /// logging after the `?` returns of the inner function.
     ///
-    /// Dispatch sites that hand the statement to the coordinator for
-    /// asynchronous completion (registered peeks, subscribes) `defuse` the
-    /// logging slot at the point where the coordinator takes over. Everywhere
-    /// else the slot stays armed and `SessionClient::execute` logs the end from
-    /// the returned result.
+    /// Streaming peeks transfer logging to their lifecycle. Subscribes transfer
+    /// it to the protocol layer. Immediate responses leave it with the caller.
     #[mz_ore::instrument(level = "debug")]
     async fn try_peek_inner(
         &mut self,
@@ -327,7 +331,8 @@ impl PeekClient {
         stmt: Option<Arc<Statement<Raw>>>,
         params: Params,
         logging: &mut ExecutionLogging,
-        connection_closed: impl Future<Output = ()> + Send,
+        cancellation_epoch: u64,
+        cancel_safety: &PeekCancelSafety,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -509,6 +514,7 @@ impl PeekClient {
                 )?;
 
                 // RBAC passed. Delegate execution to the Coordinator.
+                cancel_safety.delegate_side_effect();
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSideEffectingFunc {
                         plan: sef_plan.clone(),
@@ -1428,15 +1434,13 @@ impl PeekClient {
         if optimization_timeout == Duration::ZERO {
             optimization_timeout = Duration::MAX;
         }
-        // Note: spawn_blocking tasks cannot be cancelled, so on timeout or when the client goes away
-        // we stop waiting but the optimization task continues running in the background until
-        // completion. See https://github.com/MaterializeInc/database-issues/issues/8644 for properly
-        // cancelling optimizer runs.
-        let optimization_wait = tokio::time::timeout(optimization_timeout, optimization_future);
-        let optimization_wait = tokio::select! {
-            result = optimization_wait => result,
-            () = connection_closed => return Err(AdapterError::Canceled),
-        };
+        // Note: spawn_blocking tasks cannot be cancelled, so on timeout, or when the caller drops
+        // this future because the client canceled or went away, we stop waiting but the
+        // optimization task continues running in the background until completion. See
+        // https://github.com/MaterializeInc/database-issues/issues/8644 for properly cancelling
+        // optimizer runs.
+        let optimization_wait =
+            tokio::time::timeout(optimization_timeout, optimization_future).await;
         let optimization_result = match optimization_wait {
             Ok(Ok(result)) => result,
             Ok(Err(AdapterError::Optimizer(err))) => {
@@ -1632,6 +1636,8 @@ impl PeekClient {
                             source_ids,
                             watch_set,
                             logging,
+                            Arc::clone(&catalog),
+                            cancellation_epoch,
                         )
                         .await?
                     }
@@ -1641,15 +1647,27 @@ impl PeekClient {
                             self.log_set_transient_index_id(logging_id, dataflow_plan.id);
                         }
 
+                        let peek = self
+                            .register_peek(
+                                session.conn_id(),
+                                target_cluster_id,
+                                source_ids,
+                                Arc::clone(&catalog),
+                                cancellation_epoch,
+                                logging,
+                                false,
+                            )
+                            .await?;
+
                         let response = self
                             .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
+                                peek,
                                 dataflow_plan: Box::new(dataflow_plan),
                                 determination,
                                 finishing,
                                 compute_instance: target_cluster_id,
                                 target_replica,
                                 intermediate_result_type: typ,
-                                source_ids,
                                 conn_id: session.conn_id().clone(),
                                 max_result_size,
                                 max_query_result_size,
@@ -1657,12 +1675,6 @@ impl PeekClient {
                                 tx,
                             })
                             .await??;
-                        // On success the peek is registered in `pending_peeks`,
-                        // which now owns end-of-execution logging. On error the
-                        // coordinator logs nothing (see
-                        // `implement_slow_path_peek`), so the guard stays armed
-                        // and the caller logs the error.
-                        logging.defuse();
                         response
                     }
                 };
@@ -1693,6 +1705,7 @@ impl PeekClient {
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
+                cancel_safety.delegate_side_effect();
                 session.require_coordinator_completion();
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds {
@@ -1738,6 +1751,7 @@ impl PeekClient {
                 global_lir_plan,
                 source_ids,
             } => {
+                cancel_safety.delegate_side_effect();
                 let (df_desc, df_meta) = global_lir_plan.unapply();
 
                 coord::sequencer::emit_optimizer_notices(
