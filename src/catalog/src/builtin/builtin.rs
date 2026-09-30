@@ -10,6 +10,7 @@
 //! Constant builtin views exposing information about builtin objects.
 
 use itertools::Itertools;
+use mz_catalog_protos::objects::CatalogItemType;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_pgrepr::oid;
@@ -70,17 +71,20 @@ fn make_builtin_sources(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
         .map(|src| {
             let privileges = make_privileges_sql(&src.access, &owner_priv);
             format!(
-                "({}::oid, '{}', '{}', 'source', {})",
-                src.oid, src.schema, src.name, privileges
+                "({}::oid, '{}', '{}', 'source', {}, {})",
+                src.oid, src.schema, src.name, privileges, src.is_retained_metrics_object
             )
         })
         .join(",");
+    // Builtin logs are never retained metrics objects, hence the constant
+    // `false` in their rows.
+    let object_type = gid_mapping_object_type(CatalogItemType::Source);
     let sql = format!(
         "
-SELECT oid, schema_name, name, type, privileges
-FROM (VALUES {source_values}) AS v(oid, schema_name, name, type, privileges)
+SELECT oid, schema_name, name, type, privileges, is_retained_metrics_object, {object_type} AS object_type
+FROM (VALUES {source_values}) AS v(oid, schema_name, name, type, privileges, is_retained_metrics_object)
 UNION ALL
-SELECT oid, schema_name, name, 'log', privileges
+SELECT oid, schema_name, name, 'log', privileges, false, {object_type}
 FROM mz_internal.mz_builtin_log_indexes"
     );
 
@@ -97,6 +101,11 @@ FROM mz_internal.mz_builtin_log_indexes"
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
+            .with_column("object_type", SqlScalarType::String.nullable(false))
             .finish(),
         column_comments: Default::default(),
         sql: Box::leak(sql.into_boxed_str()),
@@ -138,9 +147,14 @@ fn make_builtin_materialized_views(builtin_items: &[Builtin<NameReference>]) -> 
             )
         })
         .join(",");
+    let object_type = gid_mapping_object_type(CatalogItemType::MaterializedView);
+    // `is_retained_metrics_object` is `false` for every row, because the catalog
+    // does not act on the flag for a materialized view.
+    // https://github.com/MaterializeInc/materialize/pull/36072 wired the flag
+    // through but it doesn't actually work. Reporting `false` keeps the column consistent.
     let sql = format!(
         "
-SELECT oid, schema_name, name, cluster_name, definition, privileges, create_sql
+SELECT oid, schema_name, name, cluster_name, definition, privileges, create_sql, false AS is_retained_metrics_object, {object_type} AS object_type
 FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, privileges, create_sql)"
     );
 
@@ -159,6 +173,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
             .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
+            .with_column("object_type", SqlScalarType::String.nullable(false))
             .with_key(vec![0])
             .with_key(vec![2])
             .with_key(vec![4])
@@ -182,13 +201,17 @@ fn make_builtin_tables(builtin_items: &[Builtin<NameReference>]) -> BuiltinView 
             let schema = escaped_string_literal(table.schema);
             let name = escaped_string_literal(table.name);
             let privileges = make_privileges_sql(&table.access, &owner_priv);
-            format!("({}::oid, {}, {}, {})", table.oid, schema, name, privileges)
+            format!(
+                "({}::oid, {}, {}, {}, {})",
+                table.oid, schema, name, privileges, table.is_retained_metrics_object
+            )
         })
         .join(",");
+    let object_type = gid_mapping_object_type(CatalogItemType::Table);
     let sql = format!(
         "
-SELECT oid, schema_name, name, privileges
-FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
+SELECT oid, schema_name, name, privileges, is_retained_metrics_object, {object_type} AS object_type
+FROM (VALUES {values}) AS v(oid, schema_name, name, privileges, is_retained_metrics_object)"
     );
 
     BuiltinView {
@@ -203,6 +226,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
+            .with_column("object_type", SqlScalarType::String.nullable(false))
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
             // (`verify_builtin_descs` enforces this). Table names happen to
@@ -264,15 +292,21 @@ fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
             // them away with `assert_safe_builtin_name`.
             let key_exprs_escaped = escaped_string_literal(&key_exprs);
             format!(
-                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped})",
-                index.oid, index.schema, index.name, on_schema, on_name_str
+                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped}, {})",
+                index.oid,
+                index.schema,
+                index.name,
+                on_schema,
+                on_name_str,
+                index.is_retained_metrics_object
             )
         })
         .join(",");
+    let object_type = gid_mapping_object_type(CatalogItemType::Index);
     let sql = format!(
         "
-SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs
-FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs)"
+SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object, {object_type} AS object_type
+FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object)"
     );
 
     BuiltinView {
@@ -286,6 +320,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
             .with_column("on_schema_name", SqlScalarType::String.nullable(false))
             .with_column("on_name", SqlScalarType::String.nullable(false))
             .with_column("key_exprs", SqlScalarType::String.nullable(false))
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
+            .with_column("object_type", SqlScalarType::String.nullable(false))
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
             // (`verify_builtin_descs` enforces this).
@@ -463,6 +502,17 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, definition, privileges, crea
 
     view.sql = Box::leak(sql.into_boxed_str());
     view
+}
+
+/// The `object_type` of a builtin's `GidMapping` record in `mz_catalog_raw`, as a
+/// SQL literal spelled the way `->>` renders it, so that catalog views can join
+/// the record on it without hardcoding the enum's discriminants.
+fn gid_mapping_object_type(item_type: CatalogItemType) -> String {
+    // `mz_catalog_raw` rows are built with `serde_json::to_value`, so this is
+    // the exact value `->>` renders.
+    let repr =
+        serde_json::to_value(item_type).expect("CatalogItemType serializes as a plain integer");
+    format!("'{repr}'")
 }
 
 /// Convert the given list of [`MzAclItem`] to the equivalent SQL syntax.
