@@ -418,6 +418,45 @@ true true true true true
 
 > DROP SOURCE counter CASCADE;
 
+# Test that each stage of a bucketed hierarchical reduction arranges only the
+# rows its buckets reject. Every group holds a single row, which wins its bucket
+# at every stage however the rows hash, so no stage's reduction may hold a
+# record. The stage inputs, which hold every row, guard against reading the
+# sizes before the dataflow has hydrated.
+> CREATE TABLE singletons (k int, v int);
+> INSERT INTO singletons SELECT g, g FROM generate_series(1, 1000) g;
+
+> CREATE MATERIALIZED VIEW singleton_max AS
+  SELECT k, MAX(v) FROM singletons GROUP BY k;
+
+> SELECT o.name, count(*), coalesce(sum(s.records), 0)
+  FROM mz_introspection.mz_dataflow_operator_dataflows o
+  LEFT JOIN mz_introspection.mz_arrangement_sizes s ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%singleton_max' AND
+    o.name IN ('Arranged MinsMaxesHierarchical input', 'Reduced Fallibly MinsMaxesHierarchical')
+  GROUP BY o.name
+"Arranged MinsMaxesHierarchical input" 7 7000
+"Reduced Fallibly MinsMaxesHierarchical" 7 0
+
+# Several aggregates share one hierarchy and pack one column each into the value
+# row. In a single-row group all aggregates pick the same row, so the winner still
+# equals its input.
+> CREATE MATERIALIZED VIEW singleton_min_max AS
+  SELECT k, MIN(v), MAX(v) FROM singletons GROUP BY k;
+
+> SELECT o.name, count(*), coalesce(sum(s.records), 0)
+  FROM mz_introspection.mz_dataflow_operator_dataflows o
+  LEFT JOIN mz_introspection.mz_arrangement_sizes s ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%singleton_min_max' AND
+    o.name IN ('Arranged MinsMaxesHierarchical input', 'Reduced Fallibly MinsMaxesHierarchical')
+  GROUP BY o.name
+"Arranged MinsMaxesHierarchical input" 7 7000
+"Reduced Fallibly MinsMaxesHierarchical" 7 0
+
+> DROP TABLE singletons CASCADE;
+
 # Test that MV sink correction buffers show up in mz_arrangement_sizes.
 # We use a replacement MV to keep the correction buffer filled with data while
 # we inspect it.
