@@ -304,6 +304,11 @@ case "$cmd" in
                 --env AZURE_SQL_USER
                 --env AZURE_SQL_PASSWORD
                 --env GCP_SERVICE_ACCOUNT_JSON
+                # For test/terraform gcp-temporary through Buildkite OIDC
+                --env GCP_WORKLOAD_IDENTITY_PROVIDER
+                --env GCP_SERVICE_ACCOUNT_EMAIL
+                --env GCP_CI_FOLDER_ID
+                --env GCP_BILLING_ACCOUNT
                 # For test/gcp Iceberg E2E
                 --env ICEBERG_GCS_BUCKET
                 --env ICEBERG_GCP_PROJECT
