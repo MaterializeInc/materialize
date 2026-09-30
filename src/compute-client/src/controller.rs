@@ -48,6 +48,7 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
+use mz_expr::func::{WasmModuleBytes, WasmModuleHash};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -266,6 +267,10 @@ pub struct ComputeController {
     /// configuration that the controller resolves once, at replica creation,
     /// must be read through the new replica's overrides.
     replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    /// The WebAssembly modules the coordinator has registered, with how many registrations
+    /// share each hash. An instance receives a module only when a dataflow or peek on it calls
+    /// into the module.
+    wasm_modules: BTreeMap<WasmModuleHash, (WasmModuleBytes, usize)>,
 
     /// Receiver for responses produced by `Instance`s.
     response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
@@ -362,6 +367,7 @@ impl ComputeController {
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             replica_dyncfg_overrides: BTreeMap::new(),
+            wasm_modules: BTreeMap::new(),
             response_rx,
             response_tx,
             introspection_rx: Some(introspection_rx),
@@ -539,6 +545,7 @@ impl ComputeController {
             wallclock_lag: _,
             dyncfg: _,
             replica_dyncfg_overrides: _,
+            wasm_modules,
             response_rx: _,
             response_tx: _,
             introspection_rx: _,
@@ -546,6 +553,7 @@ impl ComputeController {
             maintenance_ticker: _,
             maintenance_scheduled,
         } = self;
+        let wasm_modules: Vec<_> = wasm_modules.keys().map(|hash| hash.to_string()).collect();
 
         let mut instances_dump = BTreeMap::new();
         for (id, instance) in instances {
@@ -567,6 +575,7 @@ impl ComputeController {
             "read_only": read_only,
             "stashed_response": format!("{stashed_response:?}"),
             "maintenance_scheduled": maintenance_scheduled,
+            "wasm_modules": wasm_modules,
         }))
     }
 }
@@ -629,7 +638,53 @@ impl ComputeController {
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));
 
+        for (hash, (bytes, _)) in &self.wasm_modules {
+            let (hash, bytes) = (*hash, bytes.clone());
+            instance.call(move |i| i.register_wasm_module(hash, bytes));
+        }
+
         Ok(())
+    }
+
+    /// Registers a WebAssembly module, which the controller then installs on each instance that
+    /// runs a dataflow or peek calling into it. Callers must register a module before creating a
+    /// dataflow or issuing a peek whose expressions reference it.
+    pub fn register_wasm_module(&mut self, hash: WasmModuleHash, bytes: WasmModuleBytes) {
+        let (_, registrations) = self
+            .wasm_modules
+            .entry(hash)
+            .or_insert_with(|| (bytes.clone(), 0));
+        *registrations += 1;
+        if *registrations == 1 {
+            for instance in self.instances.values_mut() {
+                let bytes = bytes.clone();
+                instance.call(move |i| i.register_wasm_module(hash, bytes));
+            }
+        }
+    }
+
+    /// Undoes one [`Self::register_wasm_module`] of the module with `hash`. Instances that
+    /// already have the module keep it until nothing on them calls into it.
+    pub fn deregister_wasm_module(&mut self, hash: WasmModuleHash) {
+        if let Some((_, registrations)) = self.wasm_modules.get_mut(&hash) {
+            *registrations -= 1;
+            if *registrations == 0 {
+                self.wasm_modules.remove(&hash);
+                for instance in self.instances.values_mut() {
+                    instance.call(move |i| i.deregister_wasm_module(&hash));
+                }
+            }
+        }
+    }
+
+    /// The first of `hashes` that is not registered, if any.
+    fn missing_wasm_module<'a>(
+        &self,
+        mut hashes: impl Iterator<Item = &'a WasmModuleHash>,
+    ) -> Option<WasmModuleHash> {
+        hashes
+            .find(|hash| !self.wasm_modules.contains_key(*hash))
+            .copied()
     }
 
     /// Updates a compute instance's workload class.
@@ -884,6 +939,9 @@ impl ComputeController {
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
+        if let Some(hash) = self.missing_wasm_module(dataflow.wasm_modules.iter()) {
+            return Err(WasmModuleMissing(hash));
+        }
         let instance = self.instance(instance_id)?;
 
         // Validation: target replica
@@ -1042,6 +1100,18 @@ impl ComputeController {
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
+
+        let mut hashes = BTreeSet::new();
+        for expr in map_filter_project
+            .expressions
+            .iter()
+            .chain(map_filter_project.predicates.iter().map(|(_, p)| p))
+        {
+            expr.collect_wasm_modules(&mut hashes);
+        }
+        if let Some(hash) = self.missing_wasm_module(hashes.iter()) {
+            return Err(WasmModuleMissing(hash));
+        }
 
         let instance = self.instance(instance_id)?;
 

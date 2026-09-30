@@ -17,6 +17,7 @@
 //! controller methods return bespoke error types that serve as documentation for the failure modes
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
+use mz_expr::func::WasmModuleHash;
 use mz_repr::GlobalId;
 use thiserror::Error;
 
@@ -127,6 +128,9 @@ pub enum DataflowCreationError {
     /// because it should always have an external side effect.
     #[error("copy to dataflow has an empty as_of")]
     EmptyAsOfForCopyTo,
+    /// The dataflow calls into a WebAssembly module that is not registered.
+    #[error("WebAssembly module is not registered: {0}")]
+    WasmModuleMissing(WasmModuleHash),
 }
 
 impl From<InstanceMissing> for DataflowCreationError {
@@ -159,6 +163,9 @@ pub enum PeekError {
     /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    /// The peek calls into a WebAssembly module that is not registered.
+    #[error("WebAssembly module is not registered: {0}")]
+    WasmModuleMissing(WasmModuleHash),
 }
 
 impl From<InstanceMissing> for PeekError {

@@ -7062,6 +7062,7 @@ dependencies = [
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
+ "mz-wasm-udf",
  "num-traits",
  "prometheus",
  "proptest",

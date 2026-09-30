@@ -16,6 +16,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
+use mz_expr::func::{WasmModuleBytes, WasmModuleHash};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
@@ -174,6 +175,20 @@ pub enum ComputeCommand {
     /// Note: The `AllowWrites` command is per collection, but a dataflow could host multiple
     /// collections. We're accepting this impedance mismatch for now.
     AllowWrites(GlobalId),
+
+    /// `InstallWasmModule` provides the replica with a WebAssembly module that expressions in
+    /// dataflows and peeks may call, identified by the hash of its bytes.
+    ///
+    /// The controller sends a module before the first `CreateDataflow` or `Peek` command whose
+    /// expressions reference it, and only to instances that run such a command.
+    InstallWasmModule(Box<WasmModule>),
+
+    /// `DropWasmModule` withdraws a module installed by `InstallWasmModule`, once no dataflow or
+    /// peek on the instance references it anymore.
+    ///
+    /// The replica counts installs and evicts a module only once every install has been matched
+    /// by a drop, so a drop never takes away a module a later install still needs.
+    DropWasmModule(WasmModuleHash),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica's dataflows.
@@ -433,6 +448,15 @@ impl PeekTarget {
             Self::Persist { id, .. } => *id,
         }
     }
+}
+
+/// A WebAssembly module, as sent by [`ComputeCommand::InstallWasmModule`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WasmModule {
+    /// The SHA-256 of `bytes`.
+    pub hash: WasmModuleHash,
+    /// The module.
+    pub bytes: WasmModuleBytes,
 }
 
 /// Peek a collection, either in an arrangement or Persist.

@@ -382,7 +382,8 @@ impl ShouldTerminateGracefully for DataflowCreationError {
             | DataflowCreationError::ReplicaMissing(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
-            | DataflowCreationError::EmptyAsOfForCopyTo => false,
+            | DataflowCreationError::EmptyAsOfForCopyTo
+            | DataflowCreationError::WasmModuleMissing(_) => false,
         }
     }
 }
@@ -403,7 +404,8 @@ impl ShouldTerminateGracefully for PeekError {
             | PeekError::ReadHoldIdMismatch(_)
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
-            | PeekError::ReplicaMissing(_) => false,
+            | PeekError::ReplicaMissing(_)
+            | PeekError::WasmModuleMissing(_) => false,
         }
     }
 }

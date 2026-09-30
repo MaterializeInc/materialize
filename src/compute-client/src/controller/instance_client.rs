@@ -62,6 +62,9 @@ pub enum PeekError {
     /// The peek's target instance has shut down.
     #[error("the instance has shut down")]
     InstanceShutDown,
+    /// The peek calls into a WebAssembly module that is not registered.
+    #[error("WebAssembly module is not registered: {0}")]
+    WasmModuleMissing(mz_expr::func::WasmModuleHash),
 }
 
 impl From<InstanceShutDown> for PeekError {

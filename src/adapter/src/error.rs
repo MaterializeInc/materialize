@@ -1202,6 +1202,10 @@ impl AdapterError {
                 dependency_kind: "cluster",
                 dependency_id: compute_instance.to_string(),
             },
+            WasmModuleMissing(hash) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "wasm module",
+                dependency_id: hash.to_string(),
+            },
             e @ ReadHoldIdMismatch(_) => AdapterError::internal("instance peek error", e),
             e @ ReadHoldInsufficient(_) => AdapterError::internal("instance peek error", e),
         }
@@ -1240,6 +1244,10 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
+            WasmModuleMissing(hash) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "wasm module",
+                dependency_id: hash.to_string(),
+            },
             e @ (ReadHoldIdMismatch(_) | SinceViolation(_)) => {
                 AdapterError::internal("peek error", e)
             }
@@ -1262,6 +1270,10 @@ impl AdapterError {
             ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
+            },
+            WasmModuleMissing(hash) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "wasm module",
+                dependency_id: hash.to_string(),
             },
             MissingAsOf | SinceViolation(..) | EmptyAsOfForSubscribe | EmptyAsOfForCopyTo => {
                 AdapterError::internal("dataflow creation error", e)

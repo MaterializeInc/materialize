@@ -29,6 +29,7 @@ use mz_controller_types::dyncfgs::{
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
+use mz_expr::func::{WasmModuleBytes, WasmModuleHash};
 use mz_ore::cast::CastFrom;
 use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
@@ -61,7 +62,7 @@ use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget, WasmModule,
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
@@ -93,6 +94,8 @@ pub(super) enum DataflowCreationError {
     ReadHoldMissing(GlobalId),
     #[error("insufficient read hold provided for dataflow import: {0}")]
     ReadHoldInsufficient(GlobalId),
+    #[error("WebAssembly module is not registered: {0}")]
+    WasmModuleMissing(WasmModuleHash),
 }
 
 impl From<CollectionMissing> for DataflowCreationError {
@@ -121,6 +124,15 @@ pub(super) type Command = Box<dyn FnOnce(&mut Instance) + Send>;
 /// A response from a replica, composed of a replica ID, the replica's current epoch, and the
 /// compute response itself.
 pub(super) type ReplicaResponse = (ReplicaId, u64, ComputeResponse);
+
+/// Something that calls into an installed WebAssembly module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum WasmModuleUser {
+    /// A collection exported by a dataflow.
+    Collection(GlobalId),
+    /// A pending peek.
+    Peek(Uuid),
+}
 
 /// The state we keep for a compute instance.
 pub(super) struct Instance {
@@ -167,6 +179,13 @@ pub(super) struct Instance {
     /// inputs before we allow them to compact. database-issues#4822 tracks changing this so we only have to wait
     /// for the first peek response.
     peeks: BTreeMap<Uuid, PendingPeek>,
+    /// The WebAssembly modules installed on this instance's replicas, with the dataflow
+    /// collections and peeks that call into each. A module is installed ahead of the first
+    /// command that uses it and dropped once nothing uses it.
+    wasm_modules: BTreeMap<WasmModuleHash, BTreeSet<WasmModuleUser>>,
+    /// The WebAssembly modules the coordinator has registered, which dataflows and peeks on this
+    /// instance may call into.
+    registered_wasm_modules: BTreeMap<WasmModuleHash, WasmModuleBytes>,
     /// Currently in-progress subscribes.
     ///
     /// New entries are added for all subscribes exported from dataflows created through
@@ -345,6 +364,7 @@ impl Instance {
 
         // Remove global collection state.
         self.collections.remove(&id);
+        self.release_wasm_modules(WasmModuleUser::Collection(id));
     }
 
     fn add_replica_state(
@@ -900,6 +920,8 @@ impl Instance {
             read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
+            wasm_modules,
+            registered_wasm_modules: _,
         } = self;
 
         let replicas: BTreeMap<_, _> = replicas
@@ -920,6 +942,10 @@ impl Instance {
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
+        let wasm_modules: BTreeMap<_, _> = wasm_modules
+            .iter()
+            .map(|(hash, users)| (hash.to_string(), format!("{users:?}")))
+            .collect();
 
         Ok(serde_json::json!({
             "initialized": initialized,
@@ -931,6 +957,7 @@ impl Instance {
             "subscribes": subscribes,
             "copy_tos": copy_tos,
             "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
+            "wasm_modules": wasm_modules,
         }))
     }
 
@@ -992,6 +1019,8 @@ impl Instance {
             collections,
             log_sources,
             peeks: Default::default(),
+            wasm_modules: BTreeMap::new(),
+            registered_wasm_modules: BTreeMap::new(),
             subscribes: Default::default(),
             copy_tos: Default::default(),
             history,
@@ -1052,6 +1081,68 @@ impl Instance {
 
         let command = ComputeCommand::UpdateConfiguration(Box::new(config_params));
         self.send(command);
+    }
+
+    /// Makes a registered WebAssembly module available to dataflows and peeks on this instance.
+    pub fn register_wasm_module(&mut self, hash: WasmModuleHash, bytes: WasmModuleBytes) {
+        self.registered_wasm_modules.insert(hash, bytes);
+    }
+
+    /// Withdraws a module registered with [`Self::register_wasm_module`]. Replicas that already
+    /// have it keep it until nothing on them calls into it.
+    pub fn deregister_wasm_module(&mut self, hash: &WasmModuleHash) {
+        self.registered_wasm_modules.remove(hash);
+    }
+
+    /// The first of `hashes` that is not registered, if any.
+    fn missing_wasm_module<'a>(
+        &self,
+        mut hashes: impl Iterator<Item = &'a WasmModuleHash>,
+    ) -> Option<WasmModuleHash> {
+        hashes
+            .find(|hash| !self.registered_wasm_modules.contains_key(*hash))
+            .copied()
+    }
+
+    /// Records `users` as users of the modules with `hashes`, installing each module the
+    /// replicas do not have yet. Must precede the commands that create those users, and every
+    /// hash must be registered.
+    fn acquire_wasm_modules(
+        &mut self,
+        hashes: &BTreeSet<WasmModuleHash>,
+        users: &[WasmModuleUser],
+    ) {
+        for hash in hashes {
+            let installed = self.wasm_modules.entry(*hash).or_default();
+            let first = installed.is_empty();
+            installed.extend(users.iter().copied());
+            if first {
+                let bytes = self
+                    .registered_wasm_modules
+                    .get(hash)
+                    .expect("checked that the module is registered")
+                    .clone();
+                self.send(ComputeCommand::InstallWasmModule(Box::new(WasmModule {
+                    hash: *hash,
+                    bytes,
+                })));
+            }
+        }
+    }
+
+    /// Removes `user` from the users of every module, and drops each module it was the last
+    /// user of. Must follow the command that ends the user.
+    fn release_wasm_modules(&mut self, user: WasmModuleUser) {
+        let mut unused = Vec::new();
+        for (hash, users) in &mut self.wasm_modules {
+            if users.remove(&user) && users.is_empty() {
+                unused.push(*hash);
+            }
+        }
+        for hash in unused {
+            self.wasm_modules.remove(&hash);
+            self.send(ComputeCommand::DropWasmModule(hash));
+        }
     }
 
     /// Marks the end of any initialization commands.
@@ -1234,7 +1325,9 @@ impl Instance {
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
-            | ComputeCommand::CancelPeek { .. } => None,
+            | ComputeCommand::CancelPeek { .. }
+            | ComputeCommand::InstallWasmModule(_)
+            | ComputeCommand::DropWasmModule(_) => None,
         }
     }
 
@@ -1437,6 +1530,10 @@ impl Instance {
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
+        if let Some(hash) = self.missing_wasm_module(dataflow.wasm_modules.iter()) {
+            return Err(WasmModuleMissing(hash));
+        }
+
         // Validate that the target replica, if specified, exists.
         // A targeted dataflow is only installed on a single replica; if that
         // replica doesn't exist, we can't create the dataflow.
@@ -1618,6 +1715,7 @@ impl Instance {
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            wasm_modules: dataflow.wasm_modules,
         };
 
         if augmented_dataflow.is_transient() {
@@ -1649,6 +1747,11 @@ impl Instance {
             );
         } else {
             let collections: Vec<_> = augmented_dataflow.export_ids().collect();
+            let users: Vec<_> = augmented_dataflow
+                .export_ids()
+                .map(WasmModuleUser::Collection)
+                .collect();
+            self.acquire_wasm_modules(&augmented_dataflow.wasm_modules, &users);
             self.send(ComputeCommand::CreateDataflow(Box::new(augmented_dataflow)));
 
             for id in collections {
@@ -1785,6 +1888,18 @@ impl Instance {
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
+        let mut wasm_modules = BTreeSet::new();
+        for expr in map_filter_project
+            .expressions
+            .iter()
+            .chain(map_filter_project.predicates.iter().map(|(_, p)| p))
+        {
+            expr.collect_wasm_modules(&mut wasm_modules);
+        }
+        if let Some(hash) = self.missing_wasm_module(wasm_modules.iter()) {
+            return Err(WasmModuleMissing(hash));
+        }
+
         let target_id = peek_target.id();
 
         // Downgrade the provided read hold to the peek time.
@@ -1829,6 +1944,7 @@ impl Instance {
             target: peek_target,
             result_desc,
         };
+        self.acquire_wasm_modules(&wasm_modules, &[WasmModuleUser::Peek(uuid)]);
         self.send(ComputeCommand::Peek(Box::new(peek)));
 
         Ok(())
@@ -2036,6 +2152,7 @@ impl Instance {
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
         self.send(ComputeCommand::CancelPeek { uuid });
+        self.release_wasm_modules(WasmModuleUser::Peek(uuid));
 
         drop(peek.read_hold);
     }

@@ -1247,6 +1247,20 @@ impl<'w> Worker<'w> {
                     compute_state.traces.set(*id, padded);
                 }
             }
+
+            // Installs the new history repeats are no-ops for modules this worker already holds.
+            // Modules the new history no longer installs are dropped after everything else, once
+            // the dataflows that called them are gone.
+            let new_modules: BTreeSet<_> = new_commands
+                .iter()
+                .filter_map(|command| match command {
+                    ComputeCommand::InstallWasmModule(module) => Some(module.hash),
+                    _ => None,
+                })
+                .collect();
+            for hash in compute_state.wasm_modules.difference(&new_modules) {
+                todo_commands.push(ComputeCommand::DropWasmModule(*hash));
+            }
         } else {
             todo_commands.clone_from(&new_commands);
         }

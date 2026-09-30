@@ -232,6 +232,7 @@ impl OffloadedPeek {
     ) -> Self {
         let (mut result_tx, result_rx) = oneshot::channel();
         permits.resize(config.permit_fraction.get());
+        let module_pins = super::pin_wasm_modules(&peek.map_filter_project);
 
         let peek_uuid = peek.uuid;
         // Shared rather than copied per use: the answer arm needs it owned, because it builds
@@ -259,6 +260,7 @@ impl OffloadedPeek {
                 let state = WalkState {
                     scan,
                     _permit: permit,
+                    _module_pins: module_pins,
                     result_tx,
                 };
                 let (state, response) =
@@ -439,6 +441,9 @@ impl OffloadedPeek {
 struct WalkState {
     scan: IndexPeekScan,
     _permit: WalkPermit,
+    /// The WebAssembly modules the scan's plan calls, held installed for as long as the scan
+    /// can still evaluate it. A blocking step runs to its end after the peek is cancelled.
+    _module_pins: Vec<mz_wasm_udf::ModulePin>,
     /// The sending end of the peek's result channel. Its receiver is dropped by cancellation and
     /// by nothing else, so a closed channel is the cancellation signal.
     result_tx: oneshot::Sender<(PeekResponse, Duration)>,
