@@ -152,12 +152,14 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
-use timely::dataflow::operators::{CapabilitySet, Concatenate};
+use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::operators::vec::Broadcast;
 use timely::progress::{Antichain, Timestamp as _};
 use tracing::{debug, info};
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
 use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
@@ -1221,10 +1223,10 @@ fn mint_batch_descriptions<'scope>(
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     initial_schema: SchemaRef,
+    health: HealthReporter,
 ) -> (
     StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     StreamVec<'scope, Timestamp, Infallible>,
-    StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let scope = input.scope();
@@ -1246,8 +1248,7 @@ fn mint_batch_descriptions<'scope>(
         .expect("the planner should have enforced this")
         .clone();
 
-    let (button, errors): (_, StreamVec<'scope, Timestamp, Rc<anyhow::Error>>) =
-        builder.build_fallible(move |caps| {
+    let button = builder.build_fallible_with(report_errors(health), move |caps| {
         Box::pin(async move {
             let [table_ready_capset, capset]: &mut [_; 2] = caps.try_into().unwrap();
 
@@ -1485,15 +1486,9 @@ fn mint_batch_descriptions<'scope>(
         })
     });
 
-    let statuses = errors.map(|error| HealthStatusMessage {
-        id: None,
-        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
-        namespace: StatusNamespace::Iceberg,
-    });
     (
         batch_desc_stream,
         table_ready_stream,
-        statuses,
         button.press_on_drop(),
     )
 }
@@ -1647,9 +1642,9 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     materialize_arrow_schema: Arc<ArrowSchema>,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
+    health: HealthReporter,
 ) -> (
     StreamVec<'scope, Timestamp, BoundedDataFile>,
-    StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let scope = input.scope();
@@ -1663,8 +1658,8 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
         builder.new_input_for(batch_desc_input.broadcast(), Pipeline, &output);
     let mut input = builder.new_disconnected_input(input, Pipeline);
 
-    let (button, errors): (_, StreamVec<'scope, Timestamp, Rc<anyhow::Error>>) = builder
-        .build_fallible(move |caps| {
+    let button = builder
+        .build_fallible_with(report_errors(health), move |caps| {
             Box::pin(async move {
                 let [capset]: &mut [_; 1] = caps.try_into().unwrap();
                 let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
@@ -1971,12 +1966,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
             })
         });
 
-    let statuses = errors.map(|error| HealthStatusMessage {
-        id: None,
-        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
-        namespace: StatusNamespace::Iceberg,
-    });
-    (output_stream, statuses, button.press_on_drop())
+    (output_stream, button.press_on_drop())
 }
 
 /// The `[lower, upper)` frontier bounds of one Iceberg commit.
@@ -2735,10 +2725,8 @@ fn commit_to_iceberg<'scope>(
     > + 'static,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
-) -> (
-    StreamVec<'scope, Timestamp, HealthStatusMessage>,
-    PressOnDropButton,
-) {
+    health: HealthReporter,
+) -> PressOnDropButton {
     let scope = batch_input.scope();
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -2751,7 +2739,7 @@ fn commit_to_iceberg<'scope>(
         builder.new_disconnected_input(batch_desc_input, Exchange::new(move |_| hashed_id));
     let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
 
-    let (button, errors) = builder.build_fallible(move |_caps| {
+    let button = builder.build_fallible_with(report_errors(health), move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
                 write_frontier.borrow_mut().clear();
@@ -2989,13 +2977,18 @@ fn commit_to_iceberg<'scope>(
         })
     });
 
-    let statuses = errors.map(|error| HealthStatusMessage {
-        id: None,
-        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
-        namespace: StatusNamespace::Iceberg,
-    });
+    button.press_on_drop()
+}
 
-    (statuses, button.press_on_drop())
+/// Returns an error callback that reports errors as halting statuses of the sink.
+fn report_errors(health: HealthReporter) -> impl FnOnce(anyhow::Error) + 'static {
+    move |error| {
+        health.report(HealthStatusMessage {
+            id: None,
+            update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
+            namespace: StatusNamespace::Iceberg,
+        })
+    }
 }
 
 impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
@@ -3017,10 +3010,8 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
-    ) -> (
-        StreamVec<'scope, Timestamp, HealthStatusMessage>,
-        Vec<PressOnDropButton>,
-    ) {
+        health: &HealthReporter,
+    ) -> Vec<PressOnDropButton> {
         let scope = batches.scope();
 
         let write_handle = {
@@ -3067,16 +3058,8 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             })() {
                 Ok(schemas) => schemas,
                 Err(err) => {
-                    let error_stream = std::iter::once(HealthStatusMessage {
-                        id: None,
-                        update: HealthStatusUpdate::halting(
-                            format!("{}", err.display_with_causes()),
-                            None,
-                        ),
-                        namespace: StatusNamespace::Iceberg,
-                    })
-                    .to_stream(scope);
-                    return (error_stream, vec![]);
+                    report_errors(health.clone())(err);
+                    return vec![];
                 }
             };
 
@@ -3093,7 +3076,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             .clone();
 
         let connection_for_minter = self.clone();
-        let (batch_descriptions, table_ready, mint_status, mint_button) = mint_batch_descriptions(
+        let (batch_descriptions, table_ready, mint_button) = mint_batch_descriptions(
             format!("{sink_id}-iceberg-mint"),
             sink_id,
             batches.clone(),
@@ -3101,10 +3084,11 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             connection_for_minter,
             storage_state.storage_configuration.clone(),
             Arc::clone(&iceberg_schema),
+            health.clone(),
         );
 
         let connection_for_writer = self.clone();
-        let (datafiles, write_status, write_button) = match sink.envelope {
+        let (datafiles, write_button) = match sink.envelope {
             SinkEnvelope::Upsert => write_data_files::<UpsertEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
                 batches,
@@ -3119,6 +3103,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 Arc::new(arrow_schema_with_ids.clone()),
                 Arc::clone(&metrics),
                 statistics.clone(),
+                health.clone(),
             ),
             SinkEnvelope::Append => write_data_files::<AppendEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
@@ -3134,6 +3119,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 Arc::new(arrow_schema_with_ids.clone()),
                 Arc::clone(&metrics),
                 statistics.clone(),
+                health.clone(),
             ),
             SinkEnvelope::Debezium => {
                 unreachable!("Iceberg sink only supports Upsert and Append envelopes")
@@ -3141,7 +3127,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         };
 
         let connection_for_committer = self.clone();
-        let (commit_status, commit_button) = commit_to_iceberg(
+        let commit_button = commit_to_iceberg(
             format!("{sink_id}-commit-to-iceberg"),
             sink_id,
             sink.version,
@@ -3154,18 +3140,15 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             write_handle,
             Arc::clone(&metrics),
             statistics,
+            health.clone(),
         );
 
-        let running_status = Some(HealthStatusMessage {
+        health.report(HealthStatusMessage {
             id: None,
             update: HealthStatusUpdate::running(),
             namespace: StatusNamespace::Iceberg,
-        })
-        .to_stream(scope);
+        });
 
-        let statuses =
-            scope.concatenate([running_status, mint_status, write_status, commit_status]);
-
-        (statuses, vec![mint_button, write_button, commit_button])
+        vec![mint_button, write_button, commit_button]
     }
 }
