@@ -101,6 +101,7 @@ where
 
         let mut initialization_complete = false;
         let mut allow_writes = BTreeSet::new();
+        let mut wasm_modules = BTreeMap::new();
 
         for command in self.commands.drain(..) {
             match command {
@@ -136,6 +137,9 @@ where
                 }
                 ComputeCommand::AllowWrites(id) => {
                     allow_writes.insert(id);
+                }
+                ComputeCommand::InstallWasmModule(module) => {
+                    wasm_modules.insert(module.hash, module);
                 }
             }
         }
@@ -209,6 +213,14 @@ where
             let config = Box::new(final_configuration);
             self.commands
                 .push(ComputeCommand::UpdateConfiguration(config));
+        }
+
+        // Modules must precede the dataflows and peeks that call them.
+        let count = u64::cast_from(wasm_modules.len());
+        command_counts.install_wasm_module.borrow().set(count);
+        for module in wasm_modules.into_values() {
+            self.commands
+                .push(ComputeCommand::InstallWasmModule(module));
         }
 
         let count = u64::cast_from(created_dataflows.len());

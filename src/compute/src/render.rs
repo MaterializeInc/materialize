@@ -294,9 +294,17 @@ pub fn build_compute_dataflow(
                     };
                     let suppress_early_progress_as_of = dataflow.as_of.clone();
 
+                    // An MFP that calls WebAssembly functions is not pushed into the source,
+                    // which evaluates per row. It is applied over batches of the source's output
+                    // instead, which gives up filter pushdown for it.
+                    let batched_mfp = mfp.as_ref().and_then(|mfp| mfp.batched());
+                    if batched_mfp.is_some() {
+                        mfp = None;
+                    }
+
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<
+                    let (mut ok_stream, mut err_stream, token) = persist_source::persist_source::<
                         DataflowErrorSer,
                         ConsolidatingColumnBuilder<Row, mz_repr::Timestamp, Diff>,
                     >(
@@ -318,6 +326,17 @@ pub fn build_compute_dataflow(
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
+
+                    if let Some(batched_mfp) = batched_mfp {
+                        let (oks, errs) = crate::render::context::batched_mfp_operator(
+                            ok_stream.as_collection(),
+                            batched_mfp,
+                            usize::MAX,
+                            until.clone(),
+                        );
+                        ok_stream = oks.inner;
+                        err_stream = err_stream.as_collection().concat(errs).inner;
+                    }
 
                     // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
                     // ensure that the first frontier we report into the dataflow is beyond the

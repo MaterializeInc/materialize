@@ -129,6 +129,67 @@ where
     (ok_stream, err_stream)
 }
 
+/// Like [`flat_map_datums`], but hands `logic` up to `batch_rows` rows at a
+/// time, with their times and diffs, so it can evaluate them together.
+///
+/// Rows are materialized with their first `max_demand` columns. A batch never
+/// spans input containers, so batching does not delay any update past the
+/// activation that received it.
+pub fn flat_map_rows_batched<'scope, T, DCB, L>(
+    edge: ColCollection<'scope, T>,
+    name: &str,
+    max_demand: usize,
+    batch_rows: usize,
+    mut logic: L,
+) -> (
+    Stream<'scope, T, DCB::Container>,
+    StreamVec<'scope, T, (DataflowErrorSer, T, Diff)>,
+)
+where
+    T: RenderTimestamp,
+    DCB: ContainerBuilder,
+    L: FnMut(&[Row], &[(T, Diff)], &mut Session<T, DCB>, &mut Session<T, ECB<T>>) + 'static,
+{
+    let scope = edge.inner.scope();
+    let mut builder = OperatorBuilder::new(name.to_string(), scope);
+    let (ok_output, ok_stream) = builder.new_output();
+    let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
+    let (err_output, err_stream) = builder.new_output();
+    let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
+    let mut input = builder.new_input(edge.inner, Pipeline);
+    let batch_rows = batch_rows.max(1);
+    builder.build(move |_capabilities| {
+        let mut datums = DatumVec::new();
+        let mut rows = Vec::with_capacity(batch_rows);
+        let mut updates = Vec::with_capacity(batch_rows);
+        move |_frontiers| {
+            let mut ok_output = ok_output.activate();
+            let mut err_output = err_output.activate();
+            input.for_each(|time, data| {
+                let ok_cap = time.retain(0);
+                let err_cap = time.retain(1);
+                let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                let mut err_session = err_output.session_with_builder(&err_cap);
+                for (v, t, d) in data.borrow().into_index_iter() {
+                    rows.push(Row::pack(datums.borrow_with_limit(v, max_demand).iter()));
+                    updates.push((Columnar::into_owned(t), Columnar::into_owned(d)));
+                    if rows.len() == batch_rows {
+                        logic(&rows, &updates, &mut ok_session, &mut err_session);
+                        rows.clear();
+                        updates.clear();
+                    }
+                }
+                if !rows.is_empty() {
+                    logic(&rows, &updates, &mut ok_session, &mut err_session);
+                    rows.clear();
+                    updates.clear();
+                }
+            });
+        }
+    });
+    (ok_stream, err_stream)
+}
+
 /// Negates the diff of every record in `column`, rebuilding only the diff column.
 ///
 /// A `Typed` input hands its row and time columns over untouched, so only the

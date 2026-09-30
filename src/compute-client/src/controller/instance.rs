@@ -29,6 +29,7 @@ use mz_controller_types::dyncfgs::{
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
+use mz_expr::func::{WasmModuleBytes, WasmModuleHash};
 use mz_ore::cast::CastFrom;
 use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
@@ -61,7 +62,7 @@ use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget, WasmModule,
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
@@ -1054,6 +1055,14 @@ impl Instance {
         self.send(command);
     }
 
+    /// Sends a WebAssembly module to the replicas.
+    pub fn install_wasm_module(&mut self, hash: WasmModuleHash, bytes: WasmModuleBytes) {
+        self.send(ComputeCommand::InstallWasmModule(Box::new(WasmModule {
+            hash,
+            bytes,
+        })));
+    }
+
     /// Marks the end of any initialization commands.
     ///
     /// Intended to be called by `Controller`, rather than by other code.
@@ -1234,7 +1243,8 @@ impl Instance {
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
-            | ComputeCommand::CancelPeek { .. } => None,
+            | ComputeCommand::CancelPeek { .. }
+            | ComputeCommand::InstallWasmModule(_) => None,
         }
     }
 

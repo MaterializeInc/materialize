@@ -7032,6 +7032,7 @@ dependencies = [
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
+ "mz-wasm-udf",
  "num-traits",
  "prometheus",
  "proptest",
@@ -8645,6 +8646,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "array-concat",
+ "base64 0.23.1",
  "chrono",
  "derivative",
  "dynfmt",
@@ -8690,6 +8692,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-storage-types",
  "mz-tracing",
+ "mz-wasm-udf-abi",
  "paste",
  "prometheus",
  "proptest",

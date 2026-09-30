@@ -48,6 +48,7 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
+use mz_expr::func::{WasmModuleBytes, WasmModuleHash};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -266,6 +267,8 @@ pub struct ComputeController {
     /// configuration that the controller resolves once, at replica creation,
     /// must be read through the new replica's overrides.
     replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    /// Every WebAssembly module installed so far, sent to each instance on creation.
+    wasm_modules: BTreeMap<WasmModuleHash, WasmModuleBytes>,
 
     /// Receiver for responses produced by `Instance`s.
     response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
@@ -362,6 +365,7 @@ impl ComputeController {
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             replica_dyncfg_overrides: BTreeMap::new(),
+            wasm_modules: BTreeMap::new(),
             response_rx,
             response_tx,
             introspection_rx: Some(introspection_rx),
@@ -539,6 +543,7 @@ impl ComputeController {
             wallclock_lag: _,
             dyncfg: _,
             replica_dyncfg_overrides: _,
+            wasm_modules,
             response_rx: _,
             response_tx: _,
             introspection_rx: _,
@@ -546,6 +551,7 @@ impl ComputeController {
             maintenance_ticker: _,
             maintenance_scheduled,
         } = self;
+        let wasm_modules: Vec<_> = wasm_modules.keys().map(|hash| hash.to_string()).collect();
 
         let mut instances_dump = BTreeMap::new();
         for (id, instance) in instances {
@@ -567,6 +573,7 @@ impl ComputeController {
             "read_only": read_only,
             "stashed_response": format!("{stashed_response:?}"),
             "maintenance_scheduled": maintenance_scheduled,
+            "wasm_modules": wasm_modules,
         }))
     }
 }
@@ -629,7 +636,26 @@ impl ComputeController {
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));
 
+        for (hash, bytes) in &self.wasm_modules {
+            let (hash, bytes) = (*hash, bytes.clone());
+            instance.call(move |i| i.install_wasm_module(hash, bytes));
+        }
+
         Ok(())
+    }
+
+    /// Makes a WebAssembly module available to every current and future
+    /// instance. Callers must install a module before creating a dataflow or
+    /// issuing a peek whose expressions reference it.
+    pub fn install_wasm_module(&mut self, hash: WasmModuleHash, bytes: WasmModuleBytes) {
+        if self.wasm_modules.contains_key(&hash) {
+            return;
+        }
+        for instance in self.instances.values_mut() {
+            let bytes = bytes.clone();
+            instance.call(move |i| i.install_wasm_module(hash, bytes));
+        }
+        self.wasm_modules.insert(hash, bytes);
     }
 
     /// Updates a compute instance's workload class.

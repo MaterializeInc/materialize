@@ -504,6 +504,8 @@ pub struct CommandMetrics<M> {
     pub update_configuration: M,
     /// Metrics for `AllowWrites`.
     pub allow_writes: M,
+    /// Metrics for `InstallWasmModule`.
+    pub install_wasm_module: M,
 }
 
 impl<M> CommandMetrics<M> {
@@ -523,6 +525,7 @@ impl<M> CommandMetrics<M> {
             initialization_complete: build_metric("initialization_complete"),
             update_configuration: build_metric("update_configuration"),
             allow_writes: build_metric("allow_writes"),
+            install_wasm_module: build_metric("install_wasm_module"),
         }
     }
 
@@ -540,6 +543,7 @@ impl<M> CommandMetrics<M> {
         f(&self.peek);
         f(&self.cancel_peek);
         f(&self.allow_writes);
+        f(&self.install_wasm_module);
     }
 
     /// TODO(database-issues#7533): Add documentation.
@@ -557,6 +561,7 @@ impl<M> CommandMetrics<M> {
             Peek(_) => &self.peek,
             CancelPeek { .. } => &self.cancel_peek,
             AllowWrites { .. } => &self.allow_writes,
+            InstallWasmModule(_) => &self.install_wasm_module,
         }
     }
 }

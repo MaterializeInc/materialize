@@ -693,6 +693,14 @@ impl<'a> ActiveComputeState<'a> {
             AllowWrites(id) => {
                 self.handle_allow_writes(id);
             }
+            InstallWasmModule(module) => {
+                // Every worker receives the command. The first compiles the
+                // module for the process and the rest wait for it.
+                let hash = module.hash;
+                if let Err(e) = mz_wasm_udf::Runtime::global().install(hash, &module.bytes.0) {
+                    warn!(%hash, "WebAssembly module failed to compile: {e}");
+                }
+            }
         }
 
         timer.observe_duration();

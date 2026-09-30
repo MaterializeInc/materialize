@@ -20,12 +20,13 @@ use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
+use itertools::Itertools;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Eval, Id, MfpPlan};
+use mz_expr::{BatchedMfpPlan, Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
@@ -50,7 +51,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::{ColCollection, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums, flat_map_rows_batched};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -924,6 +925,63 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 }
 
+/// Applies `mfp` to `oks`, evaluating it over batches of rows.
+///
+/// `max_demand` is the number of leading input columns `mfp` reads.
+pub(crate) fn batched_mfp_operator<'scope, T, E>(
+    oks: ColCollection<'scope, T>,
+    mfp: BatchedMfpPlan<E>,
+    max_demand: usize,
+    until: Antichain<mz_repr::Timestamp>,
+) -> (
+    ColCollection<'scope, T>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+    E: mz_expr::OptimizableExpr + Eval + 'static,
+{
+    let batch_rows = mz_wasm_udf::Runtime::global().batch_config().max_rows();
+    let (stream, errs) = flat_map_rows_batched::<_, ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+        oks,
+        "BatchedMfp",
+        max_demand,
+        batch_rows,
+        move |rows, updates, ok_session, err_session| {
+            let arena = RowArena::new();
+            let mut datums: Vec<Vec<_>> = rows.iter().map(|row| row.iter().collect()).collect();
+            let mut outcomes = Vec::with_capacity(rows.len());
+            mfp.evaluate_batch(&mut datums, &arena, &mut outcomes);
+            let mut row_builder = SharedRow::get();
+            for ((row_datums, outcome), (time, diff)) in datums.iter().zip(outcomes).zip(updates) {
+                for result in mfp.finish(
+                    outcome,
+                    row_datums,
+                    &arena,
+                    time.event_time(),
+                    diff.clone(),
+                    |t| !until.less_equal(t),
+                    &mut row_builder,
+                ) {
+                    match result {
+                        Ok((row, event_time, diff)) => {
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            ok_session.give((row, time, diff));
+                        }
+                        Err((e, event_time, diff)) => {
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            err_session.give((e, time, diff));
+                        }
+                    }
+                }
+            }
+        },
+    );
+    (stream.as_collection(), errs.as_collection())
+}
+
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -982,6 +1040,16 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             (plan, max_demand)
         };
 
+        // An MFP that calls WebAssembly functions is evaluated over batches of
+        // rows, so that each guest call covers many rows. Seeking to a value
+        // needs the fused arrangement path below, which is per row.
+        if !has_key_val {
+            if let Some(batched) = mfp_plan.batched() {
+                let key = key_val.map(|(key, _)| key);
+                return self.as_collection_batched(batched, key, max_demand, until);
+            }
+        }
+
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
@@ -1031,6 +1099,24 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
         (stream.as_collection(), errors)
     }
+
+    /// Applies a batched MFP to the collection arranged by `key`, or the
+    /// unarranged collection if `key` is `None`.
+    fn as_collection_batched(
+        &self,
+        mfp: BatchedMfpPlan<LirScalarExpr>,
+        key: Option<Vec<LirScalarExpr>>,
+        max_demand: usize,
+        until: Antichain<mz_repr::Timestamp>,
+    ) -> (
+        ColCollection<'scope, T>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    ) {
+        let (oks, errs) = self.as_specific_collection(key.as_deref());
+        let (oks, mfp_errs) = batched_mfp_operator(oks, mfp, max_demand, until);
+        (oks, errs.concat(mfp_errs))
+    }
+
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
