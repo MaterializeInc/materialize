@@ -1064,7 +1064,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
     /// Build a bucketed stage fragment that wraps [`Self::build_bucketed_negated_output`], and
     /// adds validation if `validating` is true. It returns the consolidated inputs concatenated
-    /// with the negation of what's produced by the reduction.
+    /// with the reduction's output, which is the winner of each key.
     /// `validating` indicates whether we want this stage to perform error detection
     /// for invalid accumulations. Once a stage is clean of such errors, subsequent
     /// stages can skip validation.
@@ -1124,7 +1124,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
     /// Build a dataflow fragment for one stage of a reduction tree for multiple hierarchical
     /// aggregates to arrange and reduce the inputs. Returns the arranged input and the reduction,
-    /// with all diffs in the reduction's output negated.
+    /// whose output for each key is the key's winner minus its input.
     fn build_bucketed_negated_output<'s, Bu, Tr>(
         &self,
         input: VecCollection<'s, T, (Row, Row), Diff>,
@@ -1208,11 +1208,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     row_packer.push(func.eval(column_iter, &temp_storage));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.
-                // More specifically, we emit the winner with a positive diff and every input with
-                // its diff negated: the winner then cancels against its own input row, and the
-                // caller's `input.concat(&negated_output)` gives us the intended value of this
-                // aggregate function. Also we assume that regardless of the multiplicity of the
-                // final result in the input, we only want to have one copy in the output.
+                // The reduction emits the winner with a positive diff and every input with its diff
+                // negated, so `negated_output.concat(input)` in the caller holds one copy of the
+                // winner, regardless of its multiplicity in the input. The winner cancels against an
+                // input row only if it equals one, which holds for a single aggregate but not in
+                // general for several aggregates whose results come from different rows.
                 target.reserve(source.len().saturating_add(1));
                 target.push((BatchValOwn::<Tr>::ok(row_builder.clone()), Diff::ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
