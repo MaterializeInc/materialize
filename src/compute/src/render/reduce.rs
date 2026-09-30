@@ -1208,12 +1208,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     row_packer.push(func.eval(column_iter, &temp_storage));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.
-                // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-                // gives us the intended value of this aggregate function. Also we assume that regardless
-                // of the multiplicity of the final result in the input, we only want to have one copy
-                // in the output.
+                // More specifically, we emit the winner with a positive diff and every input with
+                // its diff negated: the winner then cancels against its own input row, and the
+                // caller's `input.concat(&negated_output)` gives us the intended value of this
+                // aggregate function. Also we assume that regardless of the multiplicity of the
+                // final result in the input, we only want to have one copy in the output.
                 target.reserve(source.len().saturating_add(1));
-                target.push((BatchValOwn::<Tr>::ok(row_builder.clone()), Diff::MINUS_ONE));
+                target.push((BatchValOwn::<Tr>::ok(row_builder.clone()), Diff::ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();
