@@ -45,6 +45,86 @@ export type LagHistoryParameters = {
   includeSystemObjects?: boolean;
 };
 
+/**
+ * Binned lag readings for a known set of objects, with no name resolution.
+ *
+ * The Console already holds every object's name, schema, database and type in
+ * the `useAllObjects` subscribe, so a caller that knows which objects it wants
+ * needs three columns back, not eleven. `buildLagHistoryQuery` still joins
+ * `mz_objects`, `mz_clusters` and `mz_object_fully_qualified_names` (itself a
+ * view over `mz_objects`, `mz_schemas` and `mz_databases`) because the
+ * environment-wide and single-object callers do depend on those names.
+ *
+ * NOTE: the IDs go in as a literal `IN` list because that is the only form
+ * that reaches an index lookup on `mz_wallclock_global_lag_recent_history_ind`.
+ * Measured on v26.45.0-dev: a literal list plans as `lookup` up to 330 entries
+ * and as a full scan from 331, while an `unnest`ed array and an `IN (SELECT
+ * ...)` subquery both plan as a differential join at every size. A cluster
+ * past 330 objects therefore loses the lookup and reads the whole index.
+ */
+export function buildObjectLagHistoryQuery({
+  objectIds,
+  lookbackMs,
+}: {
+  objectIds: string[];
+  lookbackMs: number;
+}) {
+  const bucketSizeMs = sql.raw(
+    `${calculateBucketSizeFromLookback(lookbackMs)}`,
+  );
+
+  return (
+    queryBuilder
+      .with("readings", (cte) =>
+        cte
+          .selectFrom("mz_wallclock_global_lag_recent_history")
+          .select([
+            sql<Date>`date_bin(
+              '${bucketSizeMs} MILLISECONDS',
+              occurred_at,
+              TIMESTAMP '1970-01-01'
+            )`.as("bucket_start"),
+            "lag",
+            "object_id",
+          ])
+          .where("object_id", "in", objectIds)
+          .where(
+            (eb) =>
+              sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMs}`)} MILLISECONDS'`,
+            ">=",
+            sql<Date>`mz_now()`,
+          ),
+      )
+      .selectFrom("readings")
+      // The reading kept per bin is the worst one in it, matching what
+      // `buildLagHistoryQuery` reports.
+      .distinctOn(["bucket_start", "object_id"])
+      .select(["bucket_start as bucketStart", "object_id as objectId", "lag"])
+      .orderBy(["bucket_start desc", "object_id", "lag desc"])
+  );
+}
+
+export async function fetchObjectLagHistory({
+  objectIds,
+  lookbackMs,
+  queryKey,
+  requestOptions,
+}: {
+  objectIds: string[];
+  lookbackMs: number;
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) {
+  return executeSqlV2({
+    queries: buildObjectLagHistoryQuery({ objectIds, lookbackMs }).compile(),
+    queryKey,
+    requestOptions,
+    sessionVariables: {
+      transaction_isolation: "serializable",
+    },
+  });
+}
+
 export function buildLagHistoryQuery(
   params: LagHistoryParameters = {
     lookback: { type: "getLatest" },

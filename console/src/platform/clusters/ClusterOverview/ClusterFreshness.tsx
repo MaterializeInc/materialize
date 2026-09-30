@@ -41,6 +41,7 @@ import {
   CurrentClusterFreshnessData,
   LINE_MAX_COUNT,
   useClusterFreshness,
+  useFreshnessObjects,
 } from "../queries";
 
 const TIME_PERIOD_OPTIONS = {
@@ -114,12 +115,10 @@ const FreshnessGraphWrapper = ({
   bucketSizeMs: number;
   clusterId: string;
 }) => {
+  const objects = useFreshnessObjects(clusterId);
   const {
     data: { historicalData, currentData, startTime, endTime, lines },
-  } = useClusterFreshness({
-    lookbackMs,
-    clusterId,
-  });
+  } = useClusterFreshness({ lookbackMs, objects });
 
   return (
     <VStack alignItems="flex-start" width="100%" spacing="0" padding="4">

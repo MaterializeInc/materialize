@@ -38,7 +38,10 @@ import {
   PageHeader,
   PageHeading,
 } from "~/layouts/BaseLayout";
-import { useClusterFreshness } from "~/platform/clusters/queries";
+import {
+  useClusterFreshness,
+  useFreshnessObjects,
+} from "~/platform/clusters/queries";
 import { useAllClusters } from "~/store/allClusters";
 import { MaterializeTheme } from "~/theme";
 import { formatDurationForAxis } from "~/utils/format";
@@ -107,9 +110,10 @@ const FreshnessContent = ({
   typeFilters: string[];
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const objects = useFreshnessObjects(clusterId);
   const {
     data: { historicalData, startTime, endTime, lines, objectsById },
-  } = useClusterFreshness({ lookbackMs, clusterId });
+  } = useClusterFreshness({ lookbackMs, objects });
 
   // Hydration is its own query: `buildLagHistoryQuery` is shared with pages
   // that never show it, and joined there it cost all of them a scan.
