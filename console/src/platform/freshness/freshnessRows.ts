@@ -12,6 +12,8 @@ import { assignLineColors } from "~/components/ThresholdLineGraph/thresholdLineG
 import { ThresholdLineSeries } from "~/components/ThresholdLineGraph/types";
 import { FreshnessObject } from "~/platform/clusters/queries";
 
+import { HydrationCounts } from "./queries";
+
 /** Which statistic the threshold judges an object by. */
 export type Predicate = "current" | "peak" | "p90";
 
@@ -153,13 +155,21 @@ export function buildStats(
  * threshold chose. Replacement is what would make the threshold and the
  * selection fight over the same channel.
  */
-export function buildFreshnessRows(
-  judged: ThresholdLineSeries<DataPoint>[],
-  statsByKey: Map<string, ObjectStats>,
-  objectsById: Map<string, FreshnessObject>,
-  threshold: number,
-  selectedKeys: ReadonlySet<string>,
-): FreshnessRow[] {
+export function buildFreshnessRows({
+  judged,
+  statsByKey,
+  objectsById,
+  hydrationByObjectId,
+  threshold,
+  selectedKeys,
+}: {
+  judged: ThresholdLineSeries<DataPoint>[];
+  statsByKey: Map<string, ObjectStats>;
+  objectsById: Map<string, FreshnessObject>;
+  hydrationByObjectId: Map<string, HydrationCounts>;
+  threshold: number;
+  selectedKeys: ReadonlySet<string>;
+}): FreshnessRow[] {
   const colors = assignLineColors(judged);
 
   return judged
@@ -171,6 +181,7 @@ export function buildFreshnessRows(
         notQueryable: false,
       };
       const object = objectsById.get(line.key);
+      const hydration = hydrationByObjectId.get(line.key);
       const breaching =
         line.breachValue !== null && line.breachValue > threshold;
       const drawn = breaching || selectedKeys.has(line.key);
@@ -182,8 +193,8 @@ export function buildFreshnessRows(
           .filter(Boolean)
           .join("."),
         objectType: object?.objectType ?? "",
-        hydratedReplicas: object?.hydratedReplicas ?? 0,
-        totalReplicas: object?.totalReplicas ?? 0,
+        hydratedReplicas: hydration?.hydratedReplicas ?? 0,
+        totalReplicas: hydration?.totalReplicas ?? 0,
         current: stats.current,
         peak: stats.peak,
         p90: stats.p90,

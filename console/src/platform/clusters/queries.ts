@@ -896,15 +896,13 @@ export function useReplicaUtilizationHistory(
 
 export const LINE_MAX_COUNT = 10;
 
-/** An object's identity and hydration, invariant across the window. */
+/** An object's identity, invariant across the window. */
 export interface FreshnessObject {
   objectId: string;
   objectName: string | null;
   schemaName: string | null;
   databaseName: string | null;
   objectType: string;
-  hydratedReplicas: number;
-  totalReplicas: number;
 }
 
 export function useClusterFreshness({
@@ -1016,8 +1014,6 @@ export function useClusterFreshness({
           schemaName: row.schemaName,
           databaseName: row.databaseName,
           objectType: row.objectType,
-          hydratedReplicas: Number(row.hydratedReplicas ?? 0),
-          totalReplicas: Number(row.totalReplicas ?? 0),
         });
       });
 

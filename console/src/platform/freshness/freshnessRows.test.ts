@@ -21,6 +21,7 @@ import {
   Predicate,
   sortRows,
 } from "./freshnessRows";
+import { HydrationCounts } from "./queries";
 
 /**
  * A reading as the page receives it: a number is a measured lag in
@@ -86,9 +87,14 @@ const objectsById = new Map<string, FreshnessObject>(
       schemaName: "public",
       databaseName: "materialize",
       objectType: key === "spiky" ? "index" : "materialized-view",
-      hydratedReplicas: key === "absent" ? 0 : 2,
-      totalReplicas: 2,
     },
+  ]),
+);
+
+const hydrationByObjectId = new Map<string, HydrationCounts>(
+  Object.keys(SERIES).map((key) => [
+    key,
+    { hydratedReplicas: key === "absent" ? 0 : 2, totalReplicas: 2 },
   ]),
 );
 
@@ -99,7 +105,14 @@ const rowsFor = (
 ) => {
   const stats = buildStats(lines, data);
   const judged = judgeLines(lines, data, predicate, stats);
-  return buildFreshnessRows(judged, stats, objectsById, threshold, selected);
+  return buildFreshnessRows({
+    judged,
+    statsByKey: stats,
+    objectsById,
+    hydrationByObjectId,
+    threshold,
+    selectedKeys: selected,
+  });
 };
 
 describe("computeStats", () => {

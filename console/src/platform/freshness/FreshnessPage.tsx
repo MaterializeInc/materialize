@@ -56,6 +56,7 @@ import {
   PREDICATE_LABELS,
 } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
+import { useFreshnessHydration } from "./queries";
 import { useFreshnessParams } from "./useFreshnessParams";
 import { useSettledThreshold } from "./useSettledThreshold";
 
@@ -110,6 +111,14 @@ const FreshnessContent = ({
     data: { historicalData, startTime, endTime, lines, objectsById },
   } = useClusterFreshness({ lookbackMs, clusterId });
 
+  // Hydration is its own query: `buildLagHistoryQuery` is shared with pages
+  // that never show it, and joined there it cost all of them a scan.
+  const objectIds = React.useMemo(
+    () => Array.from(objectsById.keys()),
+    [objectsById],
+  );
+  const { data: hydrationByObjectId } = useFreshnessHydration(objectIds);
+
   // Picked by hand in the All objects table, on top of whatever breaches.
   const [selectedKeys, setSelectedKeys] = React.useState<ReadonlySet<string>>(
     new Set(),
@@ -147,14 +156,22 @@ const FreshnessContent = ({
   // object on every pointer move.
   const rows = React.useMemo(
     () =>
-      buildFreshnessRows(
+      buildFreshnessRows({
         judged,
         statsByKey,
         objectsById,
-        settledThreshold,
+        hydrationByObjectId,
+        threshold: settledThreshold,
         selectedKeys,
-      ),
-    [judged, statsByKey, objectsById, settledThreshold, selectedKeys],
+      }),
+    [
+      judged,
+      statsByKey,
+      objectsById,
+      hydrationByObjectId,
+      settledThreshold,
+      selectedKeys,
+    ],
   );
 
   const breaching = rows.filter((row) => row.breaching);
