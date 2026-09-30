@@ -882,6 +882,18 @@ mod columnation {
                         EvalError::RedactError(x) => {
                             EvalError::RedactError(self.string_region.copy(x))
                         }
+                        EvalError::WasmFunction {
+                            name,
+                            kind,
+                            message,
+                        } => {
+                            assert_copy(kind);
+                            EvalError::WasmFunction {
+                                name: self.string_region.copy(name),
+                                kind: *kind,
+                                message: self.string_region.copy(message),
+                            }
+                        }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };

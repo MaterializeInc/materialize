@@ -30,6 +30,7 @@ pub mod visit;
 
 pub use id::{Id, LocalId, SourceInstanceId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace, TraceSummary};
+pub use linear::batch::{BatchedMfpPlan, BatchedSafeMfpPlan};
 pub use linear::plan::{MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{MapFilterProject, memoize_expr};

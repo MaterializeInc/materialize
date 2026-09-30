@@ -41,6 +41,7 @@ mod uint32;
 mod uint64;
 mod uuid;
 mod varchar;
+mod wasm;
 
 pub use crate::scalar::func::impls::array::*;
 pub use crate::scalar::func::impls::boolean::*;
@@ -76,3 +77,4 @@ pub use crate::scalar::func::impls::uint32::*;
 pub use crate::scalar::func::impls::uint64::*;
 pub use crate::scalar::func::impls::uuid::*;
 pub use crate::scalar::func::impls::varchar::*;
+pub use crate::scalar::func::impls::wasm::*;

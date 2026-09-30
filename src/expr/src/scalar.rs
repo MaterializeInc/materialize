@@ -1112,6 +1112,37 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains a call that constant folding must not
+    /// evaluate: an `UnmaterializableFunc`, or a WebAssembly function, whose
+    /// guest code only runs on clusters.
+    pub fn contains_unfoldable(&self) -> bool {
+        let mut contains = false;
+        self.visit_pre(|e| match e {
+            MirScalarExpr::CallUnmaterializable(_)
+            | MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Wasm(_),
+                ..
+            } => contains = true,
+            _ => (),
+        });
+        contains
+    }
+
+    /// True iff the expression calls a WebAssembly function.
+    pub fn contains_wasm_call(&self) -> bool {
+        let mut contains = false;
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Wasm(_),
+                ..
+            } = e
+            {
+                contains = true;
+            }
+        });
+        contains
+    }
+
     /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {
@@ -1895,6 +1926,13 @@ pub enum EvalError {
     MzAclArrayNullElement,
     PrettyError(Box<str>),
     RedactError(Box<str>),
+    /// A call to a user-defined WebAssembly function failed.
+    WasmFunction {
+        /// The function's qualified name.
+        name: Box<str>,
+        kind: crate::func::WasmErrorKind,
+        message: Box<str>,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -2119,6 +2157,11 @@ impl fmt::Display for EvalError {
             EvalError::MzAclArrayNullElement => {
                 write!(f, "MZ_ACL arrays must not contain null values")
             }
+            EvalError::WasmFunction {
+                name,
+                kind,
+                message,
+            } => write!(f, "function {name}: {kind}: {message}"),
         }
     }
 }
@@ -2378,6 +2421,15 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::IfNullError(s) => IfNullError(s.into_proto()),
             EvalError::LengthTooLarge => LengthTooLarge(()),
             EvalError::TempStorageBudgetExceeded => TempStorageBudgetExceeded(()),
+            EvalError::WasmFunction {
+                name,
+                kind,
+                message,
+            } => WasmFunction(ProtoWasmFunction {
+                name: name.into_proto(),
+                kind: kind.into_proto(),
+                message: message.into_proto(),
+            }),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
             EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
             EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.into_proto()),
@@ -2512,6 +2564,11 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s.into())),
                 PrettyError(s) => Ok(EvalError::PrettyError(s.into())),
                 RedactError(s) => Ok(EvalError::RedactError(s.into())),
+                WasmFunction(v) => Ok(EvalError::WasmFunction {
+                    name: v.name.into(),
+                    kind: crate::func::WasmErrorKind::from_proto(v.kind)?,
+                    message: v.message.into(),
+                }),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

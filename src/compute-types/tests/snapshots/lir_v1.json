@@ -5556,6 +5556,46 @@
         "NEWTYPE": {
           "TYPENAME": "Translate"
         }
+      },
+      "Wasm": {
+        "NEWTYPE": {
+          "TYPENAME": "WasmFunc"
+        }
+      }
+    }
+  },
+  "WasmFunc": {
+    "STRUCT": {
+      "arg_types": {
+        "SEQ": {
+          "TYPENAME": "SqlScalarType"
+        }
+      },
+      "export": "STR",
+      "limits": {
+        "TYPENAME": "WasmLimits"
+      },
+      "module": {
+        "TYPENAME": "WasmModuleHash"
+      },
+      "name": "STR",
+      "return_type": {
+        "TYPENAME": "SqlScalarType"
+      },
+      "strict": "BOOL"
+    }
+  },
+  "WasmLimits": {
+    "STRUCT": {
+      "fuel": "U64",
+      "memory_bytes": "U64"
+    }
+  },
+  "WasmModuleHash": {
+    "NEWTYPESTRUCT": {
+      "TUPLEARRAY": {
+        "CONTENT": "U8",
+        "SIZE": 32
       }
     }
   },

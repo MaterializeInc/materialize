@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizedExpr, HumanizerMode};
+use mz_expr::func::WasmFunc;
 use mz_expr::{
     BinaryFunc, Columns, Eval, EvalError, MapFilterProject, MfpPlan, MirScalarExpr,
     OptimizableExpr, SafeMfpPlan, UnaryFunc, UnmaterializableFunc, VariadicFunc,
@@ -505,6 +506,32 @@ impl OptimizableExpr for LirScalarExpr {
             Ok((Vec::new(), Vec::new()))
         } else {
             Err("LIR expressions do not support temporal predicates".into())
+        }
+    }
+
+    fn as_wasm_call(&self) -> Option<(&WasmFunc, &[Self])> {
+        match self {
+            LirScalarExpr::CallVariadic {
+                func: VariadicFunc::Wasm(func),
+                exprs,
+            } => Some((func, exprs)),
+            _ => None,
+        }
+    }
+
+    fn strict_children_mut(&mut self) -> Vec<&mut Self> {
+        match self {
+            LirScalarExpr::Column(..) | LirScalarExpr::Literal(..) => vec![],
+            LirScalarExpr::CallUnary { expr, .. } => vec![expr],
+            LirScalarExpr::CallBinary { expr1, expr2, .. } => vec![expr1, expr2],
+            LirScalarExpr::CallVariadic { func, exprs } => match func {
+                VariadicFunc::And(_) | VariadicFunc::Or(_) => vec![],
+                VariadicFunc::Coalesce(_) | VariadicFunc::CaseLiteral(_) => {
+                    exprs.iter_mut().take(1).collect()
+                }
+                _ => exprs.iter_mut().collect(),
+            },
+            LirScalarExpr::If { cond, .. } => vec![cond],
         }
     }
 }

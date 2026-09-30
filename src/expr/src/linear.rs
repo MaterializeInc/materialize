@@ -16,6 +16,8 @@ use crate::scalar::optimizable::OptimizableExpr;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
+pub mod batch;
+
 /// A compound operator that can be applied row-by-row.
 ///
 /// This operator integrates the map, filter, and project operators.
@@ -1923,24 +1925,109 @@ pub mod plan {
                     return None.into_iter().chain(None);
                 }
             }
+            evaluate_temporal(
+                &self.lower_bounds,
+                &self.upper_bounds,
+                &self.mfp.mfp.projection,
+                datums,
+                arena,
+                time,
+                diff,
+                valid_time,
+                row_builder,
+            )
+        }
 
-            // Lower and upper bounds.
-            let mut lower_bound = time;
-            let mut upper_bound = None;
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.could_error()
+                || self.lower_bounds.iter().any(|e| e.could_error())
+                || self.upper_bounds.iter().any(|e| e.could_error())
+        }
+    }
 
-            // Track whether we have seen a null in either bound, as this should
-            // prevent the record from being produced at any time.
-            let mut null_eval = false;
+    /// Applies temporal bounds to a row whose non-temporal predicates passed,
+    /// and projects it.
+    ///
+    /// `datums` holds every column the bounds and `projection` refer to.
+    pub(crate) fn evaluate_temporal<
+        'b,
+        'a: 'b,
+        E: Eval,
+        Err: From<EvalError>,
+        V: Fn(&mz_repr::Timestamp) -> bool,
+    >(
+        lower_bounds: &'a [E],
+        upper_bounds: &'a [E],
+        projection: &[usize],
+        datums: &'b [Datum<'a>],
+        arena: &'a RowArena,
+        time: mz_repr::Timestamp,
+        diff: Diff,
+        valid_time: V,
+        row_builder: &mut Row,
+    ) -> iter::Chain<
+        std::option::IntoIter<
+            Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        >,
+        std::option::IntoIter<
+            Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        >,
+    > {
+        // Lower and upper bounds.
+        let mut lower_bound = time;
+        let mut upper_bound = None;
 
-            // Advance our lower bound to be at least the result of any lower bound
-            // expressions.
-            for l in self.lower_bounds.iter() {
-                match l.eval(datums, arena) {
+        // Track whether we have seen a null in either bound, as this should
+        // prevent the record from being produced at any time.
+        let mut null_eval = false;
+
+        // Advance our lower bound to be at least the result of any lower bound
+        // expressions.
+        for l in lower_bounds.iter() {
+            match l.eval(datums, arena) {
+                Err(e) => {
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
+                }
+                Ok(Datum::MzTimestamp(d)) => {
+                    lower_bound = lower_bound.max(d);
+                }
+                Ok(Datum::Null) => {
+                    null_eval = true;
+                }
+                x => {
+                    panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
+                }
+            }
+        }
+
+        // If the lower bound exceeds our `until` frontier, it should not appear in the output.
+        if !valid_time(&lower_bound) {
+            return None.into_iter().chain(None);
+        }
+
+        // If there are any upper bounds, determine the minimum upper bound.
+        for u in upper_bounds.iter() {
+            // We can cease as soon as the lower and upper bounds match,
+            // as the update will certainly not be produced in that case.
+            if upper_bound != Some(lower_bound) {
+                match u.eval(datums, arena) {
                     Err(e) => {
                         return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                     }
                     Ok(Datum::MzTimestamp(d)) => {
-                        lower_bound = lower_bound.max(d);
+                        if let Some(upper) = upper_bound {
+                            upper_bound = Some(upper.min(d));
+                        } else {
+                            upper_bound = Some(d);
+                        };
+                        // Force the upper bound to be at least the lower
+                        // bound. The `is_some()` test should always be true
+                        // due to the above block, but maintain it here in
+                        // case that changes. It's hopefully optimized away.
+                        if upper_bound.is_some() && upper_bound < Some(lower_bound) {
+                            upper_bound = Some(lower_bound);
+                        }
                     }
                     Ok(Datum::Null) => {
                         null_eval = true;
@@ -1950,72 +2037,27 @@ pub mod plan {
                     }
                 }
             }
+        }
 
-            // If the lower bound exceeds our `until` frontier, it should not appear in the output.
-            if !valid_time(&lower_bound) {
-                return None.into_iter().chain(None);
-            }
-
-            // If there are any upper bounds, determine the minimum upper bound.
-            for u in self.upper_bounds.iter() {
-                // We can cease as soon as the lower and upper bounds match,
-                // as the update will certainly not be produced in that case.
-                if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, arena) {
-                        Err(e) => {
-                            return Some(Err((e.into(), time, diff))).into_iter().chain(None);
-                        }
-                        Ok(Datum::MzTimestamp(d)) => {
-                            if let Some(upper) = upper_bound {
-                                upper_bound = Some(upper.min(d));
-                            } else {
-                                upper_bound = Some(d);
-                            };
-                            // Force the upper bound to be at least the lower
-                            // bound. The `is_some()` test should always be true
-                            // due to the above block, but maintain it here in
-                            // case that changes. It's hopefully optimized away.
-                            if upper_bound.is_some() && upper_bound < Some(lower_bound) {
-                                upper_bound = Some(lower_bound);
-                            }
-                        }
-                        Ok(Datum::Null) => {
-                            null_eval = true;
-                        }
-                        x => {
-                            panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
-                        }
-                    }
-                }
-            }
-
-            // If the upper bound exceeds our `until` frontier, it should not appear in the output.
-            if let Some(upper) = &mut upper_bound {
-                if !valid_time(upper) {
-                    upper_bound = None;
-                }
-            }
-
-            // Produce an output only if the upper bound exceeds the lower bound,
-            // and if we did not encounter a `null` in our evaluation.
-            if Some(lower_bound) != upper_bound && !null_eval {
-                row_builder
-                    .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let upper_opt =
-                    upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
-                let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
-                lower.into_iter().chain(upper_opt)
-            } else {
-                None.into_iter().chain(None)
+        // If the upper bound exceeds our `until` frontier, it should not appear in the output.
+        if let Some(upper) = &mut upper_bound {
+            if !valid_time(upper) {
+                upper_bound = None;
             }
         }
 
-        /// Returns true if evaluation could introduce an error on non-error inputs.
-        pub fn could_error(&self) -> bool {
-            self.mfp.could_error()
-                || self.lower_bounds.iter().any(|e| e.could_error())
-                || self.upper_bounds.iter().any(|e| e.could_error())
+        // Produce an output only if the upper bound exceeds the lower bound,
+        // and if we did not encounter a `null` in our evaluation.
+        if Some(lower_bound) != upper_bound && !null_eval {
+            row_builder
+                .packer()
+                .extend(projection.iter().map(|c| datums[*c]));
+            let upper_opt =
+                upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
+            let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
+            lower.into_iter().chain(upper_opt)
+        } else {
+            None.into_iter().chain(None)
         }
     }
 }

@@ -71,6 +71,11 @@ message ProtoEvalError {
     string ident = 1;
     optional string detail = 2;
   }
+  message ProtoWasmFunction {
+    string name = 1;
+    ProtoWasmErrorKind kind = 2;
+    string message = 3;
+  }
   message ProtoValueOutOfRange {
     string value = 1;
   }
@@ -164,5 +169,16 @@ message ProtoEvalError {
     string redact_error = 82;
     google.protobuf.Empty negative_rows_from_subquery = 83;
     google.protobuf.Empty temp_storage_budget_exceeded = 84;
+    ProtoWasmFunction wasm_function = 85;
   }
+}
+
+enum ProtoWasmErrorKind {
+  PROTO_WASM_ERROR_KIND_UNSPECIFIED = 0;
+  PROTO_WASM_ERROR_KIND_GUEST = 1;
+  PROTO_WASM_ERROR_KIND_TRAP = 2;
+  PROTO_WASM_ERROR_KIND_OUT_OF_FUEL = 3;
+  PROTO_WASM_ERROR_KIND_MEMORY_LIMIT = 4;
+  PROTO_WASM_ERROR_KIND_CALL_FAILED = 5;
+  PROTO_WASM_ERROR_KIND_CONVERSION = 6;
 }

@@ -43,7 +43,9 @@ pub(super) fn reduce_call_variadic(
     }
 
     // Generic folds: constant-fold, null-propagate, error-propagate.
-    if exprs.iter().all(|x| x.is_literal()) {
+    // WebAssembly calls are never constant-folded, because folding happens
+    // where no runtime is installed and user code must not run.
+    if !matches!(func, VariadicFunc::Wasm(_)) && exprs.iter().all(|x| x.is_literal()) {
         *e = MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type);
         return;
     }

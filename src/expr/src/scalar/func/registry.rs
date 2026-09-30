@@ -985,6 +985,22 @@ fn variadic_samples() -> Vec<Sample<VariadicFunc>> {
             },
             vec![SqlScalarType::Int32, SqlScalarType::String],
         ),
+        variadic(
+            WasmFunc {
+                name: "materialize.public.gcd".into(),
+                module: WasmModuleHash([0; 32]),
+                export: "arrowudf_Z2NkKGludDMyLGludDMyKS0$aW50MzI".into(),
+                arg_types: vec![SqlScalarType::Int32, SqlScalarType::Int32],
+                return_type: SqlScalarType::Int32,
+                strict: true,
+                limits: WasmLimits {
+                    fuel: 1,
+                    memory_bytes: 1,
+                },
+                invoker: InvokerCell::default(),
+            },
+            vec![SqlScalarType::Int32, SqlScalarType::Int32],
+        ),
         // Payload-free hand-written functions, probed at their natural inputs.
         variadic(And, vec![SqlScalarType::Bool, SqlScalarType::Bool]),
         variadic(Or, vec![SqlScalarType::Bool, SqlScalarType::Bool]),
