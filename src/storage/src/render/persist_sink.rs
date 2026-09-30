@@ -102,6 +102,7 @@ use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_ore::error::ErrorExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -127,6 +128,9 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
 use tracing::trace;
 
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::statistics::SourceStatistics;
 use crate::storage_state::StorageState;
@@ -316,9 +320,9 @@ pub(crate) fn render<'scope>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
+    health: &HealthReporter,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, ()>,
-    StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
     Vec<PressOnDropButton>,
 ) {
     let persist_clients = Arc::clone(&storage_state.persist_clients);
@@ -352,7 +356,7 @@ pub(crate) fn render<'scope>(
         Arc::clone(&busy_signal),
     );
 
-    let (upper_stream, append_errors, append_token) = append_batches(
+    let (upper_stream, append_token) = append_batches(
         scope,
         collection_id.clone(),
         operator_name,
@@ -363,13 +367,10 @@ pub(crate) fn render<'scope>(
         storage_state,
         metrics,
         Arc::clone(&busy_signal),
+        health.clone(),
     );
 
-    (
-        upper_stream,
-        append_errors,
-        vec![mint_token, write_token, append_token],
-    )
+    (upper_stream, vec![mint_token, write_token, append_token])
 }
 
 /// Whenever the frontier advances, this mints a new batch description (lower
@@ -904,11 +905,8 @@ fn append_batches<'scope>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
-) -> (
-    StreamVec<'scope, mz_repr::Timestamp, ()>,
-    StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
-    PressOnDropButton,
-) {
+    health: HealthReporter,
+) -> (StreamVec<'scope, mz_repr::Timestamp, ()>, PressOnDropButton) {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
@@ -960,7 +958,14 @@ fn append_batches<'scope>(
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let (shutdown_button, errors) = append_op.build_fallible(move |caps| Box::pin(async move {
+    let report_error = move |err: anyhow::Error| {
+        health.report(HealthStatusMessage {
+            id: None,
+            namespace: StatusNamespace::Internal,
+            update: HealthStatusUpdate::halting(err.display_with_causes().to_string(), None),
+        })
+    };
+    let button = append_op.build_fallible_with(report_error, move |caps| Box::pin(async move {
         let [upper_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
         // This may SEEM unnecessary, but metrics contains extra
@@ -1425,7 +1430,7 @@ fn append_batches<'scope>(
         }
     }));
 
-    (upper_stream, errors, shutdown_button.press_on_drop())
+    (upper_stream, button.press_on_drop())
 }
 
 #[cfg(test)]

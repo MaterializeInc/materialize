@@ -201,7 +201,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
@@ -210,16 +209,12 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
-use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
 
-use crate::healthcheck::{
-    HealthConfig, HealthObjectType, HealthReporter, HealthStatusMessage, HealthStatusUpdate,
-    StatusNamespace,
-};
+use crate::healthcheck::{HealthConfig, HealthObjectType, HealthReporter};
 use crate::source::RawSourceCreationConfig;
 use crate::storage_state::StorageState;
 
@@ -395,7 +390,7 @@ pub fn build_ingestion_dataflow(
                     export_id,
                     primary_source_id
                 );
-                let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
+                let (upper_stream, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
                     export.storage_metadata.clone(),
@@ -403,20 +398,10 @@ pub fn build_ingestion_dataflow(
                     storage_state,
                     metrics,
                     Arc::clone(&busy_signal),
+                    &health,
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
-
-                let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
-                    let halt_status =
-                        HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
-                    HealthStatusMessage {
-                        id: None,
-                        namespace: StatusNamespace::Internal,
-                        update: halt_status,
-                    }
-                });
-                health.report_stream(sink_health);
             }
 
             mz_scope

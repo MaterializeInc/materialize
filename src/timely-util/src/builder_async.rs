@@ -711,6 +711,30 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         (button, error_stream)
     }
 
+    /// Like [`Self::build_fallible`], but hands the error to `on_error` instead of emitting it on
+    /// an output.
+    pub fn build_fallible_with<E: 'static, H, F>(self, on_error: H, constructor: F) -> Button
+    where
+        H: FnOnce(E) + 'static,
+        F: for<'a> FnOnce(
+                &'a mut [CapabilitySet<T>],
+            ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
+            + 'static,
+    {
+        self.build(|caps| async move {
+            let mut caps = caps
+                .into_iter()
+                .map(CapabilitySet::from_elem)
+                .collect::<Vec<_>>();
+            if let Err(err) = constructor(&mut *caps).await {
+                on_error(err);
+                // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
+                // the capabilities and could produce incorrect progress statements.
+                std::future::pending().await
+            }
+        })
+    }
+
     /// Creates operator info for the operator.
     pub fn operator_info(&self) -> OperatorInfo {
         self.builder.operator_info()
