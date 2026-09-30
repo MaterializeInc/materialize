@@ -11,7 +11,7 @@
 //! we must _instantiate_ that plan with other runtime information
 //! to actually run the dataflow.
 //!
-//! [`CatalogState`] is the [`InstantiationContext`] for
+//! [`CatalogInstantiationContext`] is the [`InstantiationContext`] for
 //! `PinnedDataflow::instantiate`, supplying the export descriptors
 //! not recorded in the pinned plan. We look this information up in the
 //! catalog items; each lookup reproduces what we would have built in the
@@ -22,15 +22,26 @@ use mz_compute_types::plan::pinned::{
     IndexInfo, InstantiationContext, MaterializedViewInfo, MetricSinkInfo,
 };
 use mz_expr::MirRelationExpr;
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::{GlobalId, ReprRelationType};
 
 use crate::catalog::CatalogState;
 use crate::optimize::metric_sink::shape_metric_sink_source;
 
-impl InstantiationContext for CatalogState {
+/// The catalog and the coordinator's transient id generator, which together
+/// answer everything instantiation asks for.
+// TODO(mgree): construct this where the coordinator loads pinned plans.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogInstantiationContext<'a> {
+    pub catalog: &'a CatalogState,
+    pub transient_ids: &'a TransientIdGen,
+}
+
+impl InstantiationContext for CatalogInstantiationContext<'_> {
     fn index(&self, id: GlobalId) -> Option<IndexInfo> {
-        let index = self.try_get_entry_by_global_id(&id)?.index()?;
-        let on_desc = self.try_get_desc_by_global_id(&index.on)?;
+        let index = self.catalog.try_get_entry_by_global_id(&id)?.index()?;
+        let on_desc = self.catalog.try_get_desc_by_global_id(&index.on)?;
         Some(IndexInfo {
             on: index.on,
             keys: index.keys.to_vec(),
@@ -39,7 +50,10 @@ impl InstantiationContext for CatalogState {
     }
 
     fn materialized_view(&self, id: GlobalId) -> Option<MaterializedViewInfo> {
-        let mv = self.try_get_entry_by_global_id(&id)?.materialized_view()?;
+        let mv = self
+            .catalog
+            .try_get_entry_by_global_id(&id)?
+            .materialized_view()?;
         // Only the writing collection is fed by a sink. An older version's id
         // resolves to the same item but names no sink.
         if mv.global_id_writes() != id {
@@ -53,10 +67,11 @@ impl InstantiationContext for CatalogState {
     }
 
     fn metric_sink(&self, id: GlobalId) -> Option<MetricSinkInfo> {
-        let CatalogItem::MetricSink(sink) = self.try_get_entry_by_global_id(&id)?.item() else {
+        let CatalogItem::MetricSink(sink) = self.catalog.try_get_entry_by_global_id(&id)?.item()
+        else {
             return None;
         };
-        let from_desc = self.try_get_desc_by_global_id(&sink.from)?;
+        let from_desc = self.catalog.try_get_desc_by_global_id(&sink.from)?;
         // The sink reads the shaped view the optimizer builds over `from`,
         // whose description depends only on the source description and the
         // prefix. The expression the shaping also returns is not needed here.
@@ -71,6 +86,10 @@ impl InstantiationContext for CatalogState {
             from_desc: shaped_desc,
         })
     }
+
+    fn allocate_transient_id(&self) -> GlobalId {
+        self.transient_ids.allocate_id().1
+    }
 }
 
 #[cfg(test)]
@@ -79,10 +98,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use mz_catalog::memory::objects::CatalogItem;
+    use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
     use mz_compute_types::plan::pinned::PinnedDataflow;
     use mz_controller_types::ClusterId;
     use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::global_id::TransientIdGen;
     use mz_repr::{CatalogItemId, GlobalId};
     use mz_sql::names::{
         DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -92,21 +112,92 @@ mod tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::VarInput;
 
+    use super::CatalogInstantiationContext;
     use crate::catalog::{Catalog, LocalExpressionCache, Op};
     use crate::optimize::dataflows::ComputeInstanceSnapshot;
     use crate::optimize::{self, LirDataflowDescription, Optimize, OptimizerConfig};
 
-    /// Checks that the original dataflow rebuilds correctly in the given catalog.
+    /// Pins `original`, instantiates it against `catalog`, and checks that
+    /// the result is `original` again, and that pinning the result gives the
+    /// same pinned form.
     ///
-    /// Returns the pinned form so a test can inspect what was stored.
+    /// Each instantiation gets a fresh id generator. The optimizers in these
+    /// tests number their internal views from 1, so the rebuilt description
+    /// carries the original ids.
+    ///
+    /// Returns the pinned form for further inspection.
     fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) -> PinnedDataflow {
+        assert_source_operators_canonical(&original);
+        let ctx = CatalogInstantiationContext {
+            catalog: catalog.state(),
+            transient_ids: &TransientIdGen::new(),
+        };
         let pinned = PinnedDataflow::try_from(original.clone()).expect("pinnable");
         let rebuilt = pinned
             .clone()
-            .instantiate(catalog.state(), original.debug_name.clone())
+            .instantiate(&ctx, original.debug_name.clone())
             .expect("instantiates");
-        assert_eq!(rebuilt, original);
+        assert_eq!(rebuilt, original, "pin then instantiate is the identity");
+        let repinned = PinnedDataflow::try_from(rebuilt).expect("pinnable");
+        assert_eq!(repinned, pinned, "instantiate then pin is the identity");
         pinned
+    }
+
+    /// Lowering leaves every source MFP in the form that planning and
+    /// folding back reproduces.
+    fn assert_source_operators_canonical(df: &LirDataflowDescription) {
+        for (id, import) in &df.source_imports {
+            let Some(operators) = &import.desc.arguments.operators else {
+                continue;
+            };
+            let replanned = operators
+                .clone()
+                .into_plan()
+                .expect("plannable")
+                .into_map_filter_project();
+            assert_eq!(&replanned, operators, "source {id} operators are canonical");
+        }
+    }
+
+    /// Runs the materialized view optimizer pipeline over the catalog item.
+    fn optimize_materialized_view(
+        catalog: &Arc<Catalog>,
+        mv: &MaterializedView,
+    ) -> LirDataflowDescription {
+        let (compute, config, metrics) = optimizer_parts(catalog);
+        let mut optimizer = optimize::materialized_view::Optimizer::new(
+            Arc::<Catalog>::clone(catalog),
+            compute,
+            mv.global_id_writes(),
+            GlobalId::Transient(1),
+            mv.desc.latest().iter_names().cloned().collect(),
+            mv.non_null_assertions.clone(),
+            mv.refresh_schedule.clone(),
+            "mv".to_string(),
+            config,
+            metrics,
+        );
+        let local_mir_plan = optimizer
+            .optimize((*mv.raw_expr).clone())
+            .expect("local MIR optimization succeeds");
+        let global_mir_plan = optimizer
+            .optimize(local_mir_plan)
+            .expect("global MIR optimization succeeds");
+        let global_lir_plan = optimizer
+            .optimize(global_mir_plan)
+            .expect("LIR optimization succeeds");
+        global_lir_plan.unapply().0
+    }
+
+    /// The pushed-down operators of the dataflow's only source import.
+    fn source_operators(df: &LirDataflowDescription) -> &mz_expr::MapFilterProject {
+        let source = df.source_imports.values().next().expect("reads a source");
+        source
+            .desc
+            .arguments
+            .operators
+            .as_ref()
+            .expect("filter pushed into the source read")
     }
 
     /// TEST FIXTURE
@@ -228,30 +319,42 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
+            let df_desc = optimize_materialized_view(&catalog, &mv);
 
-            let (compute, config, metrics) = optimizer_parts(&catalog);
-            let mut optimizer = optimize::materialized_view::Optimizer::new(
-                Arc::<Catalog>::clone(&catalog),
-                compute,
-                mv.global_id_writes(),
-                GlobalId::Transient(1),
-                mv.desc.latest().iter_names().cloned().collect(),
-                mv.non_null_assertions.clone(),
-                mv.refresh_schedule.clone(),
-                "mv".to_string(),
-                config,
-                metrics,
+            assert_round_trips(&catalog, df_desc);
+        })
+        .await
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn refresh_every_materialized_view_round_trips() {
+        Catalog::with_debug(|mut catalog| async move {
+            catalog
+                .system_config_mut()
+                .set("enable_refresh_every_mvs", VarInput::Flat("on"))
+                .expect("flag exists");
+            let CatalogItem::MaterializedView(mv) = create_item(
+                &mut catalog,
+                1,
+                "mv",
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER \"quickstart\" WITH (REFRESH EVERY '1 hour' ALIGNED TO 0) \
+                 AS SELECT \"id\" FROM \"mz_catalog\".\"mz_tables\"",
+            )
+            .await
+            else {
+                panic!("expected a materialized view");
+            };
+            assert!(mv.refresh_schedule.is_some(), "the item carries a schedule");
+            let catalog = Arc::new(catalog);
+            let df_desc = optimize_materialized_view(&catalog, &mv);
+
+            assert_eq!(df_desc.refresh_schedule, mv.refresh_schedule);
+            assert_eq!(
+                df_desc.sink_exports[&mv.global_id_writes()].refresh_schedule,
+                mv.refresh_schedule
             );
-            let local_mir_plan = optimizer
-                .optimize((*mv.raw_expr).clone())
-                .expect("local MIR optimization succeeds");
-            let global_mir_plan = optimizer
-                .optimize(local_mir_plan)
-                .expect("global MIR optimization succeeds");
-            let global_lir_plan = optimizer
-                .optimize(global_mir_plan)
-                .expect("LIR optimization succeeds");
-            let (df_desc, _) = global_lir_plan.unapply();
 
             assert_round_trips(&catalog, df_desc);
         })
@@ -277,44 +380,9 @@ mod tests {
                 panic!("expected a materialized view");
             };
             let catalog = Arc::new(catalog);
-
-            let (compute, config, metrics) = optimizer_parts(&catalog);
-            let mut optimizer = optimize::materialized_view::Optimizer::new(
-                Arc::<Catalog>::clone(&catalog),
-                compute,
-                mv.global_id_writes(),
-                GlobalId::Transient(1),
-                mv.desc.latest().iter_names().cloned().collect(),
-                mv.non_null_assertions.clone(),
-                mv.refresh_schedule.clone(),
-                "mv".to_string(),
-                config,
-                metrics,
-            );
-            let local_mir_plan = optimizer
-                .optimize((*mv.raw_expr).clone())
-                .expect("local MIR optimization succeeds");
-            let global_mir_plan = optimizer
-                .optimize(local_mir_plan)
-                .expect("global MIR optimization succeeds");
-            let global_lir_plan = optimizer
-                .optimize(global_mir_plan)
-                .expect("LIR optimization succeeds");
-            let (df_desc, _) = global_lir_plan.unapply();
-
-            let source = df_desc
-                .source_imports
-                .values()
-                .next()
-                .expect("reads mz_tables");
-            let operators = source
-                .desc
-                .arguments
-                .operators
-                .as_ref()
-                .expect("filter pushed into the source read");
+            let df_desc = optimize_materialized_view(&catalog, &mv);
             assert!(
-                operators
+                source_operators(&df_desc)
                     .predicates
                     .iter()
                     .any(|(_, predicate)| predicate.contains_temporal()),
@@ -341,6 +409,56 @@ mod tests {
                 (1, 0),
                 "mz_now() >= 1000 is pinned as one lower bound"
             );
+        })
+        .await
+    }
+
+    /// The MIR optimizer pushes `mz_now() <= e` into the source read next to
+    /// the `mz_now() < step_mz_timestamp(e)` it derives from it. Lowering
+    /// must hand on the planned form, one exclusive bound, or the pin round
+    /// trip is not exact.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn inclusive_temporal_filter_materialized_view_round_trips() {
+        Catalog::with_debug(|mut catalog| async move {
+            create_item(
+                &mut catalog,
+                1,
+                "events",
+                "CREATE TABLE \"materialize\".\"public\".\"events\" (\"ts\" timestamp)",
+            )
+            .await;
+            let CatalogItem::MaterializedView(mv) = create_item(
+                &mut catalog,
+                2,
+                "mv",
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER \"quickstart\" \
+                 AS SELECT \"ts\" FROM \"materialize\".\"public\".\"events\" \
+                 WHERE mz_now() <= \"ts\"",
+            )
+            .await
+            else {
+                panic!("expected a materialized view");
+            };
+            let catalog = Arc::new(catalog);
+            let df_desc = optimize_materialized_view(&catalog, &mv);
+            let temporal: Vec<_> = source_operators(&df_desc)
+                .predicates
+                .iter()
+                .filter(|(_, predicate)| predicate.contains_temporal())
+                .collect();
+            assert_eq!(temporal.len(), 1, "one bound: {temporal:?}");
+            assert!(
+                matches!(
+                    temporal[0].1,
+                    mz_expr::MirScalarExpr::CallBinary { ref func, .. }
+                        if matches!(func, mz_expr::BinaryFunc::Lt(_))
+                ),
+                "the bound is exclusive: {temporal:?}"
+            );
+
+            assert_round_trips(&catalog, df_desc);
         })
         .await
     }
