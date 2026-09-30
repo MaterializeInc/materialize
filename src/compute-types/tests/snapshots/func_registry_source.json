@@ -624,6 +624,7 @@
     "string_to_array": {"display":"string_to_array","sqlfunc_decl":"#[sqlfunc(output_type_expr = \"SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)\", introduces_nulls = false, propagates_nulls = false)] fn string_to_array<'a>(string: &'a str, delimiter: Option<&'a str>, null_string: OptionalArg<Option<&'a str>>, temp_storage: &'a RowArena,) -> Result<Datum<'a>, EvalError>","body_fingerprint":"6b8e24e189f8a002"},
     "substr": {"display":"substr","sqlfunc_decl":"#[sqlfunc] fn substr<'a>(s: &'a str, start: i32, length: OptionalArg<i32>) -> Result<&'a str, EvalError>","body_fingerprint":"8a901df8b94d5a60"},
     "timezone_time_variadic": {"display":"timezonet","sqlfunc_decl":"#[sqlfunc(sqlname = \"timezonet\")] fn timezone_time_variadic(tz_str: &str, time: NaiveTime, wall_time: CheckedTimestamp<DateTime<Utc>>,) -> Result<NaiveTime, EvalError>","body_fingerprint":"6b8b297584c18d7f"},
-    "translate": {"display":"translate","sqlfunc_decl":"#[sqlfunc] fn translate(string: &str, from_str: &str, to_str: &str, temp_storage: &RowArena,) -> Result<String, EvalError>","body_fingerprint":"d53308cbf87f62c5"}
+    "translate": {"display":"translate","sqlfunc_decl":"#[sqlfunc] fn translate(string: &str, from_str: &str, to_str: &str, temp_storage: &RowArena,) -> Result<String, EvalError>","body_fingerprint":"d53308cbf87f62c5"},
+    "wasm": {"display":"materialize.public.gcd","sqlfunc_decl":null,"body_fingerprint":null}
   }
 }
