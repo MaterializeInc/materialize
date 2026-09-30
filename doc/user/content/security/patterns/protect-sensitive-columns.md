@@ -7,13 +7,9 @@ menu:
     weight: 10
 ---
 
-To keep sensitive columns, such as personally identifiable information (PII),
-away from some users, expose a materialized view that excludes those columns.
-Then grant those users a role that can read only that materialized view.
-
-{{< note >}}
-{{% include-headless "/headless/rbac-cloud/select-views-privileges" %}}
-{{</ note >}}
+To keep sensitive data, such as personally identifiable information (PII), away
+from users, consider creating bespoke materialized views which exclude those
+columns. Then, grant users access only to the bespoke materialized views.
 
 {{< warning >}}
 This pattern is not a strong security barrier. An error in any object upstream
@@ -187,12 +183,10 @@ SELECT * FROM analytics.customers_public_v2;
 ERROR:  Evaluation error: invalid input syntax for type bigint: invalid digit found in string: "3215498X6"
 ```
 
-To reduce this risk:
-
-- Build the exposed materialized view from as few upstream objects as possible.
-- Guard expressions on sensitive columns that can fail. For example,
-  `CASE WHEN ssn ~ '^\d{3}-\d{2}-\d{4}$' THEN replace(ssn, '-', '')::bigint END`
-  returns `NULL` for a malformed value instead of an error.
+To reduce this risk, guard expressions on sensitive columns that can fail. For
+example,
+`CASE WHEN ssn ~ '^\d{3}-\d{2}-\d{4}$' THEN replace(ssn, '-', '')::bigint END`
+returns `NULL` for a malformed value instead of an error.
 
 Source errors, such as decoding errors, cannot be guarded this way.
 
@@ -210,9 +204,3 @@ includes the names of the restricted objects and their columns (for example, in
 `mz_columns`), and the SQL definitions of objects (for example, in
 `mz_materialized_views.create_sql`). Keep sensitive values out of object
 definitions.
-
-### Remaining columns can identify individuals
-
-Excluding direct identifiers, such as names and email addresses, does not
-anonymize the data. Combinations of the remaining columns can still identify
-individuals, and a key such as `id` can be joined back to other data.
