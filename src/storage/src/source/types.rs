@@ -24,11 +24,14 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::builder_async::{AsyncOutputHandle, MAX_OUTSTANDING_BYTES, PressOnDropButton};
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
+use timely::ContainerBuilder;
+use timely::container::PushInto;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
 
@@ -240,6 +243,55 @@ impl_fuel_size_stack!(
 impl<P, T> FuelSize for mz_timely_util::order::Partitioned<P, T> {
     fn fuel_size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+}
+
+/// Output handles of one operator that share a fuel budget, so that the operator yields back to
+/// timely once per [`MAX_OUTSTANDING_BYTES`] of its total emission across them.
+///
+/// [`AsyncOutputHandle::give_fueled`] counts bytes per handle, so an operator with many handles
+/// could emit up to the bound on each of them before yielding.
+pub struct SharedFuel<T: Timestamp, CB: ContainerBuilder> {
+    handles: Vec<AsyncOutputHandle<T, CB>>,
+    outstanding_bytes: usize,
+}
+
+impl<T: Timestamp, CB: ContainerBuilder> SharedFuel<T, CB> {
+    /// Takes ownership of `handles`, which [`Self::give`] addresses by position.
+    pub fn new(handles: Vec<AsyncOutputHandle<T, CB>>) -> Self {
+        Self {
+            handles,
+            outstanding_bytes: 0,
+        }
+    }
+
+    /// Gives `data` at `cap` to the handle at `index`, charging its [`FuelSize`] against the
+    /// shared budget. Yields back to timely and resets the budget once it exceeds
+    /// [`MAX_OUTSTANDING_BYTES`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is not the position of a handle passed to [`Self::new`].
+    pub async fn give<D>(&mut self, index: usize, cap: &Capability<T>, data: D)
+    where
+        CB: PushInto<D>,
+        D: FuelSize,
+    {
+        let size = data.fuel_size();
+        self.handles[index].give(cap, data);
+        if self.charge(size) {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Charges `size`, returning whether the budget was exceeded, in which case it resets.
+    fn charge(&mut self, size: usize) -> bool {
+        self.outstanding_bytes += size;
+        let exceeded = self.outstanding_bytes > MAX_OUTSTANDING_BYTES;
+        if exceeded {
+            self.outstanding_bytes = 0;
+        }
+        exceeded
     }
 }
 

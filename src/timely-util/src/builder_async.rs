@@ -313,16 +313,18 @@ where
     }
 }
 
+/// Maximum bytes [`AsyncOutputHandle::give_fueled`] emits through one handle before yielding back
+/// to timely.
+pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
+
 impl<T, D> AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<D>>>>
 where
     D: Clone + 'static,
     T: Timestamp,
 {
-    pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
-
     /// Provides one record at the time specified by the capability and
     /// charges `size_bytes` against the builder's fuel counter. Once at least
-    /// [`Self::MAX_OUTSTANDING_BYTES`] have been emitted since the last yield
+    /// [`MAX_OUTSTANDING_BYTES`] have been emitted since the last yield
     /// this method yields back to timely and resets the counter.
     pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2, size_bytes: usize)
     where
@@ -333,7 +335,7 @@ where
             handle.give(cap, data);
             let bytes = &handle.builder.bytes;
             bytes.set(bytes.get() + size_bytes);
-            let should_yield = bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            let should_yield = bytes.get() > MAX_OUTSTANDING_BYTES;
             if should_yield {
                 bytes.set(0);
             }
