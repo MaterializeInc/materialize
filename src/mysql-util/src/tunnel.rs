@@ -435,6 +435,3 @@ impl Config {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
