@@ -121,6 +121,8 @@ members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
+    "src/wasm-udf",
+    "src/wasm-udf-abi",
     "test/metabase/smoketest",
     "test/test-util",
 ]
@@ -251,6 +253,8 @@ default-members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
+    "src/wasm-udf",
+    "src/wasm-udf-abi",
     "test/metabase/smoketest",
     "test/test-util",
 ]
@@ -575,6 +579,8 @@ utoipa = "6.0.0"
 uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
+wasmparser = "0.258.0"
+wasmtime = { version = "49.0.1", default-features = false }
 which = "8"
 x509-cert = { version = "0.2.5", default-features = false }
 yansi = "1.0.1"
