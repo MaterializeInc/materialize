@@ -199,7 +199,19 @@ impl Context {
         desired_generation: u64,
         resources_hash: String,
     ) -> Result<Option<Action>, Error> {
-        if let Some(action) = resources.promote_services(client, &mz.namespace()).await? {
+        // The `Promoting` condition's transition time is when the rollout
+        // committed to promotion. On the reconcile that writes that condition,
+        // `mz` predates the write, and the current time stands in for it.
+        let now = Timestamp::now();
+        let promoting_since = if mz.is_promoting() {
+            mz.up_to_date_transition_time("Unknown", now)
+        } else {
+            now
+        };
+        if let Some(action) = resources
+            .promote_services(client, &mz.namespace(), promoting_since)
+            .await?
+        {
             return Ok(Some(action));
         }
         resources
