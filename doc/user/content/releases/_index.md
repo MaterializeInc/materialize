@@ -20,6 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.44.1
+*Released to Materialize Cloud: 2026-09-30* <br>
+*Released to Materialize Self-Managed: 2026-10-01* <br>
+
+### Improvements {#v26.44.1-improvements}
+- **Lower balancerd memory use per connection**: `balancerd` now builds the TLS connector for its upstream `environmentd` connections once at startup instead of once per connection, which takes certificate parsing out of connection setup and cuts memory held per proxied TLS connection by roughly a factor of ten in local measurement, leaving more headroom under `balancerd_max_connections` for a given memory limit.
+
 ## v26.43.0
 *Released to Materialize Cloud: 2026-09-23* <br>
 *Released to Materialize Self-Managed: 2026-09-24* <br>
