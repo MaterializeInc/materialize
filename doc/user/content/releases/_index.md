@@ -63,7 +63,6 @@ We've done this by offloading heavy `SELECT` queries onto separate threads. Prev
 - **PostgreSQL sources are identifiable upstream**: Connections a PostgreSQL source opens to the upstream database, including its replication connection, now set `application_name` to `materialize`, so you can pick them out in `pg_stat_activity`.
 
 ### Agent Skills {#v26.44-agent-skills}
-- **`materialize` plugin**: You can now install every Materialize agent skill at once with `/plugin install materialize@materialize` in Claude Code or `codex plugin add materialize@materialize` in Codex, and update them all in one step.
 - **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt`, `materialize-docs` is now `mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
 - **`mz-health-check`**: The health check now reports materialized views on clusters with no replicas, which stop advancing and hold back compaction of every input they read, so their storage keeps growing.
 
