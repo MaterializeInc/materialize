@@ -177,6 +177,9 @@ use crate::session::vars::{
 use crate::{names, parse};
 
 mod connection;
+mod function;
+
+pub use function::{describe_create_function, plan_create_function};
 
 // TODO: Figure out what the maximum number of columns we can actually support is, and set that.
 //
@@ -601,6 +604,10 @@ pub fn plan_create_webhook_source(
         // are older than a certain threshold.
         if expression.contains_unmaterializable_except(&[UnmaterializableFunc::CurrentTimestamp]) {
             return Err(PlanError::WebhookValidationNonDeterministic);
+        }
+        // environmentd evaluates CHECK, and only compute runs guest code.
+        if expression.contains_wasm_call() {
+            sql_bail!("webhook CHECK expressions cannot call WebAssembly functions");
         }
     }
 
@@ -4182,6 +4189,10 @@ fn kafka_sink_builder(
                 &SqlScalarType::UInt64,
             )?;
             let expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
+            // Storage evaluates PARTITION BY, and only compute runs guest code.
+            if expr.contains_wasm_call() {
+                sql_bail!("PARTITION BY cannot call WebAssembly functions");
+            }
 
             Some(expr)
         }
@@ -5949,9 +5960,6 @@ pub fn plan_drop_objects(
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    if object_type == mz_sql_parser::ast::ObjectType::Func {
-        bail_unsupported!("DROP FUNCTION");
-    }
     let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
@@ -8568,6 +8576,7 @@ pub(crate) fn resolve_item_or_type<'a>(
     let name = normalize::unresolved_item_name(name)?;
     let catalog_item = match object_type {
         ObjectType::Type => scx.catalog.resolve_type(&name),
+        ObjectType::Func => scx.catalog.resolve_function(&name),
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
@@ -8582,7 +8591,6 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Schema
-        | ObjectType::Func
         | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
     };
 

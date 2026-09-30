@@ -1,0 +1,113 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+parse-statement
+CREATE FUNCTION gcd(int, int) RETURNS int LANGUAGE wasm USING BASE64 'AGFzbQ=='
+----
+CREATE FUNCTION gcd(int4, int4) RETURNS int4 LANGUAGE wasm USING BASE64 'AGFzbQ=='
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("gcd")]), if_not_exists: false, args: [FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], returns: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, language: Ident("wasm"), volatility: None, null_behavior: None, body: Base64("AGFzbQ=="), with_options: [] })
+
+parse-statement
+CREATE FUNCTION IF NOT EXISTS db.sch.f(a int, b double precision, character varying) RETURNS text LANGUAGE wasm USING BASE64 'AGFzbQ=='
+----
+CREATE FUNCTION IF NOT EXISTS db.sch.f(a int4, b float8, varchar) RETURNS text LANGUAGE wasm USING BASE64 'AGFzbQ=='
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("db"), Ident("sch"), Ident("f")]), if_not_exists: true, args: [FunctionArg { name: Some(Ident("a")), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, FunctionArg { name: Some(Ident("b")), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] } }, FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("varchar")])), typ_mod: [] } }], returns: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, language: Ident("wasm"), volatility: None, null_behavior: None, body: Base64("AGFzbQ=="), with_options: [] })
+
+parse-statement
+CREATE FUNCTION f() RETURNS bigint USING BASE64 'AGFzbQ==' STRICT IMMUTABLE LANGUAGE wasm
+----
+CREATE FUNCTION f() RETURNS int8 LANGUAGE wasm IMMUTABLE STRICT USING BASE64 'AGFzbQ=='
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("f")]), if_not_exists: false, args: [], returns: Other { name: Name(UnresolvedItemName([Ident("int8")])), typ_mod: [] }, language: Ident("wasm"), volatility: Some(Immutable), null_behavior: Some(Strict), body: Base64("AGFzbQ=="), with_options: [] })
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm RETURNS NULL ON NULL INPUT USING BASE64 'AGFzbQ=='
+----
+CREATE FUNCTION f(int4) RETURNS int4 LANGUAGE wasm RETURNS NULL ON NULL INPUT USING BASE64 'AGFzbQ=='
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("f")]), if_not_exists: false, args: [FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], returns: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, language: Ident("wasm"), volatility: None, null_behavior: Some(ReturnsNullOnNullInput), body: Base64("AGFzbQ=="), with_options: [] })
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm CALLED ON NULL INPUT VOLATILE USING BASE64 'AGFzbQ==' WITH (EXPORT = 'g', FUEL = 1000, MEMORY = '16MB')
+----
+CREATE FUNCTION f(int4) RETURNS int4 LANGUAGE wasm VOLATILE CALLED ON NULL INPUT USING BASE64 'AGFzbQ==' WITH (EXPORT = 'g', FUEL = 1000, MEMORY = '16MB')
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("f")]), if_not_exists: false, args: [FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], returns: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, language: Ident("wasm"), volatility: Some(Volatile), null_behavior: Some(CalledOnNullInput), body: Base64("AGFzbQ=="), with_options: [CreateFunctionOption { name: Export, value: Some(Value(String("g"))) }, CreateFunctionOption { name: Fuel, value: Some(Value(Number("1000"))) }, CreateFunctionOption { name: Memory, value: Some(Value(String("16MB"))) }] })
+
+parse-statement
+CREATE FUNCTION f(timestamp with time zone, t timestamp with time zone) RETURNS int list LANGUAGE wasm USING BASE64 'AGFzbQ=='
+----
+CREATE FUNCTION f(timestamptz, t timestamptz) RETURNS int4 list LANGUAGE wasm USING BASE64 'AGFzbQ=='
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("f")]), if_not_exists: false, args: [FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }, FunctionArg { name: Some(Ident("t")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }], returns: List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), language: Ident("wasm"), volatility: None, null_behavior: None, body: Base64("AGFzbQ=="), with_options: [] })
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int USING BASE64 'AGFzbQ=='
+----
+error: Expected LANGUAGE, found EOF
+CREATE FUNCTION f(int) RETURNS int USING BASE64 'AGFzbQ=='
+                                                          ^
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm
+----
+error: Expected USING BASE64, found EOF
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm
+                                                ^
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm LANGUAGE wasm USING BASE64 'AGFzbQ=='
+----
+error: LANGUAGE specified more than once
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm LANGUAGE wasm USING BASE64 'AGFzbQ=='
+                                                 ^
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm STRICT CALLED ON NULL INPUT USING BASE64 'AGFzbQ=='
+----
+error: conflicting or redundant null input behavior
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm STRICT CALLED ON NULL INPUT USING BASE64 'AGFzbQ=='
+                                                        ^
+
+parse-statement
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm USING BASE64 'AGFzbQ==' WITH (SIZE = 1)
+----
+error: Expected one of EXPORT or FUEL or MEMORY, found SIZE
+CREATE FUNCTION f(int) RETURNS int LANGUAGE wasm USING BASE64 'AGFzbQ==' WITH (SIZE = 1)
+                                                                               ^
+
+parse-statement
+DROP FUNCTION f
+----
+DROP FUNCTION f
+=>
+DropObjects(DropObjectsStatement { object_type: Func, if_exists: false, names: [Item(UnresolvedItemName([Ident("f")]))], cascade: false })
+
+parse-statement
+DROP FUNCTION IF EXISTS f, g CASCADE
+----
+DROP FUNCTION IF EXISTS f, g CASCADE
+=>
+DropObjects(DropObjectsStatement { object_type: Func, if_exists: true, names: [Item(UnresolvedItemName([Ident("f")])), Item(UnresolvedItemName([Ident("g")]))], cascade: true })
+
+parse-statement
+SHOW CREATE FUNCTION sch.f
+----
+SHOW CREATE FUNCTION sch.f
+=>
+Show(ShowCreateFunction(ShowCreateFunctionStatement { function_name: UnresolvedItemName([Ident("sch"), Ident("f")]), redacted: false }))
+
+parse-statement
+SHOW REDACTED CREATE FUNCTION f
+----
+SHOW REDACTED CREATE FUNCTION f
+=>
+Show(ShowCreateFunction(ShowCreateFunctionStatement { function_name: UnresolvedItemName([Ident("f")]), redacted: true }))

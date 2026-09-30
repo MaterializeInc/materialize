@@ -1225,6 +1225,9 @@ impl SystemVars {
             &MAX_SCHEMAS_PER_DATABASE,
             &MAX_OBJECTS_PER_SCHEMA,
             &MAX_SECRETS,
+            &MAX_WASM_MODULE_SIZE,
+            &MAX_WASM_FUNCTION_FUEL,
+            &MAX_WASM_FUNCTION_MEMORY,
             &MAX_ROLES,
             &MAX_NETWORK_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
@@ -1768,6 +1771,22 @@ impl SystemVars {
     /// Returns the value of the `max_secrets` configuration parameter.
     pub fn max_secrets(&self) -> u32 {
         *self.expect_value(&MAX_SECRETS)
+    }
+
+    /// Returns the value of the `max_wasm_module_size` configuration parameter.
+    pub fn max_wasm_module_size(&self) -> ByteSize {
+        self.expect_value::<ByteSize>(&MAX_WASM_MODULE_SIZE).clone()
+    }
+
+    /// Returns the value of the `max_wasm_function_fuel` configuration parameter.
+    pub fn max_wasm_function_fuel(&self) -> u64 {
+        *self.expect_value(&MAX_WASM_FUNCTION_FUEL)
+    }
+
+    /// Returns the value of the `max_wasm_function_memory` configuration parameter.
+    pub fn max_wasm_function_memory(&self) -> ByteSize {
+        self.expect_value::<ByteSize>(&MAX_WASM_FUNCTION_MEMORY)
+            .clone()
     }
 
     /// Returns the value of the `max_roles` configuration parameter.

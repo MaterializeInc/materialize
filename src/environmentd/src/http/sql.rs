@@ -1735,6 +1735,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedMetricSink { .. }
         | ExecuteResponse::CreatedIntrospectionSubscribe
         | ExecuteResponse::CreatedSecret { .. }
+        | ExecuteResponse::CreatedFunction
         | ExecuteResponse::CreatedSource { .. }
         | ExecuteResponse::CreatedSink { .. }
         | ExecuteResponse::CreatedView { .. }

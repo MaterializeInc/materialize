@@ -2123,6 +2123,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
                 .map_parser_err(StatementKind::CreateSecret)
+        } else if self.peek_keyword(FUNCTION) {
+            self.parse_create_function()
+                .map_parser_err(StatementKind::CreateFunction)
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
                 .map_parser_err(StatementKind::CreateConnection)
@@ -2162,8 +2165,8 @@ impl<'a> Parser<'a> {
                     (false, true) => "TABLE, or VIEW after CREATE TEMPORARY",
                     (false, false) => {
                         "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, \
-                        SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW \
-                        after CREATE"
+                        SECRET, FUNCTION, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] \
+                        MATERIALIZED VIEW after CREATE"
                     }
                 };
                 self.expected(self.peek_pos(), expected_msg, self.peek_token())
@@ -4556,6 +4559,132 @@ impl<'a> Parser<'a> {
         Ok(options)
     }
 
+    fn parse_create_function(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FUNCTION)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        self.expect_token(&Token::LParen)?;
+        let args = if self.consume_token(&Token::RParen) {
+            vec![]
+        } else {
+            let args = self.parse_comma_separated(Parser::parse_function_arg)?;
+            self.expect_token(&Token::RParen)?;
+            args
+        };
+        self.expect_keyword(RETURNS)?;
+        let returns = self.parse_data_type()?;
+
+        // As in PostgreSQL, the clauses after `RETURNS` may appear in any order.
+        let mut language = None;
+        let mut volatility = None;
+        let mut null_behavior = None;
+        let mut body = None;
+        loop {
+            let pos = self.peek_pos();
+            if self.parse_keyword(LANGUAGE) {
+                if language.is_some() {
+                    return parser_err!(self, pos, "LANGUAGE specified more than once");
+                }
+                language = Some(self.parse_identifier()?);
+            } else if let Some(keyword) = self.parse_one_of_keywords(&[IMMUTABLE, STABLE, VOLATILE])
+            {
+                if volatility.is_some() {
+                    return parser_err!(self, pos, "conflicting or redundant volatility");
+                }
+                volatility = Some(match keyword {
+                    IMMUTABLE => FunctionVolatility::Immutable,
+                    STABLE => FunctionVolatility::Stable,
+                    VOLATILE => FunctionVolatility::Volatile,
+                    _ => unreachable!(),
+                });
+            } else if let Some(behavior) = self.parse_function_null_behavior() {
+                if null_behavior.is_some() {
+                    return parser_err!(self, pos, "conflicting or redundant null input behavior");
+                }
+                null_behavior = Some(behavior);
+            } else if self.parse_keywords(&[USING, BASE64]) {
+                if body.is_some() {
+                    return parser_err!(self, pos, "function body specified more than once");
+                }
+                body = Some(FunctionBody::Base64(self.parse_literal_string()?));
+            } else {
+                break;
+            }
+        }
+        let Some(language) = language else {
+            return self.expected(self.peek_pos(), "LANGUAGE", self.peek_token());
+        };
+        let Some(body) = body else {
+            return self.expected(self.peek_pos(), "USING BASE64", self.peek_token());
+        };
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_function_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        Ok(Statement::CreateFunction(CreateFunctionStatement {
+            name,
+            if_not_exists,
+            args,
+            returns,
+            language,
+            volatility,
+            null_behavior,
+            body,
+            with_options,
+        }))
+    }
+
+    /// Parses `[name] type`. The argument is unnamed if a complete type ends
+    /// the argument, which keeps multi-word types like `double precision`
+    /// from reading as a name followed by a type.
+    fn parse_function_arg(&mut self) -> Result<FunctionArg<Raw>, ParserError> {
+        let start = self.index;
+        if let Ok(data_type) = self.parse_data_type() {
+            if matches!(self.peek_token(), Some(Token::Comma | Token::RParen)) {
+                return Ok(FunctionArg {
+                    name: None,
+                    data_type,
+                });
+            }
+        }
+        self.index = start;
+        Ok(FunctionArg {
+            name: Some(self.parse_identifier()?),
+            data_type: self.parse_data_type()?,
+        })
+    }
+
+    fn parse_function_null_behavior(&mut self) -> Option<FunctionNullBehavior> {
+        if self.parse_keyword(STRICT) {
+            Some(FunctionNullBehavior::Strict)
+        } else if self.parse_keywords(&[RETURNS, NULL, ON, NULL, INPUT]) {
+            Some(FunctionNullBehavior::ReturnsNullOnNullInput)
+        } else if self.parse_keywords(&[CALLED, ON, NULL, INPUT]) {
+            Some(FunctionNullBehavior::CalledOnNullInput)
+        } else {
+            None
+        }
+    }
+
+    fn parse_create_function_option(&mut self) -> Result<CreateFunctionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[EXPORT, FUEL, MEMORY])? {
+            EXPORT => CreateFunctionOptionName::Export,
+            FUEL => CreateFunctionOptionName::Fuel,
+            MEMORY => CreateFunctionOptionName::Memory,
+            v => panic!("found unreachable keyword {}", v),
+        };
+        Ok(CreateFunctionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
     fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SECRET)?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -5116,7 +5245,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => {
+            | ObjectType::Connection
+            | ObjectType::Func => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -5131,7 +5261,7 @@ impl<'a> Parser<'a> {
                     cascade,
                 }))
             }
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
+            ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported DROP on {object_type}")
@@ -8532,6 +8662,13 @@ impl<'a> Parser<'a> {
                 type_name: self.parse_data_type()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, FUNCTION]) {
+            Ok(ShowStatement::ShowCreateFunction(
+                ShowCreateFunctionStatement {
+                    function_name: self.parse_item_name()?,
+                    redacted,
+                },
+            ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 ident!("transaction_isolation")

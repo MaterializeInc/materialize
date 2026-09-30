@@ -31,8 +31,8 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
-    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, FuncDef, Index, Log,
+    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -998,7 +998,7 @@ impl CatalogState {
                     oid,
                     name.clone(),
                     CatalogItem::Func(Func {
-                        inner: func.inner,
+                        inner: FuncDef::Builtin(func.inner),
                         global_id,
                     }),
                     MZ_SYSTEM_ROLE_ID,
@@ -2054,21 +2054,14 @@ impl CatalogState {
             &metadata.name().qualifiers.schema_spec,
             conn_id,
         );
-        if metadata.item_type() == CatalogItemType::Type {
-            schema
-                .types
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
-        } else {
-            // Functions would need special handling, but we don't yet support
-            // dropping functions.
-            assert_ne!(metadata.item_type(), CatalogItemType::Func);
-
-            schema
-                .items
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
+        let namespace = match metadata.item_type() {
+            CatalogItemType::Type => &mut schema.types,
+            CatalogItemType::Func => &mut schema.functions,
+            _ => &mut schema.items,
         };
+        namespace
+            .remove(&metadata.name().item)
+            .expect("catalog out of sync");
 
         if !id.is_system() {
             if let Some(cluster_id) = metadata.item().cluster_id() {

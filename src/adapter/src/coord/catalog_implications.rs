@@ -34,8 +34,8 @@ use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
-    MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Func, Index,
+    MaterializedView, MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -559,6 +559,16 @@ impl Coordinator {
                 )) => {
                     secrets_to_drop.push(catalog_id);
                 }
+                CatalogImplication::Func(CatalogImplicationKind::Added(func))
+                | CatalogImplication::Func(CatalogImplicationKind::Altered { new: func, .. }) => {
+                    if let Some(wasm) = func.wasm() {
+                        self.install_wasm_module(&wasm.definition);
+                    }
+                }
+                CatalogImplication::Func(CatalogImplicationKind::Dropped(_func, _full_name)) => {
+                    // Modules stay installed, since they are addressed by
+                    // content and another function may share one.
+                }
                 CatalogImplication::Connection(CatalogImplicationKind::Added(connection)) => {
                     match &connection.details {
                         // SSH connections: key pair is stored in secrets_controller
@@ -620,7 +630,8 @@ impl Coordinator {
                 | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
                 | CatalogImplication::View(CatalogImplicationKind::None)
                 | CatalogImplication::Secret(CatalogImplicationKind::None)
-                | CatalogImplication::Connection(CatalogImplicationKind::None) => {
+                | CatalogImplication::Connection(CatalogImplicationKind::None)
+                | CatalogImplication::Func(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
                 }
             }
@@ -1758,6 +1769,7 @@ enum CatalogImplication {
     View(CatalogImplicationKind<View>),
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
+    Func(CatalogImplicationKind<Func>),
     Cluster(CatalogImplicationKind<Cluster>),
     ClusterReplica(CatalogImplicationKind<ClusterReplica>),
 }
@@ -1916,7 +1928,9 @@ impl CatalogImplication {
                 }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
-                CatalogItem::Func(_) => {}
+                CatalogItem::Func(func) => {
+                    self.absorb_func(func, None, catalog_update.diff);
+                }
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,
@@ -1969,6 +1983,7 @@ impl CatalogImplication {
 
     impl_absorb_method!(absorb_secret, Secret, Secret);
     impl_absorb_method!(absorb_connection, Connection, Connection);
+    impl_absorb_method!(absorb_func, Func, Func);
 
     impl_absorb_method!(absorb_cluster, Cluster, Cluster);
     impl_absorb_method!(absorb_cluster_replica, ClusterReplica, ClusterReplica);

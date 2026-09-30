@@ -2951,11 +2951,15 @@ impl Coordinator {
                         );
                     }
                 }
+                // Entries are in dependency order, so a module is installed
+                // before any dataflow that calls it is shipped.
+                CatalogItem::Func(func) => {
+                    if let Some(wasm) = func.wasm() {
+                        self.install_wasm_module(&wasm.definition);
+                    }
+                }
                 // Nothing to do for these cases
-                CatalogItem::Log(_)
-                | CatalogItem::Type(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => {}
+                CatalogItem::Log(_) | CatalogItem::Type(_) | CatalogItem::Secret(_) => {}
             }
         }
 
@@ -4598,6 +4602,14 @@ impl Coordinator {
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
         ComputeInstanceSnapshot::new(&self.controller, id)
+    }
+
+    /// Makes a WebAssembly function's module available to every cluster.
+    pub(crate) fn install_wasm_module(&mut self, wasm: &mz_sql::plan::WasmFunction) {
+        self.controller.compute.install_wasm_module(
+            wasm.module_hash,
+            mz_expr::func::WasmModuleBytes(Arc::clone(&wasm.module)),
+        );
     }
 
     /// Call into the compute controller to install a finalized dataflow, and

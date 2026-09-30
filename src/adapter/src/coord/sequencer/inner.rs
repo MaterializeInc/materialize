@@ -27,7 +27,8 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogItem, Connection, DataSourceDesc, Func, FuncDef, Sink, Source, Table, TableDataSource,
+    Type, WasmFunction,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -1289,6 +1290,78 @@ impl Coordinator {
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_create_function(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateFunctionPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::CreateFunctionPlan {
+            name,
+            function,
+            if_not_exists,
+        } = plan;
+
+        // The limits are enforced here rather than in planning, so that
+        // lowering a limit never stops existing functions from being
+        // re-planned at boot.
+        let config = self.catalog().system_config();
+        let limit_error = |message: String| {
+            AdapterError::PlanError(mz_sql::plan::PlanError::Unstructured(message))
+        };
+        let module_size = u64::cast_from(function.wasm.module.len());
+        if module_size > config.max_wasm_module_size().as_bytes() {
+            return Err(limit_error(format!(
+                "WebAssembly module is {} bytes, which exceeds max_wasm_module_size ({})",
+                module_size,
+                config.max_wasm_module_size()
+            )));
+        }
+        if function.wasm.limits.fuel > config.max_wasm_function_fuel() {
+            return Err(limit_error(format!(
+                "FUEL {} exceeds max_wasm_function_fuel ({})",
+                function.wasm.limits.fuel,
+                config.max_wasm_function_fuel()
+            )));
+        }
+        if function.wasm.limits.memory_bytes > config.max_wasm_function_memory().as_bytes() {
+            return Err(limit_error(format!(
+                "MEMORY {} bytes exceeds max_wasm_function_memory ({})",
+                function.wasm.limits.memory_bytes,
+                config.max_wasm_function_memory()
+            )));
+        }
+
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        let func = Func {
+            inner: FuncDef::Wasm(WasmFunction {
+                create_sql: function.create_sql,
+                resolved_ids,
+                definition: function.wasm,
+            }),
+            global_id,
+        };
+        let op = catalog::Op::CreateItem {
+            id: item_id,
+            name: name.clone(),
+            item: CatalogItem::Func(func),
+            owner_id: *session.current_role_id(),
+        };
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedFunction),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "function",
+                });
+                Ok(ExecuteResponse::CreatedFunction)
+            }
             Err(err) => Err(err),
         }
     }

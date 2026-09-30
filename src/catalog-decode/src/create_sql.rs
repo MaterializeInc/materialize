@@ -97,6 +97,7 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
     use mz_sql_parser::ast::Statement::*;
     let item_type = match stmt {
         CreateSecret(_) => "secret",
+        CreateFunction(_) => "function",
         CreateConnection(stmt) => {
             let connection_type = stmt.connection_type.as_str();
             info.insert("connection_type", json!(connection_type));

@@ -749,6 +749,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.func()
     }
 
+    fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        self.entry.wasm_function()
+    }
+
     fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.entry.source_desc()
     }
@@ -1660,11 +1664,48 @@ pub struct Type {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
-    /// Static definition of the function.
     #[serde(skip)]
-    pub inner: &'static mz_sql::func::Func,
+    pub inner: FuncDef,
     /// [`GlobalId`] used to reference this function from outside the catalog.
     pub global_id: GlobalId,
+}
+
+/// The definition of a function.
+#[derive(Debug, Clone)]
+pub enum FuncDef {
+    /// A builtin function, with its static definition.
+    Builtin(&'static mz_sql::func::Func),
+    /// A user-defined WebAssembly function.
+    Wasm(WasmFunction),
+}
+
+#[derive(Debug, Clone)]
+pub struct WasmFunction {
+    /// Parse-able SQL that defines this function.
+    pub create_sql: String,
+    /// Other catalog objects referenced by this function's signature.
+    pub resolved_ids: ResolvedIds,
+    pub definition: mz_sql::plan::WasmFunction,
+}
+
+impl Func {
+    /// The static definition of a builtin function, or `None` for a
+    /// user-defined function.
+    pub fn builtin(&self) -> Option<&'static mz_sql::func::Func> {
+        match &self.inner {
+            FuncDef::Builtin(func) => Some(func),
+            FuncDef::Wasm(_) => None,
+        }
+    }
+
+    /// The definition of a user-defined WebAssembly function, or `None` for a
+    /// builtin.
+    pub fn wasm(&self) -> Option<&WasmFunction> {
+        match &self.inner {
+            FuncDef::Builtin(_) => None,
+            FuncDef::Wasm(wasm) => Some(wasm),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1943,7 +1984,10 @@ impl CatalogItem {
         entry: &CatalogEntry,
     ) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
-            CatalogItem::Func(func) => Ok(func.inner),
+            CatalogItem::Func(Func {
+                inner: FuncDef::Builtin(func),
+                ..
+            }) => Ok(func),
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
                 actual_type: entry.item_type(),
@@ -1990,7 +2034,10 @@ impl CatalogItem {
     pub fn references(&self) -> &ResolvedIds {
         static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(ResolvedIds::empty);
         match self {
-            CatalogItem::Func(_) => &*EMPTY,
+            CatalogItem::Func(func) => match &func.inner {
+                FuncDef::Builtin(_) => &*EMPTY,
+                FuncDef::Wasm(wasm) => &wasm.resolved_ids,
+            },
             CatalogItem::Index(idx) => &idx.resolved_ids,
             CatalogItem::Sink(sink) => &sink.resolved_ids,
             CatalogItem::Source(source) => &source.resolved_ids,
@@ -2762,7 +2809,10 @@ impl CatalogItem {
                 connection.global_id,
                 BTreeMap::new(),
             ),
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::Func(func) => match &func.inner {
+                FuncDef::Builtin(_) => unreachable!("builtin functions cannot be serialized"),
+                FuncDef::Wasm(wasm) => (wasm.create_sql.clone(), func.global_id, BTreeMap::new()),
+            },
             CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
         }
     }
@@ -2808,7 +2858,10 @@ impl CatalogItem {
             CatalogItem::Connection(connection) => {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::Func(func) => match func.inner {
+                FuncDef::Builtin(_) => unreachable!("builtin functions cannot be serialized"),
+                FuncDef::Wasm(wasm) => (wasm.create_sql, func.global_id, BTreeMap::new()),
+            },
             CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
         }
     }
@@ -2857,6 +2910,15 @@ impl CatalogEntry {
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         self.item.func(self)
+    }
+
+    /// Returns the definition of this entry if it is a user-defined
+    /// WebAssembly function.
+    pub fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        match self.item() {
+            CatalogItem::Func(func) => func.wasm().map(|wasm| &wasm.definition),
+            _ => None,
+        }
     }
 
     /// Returns the inner [`Index`] if this entry is an index, else `None`.
@@ -4149,6 +4211,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
+    fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        CatalogEntry::wasm_function(self)
+    }
+
     fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.source_desc()
     }
@@ -4178,7 +4244,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
-            CatalogItem::Func(_) => "<builtin>",
+            CatalogItem::Func(func) => match &func.inner {
+                FuncDef::Builtin(_) => "<builtin>",
+                FuncDef::Wasm(wasm) => &wasm.create_sql,
+            },
             CatalogItem::Log(_) => "<builtin>",
         }
     }

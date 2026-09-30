@@ -527,6 +527,17 @@ fn eval_error_code(err: &EvalError) -> SqlState {
         // User-raised errors (e.g. `error_if_null`).
         EvalError::IfNullError(_) => SqlState::DATA_EXCEPTION,
 
+        // Errors in user-defined WebAssembly functions.
+        EvalError::WasmFunction { kind, .. } => match kind {
+            mz_expr::func::WasmErrorKind::OutOfFuel | mz_expr::func::WasmErrorKind::MemoryLimit => {
+                SqlState::PROGRAM_LIMIT_EXCEEDED
+            }
+            mz_expr::func::WasmErrorKind::Guest
+            | mz_expr::func::WasmErrorKind::Trap
+            | mz_expr::func::WasmErrorKind::CallFailed
+            | mz_expr::func::WasmErrorKind::Conversion => SqlState::EXTERNAL_ROUTINE_EXCEPTION,
+        },
+
         // Genuinely internal errors.
         EvalError::Internal(_)
         | EvalError::InvalidCatalogJson(_)

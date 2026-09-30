@@ -24,7 +24,8 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
-    CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table, TableDataSource, Type,
+    CatalogItem, DataSourceDesc, Func, FuncDef, Index, MaterializedView, Table, TableDataSource,
+    Type,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -173,7 +174,7 @@ impl CatalogState {
                 self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
             }
             CatalogItem::Func(func) => {
-                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
+                self.pack_func_update(id, oid, schema_id, name, owner_id, func, diff)
             }
             // Tables, views, and metric sinks are exposed through materialized
             // views derived from `mz_catalog_raw`, and logs and secrets never
@@ -546,14 +547,29 @@ impl CatalogState {
     fn pack_func_update(
         &self,
         id: CatalogItemId,
+        oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
         func: &Func,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let builtin = match &func.inner {
+            FuncDef::Builtin(builtin) => *builtin,
+            FuncDef::Wasm(wasm) => {
+                return vec![self.pack_wasm_func_update(
+                    id,
+                    oid,
+                    schema_id,
+                    name,
+                    owner_id,
+                    &wasm.definition,
+                    diff,
+                )];
+            }
+        };
         let mut updates = vec![];
-        for func_impl_details in func.inner.func_impls() {
+        for func_impl_details in builtin.func_impls() {
             let arg_type_ids = func_impl_details
                 .arg_typs
                 .iter()
@@ -600,7 +616,7 @@ impl CatalogState {
                 diff,
             ));
 
-            if let mz_sql::func::Func::Aggregate(_) = func.inner {
+            if let mz_sql::func::Func::Aggregate(_) = builtin {
                 updates.push(BuiltinTableUpdate::row(
                     &*MZ_AGGREGATES,
                     Row::pack_slice(&[
@@ -614,6 +630,74 @@ impl CatalogState {
             }
         }
         updates
+    }
+
+    fn pack_wasm_func_update(
+        &self,
+        id: CatalogItemId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        wasm: &mz_sql::plan::WasmFunction,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let arg_type_ids: Vec<Option<String>> = wasm
+            .arg_types
+            .iter()
+            .map(|typ| self.scalar_type_id(typ))
+            .collect();
+        let mut row = Row::default();
+        row.packer()
+            .try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: arg_type_ids.len(),
+                }],
+                arg_type_ids.iter().map(|id| Datum::from(id.as_deref())),
+            )
+            .expect("arg_type_ids is 1 dimensional, and its length is used for the array length");
+        let arg_type_ids = row.unpack_first();
+        let return_type_id = self.scalar_type_id(&wasm.return_type);
+        BuiltinTableUpdate::row(
+            &*MZ_FUNCTIONS,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                arg_type_ids,
+                Datum::Null,
+                Datum::from(return_type_id.as_deref()),
+                Datum::False,
+                Datum::String(&owner_id.to_string()),
+            ]),
+            diff,
+        )
+    }
+
+    /// The ID of the catalog type that represents `typ`, if there is one.
+    fn scalar_type_id(&self, typ: &SqlScalarType) -> Option<String> {
+        match typ {
+            SqlScalarType::List {
+                custom_id: Some(custom_id),
+                ..
+            }
+            | SqlScalarType::Map {
+                custom_id: Some(custom_id),
+                ..
+            }
+            | SqlScalarType::Record {
+                custom_id: Some(custom_id),
+                ..
+            } => Some(custom_id.to_string()),
+            _ => {
+                let name = mz_pgrepr::Type::from(typ).name();
+                self.system_schema_ids()
+                    .find_map(|schema_id| self.ambient_schemas_by_id[&schema_id].types.get(name))
+                    .map(|id| id.to_string())
+            }
+        }
     }
 
     pub fn pack_op_update(

@@ -837,6 +837,10 @@ pub trait CatalogItem {
     /// anything other than a function), it returns an error.
     fn func(&self) -> Result<&'static Func, CatalogError>;
 
+    /// Returns the definition of a user-defined WebAssembly function, or
+    /// `None` if the item is anything else, including a builtin function.
+    fn wasm_function(&self) -> Option<&crate::plan::WasmFunction>;
+
     /// Returns the resolved source connection.
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`

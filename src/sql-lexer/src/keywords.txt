@@ -60,6 +60,7 @@ Auto
 Availability
 Avro
 Aws
+Base64
 Batch
 Begin
 Between
@@ -74,6 +75,7 @@ Broker
 Brokers
 By
 Bytes
+Called
 Cancellation
 Capture
 Cardinality
@@ -183,6 +185,7 @@ Exists
 Expected
 Experimental
 Explain
+Export
 Expose
 Expressions
 External
@@ -206,6 +209,7 @@ Foreign
 Format
 Forward
 From
+Fuel
 Full
 Fullname
 Function
@@ -235,6 +239,7 @@ Ids
 If
 Ignore
 Ilike
+Immutable
 Implementations
 Imported
 In
@@ -266,6 +271,7 @@ Json
 Kafka
 Key
 Keys
+Language
 Last
 Lateral
 Latest
@@ -421,6 +427,7 @@ Restrict
 Retain
 Return
 Returning
+Returns
 Revoke
 Right
 Role
@@ -465,6 +472,7 @@ Sources
 Sql
 Ssh
 Ssl
+Stable
 Start
 Stdin
 Stdout
@@ -539,6 +547,7 @@ Verbose
 Version
 View
 Views
+Volatile
 Wait
 Warehouse
 Warning

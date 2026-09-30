@@ -1737,6 +1737,18 @@ impl CatalogState {
                     resolved_ids,
                 })
             }
+            Plan::CreateFunction(mz_sql::plan::CreateFunctionPlan { function, .. }) => {
+                CatalogItem::Func(mz_catalog::memory::objects::Func {
+                    inner: mz_catalog::memory::objects::FuncDef::Wasm(
+                        mz_catalog::memory::objects::WasmFunction {
+                            create_sql: function.create_sql,
+                            resolved_ids,
+                            definition: function.wasm,
+                        },
+                    ),
+                    global_id,
+                })
+            }
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
                 global_id,

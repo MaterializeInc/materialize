@@ -86,6 +86,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
+        | Plan::CreateFunction(_)
         | Plan::CreateSink(_)
         | Plan::CreateTable(_)
         | Plan::CreateView(_)

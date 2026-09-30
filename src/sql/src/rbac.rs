@@ -638,6 +638,11 @@ fn generate_rbac_requirements(
             name,
             secret: _,
             if_not_exists: _,
+        })
+        | Plan::CreateFunction(plan::CreateFunctionPlan {
+            name,
+            function: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),

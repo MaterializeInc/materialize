@@ -151,6 +151,7 @@ pub fn describe(
         Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
+        Statement::CreateFunction(stmt) => ddl::describe_create_function(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
         Statement::CreateMetricSink(stmt) => ddl::describe_create_metric_sink(&scx, stmt)?,
         Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
@@ -213,6 +214,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
             show::describe_show_create_type(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateFunction(stmt)) => {
+            show::describe_show_create_function(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
@@ -360,6 +364,7 @@ pub fn plan(
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
+        Statement::CreateFunction(stmt) => ddl::plan_create_function(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateMetricSink(stmt) => ddl::plan_create_metric_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
@@ -432,6 +437,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
             show::plan_show_create_type(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateFunction(stmt)) => {
+            show::plan_show_create_function(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
 
@@ -1088,6 +1096,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateRole(_) => DDL,
             Statement::CreateSchema(_) => DDL,
             Statement::CreateSecret(_) => DDL,
+            Statement::CreateFunction(_) => DDL,
             Statement::CreateSink(_) => DDL,
             Statement::CreateMetricSink(_) => DDL,
             Statement::CreateWebhookSource(_) => DDL,
@@ -1137,6 +1146,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateMaterializedView(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateType(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateFunction(_)) => Show,
             Statement::Show(ShowStatement::ShowObjects(_)) => Show,
 
             // SCL statements.

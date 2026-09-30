@@ -22,8 +22,9 @@ use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences,
     ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement,
-    ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType,
-    SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue,
+    ShowCreateFunctionStatement, ShowCreateMaterializedViewStatement, ShowCreateTypeStatement,
+    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -40,6 +41,7 @@ use crate::names::{
     self, Aug, NameSimplifier, ObjectId, ResolvedClusterName, ResolvedDataType,
     ResolvedDatabaseName, ResolvedIds, ResolvedItemName, ResolvedRoleName, ResolvedSchemaName,
 };
+use crate::normalize;
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::unplan_create_cluster;
@@ -313,6 +315,39 @@ pub fn plan_show_create_type(
     Ok(ShowCreatePlan {
         id: ObjectId::Item(id),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
+    })
+}
+
+pub fn describe_show_create_function(
+    _: &StatementContext,
+    _: ShowCreateFunctionStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_function(
+    scx: &StatementContext,
+    ShowCreateFunctionStatement {
+        function_name,
+        redacted,
+    }: ShowCreateFunctionStatement,
+) -> Result<ShowCreatePlan, PlanError> {
+    let name = normalize::unresolved_item_name(function_name)?;
+    let item = scx.catalog.resolve_function(&name)?;
+    let full_name = scx.catalog.resolve_full_name(item.name()).to_string();
+    if item.id().is_system() {
+        sql_bail!("cannot show create for system function {full_name}");
+    }
+    let create_sql =
+        humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql(), redacted)?;
+    Ok(ShowCreatePlan {
+        id: ObjectId::Item(item.id()),
+        row: Row::pack_slice(&[Datum::String(&full_name), Datum::String(&create_sql)]),
     })
 }
 

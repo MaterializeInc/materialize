@@ -2090,6 +2090,10 @@ fn plan_set_expr(
                     show::plan_show_create_type(qcx.scx, stmt.clone())?,
                     show::describe_show_create_type(qcx.scx, stmt)?,
                 ),
+                ShowStatement::ShowCreateFunction(stmt) => to_hirscope(
+                    show::plan_show_create_function(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_function(qcx.scx, stmt)?,
+                ),
                 ShowStatement::ShowObjects(stmt) => {
                     show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
                 }
@@ -5544,6 +5548,12 @@ fn plan_function<'a>(
         distinct,
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, PlanError> {
+    if let Ok(item) = ecx.qcx.scx.get_item_by_resolved_name(name) {
+        if let Some(wasm) = item.wasm_function() {
+            let full_name = ecx.qcx.scx.catalog.resolve_full_name(item.name());
+            return plan_wasm_function(ecx, f, full_name.to_string(), wasm);
+        }
+    }
     let impls = match resolve_func(ecx, name, args)? {
         Func::Table(_) => {
             sql_bail!(
@@ -5742,6 +5752,66 @@ fn plan_function<'a>(
     };
 
     func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])
+}
+
+/// Plans a call to a user-defined WebAssembly function, implicitly casting
+/// each argument to the declared parameter type.
+fn plan_wasm_function(
+    ecx: &ExprContext,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &Function<Aug>,
+    full_name: String,
+    wasm: &crate::plan::WasmFunction,
+) -> Result<HirScalarExpr, PlanError> {
+    if over.is_some() {
+        sql_bail!("OVER specified, but {name} is not a window function nor an aggregate function");
+    }
+    if filter.is_some() {
+        sql_bail!("FILTER specified, but {name} is not an aggregate function");
+    }
+    if *distinct {
+        sql_bail!("DISTINCT specified, but {name} is not an aggregate function");
+    }
+    let args = match args {
+        mz_sql_parser::ast::FunctionArgs::Star => {
+            sql_bail!("* argument is invalid with non-aggregate function {name}")
+        }
+        mz_sql_parser::ast::FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                sql_bail!("ORDER BY specified, but {name} is not an aggregate function");
+            }
+            args
+        }
+    };
+
+    let planned = plan_exprs(ecx, args)?;
+    let unknown = |planned: &[CoercibleScalarExpr]| PlanError::UnknownFunction {
+        name: name.to_string(),
+        arg_types: planned
+            .iter()
+            .map(|e| match ecx.scalar_type(e) {
+                CoercibleScalarType::Coerced(ty) => ecx.humanize_sql_scalar_type(&ty, false),
+                CoercibleScalarType::Record(_) => "record".to_string(),
+                CoercibleScalarType::Uncoerced => "unknown".to_string(),
+            })
+            .collect(),
+    };
+    if planned.len() != wasm.arg_types.len() {
+        return Err(unknown(&planned));
+    }
+    let mut exprs = Vec::with_capacity(planned.len());
+    for (expr, typ) in planned.iter().zip_eq(&wasm.arg_types) {
+        match expr.clone().cast_to(ecx, CastContext::Implicit, typ) {
+            Ok(expr) => exprs.push(expr),
+            Err(_) => return Err(unknown(&planned)),
+        }
+    }
+    Ok(HirScalarExpr::call_variadic(wasm.call(full_name), exprs))
 }
 
 pub const IGNORE_NULLS_ERROR_MSG: &str =

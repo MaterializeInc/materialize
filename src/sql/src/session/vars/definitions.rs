@@ -561,6 +561,27 @@ pub static MAX_SECRETS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_WASM_MODULE_SIZE: VarDefinition = VarDefinition::new(
+    "max_wasm_module_size",
+    value!(ByteSize; ByteSize::mb(8)),
+    "The maximum size of the WebAssembly module behind a function (Materialize).",
+    true,
+);
+
+pub static MAX_WASM_FUNCTION_FUEL: VarDefinition = VarDefinition::new(
+    "max_wasm_function_fuel",
+    value!(u64; 1_000_000_000),
+    "The maximum fuel a WebAssembly function may allow one call (Materialize).",
+    true,
+);
+
+pub static MAX_WASM_FUNCTION_MEMORY: VarDefinition = VarDefinition::new(
+    "max_wasm_function_memory",
+    value!(ByteSize; ByteSize::mb(256)),
+    "The maximum memory limit a WebAssembly function may allow one call (Materialize).",
+    true,
+);
+
 pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     "max_roles",
     value!(u32; 1000),
@@ -2259,6 +2280,12 @@ feature_flags!(
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
         enable_for_item_parsing: false,
+    },
+    {
+        name: enable_wasm_functions,
+        desc: "CREATE FUNCTION ... LANGUAGE wasm",
+        default: false,
+        enable_for_item_parsing: true,
     },
     {
         name: enable_network_policies,

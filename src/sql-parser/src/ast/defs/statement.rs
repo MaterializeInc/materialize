@@ -64,6 +64,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    CreateFunction(CreateFunctionStatement<T>),
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
@@ -141,6 +142,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateSecret(stmt) => f.write_node(stmt),
+            Statement::CreateFunction(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
@@ -214,14 +216,17 @@ impl StatementKind {
     }
 
     /// Whether this kind of statement can carry sensitive material that we
-    /// redact from logged SQL text (and error messages): secret values, or
-    /// bulk/PII user data in `INSERT`/`UPDATE`/`EXECUTE`. A superset of
-    /// [`Self::is_secret`].
+    /// redact from logged SQL text (and error messages): secret values, bulk
+    /// or PII user data in `INSERT`/`UPDATE`/`EXECUTE`, or the module bytes of
+    /// `CREATE FUNCTION`. A superset of [`Self::is_secret`].
     pub fn is_sensitive(&self) -> bool {
         self.is_secret()
             || matches!(
                 self,
-                StatementKind::Insert | StatementKind::Update | StatementKind::Execute
+                StatementKind::Insert
+                    | StatementKind::Update
+                    | StatementKind::Execute
+                    | StatementKind::CreateFunction
             )
     }
 }
@@ -252,6 +257,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::CreateFunction => "create_function",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
@@ -2289,6 +2295,184 @@ impl<T: AstInfo> AstDisplay for CreateSecretStatement<T> {
 }
 impl_display_t!(CreateSecretStatement);
 
+/// `CREATE FUNCTION ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateFunctionStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub if_not_exists: bool,
+    pub args: Vec<FunctionArg<T>>,
+    pub returns: T::DataType,
+    pub language: Ident,
+    pub volatility: Option<FunctionVolatility>,
+    pub null_behavior: Option<FunctionNullBehavior>,
+    pub body: FunctionBody,
+    pub with_options: Vec<CreateFunctionOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateFunctionStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE FUNCTION ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.args));
+        f.write_str(") RETURNS ");
+        f.write_node(&self.returns);
+        f.write_str(" LANGUAGE ");
+        f.write_node(&self.language);
+        if let Some(volatility) = &self.volatility {
+            f.write_str(" ");
+            f.write_node(volatility);
+        }
+        if let Some(null_behavior) = &self.null_behavior {
+            f.write_str(" ");
+            f.write_node(null_behavior);
+        }
+        f.write_str(" ");
+        f.write_node(&self.body);
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CreateFunctionStatement);
+
+/// A parameter in a `CREATE FUNCTION` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionArg<T: AstInfo> {
+    pub name: Option<Ident>,
+    pub data_type: T::DataType,
+}
+
+impl<T: AstInfo> AstDisplay for FunctionArg<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if let Some(name) = &self.name {
+            f.write_node(name);
+            f.write_str(" ");
+        }
+        f.write_node(&self.data_type);
+    }
+}
+impl_display_t!(FunctionArg);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunctionVolatility {
+    Immutable,
+    Stable,
+    Volatile,
+}
+
+impl AstDisplay for FunctionVolatility {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            FunctionVolatility::Immutable => "IMMUTABLE",
+            FunctionVolatility::Stable => "STABLE",
+            FunctionVolatility::Volatile => "VOLATILE",
+        });
+    }
+}
+impl_display!(FunctionVolatility);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunctionNullBehavior {
+    /// `STRICT`
+    Strict,
+    /// `RETURNS NULL ON NULL INPUT`, a synonym for `STRICT`.
+    ReturnsNullOnNullInput,
+    /// `CALLED ON NULL INPUT`
+    CalledOnNullInput,
+}
+
+impl FunctionNullBehavior {
+    /// Whether a `NULL` argument yields `NULL` without calling the function.
+    pub fn is_strict(&self) -> bool {
+        match self {
+            FunctionNullBehavior::Strict | FunctionNullBehavior::ReturnsNullOnNullInput => true,
+            FunctionNullBehavior::CalledOnNullInput => false,
+        }
+    }
+}
+
+impl AstDisplay for FunctionNullBehavior {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            FunctionNullBehavior::Strict => "STRICT",
+            FunctionNullBehavior::ReturnsNullOnNullInput => "RETURNS NULL ON NULL INPUT",
+            FunctionNullBehavior::CalledOnNullInput => "CALLED ON NULL INPUT",
+        });
+    }
+}
+impl_display!(FunctionNullBehavior);
+
+/// The implementation of a function.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FunctionBody {
+    /// `USING BASE64 '...'`: a compiled module, base64-encoded.
+    Base64(String),
+}
+
+impl AstDisplay for FunctionBody {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            FunctionBody::Base64(module) => {
+                f.write_str("USING BASE64 ");
+                if f.redacted() {
+                    f.write_str("'<REDACTED>'");
+                } else {
+                    f.write_node(&Value::String(module.clone()));
+                }
+            }
+        }
+    }
+}
+impl_display!(FunctionBody);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CreateFunctionOptionName {
+    /// The guest function a SQL function binds to.
+    Export,
+    /// The fuel available to one call.
+    Fuel,
+    /// The memory limit of one call.
+    Memory,
+}
+
+impl AstDisplay for CreateFunctionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateFunctionOptionName::Export => "EXPORT",
+            CreateFunctionOptionName::Fuel => "FUEL",
+            CreateFunctionOptionName::Memory => "MEMORY",
+        });
+    }
+}
+
+impl WithOptionName for CreateFunctionOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateFunctionOptionName::Export
+            | CreateFunctionOptionName::Fuel
+            | CreateFunctionOptionName::Memory => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateFunctionOption<T: AstInfo> {
+    pub name: CreateFunctionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(CreateFunctionOption);
+
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTypeStatement<T: AstInfo> {
@@ -3984,6 +4168,28 @@ impl<T: AstInfo> AstDisplay for ShowCreateTypeStatement<T> {
     }
 }
 
+/// `SHOW [REDACTED] CREATE FUNCTION <name>`
+///
+/// The name stays unresolved in the AST, because functions live in their own
+/// namespace; the planner resolves it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateFunctionStatement {
+    pub function_name: UnresolvedItemName,
+    pub redacted: bool,
+}
+
+impl AstDisplay for ShowCreateFunctionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE FUNCTION ");
+        f.write_node(&self.function_name);
+    }
+}
+impl_display!(ShowCreateFunctionStatement);
+
 /// `SET TRANSACTION ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SetTransactionStatement {
@@ -5561,6 +5767,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
     ShowCreateType(ShowCreateTypeStatement<T>),
+    ShowCreateFunction(ShowCreateFunctionStatement),
     ShowVariable(ShowVariableStatement),
     InspectShard(InspectShardStatement),
 }
@@ -5580,6 +5787,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateType(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateFunction(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
             ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }

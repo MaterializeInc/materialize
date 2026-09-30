@@ -232,6 +232,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMetricSink
             | ExecuteResponse::CreatedSecret
+            | ExecuteResponse::CreatedFunction
             | ExecuteResponse::CreatedSink
             | ExecuteResponse::CreatedSource
             | ExecuteResponse::CreatedTable
