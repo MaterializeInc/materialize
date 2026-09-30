@@ -41,7 +41,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
-use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
+use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig, SourceTimeDomain};
 use crate::upsert::{UpsertKey, UpsertSourceTime, UpsertValue};
 
 /// _Renders_ complete _differential_ collections
@@ -51,13 +51,13 @@ use crate::upsert::{UpsertKey, UpsertSourceTime, UpsertValue};
 ///
 /// The first element in the returned tuple is the pair of Collections,
 /// the second is a type-erased token that will keep the source
-/// alive as long as it is not dropped.
+/// alive as long as it is not dropped, and the third builds the
+/// source's time domain once the dataflow of `scope` is built.
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<'scope, 'root, C>(
+pub fn render_source<'scope, C>(
     scope: Scope<'scope, mz_repr::Timestamp>,
-    root_scope: Scope<'root, ()>,
     dataflow_debug_name: &String,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
@@ -73,6 +73,7 @@ pub fn render_source<'scope, 'root, C>(
         ),
     >,
     Vec<PressOnDropButton>,
+    SourceTimeDomain,
 )
 where
     C: SourceConnection + SourceRender + 'static,
@@ -100,9 +101,8 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (exports, source_tokens) = source::create_raw_source(
+    let (exports, source_tokens, time_domain) = source::create_raw_source(
         scope,
-        root_scope,
         storage_state,
         resume_stream,
         &base_source_config,
@@ -148,7 +148,7 @@ where
 
         outputs.insert(export_id, (ok, err_collection));
     }
-    (outputs, needed_tokens)
+    (outputs, needed_tokens, time_domain)
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope

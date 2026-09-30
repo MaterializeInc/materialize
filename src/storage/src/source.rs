@@ -40,5 +40,5 @@ mod sql_server;
 
 pub use kafka::KafkaSourceReader;
 pub use source_reader_pipeline::{
-    RawSourceCreationConfig, SourceExportCreationConfig, create_raw_source,
+    RawSourceCreationConfig, SourceExportCreationConfig, SourceTimeDomain, create_raw_source,
 };

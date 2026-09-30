@@ -33,10 +33,10 @@
 //! defined by the [`timely::progress::timestamp::Refines`] trait in timely. `FromTime` however
 //! does not refine `IntoTime` nor does `IntoTime` refine `FromTime`.
 //!
-//! In order to acomplish this we split ingestion dataflows in two scopes, both of which are
-//! children of the root timely scope. The first scope is timestamped with `FromTime` and the
-//! second one with `IntoTime`. To move timely streams from the one scope to the other we must do
-//! so manually. Each stream that needs to be transferred between scopes is first captured using
+//! In order to acomplish this we split each ingestion into two dataflows. The first dataflow is
+//! timestamped with `FromTime` and the second one with `IntoTime`. To move timely streams from
+//! the one dataflow's scope to the other we must do so manually. Each stream that needs to be
+//! transferred between scopes is first captured using
 //! [`timely::dataflow::operators::capture::capture::Capture`] into a tokio unbounded mpsc channel.
 //! The data in the channel record in full detail the worker-local view of the original stream and
 //! whoever controls the receiver can read in the events, in the standard way of consuming the
@@ -47,19 +47,16 @@
 //!
 //!
 //! ```text
-//! +----------------RootScope(Timestamp=())------------------+
-//! |                                                         |
-//! |  +---FromTime Scope---+         +---IntoTime Scope--+   |                                                   |
-//! |  |                    |         |                   |   |
-//! |  |                 *--+---------+-->                |   |
-//! |  |                    |         |                   |   |
-//! |  |                 <--+---------+--*                |   |
-//! |  +--------------------+    ^    +-------------------+   |
-//! |                            |                            |
-//! |                            |                            |
-//! |                  data exchanged between                 |
-//! |                 scopes with capture/reclock             |
-//! +---------------------------------------------------------+
+//!    +---FromTime Dataflow--+         +---IntoTime Dataflow--+
+//!    |                      |         |                      |
+//!    |                   *--+---------+-->                   |
+//!    |                      |         |                      |
+//!    |                   <--+---------+--*                   |
+//!    +----------------------+    ^    +----------------------+
+//!                                |
+//!                                |
+//!                      data exchanged between
+//!                  dataflows with capture/reclock
 //! ```
 //!
 //! ### Detailed dataflow
@@ -260,14 +257,12 @@ pub fn build_ingestion_dataflow(
                 .get(storage_state.storage_configuration.config_set()),
         },
     );
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
-        let root_scope = root_scope.with_label();
-
-        // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
-        // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
-        // Refer to the module documentation for an explanation of this structure.
-        // The scope.clone() occurs to allow import in the region.
-        root_scope.clone().scoped(&name, |mz_scope| {
+    // The source's time domain is its own dataflow, which feeds this one's reclock operators and
+    // so is built after it. Refer to the module documentation for an explanation of this
+    // structure.
+    let (mut tokens, time_domain) =
+        timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, mz_scope| {
+            let mz_scope = mz_scope.with_label();
             let debug_name = format!("{debug_name}-sources");
 
             let mut tokens = vec![];
@@ -318,10 +313,9 @@ pub fn build_ingestion_dataflow(
                 health: health.clone(),
             };
 
-            let (outputs, source_tokens) = match connection {
+            let (outputs, source_tokens, time_domain) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
-                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -331,7 +325,6 @@ pub fn build_ingestion_dataflow(
                 ),
                 GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
                     mz_scope,
-                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -341,7 +334,6 @@ pub fn build_ingestion_dataflow(
                 ),
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
-                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -351,7 +343,6 @@ pub fn build_ingestion_dataflow(
                 ),
                 GenericSourceConnection::SqlServer(c) => crate::render::sources::render_source(
                     mz_scope,
-                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -361,7 +352,6 @@ pub fn build_ingestion_dataflow(
                 ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
-                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -408,11 +398,12 @@ pub fn build_ingestion_dataflow(
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
-            storage_state
-                .source_tokens
-                .insert(primary_source_id, (health_token, tokens));
-        })
-    });
+            (tokens, time_domain)
+        });
+    tokens.extend(time_domain(timely_worker));
+    storage_state
+        .source_tokens
+        .insert(primary_source_id, (health_token, tokens));
 }
 
 /// do the export dataflow thing

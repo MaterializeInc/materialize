@@ -46,6 +46,7 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::reclock::reclock;
+use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -59,6 +60,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
+use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
@@ -163,9 +165,8 @@ impl RawSourceCreationConfig {
 ///
 /// The `resume_stream` parameter will contain frontier updates whenever times are durably
 /// recorded which allows the ingestion to release upstream resources.
-pub fn create_raw_source<'scope, 'root, C>(
+pub fn create_raw_source<'scope, C>(
     scope: Scope<'scope, mz_repr::Timestamp>,
-    root_scope: Scope<'root, ()>,
     storage_state: &crate::storage_state::StorageState,
     committed_upper: StreamVec<'scope, mz_repr::Timestamp, ()>,
     config: &RawSourceCreationConfig,
@@ -182,6 +183,7 @@ pub fn create_raw_source<'scope, 'root, C>(
         >,
     >,
     Vec<PressOnDropButton>,
+    SourceTimeDomain,
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
@@ -216,47 +218,65 @@ where
         Arc::clone(&source_metrics),
     );
 
+    // Every source renders one export per configured source export, so the reclock operators
+    // exist before the time domain that feeds them is built.
+    let mut reclock_pushers = BTreeMap::new();
     let mut reclocked_exports = BTreeMap::new();
+    for id in config.source_exports.keys() {
+        let (reclock_pusher, reclocked) = reclock(remap_collection.clone(), config.as_of.clone());
+        reclock_pushers.insert(*id, reclock_pusher);
+        reclocked_exports.insert(*id, reclocked);
+    }
 
-    let reclocked_exports2 = &mut reclocked_exports;
-    let source_tokens = root_scope.scoped("SourceTimeDomain", move |scope| {
-        let (exports, source_tokens) = source_render_operator(
-            scope,
-            config,
-            source_connection,
-            probed_upper_tx,
-            committed_upper,
-            start_signal,
-        );
+    let config = config.clone();
+    let time_domain: SourceTimeDomain = Box::new(move |worker| {
+        let name = format!("Source time domain: {id}");
+        let logging = worker.logger_for("timely").map(Into::into);
+        worker.dataflow_core(&name, logging, Box::new(()), move |_, scope| {
+            let scope = scope.with_label();
+            let (exports, source_tokens) = source_render_operator(
+                scope,
+                &config,
+                source_connection,
+                probed_upper_tx,
+                committed_upper,
+                start_signal,
+            );
 
-        for (id, export) in exports {
-            let (reclock_pusher, reclocked) =
-                reclock(remap_collection.clone(), config.as_of.clone());
-            export
-                .inner
-                .map(move |(result, from_time, diff)| {
-                    let result = match result {
-                        Ok(msg) => Ok(SourceOutput {
-                            key: msg.key,
-                            value: msg.value,
-                            metadata: msg.metadata,
-                            from_time: from_time.clone(),
-                        }),
-                        Err(err) => Err(err),
-                    };
-                    (result, from_time, diff)
-                })
-                .capture_into(PusherCapture(reclock_pusher));
-            reclocked_exports2.insert(id, reclocked);
-        }
+            for (id, export) in exports {
+                let reclock_pusher = reclock_pushers
+                    .remove(&id)
+                    .expect("source rendered an unconfigured export");
+                export
+                    .inner
+                    .map(move |(result, from_time, diff)| {
+                        let result = match result {
+                            Ok(msg) => Ok(SourceOutput {
+                                key: msg.key,
+                                value: msg.value,
+                                metadata: msg.metadata,
+                                from_time: from_time.clone(),
+                            }),
+                            Err(err) => Err(err),
+                        };
+                        (result, from_time, diff)
+                    })
+                    .capture_into(PusherCapture(reclock_pusher));
+            }
 
-        source_tokens
+            source_tokens
+        })
     });
 
-    tokens.extend(source_tokens);
-
-    (reclocked_exports, tokens)
+    (reclocked_exports, tokens, time_domain)
 }
+
+/// Builds the time domain of a source, which reads from the external system in the source's own
+/// timestamp type, as a dataflow on the worker it is passed.
+///
+/// The time domain feeds the reclock operators of the ingestion dataflow, so it must be built
+/// after that dataflow. Returns the tokens that keep it running.
+pub type SourceTimeDomain = Box<dyn FnOnce(&mut TimelyWorker) -> Vec<PressOnDropButton>>;
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
 /// collection timestamped with the source specific timestamp type.
