@@ -28,8 +28,6 @@ use timely::progress::Antichain;
 use timely::scheduling::Activator;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
-
 /// _Dynamic_ storage instance configuration parameters that are used during dataflow rendering.
 /// Changes to these parameters are applied to `StorageWorker`s in a consistent order
 /// with source and sink creation.
@@ -116,13 +114,6 @@ pub enum InternalStorageCommand {
     UpdateConfiguration {
         /// The new configuration parameters.
         storage_parameters: StorageParameters,
-    },
-    /// For moving statistics updates to worker 0.
-    StatisticsUpdate {
-        /// Local statistics, with their epochs.
-        sources: Vec<(usize, SourceStatisticsRecord)>,
-        /// Local statistics, with their epochs.
-        sinks: Vec<(usize, SinkStatisticsRecord)>,
     },
 }
 

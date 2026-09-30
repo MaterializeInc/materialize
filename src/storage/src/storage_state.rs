@@ -112,13 +112,17 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::event_log::EventLogger;
 use crate::healthcheck::HealthToken;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandReceiver, InternalCommandSender,
     InternalStorageCommand,
 };
 use crate::metrics::StorageMetrics;
-use crate::statistics::{AggregatedStatistics, SinkStatistics, SourceStatistics};
+use crate::statistics::{
+    AggregatedStatistics, SinkStatistics, SourceStatistics, StatisticsEvent,
+    render_statistics_dataflow,
+};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
 pub mod async_storage_worker;
@@ -264,6 +268,9 @@ impl StorageState {
                 updates: Rc::clone(&shared_status_updates),
             },
         );
+        let received_statistics: Rc<RefCell<Vec<StatisticsEvent>>> = Default::default();
+        let (statistics_dataflow, statistics_logger) =
+            render_statistics_dataflow(timely_worker, Rc::clone(&received_statistics));
 
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
@@ -288,6 +295,9 @@ impl StorageState {
             ),
             shared_status_updates,
             health_dataflow,
+            received_statistics,
+            statistics_logger,
+            statistics_dataflow,
             latest_status_updates: Default::default(),
             initial_status_reported: Default::default(),
             internal_cmd_tx,
@@ -371,6 +381,13 @@ pub struct StorageState {
     pub shared_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
     /// Keeps the dataflow aggregating health reports running.
     pub health_dataflow: crate::event_log::EventLogDataflow,
+    /// Statistics that other workers routed to this worker, not yet ingested into
+    /// `aggregated_statistics`.
+    pub received_statistics: Rc<RefCell<Vec<StatisticsEvent>>>,
+    /// Routes local statistics to the workers that aggregate them.
+    pub statistics_logger: EventLogger<StatisticsEvent>,
+    /// Keeps the dataflow routing statistics running.
+    pub statistics_dataflow: crate::event_log::EventLogDataflow,
 
     /// The latest status update for each object.
     pub latest_status_updates: BTreeMap<GlobalId, StatusUpdate>,
@@ -641,6 +658,14 @@ impl<'w> Worker<'w> {
                         return;
                     }
 
+                    // Every worker advances the epochs, because each object's statistics are
+                    // aggregated on the worker its id selects.
+                    for (id, _) in ingestion_description.source_exports.iter() {
+                        self.storage_state
+                            .aggregated_statistics
+                            .advance_global_epoch(*id);
+                    }
+
                     // This needs to be done by one worker, which will
                     // broadcasts a `CreateIngestionDataflow` command to all
                     // workers based on the response that contains the
@@ -654,11 +679,6 @@ impl<'w> Worker<'w> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
-                        for (id, _) in ingestion_description.source_exports.iter() {
-                            self.storage_state
-                                .aggregated_statistics
-                                .advance_global_epoch(*id);
-                        }
                         self.storage_state
                             .async_worker
                             .update_ingestion_frontiers(id, ingestion_description);
@@ -680,13 +700,14 @@ impl<'w> Worker<'w> {
                         return;
                     }
 
+                    self.storage_state
+                        .aggregated_statistics
+                        .advance_global_epoch(id);
+
                     // This needs to be broadcast by one worker and go through
                     // the internal command fabric, to ensure consistent
                     // ordering of dataflow rendering across all workers.
                     if self.timely_worker.index() == 0 {
-                        self.storage_state
-                            .aggregated_statistics
-                            .advance_global_epoch(id);
                         self.storage_state
                             .async_worker
                             .update_sink_frontiers(id, sink_description);
@@ -874,7 +895,8 @@ impl<'w> Worker<'w> {
                     self.storage_state.sink_tokens.remove(id);
                     self.storage_state.sink_write_frontiers.remove(id);
 
-                    self.storage_state.aggregated_statistics.deinitialize(*id);
+                    let deinitialized = self.storage_state.aggregated_statistics.deinitialize(*id);
+                    self.storage_state.statistics_logger.log(deinitialized);
                 }
             }
             InternalStorageCommand::UpdateConfiguration { storage_parameters } => {
@@ -925,10 +947,6 @@ impl<'w> Worker<'w> {
                     crate::upsert::upsert_stash_pager::set_enabled(enabled);
                 }
             }
-            InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
-                .storage_state
-                .aggregated_statistics
-                .ingest(sources, sinks),
         }
     }
 
@@ -1016,11 +1034,32 @@ impl<'w> Worker<'w> {
     /// Report source statistics back to the controller.
     pub fn report_storage_statistics(&mut self, response_tx: &ResponseSender) {
         let (sources, sinks) = self.storage_state.aggregated_statistics.emit_local();
-        if !sources.is_empty() || !sinks.is_empty() {
-            self.storage_state
-                .internal_cmd_tx
-                .send(InternalStorageCommand::StatisticsUpdate { sources, sinks })
+        let logger = &self.storage_state.statistics_logger;
+        logger.log_many(
+            sources
+                .into_iter()
+                .map(|(epoch, record)| StatisticsEvent::Source(epoch, record))
+                .chain(
+                    sinks
+                        .into_iter()
+                        .map(|(epoch, record)| StatisticsEvent::Sink(epoch, record)),
+                ),
+        );
+
+        let received = self.storage_state.received_statistics.take();
+        let mut sources = Vec::new();
+        let mut sinks = Vec::new();
+        let mut deinitialized = Vec::new();
+        for event in received {
+            match event {
+                StatisticsEvent::Source(epoch, record) => sources.push((epoch, record)),
+                StatisticsEvent::Sink(epoch, record) => sinks.push((epoch, record)),
+                StatisticsEvent::Deinitialized { id, worker } => deinitialized.push((id, worker)),
+            }
         }
+        let statistics = &mut self.storage_state.aggregated_statistics;
+        statistics.ingest(sources, sinks);
+        statistics.ingest_deinitialized(deinitialized);
 
         let (sources, sinks) = self.storage_state.aggregated_statistics.snapshot();
         if !sources.is_empty() || !sinks.is_empty() {
