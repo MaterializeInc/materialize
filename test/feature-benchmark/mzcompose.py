@@ -394,14 +394,7 @@ def create_clusterd_service(
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
 ) -> Clusterd:
-    # The benchmark cluster is unmanaged, so the enable_unified_cluster system
-    # parameter never reaches it. Key the service's topology off the same
-    # parameter instead, so the benchmark default and any --this-params or
-    # --other-params override apply to the cluster being measured.
-    unified_cluster = (additional_system_parameter_defaults or {}).get(
-        "enable_unified_cluster", "true"
-    ) == "true"
-    return Clusterd(image=clusterd_image, unified_cluster=unified_cluster)
+    return Clusterd(image=clusterd_image)
 
 
 def start_overridden_mz_clusterd_and_cockroach(

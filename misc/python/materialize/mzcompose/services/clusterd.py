@@ -39,16 +39,15 @@ class Clusterd(Service):
         workers: int = 1,
         process_names: list[str] = [],
         mz_service: str = "materialized",
-        # Matches the default of the `enable_unified_cluster` system
-        # parameter, so unorchestrated clusterds run the same topology as
-        # controller-provisioned replicas. Old images ignore the env var.
-        unified_cluster: bool = True,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
             f"CLUSTERD_GRPC_HOST={name}",
             # For old Mz versions
             "CLUSTERD_USE_CTP=true",
+            # For old Mz versions, which select the replica topology per
+            # process and otherwise run a separate storage Timely cluster.
+            "CLUSTERD_UNIFIED_CLUSTER=true",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
             "LD_PRELOAD=libeatmydata.so",
@@ -62,9 +61,6 @@ class Clusterd(Service):
             *environment_extra,
         ]
 
-        if unified_cluster:
-            environment += ["CLUSTERD_UNIFIED_CLUSTER=true"]
-
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
 
@@ -75,6 +71,8 @@ class Clusterd(Service):
         compute_timely_config = timely_config(
             process_names, 2102, workers, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
         )
+        # For old Mz versions, which require a storage Timely cluster config
+        # even when running the unified topology.
         storage_timely_config = timely_config(
             process_names, 2103, workers, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
         )

@@ -88,13 +88,10 @@ struct Args {
     grpc_host: Option<String>,
 
     // === Timely cluster options. ===
-    /// Configuration for the storage Timely cluster.
-    #[clap(long, env = "STORAGE_TIMELY_CONFIG")]
-    storage_timely_config: TimelyConfig,
-    /// Configuration for the compute Timely cluster.
+    /// Configuration for the Timely cluster, which hosts both storage and compute objects.
     #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
     compute_timely_config: TimelyConfig,
-    /// The index of the process in both Timely clusters.
+    /// The index of the process in the Timely cluster.
     #[clap(long, env = "PROCESS")]
     process: usize,
 
@@ -166,12 +163,6 @@ struct Args {
     /// affinity might degrade dataflow performance rather than improving it.
     #[clap(long)]
     worker_core_affinity: bool,
-
-    /// Host storage objects on the compute Timely cluster instead of building a separate
-    /// storage Timely cluster. The storage and compute controller protocols are served
-    /// unchanged, from the same cluster.
-    #[clap(long, env = "UNIFIED_CLUSTER")]
-    unified_cluster: bool,
 }
 
 /// The process ordinal for a StatefulSet pod, taken from the trailing
@@ -422,88 +413,27 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
 
-    let mut storage_timely_config = args.storage_timely_config;
-    storage_timely_config.process = args.process;
-    let mut compute_timely_config = args.compute_timely_config;
-    compute_timely_config.process = args.process;
+    let mut timely_config = args.compute_timely_config;
+    timely_config.process = args.process;
 
-    // We assume each storage worker has a corresponding compute worker that can process its logs.
-    assert_eq!(
-        storage_timely_config.workers, compute_timely_config.workers,
-        "storage and compute must have equal workers-per-process",
-    );
-
-    if args.unified_cluster {
-        info!("running with a unified timely cluster");
-
-        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
-            compute_timely_config,
-            ComputeRuntimeRole::Solo,
-            &metrics_registry,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
-            ComputeInstanceContext {
-                scratch_directory: args.scratch_directory.clone(),
-                worker_core_affinity: args.worker_core_affinity,
-                connection_context: connection_context.clone(),
-            },
-            SYSTEM_TIME.clone(),
-            connection_context,
-            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
-        )
-        .await?;
-
-        info!(
-            "listening for storage controller connections on {}",
-            args.storage_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "storage_server",
-            transport::serve(
-                args.storage_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host.clone(),
-                Duration::MAX,
-                storage_client_builder,
-                cluster_server_metrics.for_server("storage"),
-            )
-            .instrument(info_span!("ctp", name = "storage")),
-        );
-
-        info!(
-            "listening for compute controller connections on {}",
-            args.compute_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "compute_server",
-            transport::serve(
-                args.compute_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host,
-                Duration::MAX,
-                compute_client_builder,
-                cluster_server_metrics.for_server("compute"),
-            )
-            .instrument(info_span!("ctp", name = "compute")),
-        );
-
-        // Block forever.
-        return future::pending().await;
-    }
-
-    // Start storage server.
-    let storage_client_builder = mz_storage::serve(
-        storage_timely_config,
+    let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+        timely_config,
+        ComputeRuntimeRole::Solo,
         &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
+        ComputeInstanceContext {
+            scratch_directory: args.scratch_directory.clone(),
+            worker_core_affinity: args.worker_core_affinity,
+            connection_context: connection_context.clone(),
+        },
         SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        connection_context,
+        StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
     )
     .await?;
+
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -521,21 +451,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "storage")),
     );
 
-    // Start compute server.
-    let compute_client_builder = mz_compute::server::serve(
-        compute_timely_config,
-        ComputeRuntimeRole::Solo,
-        &metrics_registry,
-        persist_clients,
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
-            connection_context,
-        },
-    )
-    .await?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
@@ -545,15 +460,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
+            grpc_host,
             Duration::MAX,
             compute_client_builder,
             cluster_server_metrics.for_server("compute"),
         )
         .instrument(info_span!("ctp", name = "compute")),
     );
-
-    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
 
     // Block forever.
     future::pending().await

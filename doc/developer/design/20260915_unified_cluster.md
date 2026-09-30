@@ -40,8 +40,8 @@ parallel. Unifying the clusters removes all of these.
 * Unifying the storage and compute controller protocols or controllers. The
   two protocols remain separate connections served by one cluster. Merging
   them is a follow-up cleanup once the unified topology is the only one.
-* Removing the legacy two-cluster topology. It remains behind the flag until
-  the unified topology has production mileage.
+* Removing the legacy two-cluster topology. It remained behind the flag until
+  the unified topology reached all of production, and has since been removed.
 * Isolation between co-hosted storage and compute objects. The unified
   topology deliberately shares workers. Scheduling or placement mechanisms
   that restore isolation (see Open questions) are follow-up work.
@@ -99,13 +99,14 @@ updates, and statistics on storage's existing intervals. Parking is capped
 while a guest is present so those duties run on time, with the cap derived
 from the storage maintenance and statistics intervals.
 
-The topology is fixed at process start and gated by a system parameter. The
-storage and compute controllers read the parameter when provisioning a
-replica and pass a CLI flag to `clusterd`, so a parameter change takes effect
-on replica restart. Following the repository convention, the parameter
-defaults off in production and on in CI, so sqllogictest, testdrive, and the
-nightly suites exercise the unified topology continuously before it is
-enabled anywhere real.
+The topology was fixed at process start and gated by the
+`enable_unified_cluster` system parameter. The controller read the parameter
+when provisioning a replica and passed a CLI flag to `clusterd`, so a
+parameter change took effect on replica restart. Following the repository
+convention, the parameter defaulted off in production and on in CI, so
+sqllogictest, testdrive, and the nightly suites exercised the unified topology
+continuously before it was enabled anywhere real. After the rollout reached
+all of production, the parameter and the two-cluster topology were removed.
 
 ### Semantics change: shared blast radius
 
@@ -116,19 +117,19 @@ starve co-hosted storage objects, including the processing of storage
 commands on that replica. The storage controller's single-replica object
 scheduling has no replica-liveness signal and can schedule an ingestion onto
 a replica whose workers are wedged by compute work. We accept and document
-this semantics change for the initial rollout: the blast radius of blocking
-compute work grows from "compute on this replica" to "this replica". A
-liveness-aware scheduling or placement mechanism is tracked as follow-up
-work and is a prerequisite for retiring the two-cluster topology, not for
-shipping the flag.
+this semantics change: the blast radius of blocking compute work grows from
+"compute on this replica" to "this replica". Compute work that blocks a
+worker thread is a defect in that work, and the only function that does so
+by design, `mz_unsafe.mz_sleep`, is not generally available. The two-cluster
+topology was therefore retired without a liveness-aware scheduling or
+placement mechanism.
 
 A smaller semantics change concerns storage introspection. On a unified
 replica, storage dataflows run on the compute Timely cluster and therefore
 appear in its logging unconditionally. The log bridge of the two-cluster
 topology, formerly gated by the `enable_storage_introspection_logs`
 parameter, was a stopgap for the same visibility and has been removed in
-favor of this work: on a two-cluster replica, storage operators are not
-visible in `mz_dataflow_*` relations.
+favor of this work.
 
 ## Minimal Viable Prototype
 
@@ -180,10 +181,7 @@ topology default-on through CI. Validation performed:
 
 * What form does liveness-aware single-replica ingestion scheduling take
   (storage controller heartbeat per replica, or reuse of compute's existing
-  liveness signals), and does it gate retiring the two-cluster topology?
-* When the two-cluster topology is retired, the storage server loop, the
-  storage Timely cluster setup, and the log bridge become dead code. What
-  production mileage do we require before deletion?
+  liveness signals)? It no longer gates retiring the two-cluster topology.
 * The `mz-compute` on `mz-storage` crate dependency is accepted for the
   hosting relationship. Should the guest-facing surface of `mz-storage`
   (`StorageState` construction, reconciliation entry points) be split into a

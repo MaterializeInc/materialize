@@ -489,6 +489,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_reduce_reduction
     enable_repr_typecheck
     enable_storage_introspection_logs
+    enable_unified_cluster
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
     enable_zero_downtime_cluster_reconfiguration

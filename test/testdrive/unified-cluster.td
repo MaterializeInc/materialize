@@ -7,15 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# A unified cluster hosts storage objects on the compute Timely cluster: a
-# source ingests there, and its dataflow is visible in compute introspection.
-# The topology is baked in at replica provisioning, so the parameter must be
-# set before the cluster is created.
+# Storage objects run on the compute Timely cluster: a source ingests there,
+# and its dataflow is visible in compute introspection.
 
 $ set-arg-default default-replica-size=scale=1,workers=1
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_cluster = true
 
 > CREATE CLUSTER uc (SIZE '${arg.default-replica-size}')
 
@@ -31,14 +26,9 @@ true
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'uc_auction'
 running
 
-# The ingestion dataflow runs on the compute Timely cluster and is natively
-# visible in compute introspection, without a storage log bridge.
+# Storage names ingestion dataflows by id, "Source dataflow: <id>".
 > SET cluster = uc
 
-# Storage names ingestion dataflows by id, "Source dataflow: <id>". On a
-# two-cluster replica the ingestion runs on the separate storage Timely
-# cluster and is invisible here, so this assertion fails if the topology flag
-# does not reach the replica.
 > SELECT count(*) > 0 FROM mz_introspection.mz_dataflows WHERE name LIKE 'Source dataflow:%'
 true
 
@@ -47,6 +37,3 @@ true
 > DROP SOURCE uc_auction CASCADE
 
 > DROP CLUSTER uc
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM RESET enable_unified_cluster

@@ -26,8 +26,7 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
-    TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -710,23 +709,17 @@ impl Controller {
         // environment-wide value or the override reaches the replica only when
         // it is next provisioned.
         let overrides = self.replica_dyncfg_overrides.get(&replica_id);
-        // Storage and compute arrangements share one maintenance policy, so a
-        // unified replica runs both kinds of arrangement under the same reach.
-        let arrangement_exert_proportionality =
-            ARRANGEMENT_EXERT_PROPORTIONALITY.get_with_overrides(&self.dyncfg, overrides);
-        let storage_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality,
-            ..Default::default()
-        };
-        let compute_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality,
+        // Storage and compute arrangements share the replica's Timely cluster, and with it one
+        // maintenance policy.
+        let proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY
+                .get_with_overrides(&self.dyncfg, overrides),
             enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get_with_overrides(&self.dyncfg, overrides),
             enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC
                 .get_with_overrides(&self.dyncfg, overrides),
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get_with_overrides(&self.dyncfg, overrides),
             ..Default::default()
         };
-        let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -754,15 +747,10 @@ impl Controller {
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
-                    let storage_timely_config = TimelyConfig {
-                        workers: location.allocation.workers.get(),
-                        addresses: assigned.peer_addresses("storage"),
-                        ..storage_proto_timely_config
-                    };
-                    let compute_timely_config = TimelyConfig {
+                    let timely_config = TimelyConfig {
                         workers: location.allocation.workers.get(),
                         addresses: assigned.peer_addresses("compute"),
-                        ..compute_proto_timely_config
+                        ..proto_timely_config
                     };
 
                     let mut args = vec![
@@ -782,14 +770,7 @@ impl Controller {
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
                         format!("--environment-id={}", environment_id),
-                        format!(
-                            "--storage-timely-config={}",
-                            storage_timely_config.to_string(),
-                        ),
-                        format!(
-                            "--compute-timely-config={}",
-                            compute_timely_config.to_string(),
-                        ),
+                        format!("--compute-timely-config={}", timely_config.to_string()),
                     ];
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
@@ -811,9 +792,6 @@ impl Controller {
                     }
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
-                    }
-                    if unified_cluster {
-                        args.push("--unified-cluster".into());
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
@@ -840,13 +818,6 @@ impl Controller {
                     ServicePort {
                         name: "storagectl".into(),
                         port_hint: 2100,
-                    },
-                    // To simplify the changes to tests, the port
-                    // chosen here is _after_ the compute ones.
-                    // TODO(petrosagg): fix the numerical ordering here
-                    ServicePort {
-                        name: "storage".into(),
-                        port_hint: 2103,
                     },
                     ServicePort {
                         name: "computectl".into(),
