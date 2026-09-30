@@ -70,17 +70,19 @@ fn make_builtin_sources(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
         .map(|src| {
             let privileges = make_privileges_sql(&src.access, &owner_priv);
             format!(
-                "({}::oid, '{}', '{}', 'source', {})",
-                src.oid, src.schema, src.name, privileges
+                "({}::oid, '{}', '{}', 'source', {}, {})",
+                src.oid, src.schema, src.name, privileges, src.is_retained_metrics_object
             )
         })
         .join(",");
+    // Builtin logs are never retained metrics objects, hence the constant
+    // `false` in their rows.
     let sql = format!(
         "
-SELECT oid, schema_name, name, type, privileges
-FROM (VALUES {source_values}) AS v(oid, schema_name, name, type, privileges)
+SELECT oid, schema_name, name, type, privileges, is_retained_metrics_object
+FROM (VALUES {source_values}) AS v(oid, schema_name, name, type, privileges, is_retained_metrics_object)
 UNION ALL
-SELECT oid, schema_name, name, 'log', privileges
+SELECT oid, schema_name, name, 'log', privileges, false
 FROM mz_internal.mz_builtin_log_indexes"
     );
 
@@ -96,6 +98,10 @@ FROM mz_internal.mz_builtin_log_indexes"
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
             )
             .finish(),
         column_comments: Default::default(),
@@ -182,13 +188,16 @@ fn make_builtin_tables(builtin_items: &[Builtin<NameReference>]) -> BuiltinView 
             let schema = escaped_string_literal(table.schema);
             let name = escaped_string_literal(table.name);
             let privileges = make_privileges_sql(&table.access, &owner_priv);
-            format!("({}::oid, {}, {}, {})", table.oid, schema, name, privileges)
+            format!(
+                "({}::oid, {}, {}, {}, {})",
+                table.oid, schema, name, privileges, table.is_retained_metrics_object
+            )
         })
         .join(",");
     let sql = format!(
         "
-SELECT oid, schema_name, name, privileges
-FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
+SELECT oid, schema_name, name, privileges, is_retained_metrics_object
+FROM (VALUES {values}) AS v(oid, schema_name, name, privileges, is_retained_metrics_object)"
     );
 
     BuiltinView {
@@ -202,6 +211,10 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
             )
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
@@ -264,15 +277,20 @@ fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
             // them away with `assert_safe_builtin_name`.
             let key_exprs_escaped = escaped_string_literal(&key_exprs);
             format!(
-                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped})",
-                index.oid, index.schema, index.name, on_schema, on_name_str
+                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped}, {})",
+                index.oid,
+                index.schema,
+                index.name,
+                on_schema,
+                on_name_str,
+                index.is_retained_metrics_object
             )
         })
         .join(",");
     let sql = format!(
         "
-SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs
-FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs)"
+SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object
+FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object)"
     );
 
     BuiltinView {
@@ -286,6 +304,10 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
             .with_column("on_schema_name", SqlScalarType::String.nullable(false))
             .with_column("on_name", SqlScalarType::String.nullable(false))
             .with_column("key_exprs", SqlScalarType::String.nullable(false))
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
             // (`verify_builtin_descs` enforces this).
