@@ -9096,7 +9096,9 @@ dependencies = [
  "mz-ore",
  "openssl",
  "postgres-openssl",
+ "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "tokio-postgres",
 ]
 
