@@ -496,6 +496,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_source_references",
         ),
+        // Converting a builtin table to a materialized view over mz_catalog_raw
+        // changes its catalog fingerprint, so each conversion needs an explicit
+        // replacement step. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.45.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replacements",
+        ),
     ]
 });
 

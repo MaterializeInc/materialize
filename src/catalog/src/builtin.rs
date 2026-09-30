@@ -1219,7 +1219,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
-        Builtin::Table(&MZ_REPLACEMENTS),
+        Builtin::MaterializedView(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),

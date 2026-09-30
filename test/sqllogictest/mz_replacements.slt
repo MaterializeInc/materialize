@@ -1,0 +1,100 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_replacements. The relation is a
+# BuiltinMaterializedView that reads the `REPLACEMENT FOR` target out of each
+# materialized view's create_sql in mz_internal.mz_catalog_raw: see
+# MZ_REPLACEMENTS in src/catalog/src/builtin/mz_internal.rs.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_replacement_materialized_views = true
+----
+COMPLETE 0
+
+# --- Schema -------------------------------------------------------------------
+
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_replacements' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+id  text  false
+target_id  text  false
+
+# --- Empty on a fresh env -----------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_internal.mz_replacements
+----
+0
+
+# --- One row per pending replacement ------------------------------------------
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW other AS SELECT a FROM t
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + 1 AS a FROM t
+
+query TT
+SELECT r_mv.name, t_mv.name
+FROM mz_internal.mz_replacements r
+JOIN mz_catalog.mz_materialized_views r_mv ON r_mv.id = r.id
+JOIN mz_catalog.mz_materialized_views t_mv ON t_mv.id = r.target_id
+----
+rp  mv
+
+# --- Applying the replacement retracts the row --------------------------------
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query I
+SELECT count(*) FROM mz_internal.mz_replacements
+----
+0
+
+query I
+SELECT count(*) FROM mz_catalog.mz_materialized_views WHERE name IN ('mv', 'other')
+----
+2
+
+# --- Dropping a pending replacement retracts the row --------------------------
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv AS SELECT a + 2 AS a FROM t
+
+query TT
+SELECT r_mv.name, t_mv.name
+FROM mz_internal.mz_replacements r
+JOIN mz_catalog.mz_materialized_views r_mv ON r_mv.id = r.id
+JOIN mz_catalog.mz_materialized_views t_mv ON t_mv.id = r.target_id
+----
+rp2  mv
+
+statement ok
+DROP MATERIALIZED VIEW rp2
+
+query I
+SELECT count(*) FROM mz_internal.mz_replacements
+----
+0

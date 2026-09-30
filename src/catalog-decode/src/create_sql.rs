@@ -126,6 +126,10 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             definition.push(';');
             info.insert("definition", json!(definition));
 
+            if let Some(target) = stmt.replacement_for {
+                info.insert("replacement_target", json!(item_id(target)?));
+            }
+
             "materialized-view"
         }
         CreateTable(_) => "table",
@@ -1956,5 +1960,26 @@ mod tests {
             err.contains("failed to parse"),
             "wrong error message: {err}"
         );
+    }
+
+    // --- item_details replacement_target ----------------------------------
+
+    fn mv_sql(with_options: &str) -> String {
+        format!(
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1]{with_options} \
+             AS SELECT 1"
+        )
+    }
+
+    #[mz_ore::test]
+    fn catalog_replacement_target() {
+        let out = super::item_details(&mv_sql("")).expect("ok");
+        assert_eq!(out.get("replacement_target"), None);
+
+        let sql = "CREATE REPLACEMENT MATERIALIZED VIEW \"materialize\".\"public\".\"rp\" \
+                   FOR [u7 AS \"materialize\".\"public\".\"mv\"] IN CLUSTER [u1] \
+                   WITH (REFRESH = ON COMMIT) AS SELECT 1";
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["replacement_target"], json!("u7"));
     }
 }

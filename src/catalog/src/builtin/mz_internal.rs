@@ -3869,10 +3869,11 @@ pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     }),
 });
 
-pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_REPLACEMENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_replacements",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_REPLACEMENTS_OID,
+    oid: oid::MV_MZ_REPLACEMENTS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("target_id", SqlScalarType::String.nullable(false))
@@ -3887,6 +3888,27 @@ pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
             "The ID of the replacement target. Corresponds to `mz_objects.id`.",
         ),
     ]),
+    // A replacement records its target as `REPLACEMENT FOR <id>` in its
+    // `create_sql`. Applying it folds the replacement into the target and drops
+    // the replacement item (`MaterializedView::apply_replacement`), which
+    // retracts the row.
+    sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL target_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    parsed->>'replacement_target' AS target_id
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'replacement_target' IS NOT NULL",
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -3908,6 +3930,7 @@ pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
         },
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
+}
 });
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
