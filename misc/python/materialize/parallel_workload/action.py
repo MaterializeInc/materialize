@@ -3284,6 +3284,8 @@ class FlipFlagsAction(Action):
             "enable_compute_prometheus_metrics",
             "enable_compute_replica_expiration",
             "compute_mv_sink_advance_persist_frontiers",
+            "wasm_udf_batch_max_rows",
+            "wasm_udf_batch_max_bytes",
             "compute_replica_expiration_offset",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",

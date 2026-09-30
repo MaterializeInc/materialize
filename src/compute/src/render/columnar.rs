@@ -30,7 +30,7 @@ use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker};
 use mz_timely_util::columnar::columnar_consolidate_exchange;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
-use timely::container::{CapacityContainerBuilder, NoopBuilder};
+use timely::container::{CapacityContainerBuilder, NoopBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
@@ -129,12 +129,17 @@ where
     (ok_stream, err_stream)
 }
 
+/// The output of a batched row operator for one input row: a result record or
+/// an error record.
+pub type BatchedOutput<T> = Result<(Row, T, Diff), (DataflowErrorSer, T, Diff)>;
+
 /// Like [`flat_map_datums`], but hands `logic` up to `batch_rows` rows at a
 /// time, with their times and diffs, so it can evaluate them together.
 ///
-/// Rows are materialized with their first `max_demand` columns. A batch never
-/// spans input containers, so batching does not delay any update past the
-/// activation that received it.
+/// Batches span every container that arrives in one activation, so a guest
+/// sees as many rows at once as the input offers. `logic` appends its outputs
+/// tagged with the index of the input row within the batch, in row order.
+/// Rows are materialized with their first `max_demand` columns.
 pub fn flat_map_rows_batched<'scope, T, DCB, L>(
     edge: ColCollection<'scope, T>,
     name: &str,
@@ -147,8 +152,8 @@ pub fn flat_map_rows_batched<'scope, T, DCB, L>(
 )
 where
     T: RenderTimestamp,
-    DCB: ContainerBuilder,
-    L: FnMut(&[Row], &[(T, Diff)], &mut Session<T, DCB>, &mut Session<T, ECB<T>>) + 'static,
+    DCB: ContainerBuilder + PushInto<(Row, T, Diff)>,
+    L: FnMut(&[Row], &[(T, Diff)], &mut Vec<(usize, BatchedOutput<T>)>) + 'static,
 {
     let scope = edge.inner.scope();
     let mut builder = OperatorBuilder::new(name.to_string(), scope);
@@ -160,31 +165,47 @@ where
     let batch_rows = batch_rows.max(1);
     builder.build(move |_capabilities| {
         let mut datums = DatumVec::new();
-        let mut rows = Vec::with_capacity(batch_rows);
-        let mut updates = Vec::with_capacity(batch_rows);
+        let mut rows = Vec::new();
+        let mut updates = Vec::new();
+        // The input containers of this activation: each one's capabilities,
+        // the end of its rows in `rows`, and its outputs.
+        let mut segments = Vec::new();
+        let mut outputs = Vec::new();
         move |_frontiers| {
-            let mut ok_output = ok_output.activate();
-            let mut err_output = err_output.activate();
             input.for_each(|time, data| {
-                let ok_cap = time.retain(0);
-                let err_cap = time.retain(1);
-                let mut ok_session = ok_output.session_with_builder(&ok_cap);
-                let mut err_session = err_output.session_with_builder(&err_cap);
                 for (v, t, d) in data.borrow().into_index_iter() {
                     rows.push(Row::pack(datums.borrow_with_limit(v, max_demand).iter()));
                     updates.push((Columnar::into_owned(t), Columnar::into_owned(d)));
-                    if rows.len() == batch_rows {
-                        logic(&rows, &updates, &mut ok_session, &mut err_session);
-                        rows.clear();
-                        updates.clear();
+                }
+                segments.push((time.retain(0), time.retain(1), rows.len(), Vec::new()));
+            });
+
+            let mut segment = 0;
+            for start in (0..rows.len()).step_by(batch_rows) {
+                let end = (start + batch_rows).min(rows.len());
+                logic(&rows[start..end], &updates[start..end], &mut outputs);
+                for (i, output) in outputs.drain(..) {
+                    while segments[segment].2 <= start + i {
+                        segment += 1;
+                    }
+                    segments[segment].3.push(output);
+                }
+            }
+            rows.clear();
+            updates.clear();
+
+            let mut ok_output = ok_output.activate();
+            let mut err_output = err_output.activate();
+            for (ok_cap, err_cap, _end, segment_outputs) in segments.drain(..) {
+                let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                let mut err_session = err_output.session_with_builder(&err_cap);
+                for output in segment_outputs {
+                    match output {
+                        Ok(update) => ok_session.give(update),
+                        Err(error) => err_session.give(error),
                     }
                 }
-                if !rows.is_empty() {
-                    logic(&rows, &updates, &mut ok_session, &mut err_session);
-                    rows.clear();
-                    updates.clear();
-                }
-            });
+            }
         }
     });
     (ok_stream, err_stream)

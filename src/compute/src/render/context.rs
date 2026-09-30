@@ -947,13 +947,15 @@ where
         "BatchedMfp",
         max_demand,
         batch_rows,
-        move |rows, updates, ok_session, err_session| {
+        move |rows, updates, outputs| {
             let arena = RowArena::new();
             let mut datums: Vec<Vec<_>> = rows.iter().map(|row| row.iter().collect()).collect();
             let mut outcomes = Vec::with_capacity(rows.len());
             mfp.evaluate_batch(&mut datums, &arena, &mut outcomes);
             let mut row_builder = SharedRow::get();
-            for ((row_datums, outcome), (time, diff)) in datums.iter().zip(outcomes).zip(updates) {
+            for (i, ((row_datums, outcome), (time, diff))) in
+                datums.iter().zip_eq(outcomes).zip_eq(updates).enumerate()
+            {
                 for result in mfp.finish(
                     outcome,
                     row_datums,
@@ -963,18 +965,19 @@ where
                     |t| !until.less_equal(t),
                     &mut row_builder,
                 ) {
-                    match result {
+                    let output = match result {
                         Ok((row, event_time, diff)) => {
                             let mut time: T = time.clone();
                             *time.event_time_mut() = event_time;
-                            ok_session.give((row, time, diff));
+                            Ok((row, time, diff))
                         }
                         Err((e, event_time, diff)) => {
                             let mut time: T = time.clone();
                             *time.event_time_mut() = event_time;
-                            err_session.give((e, time, diff));
+                            Err((e, time, diff))
                         }
-                    }
+                    };
+                    outputs.push((i, output));
                 }
             }
         },

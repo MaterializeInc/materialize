@@ -48,8 +48,12 @@ pub struct BatchConfig {
 }
 
 impl BatchConfig {
-    pub const DEFAULT_MAX_ROWS: usize = 1024;
-    pub const DEFAULT_MAX_BYTES: usize = 4 << 20;
+    /// Large enough that vectorized guests (arrow-udf `batch_fn`s, or the
+    /// macro's SIMD kernels for primitive functions) see whole containers.
+    pub const DEFAULT_MAX_ROWS: usize = 16 << 10;
+    /// Keeps a full batch's input and output buffers, and the guest's decoded
+    /// copies of them, well within the default memory limit.
+    pub const DEFAULT_MAX_BYTES: usize = 8 << 20;
 
     pub fn set(&self, max_rows: usize, max_bytes: usize) {
         self.max_rows.store(max_rows.max(1), Ordering::Relaxed);

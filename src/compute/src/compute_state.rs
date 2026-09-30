@@ -387,6 +387,11 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
+        mz_wasm_udf::Runtime::global().batch_config().set(
+            WASM_UDF_BATCH_MAX_ROWS.get(config),
+            WASM_UDF_BATCH_MAX_BYTES.get(config),
+        );
+
         if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {
                 let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);

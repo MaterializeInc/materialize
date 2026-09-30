@@ -333,6 +333,74 @@ fn jaro_winkler() {
     }
 }
 
+/// `saxpy` is a `batch_fn`: the guest computes the whole batch with Arrow
+/// kernels. Ten thousand rows cross the boundary in one call.
+#[mz_ore::test]
+fn vectorized_guest_gets_one_call_per_batch() {
+    let recorder = Arc::new(Recorder::default());
+    let saxpy = invoker(
+        "saxpy",
+        &[
+            SqlScalarType::Float64,
+            SqlScalarType::Float64,
+            SqlScalarType::Float64,
+        ],
+        SqlScalarType::Float64,
+        LIMITS,
+    )
+    .with_observer(Arc::clone(&recorder));
+    let arena = RowArena::new();
+    let rows: Vec<[Datum; 3]> = (0..10_000)
+        .map(|i| {
+            let x = f64::from(i);
+            [Datum::from(2.0f64), Datum::from(x), Datum::from(1.0f64)]
+        })
+        .collect();
+    let rows: Vec<&[Datum]> = rows.iter().map(|r| r.as_slice()).collect();
+    let out = call(&saxpy, &rows, &arena);
+    for (i, result) in out.iter().enumerate() {
+        let expected = 2.0 * f64::from(u32::try_from(i).unwrap()) + 1.0;
+        assert_eq!(*result, Ok(Datum::from(expected)));
+    }
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(
+        calls.iter().map(|(rows, _)| *rows).collect::<Vec<_>>(),
+        vec![10_000]
+    );
+}
+
+#[mz_ore::test]
+fn batch_config_bounds_rows_per_call() {
+    let recorder = Arc::new(Recorder::default());
+    let batch = Arc::new(BatchConfig::default());
+    batch.set(1000, usize::MAX);
+    let is_even = Invoker::new(
+        "is_even".into(),
+        Arc::clone(&MODULE),
+        ScalarSignature {
+            name: "is_even".into(),
+            args: vec![UdfType::Int64],
+            ret: UdfType::Boolean,
+        }
+        .export_name(),
+        vec![ValueType::new(SqlScalarType::Int64).unwrap()],
+        ValueType::new(SqlScalarType::Bool).unwrap(),
+        LIMITS,
+        batch,
+    )
+    .with_observer(Arc::clone(&recorder));
+    let arena = RowArena::new();
+    let rows: Vec<[Datum; 1]> = (0..2500).map(|i| [Datum::Int64(i)]).collect();
+    let rows: Vec<&[Datum]> = rows.iter().map(|r| r.as_slice()).collect();
+    let out = call(&is_even, &rows, &arena);
+    assert_eq!(out[2499], Ok(Datum::False));
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(
+        calls.iter().map(|(rows, _)| *rows).collect::<Vec<_>>(),
+        vec![1000, 1000, 500]
+    );
+}
+
 #[mz_ore::test]
 fn batching_does_not_change_pure_results() {
     let gcd = invoker(

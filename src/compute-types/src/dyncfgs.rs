@@ -802,9 +802,28 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The most rows one WebAssembly function call may carry. Batch sizes never
+/// change results, only how far guest calls amortize.
+pub const WASM_UDF_BATCH_MAX_ROWS: Config<usize> = Config::new(
+    "wasm_udf_batch_max_rows",
+    16 << 10,
+    "The maximum number of rows in one call to a WebAssembly function.",
+    ParameterScope::Replica,
+);
+
+/// The most encoded input bytes one WebAssembly function call may carry.
+pub const WASM_UDF_BATCH_MAX_BYTES: Config<usize> = Config::new(
+    "wasm_udf_batch_max_bytes",
+    8 << 20,
+    "The maximum encoded input size of one call to a WebAssembly function, in bytes.",
+    ParameterScope::Replica,
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&WASM_UDF_BATCH_MAX_ROWS)
+        .add(&WASM_UDF_BATCH_MAX_BYTES)
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)

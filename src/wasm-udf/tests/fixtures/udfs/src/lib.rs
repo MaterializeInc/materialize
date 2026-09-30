@@ -12,6 +12,10 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use arrow_udf::codegen::arrow_arith::numeric;
+use arrow_udf::codegen::arrow_array::cast::AsArray;
+use arrow_udf::codegen::arrow_array::types::Float64Type;
+use arrow_udf::codegen::arrow_array::Float64Array;
 use arrow_udf::function;
 
 #[function("gcd(int, int) -> int")]
@@ -78,6 +82,26 @@ fn jaro_winkler(a: &str, b: &str) -> f64 {
     let jaro = (m / a.len() as f64 + m / b.len() as f64 + (m - transpositions as f64) / m) / 3.0;
     let prefix = a.iter().zip(&b).take(4).take_while(|(x, y)| x == y).count();
     jaro + prefix as f64 * 0.1 * (1.0 - jaro)
+}
+
+/// `a * x + y`. `batch_fn` has the guest compute a whole batch at once with
+/// Arrow kernels instead of looping over rows; the scalar body is the
+/// row-at-a-time definition the batch function must agree with.
+#[function(
+    "saxpy(float64, float64, float64) -> float64",
+    batch_fn = "saxpy_columns"
+)]
+#[allow(dead_code)] // The generated export calls only `batch_fn`.
+fn saxpy(a: f64, x: f64, y: f64) -> f64 {
+    a * x + y
+}
+
+fn saxpy_columns(a: &Float64Array, x: &Float64Array, y: &Float64Array) -> Float64Array {
+    let ax = numeric::mul(a, x).expect("columns have equal lengths");
+    numeric::add(&ax, y)
+        .expect("columns have equal lengths")
+        .as_primitive::<Float64Type>()
+        .clone()
 }
 
 #[function("byte_len(binary) -> int")]
