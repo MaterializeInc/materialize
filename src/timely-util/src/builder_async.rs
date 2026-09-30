@@ -34,7 +34,7 @@ use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
-use timely::dataflow::{Scope, Stream as TimelyStream, StreamVec};
+use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
@@ -647,8 +647,8 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
     }
 
     /// Creates a fallible operator implementation from supplied logic constructor. If the `Future`
-    /// resolves to an error it will be emitted in the returned error stream and then the operator
-    /// will wait indefinitely until the shutdown button is pressed.
+    /// resolves to an error it is handed to `on_error` and then the operator will wait
+    /// indefinitely until the shutdown button is pressed.
     ///
     /// # Capability handling
     ///
@@ -659,7 +659,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
     /// frontiers would incorrectly advance, potentially causing incorrect actions downstream.
     ///
     /// ```ignore
-    /// builder.build_fallible(|caps| Box::pin(async move {
+    /// builder.build_fallible(on_error, |caps| Box::pin(async move {
     ///     // Assert that we have the number of capabilities we expect
     ///     // `cap` will be a `&mut Option<Capability<T>>`:
     ///     let [cap_set]: &mut [_; 1] = caps.try_into().unwrap();
@@ -682,38 +682,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
     ///     *cap_set = CapabilitySet::new(); // DO NOT DO THIS
     /// }));
     /// ```
-    pub fn build_fallible<E: 'static, F>(
-        mut self,
-        constructor: F,
-    ) -> (Button, StreamVec<'scope, T, Rc<E>>)
-    where
-        F: for<'a> FnOnce(
-                &'a mut [CapabilitySet<T>],
-            ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
-            + 'static,
-    {
-        // Create a new completely disconnected output
-        let (error_output, error_stream) = self.new_output::<CapacityContainerBuilder<_>>();
-        let button = self.build(|mut caps| async move {
-            let error_cap = caps.pop().unwrap();
-            let mut caps = caps
-                .into_iter()
-                .map(CapabilitySet::from_elem)
-                .collect::<Vec<_>>();
-            if let Err(err) = constructor(&mut *caps).await {
-                error_output.give(&error_cap, Rc::new(err));
-                drop(error_cap);
-                // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
-                // the capabilities and could produce incorrect progress statements.
-                std::future::pending().await
-            }
-        });
-        (button, error_stream)
-    }
-
-    /// Like [`Self::build_fallible`], but hands the error to `on_error` instead of emitting it on
-    /// an output.
-    pub fn build_fallible_with<E: 'static, H, F>(self, on_error: H, constructor: F) -> Button
+    pub fn build_fallible<E: 'static, H, F>(self, on_error: H, constructor: F) -> Button
     where
         H: FnOnce(E) + 'static,
         F: for<'a> FnOnce(

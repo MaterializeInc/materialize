@@ -965,7 +965,7 @@ fn append_batches<'scope>(
             update: HealthStatusUpdate::halting(err.display_with_causes().to_string(), None),
         })
     };
-    let button = append_op.build_fallible_with(report_error, move |caps| Box::pin(async move {
+    let button = append_op.build_fallible(report_error, move |caps| Box::pin(async move {
         let [upper_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
         // This may SEEM unnecessary, but metrics contains extra

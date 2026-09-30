@@ -68,7 +68,7 @@ pub(crate) fn render<'scope>(
     let report_transient = move |err: TransientError| {
         super::report_error(&health, ReplicationError::Transient(Rc::new(err)))
     };
-    let button = builder.build_fallible_with(report_transient, move |caps| {
+    let button = builder.build_fallible(report_transient, move |caps| {
         Box::pin(async move {
             let [probe_cap]: &mut [_; 1] = caps.try_into().unwrap();
 
