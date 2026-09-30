@@ -34,6 +34,7 @@ use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::instance::{Command, Instance, SharedCollectionState};
+use crate::controller::peek_lifecycle::PeekLifecycle;
 use crate::controller::{
     ComputeControllerResponse, IntrospectionUpdates, ReplicaId, StorageCollections,
 };
@@ -246,20 +247,109 @@ impl InstanceClient {
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
     ) -> Result<(), PeekError> {
+        self.peek_inner(
+            peek_target,
+            literal_constraints,
+            uuid,
+            timestamp,
+            result_desc,
+            finishing,
+            map_filter_project,
+            target_read_hold,
+            target_replica,
+            peek_response_tx,
+            None,
+        )
+        .await
+    }
+
+    /// Issues a frontend-owned peek, ordered against lifecycle cancellation.
+    pub async fn peek_with_lifecycle(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: Timestamp,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_read_hold: ReadHold,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
+        lifecycle: Arc<PeekLifecycle>,
+    ) -> Result<(), PeekError> {
+        self.peek_inner(
+            peek_target,
+            literal_constraints,
+            uuid,
+            timestamp,
+            result_desc,
+            finishing,
+            map_filter_project,
+            target_read_hold,
+            target_replica,
+            peek_response_tx,
+            Some(lifecycle),
+        )
+        .await
+    }
+
+    async fn peek_inner(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: Timestamp,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_read_hold: ReadHold,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
+    ) -> Result<(), PeekError> {
+        let cancellation_client = self.clone();
+        let qps = Arc::clone(&self.qps);
         self.call_sync(move |i| {
-            i.peek(
-                peek_target,
-                literal_constraints,
-                uuid,
-                timestamp,
-                result_desc,
-                finishing,
-                map_filter_project,
-                target_read_hold,
-                target_replica,
-                peek_response_tx,
-            )
+            let mut response_tx = Some(peek_response_tx);
+            let issued_lifecycle = lifecycle.clone();
+            let issue = || {
+                i.peek(
+                    peek_target,
+                    literal_constraints,
+                    uuid,
+                    timestamp,
+                    result_desc,
+                    finishing,
+                    map_filter_project,
+                    target_read_hold,
+                    target_replica,
+                    response_tx.take().expect("peek issued once"),
+                    issued_lifecycle,
+                )
+            };
+            if let Some(lifecycle) = lifecycle {
+                // Run the ordering critical section on the instance task, not
+                // around call_sync's await, which would block cancellation.
+                let canceled = lifecycle.issue(issue, move |reason| {
+                    cancellation_client.cancel_peek(uuid, reason);
+                })?;
+                if let Some(response) = canceled {
+                    let _ = response_tx
+                        .take()
+                        .expect("canceled peek was not issued")
+                        .send((response, qps.result_resume.start()));
+                }
+                Ok(())
+            } else {
+                issue()
+            }
         })
         .await?
+    }
+
+    /// Enqueues cancellation of an issued peek. Instance shutdown is harmless.
+    pub fn cancel_peek(&self, uuid: Uuid, reason: PeekResponse) {
+        let _ = self.call(move |i| i.cancel_peek(uuid, reason));
     }
 }
