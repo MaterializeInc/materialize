@@ -298,8 +298,9 @@ where
                             .storage_metadata
                             .clone();
 
-                        let error_handler =
-                            storage_state.error_handler("upsert_rehydration", export_id);
+                        let error_handler = base_source_config
+                            .health
+                            .error_handler("upsert_rehydration");
 
                         let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
                             outer_mz_scope,

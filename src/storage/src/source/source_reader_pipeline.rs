@@ -428,11 +428,11 @@ where
         config: _,
         remap_collection_id,
         busy_signal: _,
-        health: _,
+        health,
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();
-    let error_handler = storage_state.error_handler("remap_operator", id);
+    let error_handler = health.error_handler("remap_operator");
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
