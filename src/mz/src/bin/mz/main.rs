@@ -30,6 +30,7 @@ use crate::command::profile::ProfileCommand;
 use crate::command::region::RegionCommand;
 use crate::command::secret::SecretCommand;
 use crate::command::sql::SqlCommand;
+use crate::command::udf::UdfCommand;
 use crate::command::user::UserCommand;
 use clap_clippy_hack::*;
 
@@ -109,6 +110,8 @@ mod clap_clippy_hack {
         Secret(SecretCommand),
         /// Execute SQL statements in a region.
         Sql(SqlCommand),
+        /// Build, debug, and deploy WebAssembly functions.
+        Udf(UdfCommand),
         /// Manage users in your organization.
         User(UserCommand),
     }
@@ -143,6 +146,7 @@ async fn main() -> Result<(), Error> {
         Command::Region(cmd) => command::region::run(cx, cmd).await,
         Command::Secret(cmd) => command::secret::run(cx, cmd).await,
         Command::Sql(cmd) => command::sql::run(cx, cmd).await,
+        Command::Udf(cmd) => command::udf::run(cx, cmd).await,
         Command::User(cmd) => command::user::run(cx, cmd).await,
     };
 

@@ -15,4 +15,5 @@ pub mod profile;
 pub mod region;
 pub mod secret;
 pub mod sql;
+pub mod udf;
 pub mod user;

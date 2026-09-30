@@ -83,6 +83,65 @@ impl UdfType {
     }
 }
 
+impl UdfType {
+    /// The SQL type a value of this type is presented as when a function is
+    /// declared from its signature alone. Lists become one-dimensional
+    /// arrays.
+    pub fn default_sql_type(&self) -> SqlScalarType {
+        match self {
+            UdfType::Boolean => SqlScalarType::Bool,
+            UdfType::Int16 => SqlScalarType::Int16,
+            UdfType::Int32 => SqlScalarType::Int32,
+            UdfType::Int64 => SqlScalarType::Int64,
+            UdfType::UInt16 => SqlScalarType::UInt16,
+            UdfType::UInt32 => SqlScalarType::UInt32,
+            UdfType::UInt64 => SqlScalarType::UInt64,
+            UdfType::Float32 => SqlScalarType::Float32,
+            UdfType::Float64 => SqlScalarType::Float64,
+            UdfType::Decimal => SqlScalarType::Numeric { max_scale: None },
+            UdfType::Date32 => SqlScalarType::Date,
+            UdfType::Time64 => SqlScalarType::Time,
+            UdfType::Timestamp => SqlScalarType::Timestamp { precision: None },
+            UdfType::Interval => SqlScalarType::Interval,
+            UdfType::Json => SqlScalarType::Jsonb,
+            UdfType::String => SqlScalarType::String,
+            UdfType::Binary => SqlScalarType::Bytes,
+            UdfType::List(elem) => SqlScalarType::Array(Box::new(elem.default_sql_type())),
+        }
+    }
+}
+
+impl std::str::FromStr for UdfType {
+    type Err = String;
+
+    /// Parses a type name as it appears in a signature string.
+    fn from_str(s: &str) -> Result<Self, String> {
+        if let Some(elem) = s.strip_suffix("[]") {
+            return Ok(UdfType::List(Box::new(elem.parse()?)));
+        }
+        Ok(match s {
+            "boolean" => UdfType::Boolean,
+            "int16" => UdfType::Int16,
+            "int32" => UdfType::Int32,
+            "int64" => UdfType::Int64,
+            "uint16" => UdfType::UInt16,
+            "uint32" => UdfType::UInt32,
+            "uint64" => UdfType::UInt64,
+            "float32" => UdfType::Float32,
+            "float64" => UdfType::Float64,
+            "decimal" => UdfType::Decimal,
+            "date32" => UdfType::Date32,
+            "time64" => UdfType::Time64,
+            "timestamp" => UdfType::Timestamp,
+            "interval" => UdfType::Interval,
+            "json" => UdfType::Json,
+            "string" => UdfType::String,
+            "binary" => UdfType::Binary,
+            _ => return Err(format!("unsupported arrow-udf type {s:?}")),
+        })
+    }
+}
+
 impl fmt::Display for UdfType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {

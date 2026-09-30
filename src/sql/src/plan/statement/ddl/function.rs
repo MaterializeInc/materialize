@@ -31,15 +31,6 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{CreateFunctionPlan, Function, Plan, PlanError, WasmFunction};
 use crate::session::vars;
 
-/// The fuel one call gets unless the function sets `FUEL`. A limit applies to
-/// a whole batched call, so this leaves about 100K instructions per row at
-/// the default batch size of 1024 rows.
-pub const DEFAULT_WASM_FUNCTION_FUEL: u64 = 100_000_000;
-
-/// The memory limit of one call unless the function sets `MEMORY`. Sized for
-/// the input and output buffers of a full batch plus working memory.
-pub const DEFAULT_WASM_FUNCTION_MEMORY: ByteSize = ByteSize::mb(64);
-
 generate_extracted_config!(
     CreateFunctionOption,
     (Export, String),
@@ -149,8 +140,8 @@ pub fn plan_create_function(
         return_type,
         strict: null_behavior.is_some_and(|b| b.is_strict()),
         limits: WasmLimits {
-            fuel: fuel.unwrap_or(DEFAULT_WASM_FUNCTION_FUEL),
-            memory_bytes: memory.unwrap_or(DEFAULT_WASM_FUNCTION_MEMORY).as_bytes(),
+            fuel: fuel.unwrap_or(mz_wasm_udf_abi::DEFAULT_FUEL),
+            memory_bytes: memory.map_or(mz_wasm_udf_abi::DEFAULT_MEMORY_BYTES, |m| m.as_bytes()),
         },
     };
 

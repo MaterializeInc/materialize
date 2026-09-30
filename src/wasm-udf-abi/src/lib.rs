@@ -31,6 +31,16 @@ pub use types::{UdfType, UnsupportedType};
 /// The arrow-udf ABI major version this crate implements.
 pub const ABI_MAJOR_VERSION: u8 = 3;
 
+/// The fuel one call gets unless a function sets `FUEL`. A limit applies to a
+/// whole batched call, so this leaves about 6K instructions per row at the
+/// default maximum batch of 16K rows, and heavier functions get smaller
+/// batches.
+pub const DEFAULT_FUEL: u64 = 100_000_000;
+
+/// The memory limit of one call unless a function sets `MEMORY`. Sized for
+/// the input and output buffers of a full batch plus working memory.
+pub const DEFAULT_MEMORY_BYTES: u64 = 64 << 20;
+
 /// The guest export that allocates `len` bytes aligned to `align`:
 /// `(len: i32, align: i32) -> i32`.
 pub const ALLOC_EXPORT: &str = "alloc";

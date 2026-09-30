@@ -62,6 +62,28 @@ impl ScalarSignature {
     pub fn export_name(&self) -> String {
         function_export_name(&self.to_string())
     }
+
+    /// Parses a scalar signature string, `name(arg,...)->ret`.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let invalid = || format!("invalid scalar function signature {s:?}");
+        let (head, ret) = s.split_once(")->").ok_or_else(invalid)?;
+        if ret.starts_with('>') {
+            return Err(format!("{s:?} is a table function"));
+        }
+        let (name, args) = head.split_once('(').ok_or_else(invalid)?;
+        let args = if args.is_empty() {
+            vec![]
+        } else {
+            args.split(',')
+                .map(str::parse)
+                .collect::<Result<Vec<UdfType>, _>>()?
+        };
+        Ok(ScalarSignature {
+            name: name.to_string(),
+            args,
+            ret: ret.parse()?,
+        })
+    }
 }
 
 /// The name of the export that implements the function with the given
@@ -98,6 +120,19 @@ mod tests {
             "symbol {symbol} contains characters outside the symbol alphabet",
         );
         assert_eq!(decode_symbol(&symbol).as_deref(), Some(sig));
+    }
+
+    #[mz_ore::test]
+    fn signatures_parse_round_trip() {
+        for sig in [
+            "gcd(int32,int32)->int32",
+            "now()->int64",
+            "f(string[][])->json",
+        ] {
+            assert_eq!(ScalarSignature::parse(sig).unwrap().to_string(), sig);
+        }
+        assert!(ScalarSignature::parse("f(int32)->>int32").is_err());
+        assert!(ScalarSignature::parse("f(struct x)->int32").is_err());
     }
 
     #[mz_ore::test]
