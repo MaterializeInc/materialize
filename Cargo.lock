@@ -9451,6 +9451,7 @@ dependencies = [
  "arrow-ipc",
  "chrono",
  "flatbuffers",
+ "flate2",
  "itertools 0.15.0",
  "mz-expr",
  "mz-ore",
@@ -9458,6 +9459,7 @@ dependencies = [
  "mz-wasm-udf-abi",
  "stacker",
  "thiserror 2.0.21",
+ "tracing",
  "wasmparser",
  "wasmtime",
 ]
