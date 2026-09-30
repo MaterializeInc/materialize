@@ -353,7 +353,7 @@ encoding = "0.2.0"
 enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-fallible-iterator = "0.2.0"
+fallible-iterator = "0.3.0"
 fancy-regex = "0.19.2"
 flate2 = "1.1.9"
 futures = "0.3.32"
