@@ -20,11 +20,11 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
-## v26.44.0
+## v26.44.1
 *Released to Materialize Cloud: 2026-09-30* <br>
 *Released to Materialize Self-Managed: 2026-10-01* <br>
 
-### SCIM group-to-role mapping is generally available {#v26.44-scim-group-to-role-mapping}
+### SCIM group-to-role mapping is generally available {#v26.44.1-scim-group-to-role-mapping}
 
 <red>*Materialize Cloud only*</red>
 
@@ -35,7 +35,7 @@ Syncing identity provider groups to Materialize via SCIM is now generally availa
 
 As team members join, leave, or change teams, updating their group membership in your IdP keeps their access in Materialize aligned. Set it up in the [Materialize Console](/developer-tools/console/) or with Terraform. For more information, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 
-### Operational dashboards for Self-Managed {#v26.44-operational-dashboards}
+### Operational dashboards for Self-Managed {#v26.44.1-operational-dashboards}
 
 <red>*Materialize Self-Managed only*</red>
 
@@ -46,7 +46,7 @@ Starting with v13.1.2 of the [Materialize Terraform modules](/self-managed-deplo
 
 For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
 
-### Improved query latency under load {#v26.44-improved-query-latency-under-load}
+### Improved query latency under load {#v26.44.1-improved-query-latency-under-load}
 
 We've changed how Materialize serves indexed queries under heavy load. In our tests, the client-side p99 latency of single-key lookups running next to heavy scans dropped from 3.64s to 37ms. Excluding the network round trip, the server-side p99 latency dropped from 3.61s to 3ms.
 
@@ -54,23 +54,24 @@ We've changed how Materialize serves indexed queries under heavy load. In our te
 
 We've done this by offloading heavy `SELECT` queries onto separate threads. Previously, heavy `SELECT` queries (such as a filter on a key that matches millions of rows) caused head-of-line blocking. Now, these queries run on separate threads, allowing smaller lookups to keep running in parallel. Concurrent heavy scans also finish faster, because they run side by side instead of queuing on one worker. Queries that read little data are unaffected.
 
-### Improvements {#v26.44-improvements}
+### Improvements {#v26.44.1-improvements}
 - **Improved freshness, by addressing slow object storage reads**: A single hung read from object storage, such as one on a connection that died without closing, could hold back every dataflow that depends on it. Materialize now retries a read that is still outstanding after 2 seconds on a second, independent connection and uses whichever response arrives first. In Materialize Cloud, this cut reads slower than 4 seconds by about 70%.
 - **Dynamic balancerd configuration for Self-Managed**: Pointing `spec.balancerdConfigmapName` on a `Materialize` resource, or `spec.configmapName` on a standalone `Balancer`, at a ConfigMap you own containing `config.json` lets you change balancerd settings such as `balancerd_max_connections` without restarting balancer pods, with balancerd rereading the file about once a second after Kubernetes propagates an update.
 - **Connection limits in balancerd count connections from accept**: `balancerd_max_connections` now counts every connection from the moment it is accepted rather than only those that completed the startup sequence, so a connection over the limit is closed rather than answered with an error, and the new `balancerd_pre_resolved_timeout` (default 60 seconds, `0` disables) closes a connection that has not finished TLS negotiation, startup, and authentication within it.
+- **Lower balancerd memory use per connection**: `balancerd` now builds the TLS connector for its upstream `environmentd` connections once at startup instead of once per connection, which takes certificate parsing out of connection setup and cuts memory held per proxied TLS connection by roughly a factor of ten in local measurement, leaving more headroom under `balancerd_max_connections` for a given memory limit.
 - **`uuid` columns in Iceberg sinks**: An Iceberg sink now creates `uuid` columns as Iceberg `string`, in the lowercase hyphenated form, rather than `fixed[16]`, so a sink can target a catalog with no fixed-width binary type such as Unity Catalog; a table already created with a `fixed[16]` column stays writable.
 - **Longer retention for replica hydration history**: `mz_internal.mz_replica_hydration_history` now keeps completed hydration episodes for 120 days on its own retention setting, while `mz_internal.mz_object_hydration_history` stays at 30 days, so a longer window of replica history is available for capacity planning.
 - **PostgreSQL sources are identifiable upstream**: Connections a PostgreSQL source opens to the upstream database, including its replication connection, now set `application_name` to `materialize`, so you can pick them out in `pg_stat_activity`.
 
-### Agent Skills {#v26.44-agent-skills}
+### Agent Skills {#v26.44.1-agent-skills}
 - **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt`, `materialize-docs` is now `mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
 - **`mz-health-check`**: The health check now reports materialized views on clusters with no replicas, which stop advancing and hold back compaction of every input they read, so their storage keeps growing.
 
-### Guides {#v26.44-guides}
+### Guides {#v26.44.1-guides}
 - [Protect sensitive columns](/security/patterns/protect-sensitive-columns/)
 - [PostgreSQL: Troubleshoot a stuck snapshot](/ingest-data/postgres/stuck-snapshot/)
 
-### Bug Fixes {#v26.44-bug-fixes}
+### Bug Fixes {#v26.44.1-bug-fixes}
 - Fixed a panic in PostgreSQL sources when the replication stream carried messages committed before Materialize read a table's schema, which may have described an incompatible shape; each table now records the upstream LSN its schema was read at and ignores replication messages from before it.
 - Fixed a security vulnerability in the `postgres-protocol` dependency (GHSA-5x78-73v4-xg6w), where a malicious PostgreSQL server could exhaust client CPU by supplying an unbounded SCRAM iteration count during authentication; iteration counts above 2,000,000 are now rejected.
 - Fixed a security vulnerability in the `imbl` dependency (RUSTSEC-2026-0292), a double free or use-after-free in the chunk and inline-array removal paths when an element's `Drop` panics.
