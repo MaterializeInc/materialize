@@ -15,6 +15,7 @@
 
 use std::{fmt, str};
 
+use mz_repr::batch::DatumBatch;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::Eval;
@@ -31,6 +32,13 @@ pub trait LazyUnaryFunc {
         temp_storage: &'a RowArena,
         a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError>;
+
+    /// Evaluates over a batch of arguments, yielding one row per input row.
+    /// `None` when this function has no batch form.
+    fn eval_batch<'a>(&self, batch: &'a DatumBatch<EvalError>) -> Option<DatumBatch<EvalError>> {
+        let _ = batch;
+        None
+    }
 
     /// The output SqlColumnType of this function.
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
@@ -113,6 +121,12 @@ pub trait EagerUnaryFunc {
 
     fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a>;
 
+    /// Batch form of [`Self::call`], derived from the batch forms of the
+    /// argument and result types. `None` when either lacks one.
+    fn call_batch<'a>(&self, batch: &'a DatumBatch<EvalError>) -> Option<DatumBatch<EvalError>> {
+        crate::scalar::func::batch::call_unary(self, batch)
+    }
+
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
 
@@ -157,6 +171,10 @@ pub trait EagerUnaryFunc {
 }
 
 impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
+    fn eval_batch<'a>(&self, batch: &'a DatumBatch<EvalError>) -> Option<DatumBatch<EvalError>> {
+        self.call_batch(batch)
+    }
+
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],

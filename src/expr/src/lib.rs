@@ -23,6 +23,7 @@ mod linear;
 mod relation;
 mod scalar;
 
+pub mod batch;
 pub mod explain;
 pub mod row;
 pub mod virtual_syntax;
