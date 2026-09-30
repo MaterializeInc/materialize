@@ -381,6 +381,17 @@ fn parse_data_rate(s: &str) -> anyhow::Result<usize> {
 async fn main() {
     mz_ore::panic::install_enhanced_handler();
 
+    // Pin the rustls crypto provider to aws-lc-rs. The kube client and the
+    // conversion webhook's `RustlsConfig` both build their rustls configs via
+    // `builder()`, which resolves the process-default provider. Installing it
+    // explicitly keeps the choice deterministic even in workspace builds where
+    // rustls' `ring` feature is also enabled by another crate (with both
+    // features on, rustls cannot pick a default on its own and would otherwise
+    // panic).
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("installing the aws-lc-rs crypto provider should not fail");
+
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("ORCHESTRATORD_"),
         enable_version_flag: true,
@@ -425,15 +436,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // and `webhook_server` is what shutdown uses to drain the server. Both are
     // set only when the conversion webhook server is running.
     let (reload_config, webhook_server) = if args.install_v1_crd {
-        // Pin the rustls crypto provider to aws-lc-rs. `RustlsConfig` builds its
-        // `ServerConfig` via `ServerConfig::builder()`, which resolves the
-        // process-default provider. Installing it explicitly keeps the choice
-        // deterministic even in workspace builds where rustls' `ring` feature is
-        // also enabled by another crate (with both features on, rustls cannot
-        // pick a default on its own and would otherwise panic).
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .expect("installing the aws-lc-rs crypto provider should not fail");
         let config = RustlsConfig::from_pem_file(&tls_cert, &tls_key)
             .await
             .unwrap();
