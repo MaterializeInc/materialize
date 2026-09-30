@@ -66,6 +66,10 @@ We've done this by offloading heavy `SELECT` queries onto separate threads. Prev
 - **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt`, `materialize-docs` is now `mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
 - **`mz-health-check`**: The health check now reports materialized views on clusters with no replicas, which stop advancing and hold back compaction of every input they read, so their storage keeps growing.
 
+### Guides {#v26.44-guides}
+- [Protect sensitive columns](/security/patterns/protect-sensitive-columns/)
+- [PostgreSQL: Troubleshoot a stuck snapshot](/ingest-data/postgres/stuck-snapshot/)
+
 ### Bug Fixes {#v26.44-bug-fixes}
 - Fixed a panic in PostgreSQL sources when the replication stream carried messages committed before Materialize read a table's schema, which may have described an incompatible shape; each table now records the upstream LSN its schema was read at and ignores replication messages from before it.
 - Fixed a security vulnerability in the `postgres-protocol` dependency (GHSA-5x78-73v4-xg6w), where a malicious PostgreSQL server could exhaust client CPU by supplying an unbounded SCRAM iteration count during authentication; iteration counts above 2,000,000 are now rejected.
