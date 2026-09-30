@@ -140,7 +140,7 @@
     "@types/jsonwebtoken": "^9",
     "@types/lodash.debounce": "^4.0.9",
     "@types/module-alias": "^2",
-    "@types/node": "^25.3.3",
+    "@types/node": "^26.6.3",
     "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^18.3.12",
