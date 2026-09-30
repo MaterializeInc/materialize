@@ -9324,12 +9324,14 @@ dependencies = [
  "postgres-openssl",
  "rustls",
  "rustls-native-certs",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-postgres",
  "tokio-rustls",
  "tracing",
+ "x509-cert",
 ]
 
 [[package]]
