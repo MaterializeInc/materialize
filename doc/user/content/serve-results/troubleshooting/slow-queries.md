@@ -149,6 +149,11 @@ open the object's workflow graph in the console: click **Clusters**, select the
 cluster, select the object under **Materialized Views** or **Indexes**, then
 open the **Workflow** tab.
 
+To find why an object is lagging, see [Freshness
+troubleshooting](/transform-data/freshness-troubleshooting/) and [Dataflow
+troubleshooting](/transform-data/dataflow-troubleshooting/). For a lagging
+source, see [Troubleshoot ingestion](/ingest-data/troubleshooting/).
+
 ### Check the query plan
 
 Run [`EXPLAIN`](/sql/explain-plan/) on the query, on the cluster where the
