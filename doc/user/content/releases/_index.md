@@ -46,8 +46,16 @@ Starting with v13.1.2 of the [Materialize Terraform modules](/self-managed-deplo
 
 For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
 
+### Improved query latency under load {#v26.44-improved-query-latency-under-load}
+
+We've changed how Materialize serves indexed queries under heavy load. In our tests, the client-side p99 latency of single-key lookups running next to heavy scans dropped from 3.64s to 37ms. Excluding the network round trip, the server-side p99 latency dropped from 3.61s to 3ms.
+
+![Client-side latency of single-key lookups running next to heavy scans, with offload disabled (2 to 4 seconds) and enabled (about 30 ms)](/images/releases/v2644_query_latency.png)
+
+We've done this by offloading heavy `SELECT` queries onto separate threads. Previously, heavy `SELECT` queries (such as a filter on a key that matches millions of rows) caused head-of-line blocking. Now, these queries run on separate threads, allowing smaller lookups to keep running in parallel. Concurrent heavy scans also finish faster, because they run side by side instead of queuing on one worker. Queries that read little data are unaffected.
+
 ### Improvements {#v26.44-improvements}
-- **Hedged reads from object storage**: A read from object storage that is still outstanding after 2 seconds is now retried on a second, independent connection with the first response winning, which reduced reads slower than 4 seconds by about 70% in Materialize Cloud, at a cost of roughly 1% extra reads; set `persist_blob_hedged_get_enabled` to `false` to turn it off.
+- **Improved freshness, by addressing slow object storage reads**: A single hung read from object storage, such as one on a connection that died without closing, could hold back every dataflow that depends on it. Materialize now retries a read that is still outstanding after 2 seconds on a second, independent connection and uses whichever response arrives first. In Materialize Cloud, this cut reads slower than 4 seconds by about 70%.
 - **Dynamic balancerd configuration for Self-Managed**: Pointing `spec.balancerdConfigmapName` on a `Materialize` resource, or `spec.configmapName` on a standalone `Balancer`, at a ConfigMap you own containing `config.json` lets you change balancerd settings such as `balancerd_max_connections` without restarting balancer pods, with balancerd rereading the file about once a second after Kubernetes propagates an update.
 - **Connection limits in balancerd count connections from accept**: `balancerd_max_connections` now counts every connection from the moment it is accepted rather than only those that completed the startup sequence, so a connection over the limit is closed rather than answered with an error, and the new `balancerd_pre_resolved_timeout` (default 60 seconds, `0` disables) closes a connection that has not finished TLS negotiation, startup, and authentication within it.
 - **`uuid` columns in Iceberg sinks**: An Iceberg sink now creates `uuid` columns as Iceberg `string`, in the lowercase hyphenated form, rather than `fixed[16]`, so a sink can target a catalog with no fixed-width binary type such as Unity Catalog; a table already created with a `fixed[16]` column stays writable.
