@@ -40,8 +40,10 @@
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
@@ -55,8 +57,6 @@ use mz_timely_util::containers::stack::FueledBuilder;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Concat;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
@@ -108,7 +108,7 @@ pub(crate) fn render<'scope>(
     metrics: MySqlSourceMetrics,
 ) -> (
     StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<'scope, GtidPartition, ReplicationError>,
+    StreamVec<'scope, GtidPartition, Infallible>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlReplicationReader({})", config.id);
@@ -116,9 +116,8 @@ pub(crate) fn render<'scope>(
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
     let (mut data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
-    // Captures DefiniteErrors that affect the entire source, including all outputs
-    let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    // Emits nothing. Its frontier closes once the operator finishes.
+    let (_, done) = builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
@@ -132,11 +131,15 @@ pub(crate) fn render<'scope>(
 
     metrics.tables.set(u64::cast_from(source_outputs.len()));
 
-    let (button, transient_errors) = builder.build_fallible(move |caps| {
+    let health = config.health.clone();
+    let report_transient = move |err: TransientError| {
+        super::report_error(&health, ReplicationError::Transient(Rc::new(err)))
+    };
+    let button = builder.build_fallible_with(report_transient, move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, definite_error_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
+            let [data_cap_set, _done_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(REPL_READER) {
@@ -178,8 +181,7 @@ pub(crate) fn render<'scope>(
                             &output_indexes,
                             &data_output,
                             data_cap_set,
-                            &definite_error_handle,
-                            definite_error_cap_set,
+                            &config.health,
                         )
                         .await,
                     );
@@ -245,8 +247,7 @@ pub(crate) fn render<'scope>(
                     &output_indexes,
                     &data_output,
                     data_cap_set,
-                    &definite_error_handle,
-                    definite_error_cap_set,
+                    &config.health,
                 )
                 .await);
             };
@@ -269,8 +270,7 @@ pub(crate) fn render<'scope>(
                                 &output_indexes,
                                 &data_output,
                                 data_cap_set,
-                                &definite_error_handle,
-                                definite_error_cap_set,
+                                &config.health,
                             )
                             .await);
                         };
@@ -296,8 +296,7 @@ pub(crate) fn render<'scope>(
                             &output_indexes,
                             &data_output,
                             data_cap_set,
-                            &definite_error_handle,
-                            definite_error_cap_set,
+                            &config.health,
                         )
                         .await);
                     }
@@ -349,8 +348,7 @@ pub(crate) fn render<'scope>(
                                 &output_indexes,
                                 &data_output,
                                 data_cap_set,
-                                &definite_error_handle,
-                                definite_error_cap_set,
+                                &config.health,
                             )
                             .await);
                         }
@@ -377,8 +375,7 @@ pub(crate) fn render<'scope>(
                                 &output_indexes,
                                 &data_output,
                                 data_cap_set,
-                                &definite_error_handle,
-                                definite_error_cap_set,
+                                &config.health,
                             )
                             .await);
                         }
@@ -409,8 +406,7 @@ pub(crate) fn render<'scope>(
                                 &output_indexes,
                                 &data_output,
                                 data_cap_set,
-                                &definite_error_handle,
-                                definite_error_cap_set,
+                                &config.health,
                             )
                             .await);
                         }
@@ -442,8 +438,7 @@ pub(crate) fn render<'scope>(
                                     &output_indexes,
                                     &data_output,
                                     data_cap_set,
-                                    &definite_error_handle,
-                                    definite_error_cap_set,
+                                    &config.health,
                                 )
                                 .await);
                             }
@@ -464,9 +459,7 @@ pub(crate) fn render<'scope>(
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
-
-    (data_stream.as_collection(), errors, button.press_on_drop())
+    (data_stream.as_collection(), done, button.press_on_drop())
 }
 
 /// Produces the replication stream from the MySQL server. This will return all transactions

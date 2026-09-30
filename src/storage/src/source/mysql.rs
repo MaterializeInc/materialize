@@ -43,12 +43,11 @@
 //! itself. This could be authentication failures, connection failures, etc. The only operators
 //! that can emit such errors are the `MySqlReplicationReader` and the `MySqlSnapshotReader`
 //! operators, which are the ones that talk to the external world. Both of these operators are
-//! built with the `AsyncOperatorBuilder::build_fallible` method which allows transient errors
-//! to be propagated upwards with the standard `?` operator without risking downgrading the
+//! built with the `AsyncOperatorBuilder::build_fallible_with` method which allows transient
+//! errors to be propagated upwards with the standard `?` operator without risking downgrading the
 //! capability and producing bogus frontiers.
 //!
-//! The error streams from both of those operators are published to the source status and also
-//! trigger a restart of the dataflow.
+//! Both operators report their errors to the source status, which also restarts the dataflow.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -67,7 +66,6 @@ use mz_timely_util::containers::stack::FueledBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
@@ -84,7 +82,9 @@ use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, Sour
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::source::types::Probe;
 use crate::source::types::{FuelSize, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
@@ -156,7 +156,7 @@ impl SourceRender for MySqlSourceConnection {
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
+        let (snapshot_updates, rewinds, snapshot_done, snapshot_token) = snapshot::render(
             scope.clone(),
             config.clone(),
             self.clone(),
@@ -164,7 +164,7 @@ impl SourceRender for MySqlSourceConnection {
             metrics.snapshot_metrics.clone(),
         );
 
-        let (repl_updates, repl_err, repl_token) = replication::render(
+        let (repl_updates, repl_done, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self.clone(),
@@ -173,12 +173,12 @@ impl SourceRender for MySqlSourceConnection {
             metrics,
         );
 
-        let (stats_err, probe_stream, stats_token) = statistics::render(
+        let (probe_stream, stats_token) = statistics::render(
             scope.clone(),
             config.clone(),
             self,
             resume_uppers,
-            snapshot_err.clone().concat(repl_err.clone()),
+            snapshot_done.concat(repl_done),
         );
 
         let updates = snapshot_updates.concat(repl_updates);
@@ -209,31 +209,6 @@ impl SourceRender for MySqlSourceConnection {
                 update: HealthStatusUpdate::Running,
             });
         }
-
-        let health_errs = snapshot_err
-            .concat(repl_err)
-            .concat(stats_err)
-            .map(move |err| {
-                // This update will cause the dataflow to restart
-                let err_string = err.display_with_causes().to_string();
-                let update = HealthStatusUpdate::halting(err_string.clone(), None);
-
-                let namespace = match err {
-                    ReplicationError::Transient(err)
-                        if matches!(&*err, TransientError::MySqlError(MySqlError::Ssh(_))) =>
-                    {
-                        StatusNamespace::Ssh
-                    }
-                    _ => Self::STATUS_NAMESPACE,
-                };
-
-                HealthStatusMessage {
-                    id: None,
-                    namespace: namespace.clone(),
-                    update,
-                }
-            });
-        config.health.report_stream(health_errs);
 
         (
             data_collections,
@@ -389,11 +364,7 @@ async fn return_definite_error(
         (usize, Result<SourceMessage, DataflowError>),
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
-    definite_error_handle: &AsyncOutputHandle<
-        GtidPartition,
-        CapacityContainerBuilder<Vec<ReplicationError>>,
-    >,
-    definite_error_cap_set: &CapabilitySet<GtidPartition>,
+    health: &HealthReporter,
 ) {
     tracing::warn!("Returning definite error: {err}");
     for output_index in outputs {
@@ -407,11 +378,25 @@ async fn return_definite_error(
             .give_fueled(&data_cap_set[0], update, size)
             .await;
     }
-    definite_error_handle.give(
-        &definite_error_cap_set[0],
-        ReplicationError::Definite(Rc::new(err)),
-    );
-    ()
+    report_error(health, ReplicationError::Definite(Rc::new(err)));
+}
+
+/// Reports an ingestion error as a halting status, which restarts the dataflow.
+fn report_error(health: &HealthReporter, err: ReplicationError) {
+    let update = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
+    let namespace = match err {
+        ReplicationError::Transient(err)
+            if matches!(&*err, TransientError::MySqlError(MySqlError::Ssh(_))) =>
+        {
+            StatusNamespace::Ssh
+        }
+        _ => MySqlSourceConnection::STATUS_NAMESPACE,
+    };
+    health.report(HealthStatusMessage {
+        id: None,
+        namespace,
+        update,
+    });
 }
 
 async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<(), MySqlError> {

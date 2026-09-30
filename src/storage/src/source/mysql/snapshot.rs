@@ -107,6 +107,7 @@
 //! occur before the GTID frontier in the Rewind Request for that table.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,9 +135,8 @@ use mz_timely_util::builder_async::{
 use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tracing::trace;
@@ -694,7 +694,7 @@ pub(crate) fn render<'scope>(
 ) -> (
     StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
     StreamVec<'scope, GtidPartition, RewindRequest>,
-    StreamVec<'scope, GtidPartition, ReplicationError>,
+    StreamVec<'scope, GtidPartition, Infallible>,
     PressOnDropButton,
 ) {
     let mut builder =
@@ -704,9 +704,8 @@ pub(crate) fn render<'scope>(
 
     let (raw_handle, raw_data) = builder.new_output::<FueledBuilder<_>>();
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    // Captures DefiniteErrors that affect the entire source, including all outputs
-    let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    // Emits nothing. Its frontier closes once the operator finishes.
+    let (_, done) = builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
@@ -750,14 +749,18 @@ pub(crate) fn render<'scope>(
             .push(output);
     }
 
-    let (button, transient_errors): (_, StreamVec<'scope, GtidPartition, Rc<TransientError>>) =
-        builder.build_fallible(move |caps| {
+    let health = config.health.clone();
+    let report_transient = move |err: TransientError| {
+        super::report_error(&health, ReplicationError::Transient(Rc::new(err)))
+    };
+    let button =
+        builder.build_fallible_with(report_transient, move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
                 let [
                     data_cap_set,
                     rewind_cap_set,
-                    definite_error_cap_set,
+                    _done_cap_set,
                     snapshot_cap_set,
                 ]: &mut [_; 4] = caps.try_into().unwrap();
 
@@ -814,8 +817,7 @@ pub(crate) fn render<'scope>(
                             &all_outputs,
                             &raw_handle,
                             data_cap_set,
-                            &definite_error_handle,
-                            definite_error_cap_set,
+                            &config.health,
                         )
                         .await);
                     }
@@ -920,8 +922,7 @@ pub(crate) fn render<'scope>(
                             &all_outputs,
                             &raw_handle,
                             data_cap_set,
-                            &definite_error_handle,
-                            definite_error_cap_set,
+                            &config.health,
                         )
                         .await);
                     }
@@ -1128,12 +1129,10 @@ pub(crate) fn render<'scope>(
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
-
     (
         raw_data.as_collection(),
         rewinds,
-        errors,
+        done,
         button.press_on_drop(),
     )
 }
