@@ -1847,13 +1847,13 @@ export interface MzMaterializedViewRefreshes {
 
 export interface MzMaterializedViewRefreshStrategies {
   /**
-   * The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.
+   * The `ALIGNED TO` expression of a `REFRESH EVERY` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `every`.
    */
-  aligned_to: Generated<Timestamp | null>;
+  aligned_to_expression: Generated<string | null>;
   /**
-   * The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.
+   * The time expression of a `REFRESH AT` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `at`.
    */
-  at: Generated<Timestamp | null>;
+  at_expression: Generated<string | null>;
   /**
    * The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.
    */
