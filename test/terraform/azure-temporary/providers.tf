@@ -10,18 +10,17 @@
 terraform {
   required_version = ">= 1.8"
 
+  # azurerm, helm and kubernetes take their versions from the modules' caps, so
+  # a constraint here could only conflict with them.
   required_providers {
     azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "4.54.0"
+      source = "hashicorp/azurerm"
     }
     kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
+      source = "hashicorp/kubernetes"
     }
     helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.0"
+      source = "hashicorp/helm"
     }
     random = {
       source  = "hashicorp/random"

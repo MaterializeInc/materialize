@@ -101,22 +101,6 @@ updates:
       applies-to: version-updates
       patterns:
         - "*"
-  # Terraform needs one version of each provider that satisfies the roots and
-  # every module they pin. The modules that declare these providers cap helm
-  # below 2.18, kubernetes below 2.39 and azurerm below 4.76. Move a provider
-  # past its cap only together with a module tag that accepts it.
-  ignore:
-    - dependency-name: hashicorp/helm
-      update-types:
-        - version-update:semver-major
-    - dependency-name: hashicorp/kubernetes
-      update-types:
-        - version-update:semver-major
-    # azurerm is pinned to an exact version, and 4.x releases already go past
-    # the cap, so ignoring only major updates would still allow a breaking bump.
-    - dependency-name: hashicorp/azurerm
-      versions:
-        - ">= 4.76.0"
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
