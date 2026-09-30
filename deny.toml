@@ -61,6 +61,10 @@ skip = [
 
     { name = "memmap2", version = "0.5.4" },
 
+    # `backtrace` holds these back, while wasmtime needs the newer releases.
+    { name = "gimli", version = "0.32.3" },
+    { name = "object", version = "0.37.3" },
+
     { name = "getrandom", version = "0.2.10" },
     { name = "rand", version = "0.8.5" },
     { name = "rand_chacha", version = "0.3.0" },
@@ -241,6 +245,8 @@ wrappers = [
     "bindgen",
     "buildid",
     "cookie_store",
+    "cranelift-codegen",
+    "cranelift-frontend",
     "deadpool-postgres",
     "eventsource-client",
     "fail",
@@ -258,8 +264,10 @@ wrappers = [
     "postgres",
     "pprof",
     "prost-build",
+    "pulley-interpreter",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
+    "regalloc2",
     "reqsign-aws-core",
     "reqsign-aws-v4",
     "reqsign-azure-storage",
@@ -275,6 +283,10 @@ wrappers = [
     "tracing",
     "tungstenite",
     "want",
+    "wasmtime",
+    "wasmtime-environ",
+    "wasmtime-internal-cranelift",
+    "wasmtime-internal-unwinder",
     "zopfli",
 ]
 
