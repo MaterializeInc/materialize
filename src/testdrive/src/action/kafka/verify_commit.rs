@@ -51,8 +51,8 @@ pub async fn run_verify_commit(
             let committed_tpl = mz_ore::task::spawn_blocking(
                 || "kakfa_committed_offsets".to_string(),
                 move || {
-                    let consumer: StreamConsumer =
-                        config.create().context("creating kafka consumer")?;
+                    let consumer: StreamConsumer = mz_kafka_util::client::create(&config)
+                        .context("creating kafka consumer")?;
 
                     Ok::<_, anyhow::Error>(
                         consumer.committed_offsets(tpl, Duration::from_secs(10))?,
