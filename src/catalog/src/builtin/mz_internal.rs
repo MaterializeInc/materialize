@@ -456,11 +456,12 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     }),
 });
 
-pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| {
+        BuiltinMaterializedView {
         name: "mz_materialized_view_refresh_strategies",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
+        oid: oid::MV_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
         desc: RelationDesc::builder()
             .with_column(
                 "materialized_view_id",
@@ -492,18 +493,64 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
             ),
             (
                 "aligned_to",
-                "The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
+                "The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every` or the time was not given as a literal.",
             ),
             (
                 "at",
-                "The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.",
+                "The time of a `REFRESH AT`, or `NULL` if the `type` is not `at` or the time was not given as a literal.",
             ),
         ]),
+        // `parse_catalog_create_sql` reports one entry per `REFRESH` option of
+        // the stored `create_sql`, and an omitted option as `ON COMMIT`. It reads
+        // a time only when it is stored as a literal, which covers `mz_now()`,
+        // `AT CREATION` and an omitted `ALIGNED TO` after purification, and
+        // reports any other expression as NULL. Builtin materialized views have
+        // no `create_sql` in the durable catalog and no refresh schedule.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL materialized_view_id,
+    ASSERT NOT NULL type
+) AS
+WITH
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql') AS parsed
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    user_strategies AS (
+        SELECT
+            i.id AS materialized_view_id,
+            r->>'type' AS type,
+            (r->>'interval')::interval AS interval,
+            (r->>'aligned_to')::mz_timestamp::timestamptz AS aligned_to,
+            (r->>'at')::mz_timestamp::timestamptz AS at
+        FROM
+            items i,
+            jsonb_array_elements(i.parsed->'refresh') AS r
+        WHERE i.parsed->>'type' = 'materialized-view'
+    ),
+    builtin_strategies AS (
+        SELECT
+            mv.id AS materialized_view_id,
+            'on-commit' AS type,
+            NULL::interval AS interval,
+            NULL::timestamptz AS aligned_to,
+            NULL::timestamptz AS at
+        FROM mz_catalog.mz_materialized_views mv
+        LEFT JOIN items i ON i.id = mv.id
+        WHERE i.id IS NULL
+    )
+SELECT * FROM user_strategies
+UNION ALL
+SELECT * FROM builtin_strategies",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
-});
+    });
 
 pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {

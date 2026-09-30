@@ -21,10 +21,11 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Format,
+    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Expr, Format,
     FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
     KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
-    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, SinkEnvelope,
+    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawDataType, RawItemName,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope,
     SourceEnvelope, SourceErrorPolicy, Statement, TableFromSourceOptionName, TableOptionName,
     UnresolvedItemName, Value, WithOptionValue,
 };
@@ -122,6 +123,44 @@ fn retain_history_millis<T: AstInfo>(value: Option<&WithOptionValue<T>>) -> Resu
     }
 }
 
+/// The milliseconds of a `REFRESH AT` time or `ALIGNED TO` alignment, when it is stored as a
+/// literal, possibly in parentheses or under one cast that preserves the time it denotes.
+///
+/// Purification stores `mz_now()`, `AT CREATION` and an omitted `ALIGNED TO` as
+/// `<millis>::mz_timestamp`, and leaves any other expression as written. Any expression other
+/// than a literal reads as NULL, because evaluating it needs the planner.
+///
+/// A string is read with `strconv::parse_mz_timestamp`, the parser behind the planner's
+/// text-to-`mz_timestamp` cast. Casting a number to a type that accepts it (`mz_timestamp`, the
+/// integer types, `text`) keeps its value. Of the types a string can be cast to, only
+/// `mz_timestamp`, `timestamptz` and `text` keep the time: `timestamp` drops a UTC offset and
+/// `date` drops the time of day.
+fn refresh_time_millis(mut time: &Expr<Raw>) -> Option<u64> {
+    // The parser keeps parentheses, e.g. `REFRESH AT (mz_now())`, as `Expr::Nested`.
+    while let Expr::Nested(inner) = time {
+        time = inner;
+    }
+    match time {
+        Expr::Value(Value::Number(millis)) => millis.parse().ok(),
+        Expr::Value(Value::String(s)) => strconv::parse_mz_timestamp(s).ok().map(u64::from),
+        Expr::Cast { expr, data_type } => match expr.as_ref() {
+            Expr::Value(Value::Number(millis)) => millis.parse().ok(),
+            Expr::Value(Value::String(s)) => {
+                let RawDataType::Other { name, .. } = data_type else {
+                    return None;
+                };
+                let type_name = name.name().0.last()?.as_str();
+                if !matches!(type_name, "mz_timestamp" | "timestamptz" | "text") {
+                    return None;
+                }
+                strconv::parse_mz_timestamp(s).ok().map(u64::from)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Parses a catalog `create_sql` string into a JSON object.
 ///
 /// The returned JSON does not fully reflect the parsed SQL and instead contains only fields
@@ -176,6 +215,43 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             if let Some(target) = stmt.replacement_for {
                 info.insert("replacement_target", json!(item_id(target)?));
             }
+
+            // Purification leaves at least one REFRESH option, but a statement stored
+            // before it did has none and means ON COMMIT.
+            let mut refresh = Vec::new();
+            for option in stmt.with_options {
+                let Some(WithOptionValue::Refresh(value)) = option.value else {
+                    continue;
+                };
+                refresh.push(match value {
+                    RefreshOptionValue::OnCommit => json!({"type": "on-commit"}),
+                    // Purified to `AT <mz_now>` before storage.
+                    RefreshOptionValue::AtCreation => json!({"type": "at", "at": null}),
+                    RefreshOptionValue::At(RefreshAtOptionValue { time }) => {
+                        json!({"type": "at", "at": refresh_time_millis(&time)})
+                    }
+                    RefreshOptionValue::Every(RefreshEveryOptionValue {
+                        interval,
+                        aligned_to,
+                    }) => {
+                        // The same duration round trip as planning, so that `1 day`
+                        // renders as `24:00:00` rather than as a day.
+                        let interval = Interval::from_literal(&interval)
+                            .and_then(|interval| interval.duration())
+                            .and_then(|duration| Interval::from_duration(&duration))
+                            .map_err(|e| format!("invalid REFRESH EVERY interval: {e}"))?;
+                        json!({
+                            "type": "every",
+                            "interval": interval.to_string(),
+                            "aligned_to": aligned_to.as_ref().and_then(refresh_time_millis),
+                        })
+                    }
+                });
+            }
+            if refresh.is_empty() {
+                refresh.push(json!({"type": "on-commit"}));
+            }
+            info.insert("refresh", json!(refresh));
 
             "materialized-view"
         }
@@ -2125,13 +2201,92 @@ mod tests {
         }
     }
 
-    // --- item_details replacement_target ----------------------------------
+    // --- item_details refresh / replacement_target ---------------
 
     fn mv_sql(with_options: &str) -> String {
         format!(
             "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1]{with_options} \
              AS SELECT 1"
         )
+    }
+
+    const MZ_TIMESTAMP: &str = "[s1 AS \"pg_catalog\".\"mz_timestamp\"]";
+
+    #[mz_ore::test]
+    fn catalog_refresh_omitted_means_on_commit() {
+        let out = super::item_details(&mv_sql("")).expect("ok");
+        assert_eq!(out["refresh"], json!([{"type": "on-commit"}]));
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_one_entry_per_option() {
+        let sql = mv_sql(&format!(
+            " WITH (REFRESH = AT 32472144000000::{MZ_TIMESTAMP}, \
+             REFRESH = EVERY '1 day' ALIGNED TO 946684800000::{MZ_TIMESTAMP}, \
+             REFRESH = EVERY '90 minutes' ALIGNED TO 5)"
+        ));
+        let out = super::item_details(&sql).expect("ok");
+        assert_eq!(
+            out["refresh"],
+            json!([
+                {"type": "at", "at": 32472144000000u64},
+                {"type": "every", "interval": "24:00:00", "aligned_to": 946684800000u64},
+                {"type": "every", "interval": "01:30:00", "aligned_to": 5},
+            ])
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_string_literal_times() {
+        let sql = mv_sql(
+            " WITH (REFRESH = AT '2999-01-01 00:00:00+00', \
+             REFRESH = AT '2999-01-01 05:00:00+05', \
+             REFRESH = AT '3000-01-01 23:59', \
+             REFRESH = EVERY '1 day' ALIGNED TO '2000-01-01 00:00:00+00'::[s52 AS \"pg_catalog\".\"timestamptz\"])",
+        );
+        let out = super::item_details(&sql).expect("ok");
+        assert_eq!(
+            out["refresh"],
+            json!([
+                {"type": "at", "at": 32472144000000u64},
+                {"type": "at", "at": 32472144000000u64},
+                {"type": "at", "at": 32503766340000u64},
+                {"type": "every", "interval": "24:00:00", "aligned_to": 946684800000u64},
+            ])
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_parenthesized_literal() {
+        // `REFRESH AT (mz_now())` after purification.
+        let sql = mv_sql(&format!(
+            " WITH (REFRESH = AT ((1790696789484::{MZ_TIMESTAMP})))"
+        ));
+        let out = super::item_details(&sql).expect("ok");
+        assert_eq!(
+            out["refresh"],
+            json!([{"type": "at", "at": 1790696789484u64}])
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_other_expressions_read_null() {
+        let sql = mv_sql(&format!(
+            " WITH (REFRESH = AT 946684800000::{MZ_TIMESTAMP}::[s46 AS \"pg_catalog\".\"text\"]::[s22 AS \"pg_catalog\".\"int8\"] + 2000, \
+             REFRESH = AT '2000-01-01 10:00+05'::[s50 AS \"pg_catalog\".\"timestamp\"], \
+             REFRESH = AT GREATEST('1990-01-04 11:00', 1790696789484::{MZ_TIMESTAMP}), \
+             REFRESH = EVERY '1 day' ALIGNED TO '2000-01-01 00:00:00+00'::[s52 AS \"pg_catalog\".\"timestamptz\"] + INTERVAL '1 hour')"
+        ));
+        let out = super::item_details(&sql).expect("ok");
+        assert_eq!(
+            out["refresh"],
+            json!([
+                {"type": "at", "at": null},
+                {"type": "at", "at": null},
+                {"type": "at", "at": null},
+                {"type": "every", "interval": "24:00:00", "aligned_to": null},
+            ])
+        );
     }
 
     #[mz_ore::test]

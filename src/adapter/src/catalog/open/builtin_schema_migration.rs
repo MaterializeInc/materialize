@@ -510,6 +510,12 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             "26.45.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_INTERNAL_SCHEMA,
+            "mz_materialized_view_refresh_strategies",
+        ),
+        MigrationStep::replacement(
+            "26.45.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
             "mz_replacements",
         ),
     ]
