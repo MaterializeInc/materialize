@@ -150,6 +150,9 @@ pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
     topic_name: String,
     consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
+    /// The offsets this worker last committed upstream. Only a successful commit updates it, so a
+    /// failed commit is retried on the next resume upper.
+    committed_offsets: Vec<(PartitionId, MzOffset)>,
 }
 
 /// Computes whether this worker is responsible for consuming a partition. It assigns partitions to
@@ -662,10 +665,11 @@ fn render_reader<'scope>(
                 partition_capabilities,
             };
 
-            let offset_committer = KafkaResumeUpperProcessor {
+            let mut offset_committer = KafkaResumeUpperProcessor {
                 config: config.clone(),
                 topic_name: topic.clone(),
                 consumer,
+                committed_offsets: Vec::new(),
             };
 
             // Seed the progress metrics from the resume uppers if we are snapshotting.
@@ -1131,7 +1135,7 @@ fn render_reader<'scope>(
 
 impl KafkaResumeUpperProcessor {
     async fn process_frontier(
-        &self,
+        &mut self,
         uppers: &ResumeUppers<KafkaTimestamp>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
@@ -1154,12 +1158,14 @@ impl KafkaResumeUpperProcessor {
             return Ok(());
         };
         let offsets: Vec<_> = self.responsible_offsets(frontier).collect();
-        if !offsets.is_empty() {
+        // `uppers` changes whenever any export's upper moves, usually leaving this worker's
+        // offsets unchanged, and each commit is a synchronous round trip to the group coordinator.
+        if !offsets.is_empty() && offsets != self.committed_offsets {
             let mut tpl = TopicPartitionList::new();
-            for (pid, offset) in offsets {
+            for (pid, offset) in &offsets {
                 let offset_to_commit =
                     Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
-                tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
+                tpl.add_partition_offset(&self.topic_name, *pid, offset_to_commit)
                     .expect("offset known to be valid");
             }
             let consumer = Arc::clone(&self.consumer);
@@ -1168,6 +1174,7 @@ impl KafkaResumeUpperProcessor {
                 move || consumer.commit(&tpl, CommitMode::Sync),
             )
             .await?;
+            self.committed_offsets = offsets;
         }
         Ok(())
     }
