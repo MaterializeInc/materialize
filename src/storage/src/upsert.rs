@@ -22,7 +22,7 @@ use futures::future::FutureExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_rocksdb::ValueIterator;
 use mz_sql_server_util::cdc::Lsn;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -33,19 +33,20 @@ use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_storage_types::sources::kafka::{KafkaTimestamp, RangeBound};
 use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Capability, InputCapability, Operator};
+use timely::dataflow::operators::{InputCapability, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::healthcheck::HealthStatusUpdate;
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::metrics::upsert::{UpsertBackpressureMetrics, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
 use crate::{upsert_continual_feedback, upsert_continual_feedback_v2};
@@ -543,9 +544,9 @@ pub(crate) fn upsert<'scope, T, FromTime>(
     storage_configuration: &StorageConfiguration,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
     backpressure_metrics: Option<UpsertBackpressureMetrics>,
+    health: HealthReporter,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
@@ -660,6 +661,7 @@ where
         storage_configuration,
         prevent_snapshot_buffering,
         snapshot_buffering_max,
+        health,
     )
 }
 
@@ -681,7 +683,6 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
@@ -738,9 +739,9 @@ fn upsert_operator<'scope, T, FromTime, F, Fut, US>(
     _storage_configuration: &StorageConfiguration,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
+    health: HealthReporter,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
@@ -773,6 +774,7 @@ where
             upsert_config,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
+            health,
         )
     } else {
         upsert_classic(
@@ -788,6 +790,7 @@ where
             upsert_config,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
+            health,
         )
     }
 }
@@ -1037,13 +1040,13 @@ async fn drain_staged_input<S, T, FromTime, E>(
     }
 }
 
-/// A no-op-ish error emitter for the fuzzing hook. With the in-memory backend
-/// and the well-formed inputs the fuzzer builds, `multi_get`/`multi_put` never
-/// error, so reaching this is itself a finding.
-#[cfg(feature = "fuzzing")]
-struct PanicErrorEmitter;
+/// A no-op-ish error emitter for tests and the fuzzing hook. With the in-memory
+/// backend and well-formed inputs, `multi_get`/`multi_put` never error, so
+/// reaching this is itself a finding.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) struct PanicErrorEmitter;
 
-#[cfg(feature = "fuzzing")]
+#[cfg(any(test, feature = "fuzzing"))]
 #[async_trait::async_trait(?Send)]
 impl<T> UpsertErrorEmitter<T> for PanicErrorEmitter {
     async fn emit(&mut self, context: String, e: anyhow::Error) {
@@ -1098,7 +1101,7 @@ pub async fn fuzz_drain_staged_input(
         .map(|r| match r.value {
             None => None,
             Some(mut sv) => {
-                sv.ensure_decoded(bincode_opts, GlobalId::User(0), None);
+                sv.ensure_decoded(bincode_opts, mz_repr::GlobalId::User(0), None);
                 sv.into_decoded().finalized
             }
         })
@@ -1126,9 +1129,9 @@ fn upsert_classic<'scope, T, FromTime, F, Fut, US>(
     upsert_config: UpsertConfig,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
+    health: HealthReporter,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
@@ -1149,7 +1152,6 @@ where
     let (_snapshot_handle, snapshot_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
 
-    let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
         input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
@@ -1164,7 +1166,7 @@ where
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     let shutdown_button = builder.build(move |caps| async move {
-        let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+        let [mut output_cap, mut snapshot_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::<_, _, FromTime>::new(
             state().await,
@@ -1178,7 +1180,7 @@ where
 
         let mut stash = vec![];
 
-        let mut error_emitter = (&mut health_output, &health_cap);
+        let mut error_emitter = health;
 
         tracing::info!(
             ?resume_upper,
@@ -1375,7 +1377,6 @@ where
             Ok(ok) => Ok(ok),
             Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(*err))),
         }),
-        health_stream,
         snapshot_stream,
         shutdown_button.press_on_drop(),
     )
@@ -1386,33 +1387,16 @@ pub(crate) trait UpsertErrorEmitter<T> {
     async fn emit(&mut self, context: String, e: anyhow::Error);
 }
 
+/// Reports the error as a halting status, and stalls until the dataflow is restarted.
 #[async_trait::async_trait(?Send)]
-impl<T: Timestamp> UpsertErrorEmitter<T>
-    for (
-        &mut AsyncOutputHandle<
-            T,
-            CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-        >,
-        &Capability<T>,
-    )
-{
+impl<T> UpsertErrorEmitter<T> for HealthReporter {
     async fn emit(&mut self, context: String, e: anyhow::Error) {
-        process_upsert_state_error::<T>(context, e, self.0, self.1).await
+        self.report(HealthStatusMessage {
+            id: None,
+            namespace: StatusNamespace::Upsert,
+            update: HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None),
+        });
+        std::future::pending::<()>().await;
+        unreachable!("pending future never returns");
     }
-}
-
-/// Emit the given error, and stall till the dataflow is restarted.
-async fn process_upsert_state_error<T: Timestamp>(
-    context: String,
-    e: anyhow::Error,
-    health_output: &AsyncOutputHandle<
-        T,
-        CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-    >,
-    health_cap: &Capability<T>,
-) {
-    let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
-    health_output.give(health_cap, (None, update));
-    std::future::pending::<()>().await;
-    unreachable!("pending future never returns");
 }

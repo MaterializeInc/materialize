@@ -18,7 +18,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, VecCollection};
 use indexmap::map::Entry;
 use itertools::Itertools;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -32,7 +32,6 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::upsert::UpsertConfig;
 use crate::upsert::UpsertErrorEmitter;
@@ -99,7 +98,7 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// we might be ingesting updates from a partial emission (see above). In either
 /// case, our input might not be consolidated and `consolidate_chunk` is able to
 /// handle that.
-pub fn upsert_inner<'scope, T, FromTime, F, Fut, US>(
+pub fn upsert_inner<'scope, T, FromTime, F, Fut, US, E>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
@@ -112,13 +111,14 @@ pub fn upsert_inner<'scope, T, FromTime, F, Fut, US>(
     upsert_config: UpsertConfig,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
+    mut error_emitter: E,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
-    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
     StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
 where
+    E: UpsertErrorEmitter<T> + 'static,
     T: Timestamp + Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
@@ -135,7 +135,6 @@ where
     let (_snapshot_handle, snapshot_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
 
-    let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
         input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
@@ -150,7 +149,7 @@ where
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
 
     let shutdown_button = builder.build(move |caps| async move {
-        let [output_cap, snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+        let [output_cap, snapshot_cap]: [_; 2] = caps.try_into().unwrap();
         drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
@@ -207,8 +206,6 @@ where
 
         // A buffer for our output.
         let mut output_updates = vec![];
-
-        let mut error_emitter = (&mut health_output, &health_cap);
 
         loop {
             tokio::select! {
@@ -586,7 +583,6 @@ where
                 Ok(ok) => Ok(ok),
                 Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(*err))),
             }),
-        health_stream,
         snapshot_stream,
         shutdown_button.press_on_drop(),
     )
@@ -933,7 +929,7 @@ mod test {
 
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::ShardId;
-    use mz_repr::{Datum, Timestamp as MzTimestamp};
+    use mz_repr::{Datum, GlobalId, Timestamp as MzTimestamp};
     use mz_rocksdb::{RocksDBConfig, ValueIterator};
     use mz_storage_operators::persist_source::Subtime;
     use mz_storage_types::sources::SourceEnvelope;
@@ -1005,7 +1001,7 @@ mod test {
                             source_statistics,
                         };
 
-                        let (output, _, _, button) = upsert_inner(
+                        let (output, _, button) = upsert_inner(
                             input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
@@ -1018,6 +1014,7 @@ mod test {
                             upsert_config,
                             true,
                             None,
+                            crate::upsert::PanicErrorEmitter,
                         );
                         std::mem::forget(button);
 
@@ -1202,7 +1199,7 @@ mod test {
                             crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
                         };
 
-                        let (output, _, _, button) = upsert_inner(
+                        let (output, _, button) = upsert_inner(
                             input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
@@ -1215,6 +1212,7 @@ mod test {
                             upsert_config,
                             true,
                             None,
+                            crate::upsert::PanicErrorEmitter,
                         );
                         std::mem::forget(button);
 
@@ -1404,7 +1402,7 @@ mod test {
                             crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
                         };
 
-                        let (output, _, _, button) = upsert_inner(
+                        let (output, _, button) = upsert_inner(
                             input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
@@ -1417,6 +1415,7 @@ mod test {
                             upsert_config,
                             true,
                             None,
+                            crate::upsert::PanicErrorEmitter,
                         );
                         std::mem::forget(button);
 
