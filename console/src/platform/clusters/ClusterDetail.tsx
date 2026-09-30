@@ -7,123 +7,44 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { MenuItem, VStack } from "@chakra-ui/react";
+import { VStack } from "@chakra-ui/react";
 import React from "react";
-import { Link, Route, useLocation, useParams } from "react-router-dom";
+import { Navigate, Route, useParams } from "react-router-dom";
 
-import { isSystemCluster } from "~/api/materialize";
-import { ClusterWithOwnership } from "~/api/materialize/cluster/clusterList";
-import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
-import OverflowMenu from "~/components/OverflowMenu";
+import { useUiPreview } from "~/hooks/useUiPreview";
 import {
   Breadcrumb,
-  PageBreadcrumbs,
   PageHeader,
   PageTabStrip,
   Tab,
 } from "~/layouts/BaseLayout";
-import {
-  ClusterDetailParams,
-  ClusterParams,
-} from "~/platform/clusters/ClusterRoutes";
+import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
 import { SentryRoutes } from "~/sentry";
-import { useAllClusters } from "~/store/allClusters";
-import { assert } from "~/util";
 
-import { replaceClusterIdAndName } from "../routeHelpers";
-import AlterClusterMenuItem from "./AlterClusterMenuItem";
+import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
 import ClusterOverview from "./ClusterOverview";
+import { CLUSTER_OBJECT_TYPES } from "./ClusterPage/clusterObjectTypes";
+import ClusterPage from "./ClusterPage/ClusterPage";
 import ClusterReplicas from "./ClusterReplicas";
 import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
-import { useOwners } from "./queries";
 import Sinks from "./Sinks";
 import Sources from "./Sources";
-import { useShowSystemObjects } from "./useShowSystemObjects";
 
-const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
-  const [showSystemObjects] = useShowSystemObjects();
-  const { clusterId, clusterName } = useParams<ClusterParams>();
-  const { data: clusters, getClusterById } = useAllClusters();
-  const { isOwner } = useOwners();
-  const { pathname, search } = useLocation();
-  assert(clusterId);
-  assert(clusterName);
-  const cluster = getClusterById(clusterId);
-
-  // The subscribe upserts by id, so the atom's order is arbitrary.
-  const clustersToShow = clusters
-    .filter((c) => showSystemObjects || !isSystemCluster(c.id))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const menu = (
-    <>
-      {clustersToShow.map((c) => (
-        <MenuItem
-          as={Link}
-          disabled={c.name === clusterName}
-          to={
-            replaceClusterIdAndName({
-              pathname,
-              currentClusterId: clusterId,
-              currentClusterName: clusterName,
-              targetCluster: c,
-            }) + search
-          }
-          key={c.id}
-        >
-          {c.name}
-        </MenuItem>
-      ))}
-    </>
+// The redesigned page nests the object lists under `objects/`. Send those links
+// to the matching classic tab so they still land somewhere for opted-out users.
+// A bare `objects` link opens the first type, as the redesigned page does.
+const ClassicObjectsRedirect = () => {
+  const { objectType = CLUSTER_OBJECT_TYPES[0].path } = useParams<{
+    objectType: string;
+  }>();
+  const isKnownType = CLUSTER_OBJECT_TYPES.some(
+    ({ path }) => path === objectType,
   );
-
-  return (
-    <PageBreadcrumbs
-      crumbs={props.crumbs}
-      contextMenuChildren={menu}
-      rightSideChildren={
-        cluster && (
-          <OverflowMenuContainer
-            cluster={{ ...cluster, isOwner: isOwner(cluster.ownerId) }}
-          />
-        )
-      }
-    />
-  );
+  return <Navigate to={isKnownType ? `../${objectType}` : ".."} replace />;
 };
 
-const OverflowMenuContainer = ({
-  cluster,
-}: {
-  cluster: ClusterWithOwnership;
-}) => {
-  return (
-    <OverflowMenu
-      items={[
-        {
-          visible: !isSystemCluster(cluster.id) && cluster.managed,
-          render: () => <AlterClusterMenuItem cluster={cluster} />,
-        },
-        {
-          visible: !isSystemCluster(cluster.id) && cluster?.isOwner,
-          render: () =>
-            cluster && (
-              <DeleteObjectMenuItem
-                key="delete-object"
-                selectedObject={cluster}
-                // subscribe will update our list and the cluster routes will redirect
-                onSuccessAction={() => undefined}
-                objectType="CLUSTER"
-              />
-            ),
-        },
-      ]}
-    />
-  );
-};
-
-const ClusterDetailPage = () => {
+const ClassicClusterDetailPage = () => {
   const { clusterName } = useParams<ClusterDetailParams>();
 
   const breadcrumbs: Breadcrumb[] = React.useMemo(
@@ -168,9 +89,19 @@ const ClusterDetailPage = () => {
         <Route path="indexes" element={<IndexList key={clusterName} />} />
         <Route path="sources" element={<Sources key={clusterName} />} />
         <Route path="sinks" element={<Sinks key={clusterName} />} />
+        <Route path="objects" element={<ClassicObjectsRedirect />} />
+        <Route
+          path="objects/:objectType"
+          element={<ClassicObjectsRedirect />}
+        />
       </SentryRoutes>
     </>
   );
+};
+
+const ClusterDetailPage = () => {
+  const { isEnabled } = useUiPreview("clusterDetailsRedesign");
+  return isEnabled ? <ClusterPage /> : <ClassicClusterDetailPage />;
 };
 
 export default ClusterDetailPage;
