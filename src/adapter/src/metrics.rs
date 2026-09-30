@@ -434,7 +434,7 @@ impl QpsPhases {
         use crate::command::Command;
         match command {
             Command::Commit { .. } => &self.coordinator_queue_commit,
-            Command::RegisterFrontendPeek { .. } => &self.coordinator_queue_register,
+            Command::InstallFrontendPeekWatchSets { .. } => &self.coordinator_queue_register,
             Command::CatalogSnapshot { .. } => &self.coordinator_queue_catalog,
             _ => &self.coordinator_queue_other,
         }
