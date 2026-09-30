@@ -11,7 +11,7 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -28,20 +28,21 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{ExchangeableBatchPart, ShardSourcePart};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
+use mz_persist_client::operators::PERSIST_SOURCE_BATCH_EVALUATION;
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
 };
 use mz_persist_client::stats::STATS_AUDIT_PANIC;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnEncoder, Schema};
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use mz_repr::{
     Datum, DatumVec, Diff, GlobalId, RelationDesc, ReprRelationType, Row, RowArena, Timestamp,
 };
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::SourceData;
+use mz_storage_types::sources::{SourceData, SourceDataColumnarDecoder};
 use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -576,11 +577,13 @@ where
     let name = name.to_owned();
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    let mut batch_evaluation = BatchEvaluation::new(map_filter_project.as_ref());
 
     builder.build(move |_caps| {
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activator = Activator::new(operator_info.address, scope.activations());
         let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
+        let batch_evaluation_enabled = PERSIST_SOURCE_BATCH_EVALUATION.handle(&cfg);
         let mut pending_work = VecDeque::new();
         let mut datum_vec = DatumVec::new();
         let mut row_builder = Row::default();
@@ -594,12 +597,14 @@ where
                         panic_on_audit_failure,
                         capabilities: capabilities.clone(),
                         part: PendingPart::Unparsed(blob),
+                        batched: None,
                     });
                 }
             });
 
             // Get dyncfg values once per schedule to amortize the cost of loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
+            batch_evaluation.enabled = batch_evaluation_enabled.get();
             let mut work = 0;
             let mut ok_output = ok_output.activate();
             let mut err_output = err_output.activate();
@@ -614,6 +619,8 @@ where
                 let mut err_session = err_output.session_with_builder(&front.capabilities[1]);
                 let done = decode_part(
                     &mut front.part,
+                    &mut front.batched,
+                    &mut batch_evaluation,
                     front.panic_on_audit_failure,
                     cap_time,
                     &name,
@@ -651,6 +658,9 @@ struct PendingWork {
     capabilities: [Capability<RefinedTime>; 2],
     /// Pending fetched part.
     part: PendingPart,
+    /// Whether this part is read in chunks of columns rather than row by row,
+    /// once the first `decode_part` call has decided.
+    batched: Option<bool>,
 }
 
 enum PendingPart {
@@ -686,6 +696,8 @@ impl PendingPart {
 /// caller must emit them at the capability `cap_time` came from.
 fn decode_part<E, F>(
     part: &mut PendingPart,
+    batched: &mut Option<bool>,
+    batch_evaluation: &mut BatchEvaluation,
     panic_on_audit_failure: bool,
     cap_time: RefinedTime,
     name: &str,
@@ -701,6 +713,24 @@ where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
     F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
 {
+    if let Some(mfp) = map_filter_project {
+        if let Some(done) = decode_part_batched(
+            part,
+            batched,
+            batch_evaluation,
+            panic_on_audit_failure,
+            cap_time,
+            name,
+            until,
+            mfp,
+            work,
+            yield_fuel,
+            &mut give,
+        ) {
+            return done;
+        }
+    }
+
     let fetched_part = part.part_mut();
     let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
     let mut row_buf = None;
@@ -830,6 +860,188 @@ where
         }
     }
     true
+}
+
+/// Rows per chunk of batch evaluation: enough to amortize one walk of the MFP
+/// over them, few enough to check the yield fuel often.
+const BATCH_ROWS: usize = 1024;
+
+/// Operator-wide state for evaluating the MFP over chunks of a part's columns
+/// rather than row by row, see [`MfpPlan::evaluate_batch`].
+struct BatchEvaluation {
+    /// The flag's value as of the current schedule.
+    enabled: bool,
+    /// Whether the MFP has a batch form over this source's columns, once probed.
+    usable: Option<bool>,
+    /// The input columns the MFP reads. Other columns are not decoded.
+    referenced: BTreeSet<usize>,
+}
+
+impl BatchEvaluation {
+    fn new(mfp: Option<&MfpPlan>) -> Self {
+        Self {
+            enabled: false,
+            usable: None,
+            referenced: mfp.map(MfpPlan::referenced_inputs).unwrap_or_default(),
+        }
+    }
+}
+
+/// Batch form of [`decode_part`], see [`BatchEvaluation`].
+///
+/// Returns `None` when this part is not read this way, having consumed nothing,
+/// so that `decode_part` reads it row by row. A part stays on the path that
+/// first touched it, as the two keep different read state in the fetched part.
+fn decode_part_batched<E, F>(
+    part: &mut PendingPart,
+    batched: &mut Option<bool>,
+    batch_evaluation: &mut BatchEvaluation,
+    panic_on_audit_failure: bool,
+    cap_time: RefinedTime,
+    name: &str,
+    until: &Antichain<Timestamp>,
+    mfp: &MfpPlan,
+    work: &mut usize,
+    yield_fuel: usize,
+    give: &mut F,
+) -> Option<bool>
+where
+    E: From<DataflowError> + From<EvalError>,
+    F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
+{
+    let fetched_part = part.part_mut();
+    match *batched {
+        Some(false) => return None,
+        Some(true) => {}
+        None => {
+            if !batch_evaluation.enabled || batch_evaluation.usable == Some(false) {
+                *batched = Some(false);
+                return None;
+            }
+            // Whether the MFP has a batch form over these columns depends only
+            // on types, so an empty chunk settles it without consuming any row.
+            let Some(chunk) = fetched_part.next_structured_chunk(0) else {
+                *batched = Some(false);
+                return None;
+            };
+            let usable =
+                evaluate_chunk(chunk.key, mfp, &batch_evaluation.referenced, &[], |_, _| {})
+                    .is_some();
+            batch_evaluation.usable = Some(usable);
+            *batched = Some(usable);
+            if !usable {
+                return None;
+            }
+        }
+    }
+
+    let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+    let mut selected = Vec::new();
+    let mut updates = Vec::new();
+    loop {
+        let Some(chunk) = fetched_part.next_structured_chunk(BATCH_ROWS) else {
+            return Some(true);
+        };
+        selected.clear();
+        updates.clear();
+        for (offset, update) in chunk.updates.iter().enumerate() {
+            let Some((time, diff)) = update else {
+                continue;
+            };
+            if until.less_equal(time) {
+                continue;
+            }
+            let index = chunk.range.start + offset;
+            if chunk.key.is_err(index) {
+                let mut data = SourceData(Ok(Row::default()));
+                chunk.key.decode(index, &mut data);
+                let err = data
+                    .0
+                    .expect_err("entries flagged as errors decode to errors");
+                if let Some(stats) = &is_filter_pushdown_audit {
+                    report_audit_violation(stats, name, None, &err, panic_on_audit_failure);
+                }
+                let mut emit_time = cap_time;
+                emit_time.0 = *time;
+                give(Err(E::from(err)), emit_time, (*diff).into());
+                *work += 1;
+            } else {
+                selected.push(index);
+                updates.push((*time, *diff));
+            }
+        }
+        // Each evaluated row counts against the fuel, as in `decode_part`.
+        *work += selected.len();
+        evaluate_chunk(
+            chunk.key,
+            mfp,
+            &batch_evaluation.referenced,
+            &selected,
+            |row, result| {
+                let (time, diff) = updates[row];
+                if let Some(stats) = &is_filter_pushdown_audit {
+                    report_audit_violation(stats, name, Some(mfp), &result, panic_on_audit_failure);
+                }
+                let mut emit_time = cap_time;
+                emit_time.0 = time;
+                let record = match result {
+                    Ok(row) => Ok(Cow::Borrowed(row)),
+                    Err(err) => Err(E::from(err.clone())),
+                };
+                give(record, emit_time, diff.into());
+                *work += 1;
+            },
+        )
+        .expect("the probe established a batch form");
+        if *work >= yield_fuel {
+            return Some(false);
+        }
+    }
+}
+
+/// Evaluates `mfp` over the `selected` rows of `decoder`, calling `emit` with
+/// each output row's position in `selected` and its projected row or error.
+///
+/// Returns `None` when the MFP or a column it reads has no batch form.
+fn evaluate_chunk(
+    decoder: &SourceDataColumnarDecoder,
+    mfp: &MfpPlan,
+    referenced: &BTreeSet<usize>,
+    selected: &[usize],
+    emit: impl FnMut(usize, Result<&Row, &EvalError>),
+) -> Option<()> {
+    let inputs = match decoder.rows().as_rows() {
+        Some(rows) => rows.batches(selected, |column| referenced.contains(&column))?,
+        None => Vec::new(),
+    };
+    mfp.evaluate_batch(&inputs, selected.len(), emit)
+}
+
+/// Reports that a part fetched only to audit the decision to skip it produced `result`.
+fn report_audit_violation(
+    stats: &impl Debug,
+    name: &str,
+    mfp: Option<&MfpPlan>,
+    result: &impl Debug,
+    panic_on_audit_failure: bool,
+) {
+    // NB: The tag added by this scope is used for alerting. The panic message
+    // may be changed arbitrarily, but the tag key and val must stay the same.
+    sentry::with_scope(
+        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+        || {
+            error!(
+                ?stats,
+                name,
+                mfp = ?mfp.map(redact),
+                result = ?redact(result),
+                "persist filter pushdown correctness violation!"
+            );
+            if panic_on_audit_failure {
+                panic!("persist filter pushdown correctness violation! {}", name);
+            }
+        },
+    );
 }
 
 /// A trait representing a type that can be used in `backpressure`.
