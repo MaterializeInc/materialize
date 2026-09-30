@@ -20,7 +20,7 @@ gcp_auth.workspace = true
 hex.workspace = true
 http.workspace = true
 humantime.workspace = true
-k8s-controller.workspace = true
+k8s-controller = { workspace = true, features = ["prometheus"] }
 k8s-openapi.workspace = true
 kube.workspace = true
 maplit.workspace = true

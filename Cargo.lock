@@ -5305,15 +5305,16 @@ dependencies = [
 
 [[package]]
 name = "k8s-controller"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "548329de3a20cd4f697d9d6f99512f8a1b3b1b9526ed05186c70a7bb24a06b41"
+checksum = "25b4b06f56a445e20f50c52894e412b2a3c5f2be97d03dd4326c6c768558dee1"
 dependencies = [
  "async-trait",
  "futures",
  "k8s-openapi",
  "kube",
  "kube-runtime",
+ "prometheus",
  "rand 0.9.4",
  "serde",
  "serde_json",
@@ -7538,8 +7539,11 @@ name = "mz-metrics-catalog"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "k8s-controller",
+ "k8s-openapi",
  "mz-metrics",
  "mz-ore",
+ "prometheus",
  "quote",
  "serde",
  "serde_yaml",
