@@ -8082,9 +8082,11 @@ dependencies = [
  "derivative",
  "mz-ore",
  "mz-server-core",
+ "openssl",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
