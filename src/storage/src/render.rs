@@ -73,10 +73,10 @@
 //! produces the collections expected by the rest of the framework. The rendering is handled by the
 //! `[crate::source::types::SourceRender::render] method.
 //!
-//! When rendering a source dataflow we expect three outputs. First, a health output, which is how
-//! the source communicates status updates about its health. Second, a data output, which is the
-//! main output of a source and contains the data that will eventually be recorded in the persist
-//! shard. Finally, an optional upper frontier output, which tracks the overall upstream upper
+//! When rendering a source dataflow we expect two outputs, and sources report their health
+//! through the `HealthReporter` in their configuration. First, a data output, which is the main
+//! output of a source and contains the data that will eventually be recorded in the persist
+//! shard. Second, an optional upper frontier output, which tracks the overall upstream upper
 //! frontier. When a source doesn't provide a dedicated progress output the framework derives one
 //! by observing the progress of the data output. This output (derived or not) is what drives
 //! reclocking. When a source provides a dedicated upper output, it can manage it independently of
@@ -89,15 +89,15 @@
 //!                                                   resume upper
 //!                                              ,--------------------.
 //!                                             /                     |
-//!                            health     ,----+---.                  |
-//!                            output     | source |                  |
-//!                           ,-----------| reader |                  |
-//!                          /            +--,---.-+                  |
-//!                         /               /     \                   |
-//!                  +-----/----+   data   /       \  upper           |
-//!                  |  health  |   output/         \ output          |
-//!                  | operator |         |          \                |
-//!                  +----------+         |           |               |
+//!                                       ,----+---.                  |
+//!                                       | source |                  |
+//!                                       | reader |                  |
+//!                                       +--,---.-+                  |
+//!                                         /     \                   |
+//!                                 data   /       \  upper           |
+//!                                 output/         \ output          |
+//!                                       |          \                |
+//!                                       |           |               |
 //!  FromTime                             |           |               |
 //!     scope                             |           |               |
 //!  -------------------------------------|-----------|---------------|---
@@ -197,7 +197,7 @@
 //!
 //! Not yet documented
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -211,12 +211,15 @@ use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, S
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::dataflow::operators::vec::Map;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthConfig, HealthObjectType, HealthReporter, HealthStatusMessage, HealthStatusUpdate,
+    StatusNamespace,
+};
 use crate::source::RawSourceCreationConfig;
 use crate::storage_state::StorageState;
 
@@ -241,6 +244,27 @@ pub fn build_ingestion_dataflow(
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
+    let (health, health_token) = HealthReporter::register(
+        timely_worker,
+        primary_source_id,
+        HealthConfig {
+            object_type: HealthObjectType::Source,
+            mark_starting: resume_uppers
+                .iter()
+                .filter_map(|(id, frontier)| {
+                    // If the collection isn't closed, then we will remark it as Starting as
+                    // the dataflow comes up.
+                    (!frontier.is_empty()).then_some(*id)
+                })
+                .collect(),
+            write_namespaced_map: storage_state
+                .storage_configuration
+                .parameters
+                .record_namespaced_errors,
+            suspend_and_restart_delay: dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                .get(storage_state.storage_configuration.config_set()),
+        },
+    );
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
         let root_scope = root_scope.with_label();
 
@@ -296,9 +320,10 @@ pub fn build_ingestion_dataflow(
                 config: storage_state.storage_configuration.clone(),
                 remap_collection_id: description.remap_collection_id,
                 busy_signal: Arc::clone(&busy_signal),
+                health: health.clone(),
             };
 
-            let (outputs, source_health, source_tokens) = match connection {
+            let (outputs, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     root_scope,
@@ -353,8 +378,6 @@ pub fn build_ingestion_dataflow(
             tokens.extend(source_tokens);
 
             let mut upper_streams = vec![];
-            let mut health_streams = Vec::with_capacity(source_health.len() + outputs.len());
-            health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
                 let export = &description.source_exports[&export_id];
                 let source_data = ok.map(Ok).concat(err.map(Err));
@@ -393,44 +416,16 @@ pub fn build_ingestion_dataflow(
                         update: halt_status,
                     }
                 });
-                health_streams.push(sink_health.leave(root_scope));
+                health.report_stream(sink_health);
             }
 
             mz_scope
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
-            let health_stream = root_scope.concatenate(health_streams);
-            let health_token = crate::healthcheck::health_operator(
-                root_scope,
-                storage_state.now.clone(),
-                resume_uppers
-                    .iter()
-                    .filter_map(|(id, frontier)| {
-                        // If the collection isn't closed, then we will remark it as Starting as
-                        // the dataflow comes up.
-                        (!frontier.is_empty()).then_some(*id)
-                    })
-                    .collect(),
-                primary_source_id,
-                "source",
-                health_stream,
-                crate::healthcheck::DefaultWriter {
-                    command_tx: storage_state.internal_cmd_tx.clone(),
-                    updates: Rc::clone(&storage_state.shared_status_updates),
-                },
-                storage_state
-                    .storage_configuration
-                    .parameters
-                    .record_namespaced_errors,
-                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                    .get(storage_state.storage_configuration.config_set()),
-            );
-            tokens.push(health_token);
-
             storage_state
                 .source_tokens
-                .insert(primary_source_id, tokens);
+                .insert(primary_source_id, (health_token, tokens));
         })
     });
 }
@@ -445,37 +440,27 @@ pub fn build_export_dataflow(
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        let scope = scope.with_label();
-
-        let mut tokens = vec![];
-        let (health_stream, sink_tokens) =
-            crate::render::sinks::render_sink(scope, storage_state, id, &description);
-        tokens.extend(sink_tokens);
-
-        // Note that sinks also have only 1 active worker, which simplifies the work that
-        // `health_operator` has to do internally.
-        let health_token = crate::healthcheck::health_operator(
-            scope,
-            storage_state.now.clone(),
-            [id].into_iter().collect(),
-            id,
-            "sink",
-            health_stream,
-            crate::healthcheck::DefaultWriter {
-                command_tx: storage_state.internal_cmd_tx.clone(),
-                updates: Rc::clone(&storage_state.shared_status_updates),
-            },
-            storage_state
+    let (health, health_token) = HealthReporter::register(
+        timely_worker,
+        id,
+        HealthConfig {
+            object_type: HealthObjectType::Sink,
+            mark_starting: BTreeSet::new(),
+            write_namespaced_map: storage_state
                 .storage_configuration
                 .parameters
                 .record_namespaced_errors,
-            dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+            suspend_and_restart_delay: dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
                 .get(storage_state.storage_configuration.config_set()),
-        );
-        tokens.push(health_token);
+        },
+    );
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        let scope = scope.with_label();
 
-        storage_state.sink_tokens.insert(id, tokens);
+        let tokens =
+            crate::render::sinks::render_sink(scope, storage_state, id, &description, &health);
+
+        storage_state.sink_tokens.insert(id, (health_token, tokens));
     });
 }
 

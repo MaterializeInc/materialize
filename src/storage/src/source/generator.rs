@@ -217,7 +217,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
             GlobalId,
             StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
         >,
-        StreamVec<'scope, MzOffset, HealthStatusMessage>,
         StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
@@ -237,7 +236,9 @@ impl SourceRender for LoadGeneratorSourceConnection {
             config.now_fn.clone(),
         );
 
-        (updates, health, probe_stream, button)
+        config.health.report_stream(health);
+
+        (updates, probe_stream, button)
     }
 }
 

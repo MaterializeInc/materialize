@@ -104,7 +104,7 @@ use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::error::SqlState;
@@ -135,7 +135,6 @@ impl SourceRender for PostgresSourceConnection {
             GlobalId,
             StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
         >,
-        StreamVec<'scope, MzOffset, HealthStatusMessage>,
         StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
@@ -220,16 +219,13 @@ impl SourceRender for PostgresSourceConnection {
         }
 
         let export_ids = config.source_exports.keys().copied();
-        let health_init = export_ids
-            .map(Some)
-            .chain(std::iter::once(None))
-            .map(|id| HealthStatusMessage {
+        for id in export_ids.map(Some).chain(std::iter::once(None)) {
+            config.health.report(HealthStatusMessage {
                 id,
                 namespace: Self::STATUS_NAMESPACE,
                 update: HealthStatusUpdate::Running,
-            })
-            .collect::<Vec<_>>()
-            .to_stream(scope);
+            });
+        }
 
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
@@ -263,11 +259,10 @@ impl SourceRender for PostgresSourceConnection {
             }
         });
 
-        let health = health_init.concat(errs);
+        config.health.report_stream(errs);
 
         (
             data_collections,
-            health,
             probe_stream,
             vec![snapshot_token, repl_token],
         )

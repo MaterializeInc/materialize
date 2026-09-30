@@ -30,7 +30,7 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 
@@ -128,7 +128,6 @@ impl SourceRender for SqlServerSourceConnection {
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
         BTreeMap<GlobalId, StackedCollection<'scope, Lsn, Result<SourceMessage, DataflowError>>>,
-        StreamVec<'scope, Lsn, HealthStatusMessage>,
         StreamVec<'scope, Lsn, Probe<Lsn>>,
         Vec<PressOnDropButton>,
     ) {
@@ -209,16 +208,13 @@ impl SourceRender for SqlServerSourceConnection {
         }
 
         let export_ids = config.source_exports.keys().copied();
-        let health_init = export_ids
-            .map(Some)
-            .chain(std::iter::once(None))
-            .map(|id| HealthStatusMessage {
+        for id in export_ids.map(Some).chain(std::iter::once(None)) {
+            config.health.report(HealthStatusMessage {
                 id,
                 namespace: Self::STATUS_NAMESPACE,
                 update: HealthStatusUpdate::Running,
-            })
-            .collect::<Vec<_>>()
-            .to_stream(scope);
+            });
+        }
 
         let health_errs = repl_errs.concat(progress_errs).map(move |err| {
             // This update will cause the dataflow to restart
@@ -234,11 +230,10 @@ impl SourceRender for SqlServerSourceConnection {
                 update,
             }
         });
-        let health = health_init.concat(health_errs);
+        config.health.report_stream(health_errs);
 
         (
             data_collections,
-            health,
             progress_probes,
             vec![repl_token, progress_token],
         )

@@ -24,11 +24,10 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
-use timely::dataflow::operators::Leave;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
 
-use crate::healthcheck::HealthStatusMessage;
+use crate::healthcheck::{HealthReporter, HealthStatusMessage};
 use crate::storage_state::StorageState;
 
 /// The concrete trace type produced internally when arranging a sink's input.
@@ -50,14 +49,12 @@ pub(crate) type SinkBatchStream<'scope> =
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
 pub(crate) fn render_sink<'scope>(
-    scope: Scope<'scope, ()>,
+    scope: Scope<'scope, Timestamp>,
     storage_state: &mut StorageState,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-) -> (
-    StreamVec<'scope, (), HealthStatusMessage>,
-    Vec<PressOnDropButton>,
-) {
+    health: &HealthReporter,
+) -> Vec<PressOnDropButton> {
     let snapshot_mode = if sink.with_snapshot {
         SnapshotMode::Include
     } else {
@@ -67,9 +64,8 @@ pub(crate) fn render_sink<'scope>(
     let error_handler = storage_state.error_handler("storage_sink", sink_id);
 
     let name = format!("{sink_id}-sinks");
-    let outer_scope = scope.clone();
 
-    scope.scoped(&name, |scope| {
+    scope.region_named(&name, |scope| {
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
@@ -95,7 +91,7 @@ pub(crate) fn render_sink<'scope>(
         let key_is_synthetic = sink_render.get_key_indices().is_none()
             && sink_render.get_relation_key_indices().is_none();
 
-        let (health, sink_tokens) = sink_render.render_sink(
+        let (sink_health, sink_tokens) = sink_render.render_sink(
             storage_state,
             sink,
             sink_id,
@@ -104,7 +100,8 @@ pub(crate) fn render_sink<'scope>(
             err_collection.as_collection(),
         );
         tokens.extend(sink_tokens);
-        (health.leave(outer_scope), tokens)
+        health.report_stream(sink_health);
+        tokens
     })
 }
 

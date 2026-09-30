@@ -187,7 +187,6 @@ impl SourceRender for KafkaSourceConnection {
             GlobalId,
             StackedCollection<'scope, KafkaTimestamp, Result<SourceMessage, DataflowError>>,
         >,
-        StreamVec<'scope, KafkaTimestamp, HealthStatusMessage>,
         StreamVec<'scope, KafkaTimestamp, Probe<KafkaTimestamp>>,
         Vec<PressOnDropButton>,
     ) {
@@ -214,13 +213,9 @@ impl SourceRender for KafkaSourceConnection {
         for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
             data_collections.insert(*id, data_stream.as_collection());
         }
+        config.health.report_stream(health);
 
-        (
-            data_collections,
-            health,
-            probes,
-            vec![metadata_token, reader_token],
-        )
+        (data_collections, probes, vec![metadata_token, reader_token])
     }
 }
 
@@ -794,8 +789,8 @@ fn render_reader<'scope>(
                         }
 
                         // Clear all the health namespaces we know about.
-                        // Note that many kafka sources's don't have an ssh tunnel, but the
-                        // `health_operator` handles this fine.
+                        // Note that many kafka sources don't have an ssh tunnel, but the health
+                        // dataflow handles this fine.
                         for output in &outputs {
                             for namespace in [StatusNamespace::Kafka, StatusNamespace::Ssh] {
                                 health_output.give(

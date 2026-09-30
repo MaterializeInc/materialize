@@ -31,7 +31,7 @@ use timely::progress::Antichain;
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
 
-use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
+use crate::healthcheck::StatusNamespace;
 use crate::source::RawSourceCreationConfig;
 
 /// An update produced by implementors of `SourceRender` that presents an _aggregated_
@@ -68,14 +68,13 @@ pub trait SourceRender {
     /// committing offsets upstream or advancing the LSN of a replication slot. It is safe to
     /// ignore this argument.
     ///
-    /// Rendering a source is expected to return four things.
+    /// Rendering a source is expected to return three things, and to report its health through
+    /// `config.health`.
     ///
     /// First, a source must produce a collection that is produced by the rendered dataflow and
     /// must contain *definite*[^1] data for all times beyond the resumption frontier.
     ///
-    /// Second, a source must produce a stream of health status updates.
-    ///
-    /// Third, a source must produce a probe stream that periodically reports the upstream
+    /// Second, a source must produce a probe stream that periodically reports the upstream
     /// frontier. This is used to drive reclocking and mint new bindings.
     ///
     /// Finally, the source is expected to return an opaque token that when dropped will cause the
@@ -93,7 +92,6 @@ pub trait SourceRender {
             GlobalId,
             StackedCollection<'scope, Self::Time, Result<SourceMessage, DataflowError>>,
         >,
-        StreamVec<'scope, Self::Time, HealthStatusMessage>,
         StreamVec<'scope, Self::Time, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );

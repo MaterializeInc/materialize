@@ -74,7 +74,6 @@ pub fn render_source<'scope, 'root, C>(
             VecCollection<'scope, mz_repr::Timestamp, DataflowError, Diff>,
         ),
     >,
-    Vec<StreamVec<'root, (), HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -103,7 +102,7 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (exports, health, source_tokens) = source::create_raw_source(
+    let (exports, source_tokens) = source::create_raw_source(
         scope,
         root_scope,
         storage_state,
@@ -114,9 +113,6 @@ where
     );
 
     needed_tokens.extend(source_tokens);
-
-    let mut health_streams = Vec::with_capacity(exports.len() + 1);
-    health_streams.push(health);
 
     let mut outputs = BTreeMap::new();
     for (export_id, export) in exports {
@@ -132,7 +128,7 @@ where
         let data_config = base_source_config.source_exports[&export_id]
             .data_config
             .clone();
-        let (ok, extra_tokens, health_stream) = render_source_stream(
+        let (ok, extra_tokens) = render_source_stream(
             scope,
             dataflow_debug_name,
             export_id,
@@ -153,10 +149,8 @@ where
         };
 
         outputs.insert(export_id, (ok, err_collection));
-
-        health_streams.extend(health_stream.into_iter().map(|s| s.leave(root_scope)));
     }
-    (outputs, health_streams, needed_tokens)
+    (outputs, needed_tokens)
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
@@ -175,7 +169,6 @@ fn render_source_stream<'scope, FromTime>(
 ) -> (
     VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
     Vec<PressOnDropButton>,
-    Vec<StreamVec<'scope, mz_repr::Timestamp, HealthStatusMessage>>,
 )
 where
     FromTime: Timestamp + Sync,
@@ -446,9 +439,12 @@ where
         }
     };
 
+    for health in decode_health.into_iter().chain(envelope_health) {
+        base_source_config.health.report_stream(health);
+    }
+
     // Return the collections and any needed tokens.
-    let health = decode_health.into_iter().chain(envelope_health).collect();
-    (envelope_ok, needed_tokens, health)
+    (envelope_ok, needed_tokens)
 }
 
 // Returns the maximum limit of inflight bytes for backpressure based on given config
