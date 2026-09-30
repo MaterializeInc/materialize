@@ -167,8 +167,8 @@ skip = [
     # `expires_at` field that 3.2 added to `Credential::SasToken`, so the older
     # reqsign that would converge here is not an option.
     { name = "pem", version = "4.0.0" },
-    # Held back by mz-timely-util; iceberg and the persist crates use 0.13.
-    { name = "lz4_flex", version = "0.12.1" },
+    # Held back by parquet 58. parquet 60 moves to 0.14.
+    { name = "lz4_flex", version = "0.13.1" },
     # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
     # while native-tls still pulls older versions.
     { name = "core-foundation", version = "0.10.1" },
