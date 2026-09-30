@@ -11,7 +11,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -19,6 +21,7 @@ use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
 use mz_sql::catalog::{ObjectType, SystemObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_ANALYTICS_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::vars::METRICS_RETENTION;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
@@ -3791,37 +3794,109 @@ ON mz_internal.mz_metric_sinks (id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
-        name: "mz_history_retention_strategies",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
-        desc: RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_column("strategy", SqlScalarType::String.nullable(false))
-            .with_column("value", SqlScalarType::Jsonb.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("id", "The ID of the object."),
-            (
-                "strategy",
-                "The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field.",
-            ),
-            (
-                "value",
-                "The value of the strategy. For `FOR`, is a number of milliseconds.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "history_retention",
-            description: "History retention strategy for an object",
-            links: &const { [] },
-            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-        }),
-    }
-});
+pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || {
+        // Both defaults are compiled in and inlined into the SQL, so changing either
+        // moves this view's fingerprint and needs a replacement migration step.
+        let default_window_millis = u64::from(CompactionWindow::Default.comparable_timestamp());
+        let metrics_retention_millis = METRICS_RETENTION
+            .default_value()
+            .as_any()
+            .downcast_ref::<Duration>()
+            .expect("metrics_retention is a duration")
+            .as_millis();
+        BuiltinMaterializedView {
+            name: "mz_history_retention_strategies",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::MV_MZ_HISTORY_RETENTION_STRATEGIES_OID,
+            desc: RelationDesc::builder()
+                .with_column("id", SqlScalarType::String.nullable(false))
+                .with_column("strategy", SqlScalarType::String.nullable(false))
+                .with_column("value", SqlScalarType::Jsonb.nullable(false))
+                .finish(),
+            column_comments: BTreeMap::from_iter([
+                ("id", "The ID of the object."),
+                (
+                    "strategy",
+                    "The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field.",
+                ),
+                (
+                    "value",
+                    "The value of the strategy. For `FOR`, is a number of milliseconds.",
+                ),
+            ]),
+            sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL strategy,
+    ASSERT NOT NULL value
+) AS
+WITH
+    items AS (
+        SELECT id, details->'retain_history_millis' AS millis
+        FROM (
+            SELECT
+                mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+                mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql') AS details
+            FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'Item'
+        )
+        WHERE details->>'type' IN ('table', 'source', 'subsource', 'index', 'materialized-view')
+    ),
+    builtins AS (
+        SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_tables
+        UNION ALL SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_sources WHERE type <> 'log'
+        UNION ALL SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_indexes
+        UNION ALL SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_materialized_views
+    ),
+    builtin_windows AS (
+        /*
+        A builtin has no `create_sql`: it
+        follows the `metrics_retention` system parameter when flagged as a
+        retained-metrics object, and has the default window otherwise.
+        */
+        SELECT
+            's' || (gm.data->'value'->>'catalog_id') AS id,
+            CASE
+                WHEN b.is_retained_metrics_object THEN coalesce(
+                    (
+                        SELECT floor(EXTRACT(EPOCH FROM value::interval) * 1000)::int8
+                        FROM mz_internal.mz_overridden_system_parameters
+                        WHERE name = 'metrics_retention'
+                    ),
+                    {metrics_retention_millis}
+                )
+                ELSE {default_window_millis}::int8
+            END AS millis
+        FROM builtins b
+        JOIN mz_internal.mz_catalog_raw gm ON
+            gm.data->>'kind' = 'GidMapping' AND
+            gm.data->'key'->>'object_type' = b.object_type AND
+            gm.data->'key'->>'schema_name' = b.schema_name AND
+            gm.data->'key'->>'object_name' = b.name
+    ),
+    introspection_indexes AS (
+        SELECT 'si' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'ClusterIntrospectionSourceIndex'
+    )
+-- FOR is the only strategy at the moment. We may introduce FROM or others later.
+SELECT id, 'FOR' AS strategy, coalesce(millis, to_jsonb({default_window_millis}::int8)) AS value FROM items
+UNION ALL SELECT id, 'FOR', to_jsonb(millis) FROM builtin_windows
+-- An introspection source index always has the default window.
+UNION ALL SELECT id, 'FOR', to_jsonb({default_window_millis}::int8) FROM introspection_indexes").into_boxed_str()),
+            is_retained_metrics_object: false,
+            access: vec![PUBLIC_SELECT],
+            ontology: Some(Ontology {
+                entity_name: "history_retention",
+                description: "History retention strategy for an object",
+                links: &const { [] },
+                column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+            }),
+        }
+    },
+);
 
 pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_license_keys",
