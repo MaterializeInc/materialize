@@ -604,7 +604,6 @@ name                                     comment
 ------------------------------------------------
 mz_aggregates                            ""
 mz_cluster_replica_size_internal         ""
-mz_history_retention_strategies          ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
 mz_object_arrangement_size_history       ""
@@ -621,6 +620,7 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_indexes                       ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
@@ -725,6 +725,7 @@ mz_cluster_schedules           mz_catalog_server   ""
 mz_cluster_system_parameters   mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
 mz_comments                    mz_catalog_server   ""
+mz_history_retention_strategies mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_kafka_source_tables         mz_catalog_server   ""
 mz_metric_sinks                mz_catalog_server   ""
@@ -838,7 +839,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-27
+26
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

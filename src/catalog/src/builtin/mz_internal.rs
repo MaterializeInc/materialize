@@ -11,7 +11,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -19,6 +21,7 @@ use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
 use mz_sql::catalog::{ObjectType, SystemObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_ANALYTICS_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::vars::METRICS_RETENTION;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
@@ -3791,11 +3794,21 @@ ON mz_internal.mz_metric_sinks (id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || {
+        // Both defaults are compiled in and inlined into the SQL, so changing either
+        // moves this view's fingerprint and needs a replacement migration step.
+        let default_window_millis = u64::from(CompactionWindow::Default.comparable_timestamp());
+        let metrics_retention_millis = METRICS_RETENTION
+            .default_value()
+            .as_any()
+            .downcast_ref::<Duration>()
+            .expect("metrics_retention is a duration")
+            .as_millis();
+        BuiltinMaterializedView {
         name: "mz_history_retention_strategies",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
+        oid: oid::MV_MZ_HISTORY_RETENTION_STRATEGIES_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .with_column("strategy", SqlScalarType::String.nullable(false))
@@ -3812,6 +3825,77 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::n
                 "The value of the strategy. For `FOR`, is a number of milliseconds.",
             ),
         ]),
+        // Every table, source other than a log, index and materialized view
+        // has a compaction window, so those catalog views are the base set.
+        // They already resolve builtin, introspection and temporary items.
+        //
+        // A durable item records its window as the `RETAIN HISTORY` option of
+        // its `create_sql`, which `parse_catalog_create_sql` reports in
+        // milliseconds. An absent option means the default window. A builtin
+        // has no `create_sql`: it follows the `metrics_retention` system
+        // parameter when flagged as a retained-metrics object, and has the
+        // default window otherwise.
+        //
+        // NOTE: the flag has no effect on a builtin materialized view. Item
+        // parsing keeps only the window in its `create_sql` and
+        // `CatalogItem::is_retained_metrics_object` is false for every
+        // materialized view, so those run with the default window whatever
+        // their definition declares, and report it here.
+        //
+        // NOTE: `metrics_retention` is read from the durable override, so a
+        // value set through `--system-parameter-default` rather than
+        // `ALTER SYSTEM` is invisible here and retained-metrics builtins then
+        // report the compiled-in default. The persisted override is the
+        // `<count> <unit>` form of `Duration::format`, whose units are all
+        // interval units.
+        sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL strategy,
+    ASSERT NOT NULL value
+) AS
+WITH
+    windowed AS (
+        SELECT id, oid FROM mz_catalog.mz_tables
+        UNION ALL SELECT id, oid FROM mz_catalog.mz_sources WHERE type <> 'log'
+        UNION ALL SELECT id, oid FROM mz_catalog.mz_indexes
+        UNION ALL SELECT id, oid FROM mz_catalog.mz_materialized_views
+    ),
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->'retain_history_millis' AS millis
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    retained_metrics_builtins AS (
+        SELECT oid FROM mz_internal.mz_builtin_tables WHERE is_retained_metrics_object
+        UNION ALL SELECT oid FROM mz_internal.mz_builtin_sources WHERE is_retained_metrics_object
+        UNION ALL SELECT oid FROM mz_internal.mz_builtin_indexes WHERE is_retained_metrics_object
+    ),
+    metrics_retention AS (
+        SELECT coalesce(
+            (
+                SELECT floor(EXTRACT(EPOCH FROM value::interval) * 1000)::int8
+                FROM mz_internal.mz_overridden_system_parameters
+                WHERE name = 'metrics_retention'
+            ),
+            {metrics_retention_millis}
+        ) AS millis
+    )
+SELECT
+    w.id,
+    'FOR' AS strategy,
+    CASE
+        WHEN i.id IS NOT NULL THEN coalesce(i.millis, to_jsonb({default_window_millis}::int8))
+        WHEN r.oid IS NOT NULL THEN to_jsonb(m.millis)
+        ELSE to_jsonb({default_window_millis}::int8)
+    END AS value
+FROM windowed w
+LEFT JOIN items i ON i.id = w.id
+LEFT JOIN retained_metrics_builtins r ON r.oid = w.oid
+CROSS JOIN metrics_retention m").into_boxed_str()),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
@@ -3821,7 +3905,8 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::n
             column_semantic_types: &[("id", SemanticType::CatalogItemId)],
         }),
     }
-});
+    },
+);
 
 pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_license_keys",

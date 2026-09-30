@@ -25,8 +25,8 @@ use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
 use crate::builtin::{
-    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinView,
-    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    Builtin, BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable,
+    BuiltinView, Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
 };
 
 /// Generate builtin views reporting the given builtins.
@@ -51,12 +51,17 @@ pub(super) fn builtins(
         Builtin::Table(x) => Some(*x),
         _ => None,
     });
+    let index_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Index(x) => Some(*x),
+        _ => None,
+    });
 
     let sources: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_sources(source_iter, log_iter)));
     let materialized_views: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
     let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
+    let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(index_iter)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
@@ -67,10 +72,10 @@ pub(super) fn builtins(
     });
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         view_iter,
-        [sources, materialized_views, tables],
+        [sources, materialized_views, tables, indexes],
     )));
 
-    [sources, materialized_views, tables, views]
+    [sources, materialized_views, tables, indexes, views]
         .into_iter()
         .map(Builtin::View)
 }
@@ -83,22 +88,22 @@ fn make_builtin_sources(
     let source_values = source_iter.map(|src| {
         let privileges = make_privileges_sql(&src.access, &owner_priv);
         format!(
-            "({}::oid, '{}', '{}', 'source', {})",
-            src.oid, src.schema, src.name, privileges
+            "({}::oid, '{}', '{}', 'source', {}, {})",
+            src.oid, src.schema, src.name, privileges, src.is_retained_metrics_object
         )
     });
     let log_values = log_iter.map(|log| {
         let privileges = make_privileges_sql(&log.access, &owner_priv);
         format!(
-            "({}::oid, '{}', '{}', 'log', {})",
+            "({}::oid, '{}', '{}', 'log', {}, false)",
             log.oid, log.schema, log.name, privileges
         )
     });
     let values = source_values.chain(log_values).join(",");
     let sql = format!(
         "
-SELECT oid, schema_name, name, type, privileges
-FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
+SELECT oid, schema_name, name, type, privileges, is_retained_metrics_object
+FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges, is_retained_metrics_object)"
     );
 
     BuiltinView {
@@ -113,6 +118,10 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
             )
             .with_key(vec![0])
             .with_key(vec![2])
@@ -195,13 +204,16 @@ fn make_builtin_tables(iter: impl Iterator<Item = &'static BuiltinTable>) -> Bui
             let schema = escaped_string_literal(table.schema);
             let name = escaped_string_literal(table.name);
             let privileges = make_privileges_sql(&table.access, &owner_priv);
-            format!("({}::oid, {}, {}, {})", table.oid, schema, name, privileges)
+            format!(
+                "({}::oid, {}, {}, {}, {})",
+                table.oid, schema, name, privileges, table.is_retained_metrics_object
+            )
         })
         .join(",");
     let sql = format!(
         "
-SELECT oid, schema_name, name, privileges
-FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
+SELECT oid, schema_name, name, privileges, is_retained_metrics_object
+FROM (VALUES {values}) AS v(oid, schema_name, name, privileges, is_retained_metrics_object)"
     );
 
     BuiltinView {
@@ -216,12 +228,59 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
             // (`verify_builtin_descs` enforces this). Table names happen to
             // be unique across builtin schemas today, so `name` is a key. If
             // a table is ever added whose bare name collides with another
             // schema's, drop the `name` key here.
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+fn make_builtin_indexes(iter: impl Iterator<Item = &'static BuiltinIndex>) -> BuiltinView {
+    let values = iter
+        .map(|index| {
+            let schema = escaped_string_literal(index.schema);
+            let name = escaped_string_literal(index.name);
+            format!(
+                "({}::oid, {}, {}, {})",
+                index.oid, schema, name, index.is_retained_metrics_object
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, is_retained_metrics_object
+FROM (VALUES {values}) AS v(oid, schema_name, name, is_retained_metrics_object)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column(
+                "is_retained_metrics_object",
+                SqlScalarType::Bool.nullable(false),
+            )
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this). Builtin index names are
+            // unique across schemas, which `mz_indexes` also relies on.
             .with_key(vec![0])
             .with_key(vec![2])
             .finish(),
@@ -252,7 +311,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
 /// declared keys rely on.
 fn make_builtin_views<'a>(
     iter: impl Iterator<Item = &'a BuiltinView>,
-    generated: [&BuiltinView; 3],
+    generated: [&BuiltinView; 4],
 ) -> BuiltinView {
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 

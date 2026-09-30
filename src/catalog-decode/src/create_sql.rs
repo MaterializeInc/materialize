@@ -15,15 +15,18 @@
 
 use std::collections::BTreeMap;
 
+use mz_repr::adt::interval::Interval;
+use mz_repr::strconv;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    CreateSinkConnection, CreateSubsourceOptionName, Format, FormatSpecifier,
-    IcebergSinkConfigOptionName, IcebergSinkMode, KafkaSinkConfigOptionName,
-    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, Raw, RawClusterName,
-    RawItemName, SinkEnvelope, SourceEnvelope, SourceErrorPolicy, Statement, UnresolvedItemName,
-    Value, WithOptionValue,
+    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Format,
+    FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
+    KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
+    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, SinkEnvelope,
+    SourceEnvelope, SourceErrorPolicy, Statement, TableFromSourceOptionName, TableOptionName,
+    UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde_json::json;
@@ -85,6 +88,40 @@ fn option_string<T: AstInfo>(value: &WithOptionValue<T>) -> Option<String> {
     }
 }
 
+/// The compaction window a `RETAIN HISTORY` option plans to, in milliseconds.
+///
+/// Mirrors `plan_retain_history_option` and `OptionalDuration` in `mz_sql`: `NULL` and a zero
+/// duration disable compaction, which `CompactionWindow::comparable_timestamp` reports as
+/// `u64::MAX`. Each statement type has its own option type, so callers look the option up
+/// themselves, taking the last one as `CatalogItem::update_retain_history` does.
+fn retain_history_millis<T: AstInfo>(value: Option<&WithOptionValue<T>>) -> Result<u64, String> {
+    let value = match value {
+        Some(WithOptionValue::RetainHistoryFor(value) | WithOptionValue::Value(value)) => value,
+        _ => return Err("invalid RETAIN HISTORY value".into()),
+    };
+    let interval = match value {
+        Value::Null => None,
+        Value::Interval(literal) => {
+            Some(Interval::from_literal(literal).map_err(|e| e.to_string())?)
+        }
+        Value::Number(s) | Value::String(s) => {
+            Some(strconv::parse_interval(s).map_err(|e| e.to_string())?)
+        }
+        Value::HexString(_) | Value::Boolean(_) => {
+            return Err("invalid RETAIN HISTORY value".into());
+        }
+    };
+    let duration = interval
+        .map(|interval| interval.duration().map_err(|e| e.to_string()))
+        .transpose()?
+        .filter(|duration| !duration.is_zero());
+    match duration {
+        None => Ok(u64::MAX),
+        Some(duration) => u64::try_from(duration.as_millis())
+            .map_err(|_| "RETAIN HISTORY duration out of range".to_string()),
+    }
+}
+
 /// Parses a catalog `create_sql` string into a JSON object.
 ///
 /// The returned JSON does not fully reflect the parsed SQL and instead contains only fields
@@ -126,20 +163,62 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             definition.push(';');
             info.insert("definition", json!(definition));
 
+            if let Some(option) = stmt
+                .with_options
+                .iter()
+                .rev()
+                .find(|o| o.name == MaterializedViewOptionName::RetainHistory)
+            {
+                let millis = retain_history_millis(option.value.as_ref())?;
+                info.insert("retain_history_millis", json!(millis));
+            }
+
             if let Some(target) = stmt.replacement_for {
                 info.insert("replacement_target", json!(item_id(target)?));
             }
 
             "materialized-view"
         }
-        CreateTable(_) => "table",
+        CreateTable(stmt) => {
+            if let Some(option) = stmt
+                .with_options
+                .iter()
+                .rev()
+                .find(|o| o.name == TableOptionName::RetainHistory)
+            {
+                let millis = retain_history_millis(option.value.as_ref())?;
+                info.insert("retain_history_millis", json!(millis));
+            }
+
+            "table"
+        }
         CreateTableFromSource(stmt) => {
             let source_id = item_id(stmt.source)?;
             info.insert("source_id", json!(source_id));
 
+            if let Some(option) = stmt
+                .with_options
+                .iter()
+                .rev()
+                .find(|o| o.name == TableFromSourceOptionName::RetainHistory)
+            {
+                let millis = retain_history_millis(option.value.as_ref())?;
+                info.insert("retain_history_millis", json!(millis));
+            }
+
             "table"
         }
         CreateSource(stmt) => {
+            if let Some(option) = stmt
+                .with_options
+                .iter()
+                .rev()
+                .find(|o| o.name == CreateSourceOptionName::RetainHistory)
+            {
+                let millis = retain_history_millis(option.value.as_ref())?;
+                info.insert("retain_history_millis", json!(millis));
+            }
+
             let Some(in_cluster) = stmt.in_cluster else {
                 return Err("missing IN CLUSTER".into());
             };
@@ -231,6 +310,16 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 .any(|o| matches!(o.name, CreateSubsourceOptionName::Progress));
             let source_type = if is_progress { "progress" } else { "subsource" };
             info.insert("source_type", json!(source_type));
+
+            if let Some(option) = stmt
+                .with_options
+                .iter()
+                .rev()
+                .find(|o| o.name == CreateSubsourceOptionName::RetainHistory)
+            {
+                let millis = retain_history_millis(option.value.as_ref())?;
+                info.insert("retain_history_millis", json!(millis));
+            }
 
             if let Some(of_source) = stmt.of_source {
                 let of_source_id = item_id(of_source)?;
@@ -379,6 +468,15 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             info.insert("cluster_id", json!(cluster_id));
             let on_id = item_id(stmt.on_name)?;
             info.insert("on_id", json!(on_id));
+            if let Some(option) = stmt
+                .with_options
+                .iter()
+                .rev()
+                .find(|o| o.name == IndexOptionName::RetainHistory)
+            {
+                let millis = retain_history_millis(option.value.as_ref())?;
+                info.insert("retain_history_millis", json!(millis));
+            }
             "index"
         }
         CreateType(_) => "type",
@@ -1960,6 +2058,71 @@ mod tests {
             err.contains("failed to parse"),
             "wrong error message: {err}"
         );
+    }
+
+    // --- item_details retain_history_millis ----------------------
+
+    fn table_sql(with_options: &str) -> String {
+        format!(
+            "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" pg_catalog.int4){with_options}"
+        )
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_absent_is_omitted() {
+        let out = super::item_details(&table_sql("")).expect("ok");
+        assert_eq!(out.get("retain_history_millis"), None);
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_spellings() {
+        // A string or a bare number parses as an interval, the number as seconds, and an
+        // interval literal applies its range qualifier.
+        for (option, millis) in [
+            ("'1h'", 3_600_000u64),
+            ("90", 90_000),
+            ("INTERVAL '2' DAY", 172_800_000),
+            ("INTERVAL '1:30' MINUTE TO SECOND", 90_000),
+        ] {
+            let sql = table_sql(&format!(" WITH (RETAIN HISTORY = FOR {option})"));
+            let out = super::item_details(&sql).expect("ok");
+            assert_eq!(out["retain_history_millis"], json!(millis), "{option}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_zero_disables_compaction() {
+        for option in ["'0'", "0"] {
+            let sql = table_sql(&format!(" WITH (RETAIN HISTORY = FOR {option})"));
+            let out = super::item_details(&sql).expect("ok");
+            assert_eq!(out["retain_history_millis"], json!(u64::MAX), "{option}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_on_each_item_kind() {
+        let cases = [
+            (
+                "CREATE SOURCE \"materialize\".\"public\".\"s\" IN CLUSTER [u1] \
+                 FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '2h')",
+                7_200_000u64,
+            ),
+            (
+                "CREATE INDEX \"t_idx\" IN CLUSTER [u1] \
+                 ON [u2 AS \"materialize\".\"public\".\"t\"] (\"a\") \
+                 WITH (RETAIN HISTORY = FOR '3h')",
+                10_800_000,
+            ),
+            (
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1] \
+                 WITH (RETAIN HISTORY = FOR '4h', REFRESH = ON COMMIT) AS SELECT 1",
+                14_400_000,
+            ),
+        ];
+        for (sql, millis) in cases {
+            let out = super::item_details(sql).expect("ok");
+            assert_eq!(out["retain_history_millis"], json!(millis), "{sql}");
+        }
     }
 
     // --- item_details replacement_target ----------------------------------
