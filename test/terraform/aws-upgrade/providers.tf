@@ -13,15 +13,15 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
+      version = "~> 3.2"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.0"
+      version = "~> 3.3"
     }
     random = {
       source  = "hashicorp/random"
@@ -54,6 +54,7 @@ data "aws_ecrpublic_authorization_token" "token" {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint

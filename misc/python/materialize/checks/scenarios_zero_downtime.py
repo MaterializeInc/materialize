@@ -39,8 +39,13 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 
 
-def wait_ready_and_promote(mz_service: str) -> list[MzcomposeAction]:
-    return [WaitReadyMz(mz_service), PromoteMz(mz_service)]
+def wait_ready_and_promote(
+    mz_service: str, previous_mz_service: str
+) -> list[MzcomposeAction]:
+    return [
+        WaitReadyMz(mz_service),
+        PromoteMz(mz_service, retire=previous_mz_service),
+    ]
 
 
 class ZeroDowntimeRestartEntireMz(Scenario):
@@ -60,7 +65,7 @@ class ZeroDowntimeRestartEntireMz(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2"),
+            *wait_ready_and_promote("mz_2", "mz_1"),
             start_mz_read_only(
                 self,
                 deploy_generation=2,
@@ -68,7 +73,7 @@ class ZeroDowntimeRestartEntireMz(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3"),
+            *wait_ready_and_promote("mz_3", "mz_2"),
             start_mz_read_only(
                 self,
                 deploy_generation=3,
@@ -76,7 +81,7 @@ class ZeroDowntimeRestartEntireMz(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4"),
+            *wait_ready_and_promote("mz_4", "mz_3"),
             Validate(self, mz_service="mz_4"),
         ]
 
@@ -102,7 +107,7 @@ class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
                 force_migrations="replacement",
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2"),
+            *wait_ready_and_promote("mz_2", "mz_1"),
             start_mz_read_only(
                 self,
                 deploy_generation=2,
@@ -111,7 +116,7 @@ class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
                 force_migrations="replacement",
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3"),
+            *wait_ready_and_promote("mz_3", "mz_2"),
             start_mz_read_only(
                 self,
                 deploy_generation=3,
@@ -120,7 +125,7 @@ class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
                 force_migrations="replacement",
             ),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4"),
+            *wait_ready_and_promote("mz_4", "mz_3"),
             Validate(self, mz_service="mz_4"),
         ]
 
@@ -155,7 +160,7 @@ class ZeroDowntimeUpgradeEntireMzOnce(Scenario):
             # below the 1200s default so that a genuinely stuck cutover still
             # fails the pipeline quickly.
             WaitReadyMz(mz_service="mz_2", timeout=180),
-            PromoteMz(mz_service="mz_2"),
+            PromoteMz(mz_service="mz_2", retire="mz_1"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             Validate(self, mz_service="mz_2"),
         ]
@@ -186,7 +191,7 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2"),
+            *wait_ready_and_promote("mz_2", "mz_1"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             start_mz_read_only(
                 self,
@@ -196,7 +201,7 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Validate(self, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3"),
+            *wait_ready_and_promote("mz_3", "mz_2"),
             Validate(self, mz_service="mz_3"),
         ]
 
@@ -223,7 +228,7 @@ class ZeroDowntimeBumpedVersion(Scenario):
             Manipulate(self, phase=1, mz_service="mz_1"),
             BumpVersion(),
             UseOptimizedProfile(),
-            *wait_ready_and_promote("mz_2"),
+            *wait_ready_and_promote("mz_2", "mz_1"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             start_mz_read_only(
                 self,
@@ -233,7 +238,7 @@ class ZeroDowntimeBumpedVersion(Scenario):
                 publish=False,  # Allows us to build the image during the test in CI
             ),
             Validate(self, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3"),
+            *wait_ready_and_promote("mz_3", "mz_2"),
             Validate(self, mz_service="mz_3"),
             GitResetHard(),  # Undo the previous version bump in case we need to run the mz container
         ]
@@ -267,7 +272,7 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2"),
+            *wait_ready_and_promote("mz_2", "mz_1"),
             # Upgrade to current source
             start_mz_read_only(
                 self,
@@ -277,7 +282,7 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3"),
+            *wait_ready_and_promote("mz_3", "mz_2"),
             start_mz_read_only(
                 self,
                 tag=None,
@@ -286,7 +291,7 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4"),
+            *wait_ready_and_promote("mz_4", "mz_3"),
             Validate(self, mz_service="mz_4"),
         ]
 
@@ -329,7 +334,7 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2"),
+            *wait_ready_and_promote("mz_2", "mz_1"),
             start_mz_read_only(
                 self,
                 tag=get_previous_version(),
@@ -338,7 +343,7 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3"),
+            *wait_ready_and_promote("mz_3", "mz_2"),
             start_mz_read_only(
                 self,
                 tag=get_last_version(),
@@ -347,7 +352,7 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4"),
+            *wait_ready_and_promote("mz_4", "mz_3"),
             start_mz_read_only(
                 self,
                 tag=None,
@@ -356,6 +361,6 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Validate(self, mz_service="mz_4"),
-            *wait_ready_and_promote("mz_5"),
+            *wait_ready_and_promote("mz_5", "mz_4"),
             Validate(self, mz_service="mz_5"),
         ]

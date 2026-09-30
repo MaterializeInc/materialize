@@ -640,7 +640,7 @@ impl BuildArtifact {
                         .execute(params![
                             key,
                             col_name,
-                            col_type.r#type,
+                            col_type.r#type.to_json(),
                             i32::from(col_type.nullable),
                             i64::try_from(col_type.position).unwrap_or(0),
                         ])
@@ -681,7 +681,7 @@ impl BuildArtifact {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     ColumnType {
-                        r#type: row.get(2)?,
+                        r#type: super::decode_column_type(row.get(2)?)?,
                         nullable: row.get::<_, i32>(3)? != 0,
                         position: usize::try_from(row.get::<_, i64>(4)?).unwrap_or(0),
                         comment: None,

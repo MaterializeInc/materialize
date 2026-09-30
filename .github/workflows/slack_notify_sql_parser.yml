@@ -65,15 +65,17 @@ jobs:
             index-slt:
               - 'test/sqllogictest/mz_catalog_server_index_accounting.slt'
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: "Check Retained Metric Changes"
         id: check-retain-metrics
         if: steps.filter.outputs.builtin-rs == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
-          if git diff ${{ github.event.pull_request.base.sha }} -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
+          if git diff "$BASE_SHA" -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
       - name: "Push to Slack"

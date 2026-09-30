@@ -10,6 +10,9 @@
 # `CREATE TABLE ... FROM SOURCE` reads the source's data, so it requires the
 # same read privileges as reading the source directly: `SELECT` on the source
 # and `USAGE` on its schema.
+#
+# Those privileges are also required *before* purification, which runs ahead of
+# planning and borrows the source's own connection to contact its upstream.
 
 mode cockroach
 
@@ -163,5 +166,117 @@ COMPLETE 0
 
 simple conn=other_team,user=other_team
 CREATE TABLE other_team_schema.mine FROM SOURCE victim_schema.victim_auction (REFERENCE "auction"."users");
+----
+COMPLETE 0
+
+# Purification runs before planning and reaches the source's upstream, so the
+# read requirement is enforced before it, not only at plan time.
+#
+# An unresolvable reference is the discriminator: purification reports whether a
+# reference exists upstream, so if it ran first this would return
+# "reference to ... not found" and leak that fact to a role with no privilege on
+# the source. A permission error means the check fired first.
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON victim_schema.victim_auction FROM attacker;
+----
+COMPLETE 0
+
+simple conn=attacker,user=attacker
+CREATE TABLE attacker_schema.probe FROM SOURCE victim_schema.victim_auction (REFERENCE "auction"."does_not_exist");
+----
+db error: ERROR: permission denied for SOURCE "materialize.victim_schema.victim_auction"
+DETAIL: The 'attacker' role needs SELECT privileges on SOURCE "materialize.victim_schema.victim_auction"
+
+# `ALTER SOURCE` reaches the same purification path but carries its target as an
+# unresolved name, so it is not covered by the resolved-id check and needs the
+# source resolved from the statement. It mutates the source, so it requires
+# ownership.
+#
+# `ADD SUBSOURCE` is the discriminator here: purification rejects it on a load
+# generator with "does not support ALTER SOURCE", so an ownership error can only
+# come from the earlier gate. `REFRESH REFERENCES` would not discriminate, since
+# it purifies successfully on a load generator and plan-time ownership produces
+# the identical message.
+
+simple conn=attacker,user=attacker
+ALTER SOURCE victim_schema.victim_auction ADD SUBSOURCE t;
+----
+db error: ERROR: must be owner of SOURCE materialize.victim_schema.victim_auction
+
+# The owner is unaffected on both paths.
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE victim_schema.victim_auction OWNER TO attacker;
+----
+COMPLETE 0
+
+simple conn=attacker,user=attacker
+ALTER SOURCE victim_schema.victim_auction REFRESH REFERENCES;
+----
+COMPLETE 0
+
+# Ownership does not stand in for read privileges: an owner's `SELECT` is an
+# ordinary revocable grant, and schema `USAGE` is separate from ownership, so
+# the pre-purification check must require the read even from the owner. The
+# attacker owns the source here but has had `SELECT` revoked; the invalid
+# reference again discriminates, since a reference-not-found error would mean
+# purification ran and leaked reference existence to a role planning would
+# reject.
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON victim_schema.victim_auction FROM attacker;
+----
+COMPLETE 0
+
+simple conn=attacker,user=attacker
+CREATE TABLE attacker_schema.owner_probe FROM SOURCE victim_schema.victim_auction (REFERENCE "auction"."does_not_exist");
+----
+db error: ERROR: permission denied for SOURCE "materialize.victim_schema.victim_auction"
+DETAIL: The 'attacker' role needs SELECT privileges on SOURCE "materialize.victim_schema.victim_auction"
+
+# Schema `USAGE` is the other half of the read requirement. The attacker gets
+# `SELECT` back but loses `USAGE` on the schema; the denial must move to the
+# schema, again ahead of purification.
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON victim_schema.victim_auction TO attacker;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA victim_schema FROM attacker;
+----
+COMPLETE 0
+
+simple conn=attacker,user=attacker
+CREATE TABLE attacker_schema.schema_probe FROM SOURCE victim_schema.victim_auction (REFERENCE "auction"."does_not_exist");
+----
+db error: ERROR: permission denied for SCHEMA "materialize.victim_schema"
+DETAIL: The 'attacker' role needs USAGE privileges on SCHEMA "materialize.victim_schema"
+
+# Superusers pass through the gate: mz_system does not own the source (the
+# attacker does), so reaching purification's "does not support ALTER SOURCE"
+# error proves the ownership requirement was filtered, not enforced.
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE victim_schema.victim_auction ADD SUBSOURCE t;
+----
+db error: ERROR: source victim_schema.victim_auction does not support ALTER SOURCE.
+
+# With RBAC checks disabled, a non-owner passes through the same way.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=no_create,user=no_create
+ALTER SOURCE victim_schema.victim_auction ADD SUBSOURCE t;
+----
+db error: ERROR: source victim_schema.victim_auction does not support ALTER SOURCE.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
 ----
 COMPLETE 0

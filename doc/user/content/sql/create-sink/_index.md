@@ -9,7 +9,7 @@ menu:
     identifier: 'create-sink'
 ---
 
-A [sink](/concepts/sinks/) describes an external system you
+A [sink](/fundamentals/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
 that data. You can define a sink over a materialized view, source, or table.
 
@@ -110,7 +110,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [Sinks](/concepts/sinks/)
+- [Sinks](/fundamentals/concepts/sinks/)
 - [`SHOW SINKS`](/sql/show-sinks/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SINK`](/sql/show-create-sink/)

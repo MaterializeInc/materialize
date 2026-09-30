@@ -25,11 +25,7 @@ from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 # Persist consensus lives in the metadata store configured through the
 # environment (default `postgres-metadata`, or `EXTERNAL_METADATA_STORE`). Both
 # the SQL-backed stores listen on 26257 under a hostname equal to their name and
-# have `setup_materialize` create the `consensus` schema. FoundationDB is
-# excluded: persist *does* have an `FdbConsensus`, but it is behind the
-# `foundationdb` cargo feature that the clusterd-test-driver/clusterd images do
-# not build, and its consensus URI is a `foundationdb://` cluster file rather
-# than the shared `postgres://…:26257` form.
+# have `setup_materialize` create the `consensus` schema.
 if METADATA_STORE not in ("cockroach", "postgres-metadata"):
     raise ValueError(
         f"clusterd-test-driver needs a SQL metadata store for persist consensus, "

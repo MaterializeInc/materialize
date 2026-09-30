@@ -20,9 +20,9 @@ use mz_sql_parser::ast::{
     ExternalReferences, Ident, PgConfigOptionName, TableConstraint, UnresolvedItemName, Value,
     WithOptionValue,
 };
-use mz_storage_types::sources::SourceExportStatementDetails;
 use mz_storage_types::sources::casts::{CastFunc, StorageScalarExpr};
 use mz_storage_types::sources::postgres::CastType;
+use mz_storage_types::sources::{MzOffset, SourceExportStatementDetails};
 use prost::Message;
 use tokio_postgres::Client;
 use tokio_postgres::types::Oid;
@@ -228,6 +228,7 @@ pub(super) fn generate_source_export_statement_values(
         table,
         text_columns,
         exclude_columns,
+        initial_lsn,
     } = purified_export.details
     else {
         bail_internal!("purified export details must be postgres");
@@ -323,6 +324,7 @@ pub(super) fn generate_source_export_statement_values(
     let details = SourceExportStatementDetails::Postgres {
         table,
         cast_oid_full_range: true,
+        initial_lsn: Some(initial_lsn),
     };
 
     let text_columns = text_columns.map(|mut columns| {
@@ -362,17 +364,30 @@ pub(super) struct PurifiedSourceExports {
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
 }
 
-// Purify the requested external references, returning a set of purified
-// source exports corresponding to external tables, and and additional
-// fields necessary to generate relevant statements and update statement options
+/// Purifies the requested external references, returning the purified source exports that
+/// correspond to external tables along with the additional fields needed to generate the relevant
+/// statements and update statement options.
+///
+/// `initial_lsn` is an upper bound on the upstream LSN whose schemas `retrieved_references`
+/// describe, and the point from which the purified exports interpret the replication stream. It
+/// must be read after `retrieved_references`, so that it accounts for any schema change they
+/// already reflect. Reading it earlier leaves a window in which replication trusts a Relation
+/// message describing a schema older than the one captured here.
+///
+/// `exclude_constraints` and `exclude_all_constraints` are only ever non-empty or true for
+/// `CREATE TABLE .. FROM SOURCE`, which purifies exactly one export, so constraint names are
+/// validated against that single table's constraints.
 pub(super) async fn purify_source_exports(
     client: &Client,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     mut exclude_columns: Vec<UnresolvedItemName>,
+    exclude_constraints: &BTreeSet<String>,
+    exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
+    initial_lsn: MzOffset,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
         Some(requested) if matches!(reference_policy, SourceReferencePolicy::NotAllowed) => {
@@ -457,6 +472,22 @@ pub(super) async fn purify_source_exports(
             let text_columns = text_column_map.remove(&desc.oid);
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
+            let missing_exclude_constraints: Vec<_> = exclude_constraints
+                .iter()
+                .filter(|n| !desc.keys.iter().any(|k| &&k.name == n))
+                .cloned()
+                .collect();
+            if !missing_exclude_constraints.is_empty() {
+                return Err(PgSourcePurificationError::ConstraintsNotFound {
+                    table: PartialItemName {
+                        database: None,
+                        schema: Some(desc.namespace.clone()),
+                        item: desc.name.clone(),
+                    },
+                    constraints: missing_exclude_constraints,
+                });
+            }
+
             if let Some(exclude_cols) = &exclude_columns {
                 let excluded_col_nums: BTreeSet<u16> = desc
                     .columns
@@ -472,6 +503,17 @@ pub(super) async fn purify_source_exports(
                 // incompatible schema change once the excluded column disappears.
                 desc.keys
                     .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
+            }
+
+            desc.keys.retain(|k| !exclude_constraints.contains(&k.name));
+
+            if exclude_all_constraints {
+                // Marking columns as nullable allows dropping (and adding) the
+                // NOT NULL constraint without an outage.
+                desc.keys.clear();
+                for c in &mut desc.columns {
+                    c.nullable = true;
+                }
             }
 
             if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
@@ -498,6 +540,7 @@ pub(super) async fn purify_source_exports(
                                 .collect()
                         }),
                         table: desc,
+                        initial_lsn,
                     },
                 },
             ))

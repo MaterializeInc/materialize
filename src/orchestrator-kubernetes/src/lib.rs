@@ -65,6 +65,11 @@ pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+/// How many attempts of a failed worker command log at warn level before later attempts log at
+/// error level. With the retry backoff starting at 125ms, the first error-level attempt comes
+/// about 4s after the first failure, so a Kubernetes API error that clears on retry, such as a
+/// new service account's RBAC that has not yet propagated, does not reach Sentry.
+const RETRY_WARN_ATTEMPTS: usize = 5;
 
 const POD_TEMPLATE_HASH_ANNOTATION: &str = "environmentd.materialize.cloud/pod-template-hash";
 
@@ -76,6 +81,8 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// The name of a non-default Kubernetes scheduler to use, if any.
     pub scheduler_name: Option<String>,
+    /// The name of a `PriorityClass` to assign to services, if any.
+    pub priority_class_name: Option<String>,
     /// Annotations to install on every service created by the orchestrator.
     pub service_annotations: BTreeMap<String, String>,
     /// Labels to install on every service created by the orchestrator.
@@ -258,6 +265,9 @@ enum WorkerCommand {
     ListServices {
         namespace: String,
         result_tx: oneshot::Sender<Vec<String>>,
+    },
+    Flush {
+        result_tx: oneshot::Sender<()>,
     },
     FetchServiceMetrics {
         name: String,
@@ -1200,6 +1210,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 security_context,
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
+                priority_class_name: self.config.priority_class_name.clone(),
                 service_account: self.config.service_account.clone(),
                 affinity: Some(affinity),
                 topology_spread_constraints: topology_spread,
@@ -1232,7 +1243,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
-        let pod_template_hash = format!("{:x}", hasher.finalize());
+        let pod_template_hash = hex::encode(hasher.finalize());
         pod_annotations.insert(
             POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
             pod_template_hash.clone(),
@@ -1305,6 +1316,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         let list = result_rx.await.expect("worker task not dropped");
         Ok(list)
+    }
+
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
@@ -1458,12 +1476,29 @@ impl OrchestratorWorker {
             F: Fn() -> U,
             U: Future<Output = Result<R, K8sError>>,
         {
+            let start = Instant::now();
             Retry::default()
                 .clamp_backoff(Duration::from_secs(10))
-                .retry_async(|_| {
-                    f().map_err(
-                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
-                    )
+                .retry_async(|state| {
+                    f().map_err(move |error| {
+                        let attempt = state.i + 1;
+                        let elapsed = start.elapsed();
+                        if state.i < RETRY_WARN_ATTEMPTS {
+                            tracing::warn!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        } else {
+                            tracing::error!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        }
+                    })
                 })
                 .await
                 .expect("always retries on error")
@@ -1481,6 +1516,9 @@ impl OrchestratorWorker {
             } => {
                 let result = retry(|| self.list_services(&namespace), "ListServices").await;
                 let _ = result_tx.send(result);
+            }
+            Flush { result_tx } => {
+                let _ = result_tx.send(());
             }
             FetchServiceMetrics {
                 name,
@@ -1589,6 +1627,7 @@ impl OrchestratorWorker {
                 };
 
                 process_metrics.heap_limit = usage.heap_limit;
+                process_metrics.swap_bytes = usage.swap_bytes;
             }
 
             process_metrics

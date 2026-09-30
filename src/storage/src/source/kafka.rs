@@ -536,6 +536,7 @@ fn render_reader<'scope>(
                         // If the topic doesn't exist, that is a definite error
                         let error = Err(SourceError {
                             error: SourceErrorDetails::Initialization(e.to_string().into()),
+                            hint: None,
                         }
                         .into());
                         let time = data_cap.time().clone();
@@ -594,7 +595,8 @@ fn render_reader<'scope>(
                                 );
                                 let error = Err(
                                     SourceError{
-                                        error:SourceErrorDetails::Initialization(err_str.into())
+                                        error:SourceErrorDetails::Initialization(err_str.into()),
+                                        hint: None,
                                     }.into()
                                 );
                                 let time = data_cap.time().clone();
@@ -951,6 +953,7 @@ fn render_reader<'scope>(
                                     let msg = msg.map_err(|e| {
                                         DataflowError::SourceError(Box::new(SourceError {
                                             error: SourceErrorDetails::Other(e.to_string().into()),
+                                            hint: None,
                                         }))
                                     });
                                     let update = ((output_index, msg), time, diff);
@@ -999,6 +1002,7 @@ fn render_reader<'scope>(
                                     let msg = msg.map_err(|e| {
                                         DataflowError::SourceError(Box::new(SourceError {
                                             error: SourceErrorDetails::Other(e.to_string().into()),
+                                            hint: None,
                                         }))
                                     });
                                     let update =
@@ -1831,6 +1835,7 @@ fn render_metadata_fetcher<'scope>(
                 if !PartialOrder::less_equal(&prev_upstream_frontier, &upstream_frontier) {
                     let error = SourceError {
                         error: SourceErrorDetails::Other("topic was recreated".into()),
+                        hint: None,
                     };
                     update = MetadataUpdate::DefiniteError(error);
                 }
@@ -1906,6 +1911,7 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                     Err(GetPartitionsError::TopicDoesNotExist) => {
                         let error = SourceError {
                             error: SourceErrorDetails::Other("topic was deleted".into()),
+                            hint: None,
                         };
                         MetadataUpdate::DefiniteError(error)
                     }

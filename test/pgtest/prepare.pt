@@ -188,3 +188,87 @@ ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DEALLOCATE"}
 ReadyForQuery {"status":"I"}
+
+# SQL and the extended protocol share one prepared statement namespace, so a
+# name that only one of them can spell is a name the other can never release.
+# `Parse` stores the name exactly as sent, and the lexer folds unquoted
+# identifiers to lowercase, so a mixed-case protocol name is reachable only
+# through the quoted spelling.
+send
+Parse {"name": "_PLAN0x7", "query": "SELECT 4"}
+Sync
+Query {"query": "DEALLOCATE _PLAN0x7"}
+Query {"query": "DEALLOCATE \"_PLAN0x7\""}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"26000"},{"typ":"M","value":"prepared statement \"_plan0x7\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
+ReadyForQuery {"status":"I"}
+
+# The reverse direction: a statement prepared from SQL under a quoted name is
+# addressable over the protocol under that same name, without the quotes.
+send
+Query {"query": "PREPARE \"Foo\" AS SELECT 1"}
+Describe {"variant": "S", "name": "Foo"}
+Sync
+Query {"query": "EXECUTE \"Foo\""}
+Query {"query": "DEALLOCATE \"Foo\""}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+ParameterDescription {"parameters":[]}
+RowDescription {"fields":[{"name":"?column?"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
+ReadyForQuery {"status":"I"}
+
+# Portals share a namespace across SQL and the protocol the same way, so `CLOSE`
+# must strip its quotes too. The explicit transaction keeps the bound portal
+# alive across the intervening simple queries.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "SELECT 1"}
+Bind {"portal": "P"}
+Sync
+Query {"query": "CLOSE \"P\""}
+Query {"query": "CLOSE \"P\""}
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"CLOSE CURSOR"}
+ReadyForQuery {"status":"T"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"P\" does not exist"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}

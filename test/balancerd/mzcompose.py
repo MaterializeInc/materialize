@@ -20,15 +20,13 @@ import struct
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
 from textwrap import dedent
-from typing import Any
 from urllib.parse import quote
 
 import pg8000
 import psycopg
 import requests
-from pg8000.exceptions import InterfaceError
+from pg8000.exceptions import DatabaseError
 from psycopg import Cursor
 from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
@@ -578,6 +576,10 @@ def workflow_long_query(c: Composition) -> None:
             or "EOF detected" in msg
             or "unexpected eof while reading" in msg
             or "frame size too big" in msg
+            # pgwire reports the oversized frame itself since #38809:
+            # "frame of N bytes exceeds the M byte limit". Which of that
+            # and the connection close the client sees first is a race.
+            or "exceeds the" in msg
         )
     except:
         raise RuntimeError("execute() threw an unexpected exception")
@@ -619,29 +621,19 @@ def workflow_pgwire_param_rejection(c: Composition) -> None:
     """Parameters should be rejected"""
     c.up("balancerd", "frontegg-mock", "materialized")
 
-    def check_error(
-        message: str, f: Callable[..., Any], ExpectedError: type[Exception]
-    ):
-        try:
-            f()
-        except ExpectedError:
-            return
-        raise AssertionError(f"Expected {message} to raise {ExpectedError}")
-
     # Uses pg8000, because with psycopg/libpq only a notice is printed, and
     # catching it during the connection process is not easy:
     # NOTICE:  startup setting mz_forwarded_for not set: unrecognized configuration parameter "mz_forwarded_for"
-    check_error(
-        "connect with mz_forwarded_for param",
-        lambda: pg8000_sql_cursor(c, startup_params={"mz_forwarded_for": "1.1.1.1"}),
-        InterfaceError,
-    )
-
-    check_error(
-        "connect with mz_connection_uuid param",
-        lambda: pg8000_sql_cursor(c, startup_params={"mz_connection_uuid": "123456"}),
-        InterfaceError,
-    )
+    for param, value in [
+        ("mz_forwarded_for", "1.1.1.1"),
+        ("mz_connection_uuid", "123456"),
+    ]:
+        try:
+            pg8000_sql_cursor(c, startup_params={param: value})
+        except DatabaseError as e:
+            assert e.args[0]["M"] == f"invalid parameter '{param}'", e
+            continue
+        raise AssertionError(f"Expected connecting with {param} to be rejected")
 
 
 def workflow_balancerd_restarted(c: Composition) -> None:
@@ -760,6 +752,58 @@ def workflow_user(c: Composition) -> None:
 
         assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
         assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
+
+
+def workflow_max_connections(c: Composition) -> None:
+    """Test that connections beyond balancerd's limit are refused with a clear error."""
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=materialized:6876",
+                "--pgwire-sni-resolver-template=sni.test:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_max_connections=1",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+            dns=[STATIC_IPS["dnsmasq"]],
+        ),
+    ):
+        c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
+        cursor = sql_cursor(c)
+        with contextlib.closing(cursor.connection):
+            try:
+                sql_cursor(c)
+                raise RuntimeError("connect() expected to fail")
+            except OperationalError as e:
+                # The limit is applied at accept, before the client has sent anything, so
+                # the refusal is a closed socket rather than a pgwire error message.
+                assert "server closed the connection unexpectedly" in str(e), e
+
+            # The established connection is unaffected by the rejection.
+            cursor.execute("SELECT 'abc'")
+            assert cursor.fetchall() == [("abc",)]
+
+        # Match the line ending so that a larger count does not satisfy the assert.
+        assert_metrics(c, "mz_balancer_connection_rejected_total 1\n")
+        assert_metrics(c, "mz_balancer_connection_limit 1\n")
 
 
 def workflow_many_connections(c: Composition) -> None:

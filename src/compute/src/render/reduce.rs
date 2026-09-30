@@ -13,10 +13,11 @@
 
 use std::collections::BTreeMap;
 
+use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
-use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::columnar::layout::Coltainer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
@@ -26,7 +27,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COLUMNAR_ACCUMULABLE_DIFF, ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -35,7 +38,8 @@ use mz_compute_types::plan::reduce::{
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::{AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
-use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::numeric::{self, Numeric, NumericAgg, OrderedNumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
@@ -54,8 +58,8 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
-    RowRowSpine, RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowAgent, RowErrBuilder, RowErrSpine, RowRowAgent,
+    RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher,
@@ -108,7 +112,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
             let (key_val_input, err) = input
                 .enter_region(inner)
-                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
+                .flat_map::<ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
                     input_key.map(|k| (k, None)),
                     max_demand,
                     move |row_datums, time, diff, ok_session, err_session| {
@@ -173,7 +177,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .get(&self.config_set)
                     .try_into()
                     .expect("must fit");
-                T::maybe_apply_temporal_bucketing(
+                T::maybe_apply_temporal_bucketing_vec(
                     key_val_collection.inner,
                     self.as_of_frontier.clone(),
                     summary,
@@ -1473,6 +1477,50 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             differential_dataflow::collection::concatenate(collection_scope, to_aggregate)
         };
 
+        // The accumulators travel in the arrangement's diffs. A columnar diff container
+        // lays each `Accum` out by variant, so it occupies only its own variant's
+        // columns rather than the footprint of the largest variant. Both layouts feed
+        // the same reduce operators.
+        if ENABLE_COLUMNAR_ACCUMULABLE_DIFF.get(&self.config_set) {
+            let arranged = collection
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _, Coltainer<_>>,
+                    RowSpine<_, (Vec<Accum>, Diff), Coltainer<_>>,
+                >(
+                    "ArrangeAccumulable [val: empty]",
+                );
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+        } else {
+            let arranged = collection
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _>,
+                    RowSpine<_, (Vec<Accum>, Diff)>,
+                >(
+                    "ArrangeAccumulable [val: empty]",
+                );
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+        }
+    }
+
+    /// Reduces arranged accumulators to output rows, and to the errors the accumulated
+    /// values can reveal. Generic over the container holding the diffs, so both diff
+    /// layouts share one rendering of the reduce operators.
+    fn reduce_accumulable<'s, DC>(
+        &self,
+        arranged: Arranged<'s, RowAgent<T, (Vec<Accum>, Diff), DC>>,
+        full_aggrs: Vec<LirAggregateExpr>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
+    ) -> (
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
+    )
+    where
+        DC: BatchContainer<Owned = (Vec<Accum>, Diff)>,
+    {
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
@@ -1482,15 +1530,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
-        let arranged = collection
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, (Vec<Accum>, Diff)>,
-            >(
-                "ArrangeAccumulable [val: empty]",
-            );
         let arranged_output = arranged
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
@@ -1553,6 +1592,34 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                          unsigned type for key {key}"
                                     );
                                     let err = EvalError::Internal(message.into());
+                                    output.push((err.into(), Diff::ONE));
+                                }
+                            }
+                            (
+                                AggregateFunc::SumInterval,
+                                Accum::Interval {
+                                    months,
+                                    days,
+                                    micros,
+                                    ..
+                                },
+                            ) => {
+                                // PostgreSQL reports a sum that leaves the
+                                // `Interval` field widths as `interval out of
+                                // range`. So do we.
+                                if Interval::try_new(
+                                    months.into_inner(),
+                                    days.into_inner(),
+                                    micros.into_inner(),
+                                )
+                                .is_none()
+                                {
+                                    let err = EvalError::IntervalOutOfRange(
+                                        format!(
+                                            "{months} months {days} days {micros} microseconds"
+                                        )
+                                        .into(),
+                                    );
                                     output.push((err.into(), Diff::ONE));
                                 }
                             }
@@ -1622,10 +1689,16 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
             non_nulls: Diff::ZERO,
         },
         AggregateFunc::SumNumeric => Accum::Numeric {
-            accum: OrderedDecimal(NumericAgg::zero()),
+            accum: OrderedNumericAgg(NumericAgg::zero()),
             pos_infs: Diff::ZERO,
             neg_infs: Diff::ZERO,
             nans: Diff::ZERO,
+            non_nulls: Diff::ZERO,
+        },
+        AggregateFunc::SumInterval => Accum::Interval {
+            months: AccumCount::ZERO,
+            days: AccumCount::ZERO,
+            micros: AccumCount::ZERO,
             non_nulls: Diff::ZERO,
         },
         _ => Accum::SimpleNumber {
@@ -1778,7 +1851,7 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 };
 
                 Accum::Numeric {
-                    accum: OrderedDecimal(accum),
+                    accum: OrderedNumericAgg(accum),
                     pos_infs,
                     neg_infs,
                     nans,
@@ -1786,13 +1859,28 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 }
             }
             Datum::Null => Accum::Numeric {
-                accum: OrderedDecimal(NumericAgg::zero()),
+                accum: OrderedNumericAgg(NumericAgg::zero()),
                 pos_infs: Diff::ZERO,
                 neg_infs: Diff::ZERO,
                 nans: Diff::ZERO,
                 non_nulls: Diff::ZERO,
             },
             x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
+        },
+        AggregateFunc::SumInterval => match datum {
+            Datum::Interval(i) => Accum::Interval {
+                months: i.months.into(),
+                days: i.days.into(),
+                micros: i.micros.into(),
+                non_nulls: Diff::ONE,
+            },
+            Datum::Null => Accum::Interval {
+                months: AccumCount::ZERO,
+                days: AccumCount::ZERO,
+                micros: AccumCount::ZERO,
+                non_nulls: Diff::ZERO,
+            },
+            x => panic!("Invalid argument to AggregateFunc::SumInterval: {x:?}"),
         },
         _ => {
             // Other accumulations need to disentangle the accumulable
@@ -1988,6 +2076,26 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     Datum::from(d)
                 }
             }
+            (
+                AggregateFunc::SumInterval,
+                Accum::Interval {
+                    months,
+                    days,
+                    micros,
+                    non_nulls: _,
+                },
+            ) => {
+                match Interval::try_new(months.into_inner(), days.into_inner(), micros.into_inner())
+                {
+                    Some(interval) => Datum::Interval(interval),
+                    // The sum overflows an `Interval`. In the accumulable
+                    // reduce pair the sibling operator raises the error, so
+                    // this value is never exposed. `AccumulableOneByOneAggr`
+                    // has no sibling, so a window aggregate does surface this
+                    // NULL. See `mz_expr::sum_interval_counted`.
+                    None => Datum::Null,
+                }
+            }
             _ => panic!(
                 "Unexpected accumulation (aggr={:?}, accum={accum:?})",
                 aggr_func
@@ -2018,8 +2126,12 @@ type AccumCount = mz_ore::Overflowing<i128>;
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize
+    Deserialize,
+    Columnar
 )]
+// The columnar container orders references with this derived `Ord`, which must agree with
+// the owned `Ord`. It does because every field's reference type is its owned type.
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
@@ -2049,10 +2161,27 @@ enum Accum {
         /// Counts non-NULL values
         non_nulls: Diff,
     },
+    /// Accumulates intervals as three independent component sums, matching
+    /// PostgreSQL's interval addition: nothing is carried from a coarser
+    /// component into a finer one. Each component accumulates in the same
+    /// `AccumCount` the other variants use, so a sum that overflows an
+    /// `Interval` field still consolidates and retracts correctly, and the
+    /// narrowing at finalization is the single place that decides whether the
+    /// result is representable.
+    Interval {
+        /// The accumulation of all non-NULL month counts observed.
+        months: AccumCount,
+        /// The accumulation of all non-NULL day counts observed.
+        days: AccumCount,
+        /// The accumulation of all non-NULL microsecond counts observed.
+        micros: AccumCount,
+        /// The number of non-NULL values observed.
+        non_nulls: Diff,
+    },
     /// Accumulates arbitrary precision decimals.
     Numeric {
         /// Accumulates non-special values
-        accum: OrderedDecimal<NumericAgg>,
+        accum: OrderedNumericAgg,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -2082,6 +2211,12 @@ impl IsZero for Accum {
                     && nans.is_zero()
                     && non_nulls.is_zero()
             }
+            Accum::Interval {
+                months,
+                days,
+                micros,
+                non_nulls,
+            } => months.is_zero() && days.is_zero() && micros.is_zero() && non_nulls.is_zero(),
             Accum::Numeric {
                 accum,
                 pos_infs,
@@ -2145,6 +2280,25 @@ impl Semigroup for Accum {
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
+                *non_nulls += other_non_nulls;
+            }
+            (
+                Accum::Interval {
+                    months,
+                    days,
+                    micros,
+                    non_nulls,
+                },
+                Accum::Interval {
+                    months: other_months,
+                    days: other_days,
+                    micros: other_micros,
+                    non_nulls: other_non_nulls,
+                },
+            ) => {
+                *months += other_months;
+                *days += other_days;
+                *micros += other_micros;
                 *non_nulls += other_non_nulls;
             }
             (
@@ -2234,6 +2388,17 @@ impl Multiply<Diff> for Accum {
                 nans: nans * factor,
                 non_nulls: non_nulls * factor,
             },
+            Accum::Interval {
+                months,
+                days,
+                micros,
+                non_nulls,
+            } => Accum::Interval {
+                months: months * AccumCount::from(factor),
+                days: days * AccumCount::from(factor),
+                micros: micros * AccumCount::from(factor),
+                non_nulls: non_nulls * factor,
+            },
             Accum::Numeric {
                 accum,
                 pos_infs,
@@ -2254,7 +2419,7 @@ impl Multiply<Diff> for Accum {
                 // http://speleotrove.com/decimal/dncont.html
                 assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
                 Accum::Numeric {
-                    accum: OrderedDecimal(f),
+                    accum: OrderedNumericAgg(f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
                     nans: nans * factor,
@@ -2265,6 +2430,8 @@ impl Multiply<Diff> for Accum {
     }
 }
 
+// The batcher stages updates in columnation chunks before they reach the arrangement,
+// which stores `Accum` in its columnar form.
 impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
 }
@@ -2501,6 +2668,7 @@ mod monoids {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All
@@ -2721,5 +2889,119 @@ mod tests {
         acc.plus_equals(&datum_to_accumulator(&func, Datum::from(-1.1e31_f64)));
         let datum = finalize_accum(&func, &acc, Diff::from(2_i64));
         assert_eq!(datum, Datum::from(0.0_f64));
+    }
+
+    /// Accumulators of every variant, in zero, accumulated, and negated states.
+    fn sample_accums() -> Vec<Accum> {
+        let mut cx = numeric::cx_datum();
+        let mut numeric = |s: &str| Datum::from(cx.parse(s).unwrap());
+        let cases: Vec<(AggregateFunc, Vec<Datum>)> = vec![
+            (AggregateFunc::Count, vec![Datum::Null, Datum::Int64(5)]),
+            (
+                AggregateFunc::SumInt64,
+                vec![Datum::Int64(-7), Datum::Int64(i64::MAX)],
+            ),
+            (
+                AggregateFunc::SumUInt16,
+                vec![Datum::UInt16(3), Datum::Null],
+            ),
+            (
+                AggregateFunc::Any,
+                vec![Datum::True, Datum::False, Datum::Null],
+            ),
+            (
+                AggregateFunc::SumFloat64,
+                vec![
+                    Datum::from(1.5_f64),
+                    Datum::from(f64::NAN),
+                    Datum::from(f64::NEG_INFINITY),
+                ],
+            ),
+            (
+                AggregateFunc::SumNumeric,
+                vec![
+                    numeric("-12345.678"),
+                    numeric("9e39"),
+                    numeric("NaN"),
+                    numeric("Infinity"),
+                    Datum::Null,
+                ],
+            ),
+            (
+                AggregateFunc::SumInterval,
+                vec![
+                    Datum::Interval(Interval::new(-13, 40, 1_234_567)),
+                    Datum::Interval(Interval::new(i32::MAX, i32::MIN, i64::MAX)),
+                    Datum::Null,
+                ],
+            ),
+        ];
+        let mut accums = Vec::new();
+        for (func, datums) in cases {
+            let mut sum = accumulable_zero(&func);
+            accums.push(sum);
+            for datum in datums {
+                let accum = datum_to_accumulator(&func, datum);
+                sum.plus_equals(&accum);
+                accums.push(accum);
+                accums.push(accum.multiply(&Diff::from(-1_i64)));
+            }
+            accums.push(sum);
+        }
+        accums
+    }
+
+    #[mz_ore::test]
+    fn accum_columnar_round_trip() {
+        use columnar::bytes::indexed::{DecodedStore, encode};
+        use columnar::{AsBytes, Borrow, BorrowedOf, FromBytes, Index, Len};
+        use differential_dataflow::trace::implementations::BatchContainer;
+
+        let accums = sample_accums();
+        let container = Accum::as_columns(accums.iter());
+        assert_eq!(container.len(), accums.len());
+        let borrowed = container.borrow();
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(borrowed.get(index)), *accum);
+        }
+        for (i, a) in accums.iter().enumerate() {
+            for (j, b) in accums.iter().enumerate() {
+                assert_eq!(borrowed.get(i).cmp(&borrowed.get(j)), a.cmp(b));
+            }
+        }
+
+        let bytes: Vec<&[u8]> = borrowed.as_bytes().map(|(_align, bytes)| bytes).collect();
+        let decoded = BorrowedOf::<Accum>::from_bytes(&mut bytes.into_iter());
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(decoded.get(index)), *accum);
+        }
+        // NOTE: the `i128` columns cannot be `validate`d, see the `Overflowing<i128>` test in
+        // `mz_ore`, so this only decodes.
+        let mut words = Vec::new();
+        encode(&mut words, &borrowed);
+        let decoded = BorrowedOf::<Accum>::from_store(&DecodedStore::new(&words), &mut 0);
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(decoded.get(index)), *accum);
+        }
+
+        // The arrangement's diff container, holding whole `(Vec<Accum>, Diff)` diffs.
+        let diffs: Vec<(Vec<Accum>, Diff)> = accums
+            .chunks(3)
+            .map(|chunk| (chunk.to_vec(), Diff::ONE))
+            .collect();
+        let mut coltainer = Coltainer::<(Vec<Accum>, Diff)>::default();
+        for diff in &diffs {
+            coltainer.push_own(diff);
+        }
+        assert_eq!(coltainer.len(), diffs.len());
+        for (index, diff) in diffs.iter().enumerate() {
+            assert_eq!(
+                <Coltainer<(Vec<Accum>, Diff)>>::into_owned(coltainer.index(index)),
+                *diff
+            );
+        }
+        let mut sum = <Coltainer<(Vec<Accum>, Diff)>>::into_owned(coltainer.index(0));
+        sum.plus_equals(&sum.clone().multiply(&Diff::from(-1_i64)));
+        assert!(sum.is_zero());
     }
 }

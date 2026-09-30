@@ -1,0 +1,225 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Comparison of criterion results between an ancestor baseline and the current run.
+
+Reads the JSON files criterion writes under its output directory. Criterion
+itself never fails a run on a regression, so the verdict logic lives here.
+"""
+
+import json
+from dataclasses import dataclass, replace
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+
+class Verdict(Enum):
+    REGRESSION = "regression"
+    UNCONFIRMED = "unconfirmed"
+    IMPROVEMENT = "improvement"
+    UNCHANGED = "unchanged"
+    NEW = "new"
+
+
+@dataclass(frozen=True)
+class BenchResult:
+    """Outcome for one criterion benchmark id.
+
+    Means are in nanoseconds. Change fields are relative to the ancestor mean,
+    so 0.1 is a 10% slowdown. They are `None` when there is no ancestor
+    measurement to compare against.
+    """
+
+    id: str
+    current_mean_ns: float
+    ancestor_mean_ns: float | None
+    change_mean: float | None
+    change_lower: float | None
+    change_upper: float | None
+    verdict: Verdict
+    # Relative mean change on the confirmation rerun, set only for benchmarks
+    # that regressed in the first round and were measured again.
+    rerun_change: float | None = None
+
+
+@dataclass(frozen=True)
+class CompareReport:
+    results: list[BenchResult]
+    warnings: list[str]
+
+    @property
+    def has_regressions(self) -> bool:
+        return any(r.verdict == Verdict.REGRESSION for r in self.results)
+
+
+_VERDICT_ORDER = {
+    Verdict.REGRESSION: 0,
+    Verdict.UNCONFIRMED: 1,
+    Verdict.IMPROVEMENT: 2,
+    Verdict.UNCHANGED: 3,
+    Verdict.NEW: 4,
+}
+
+
+def _sorted(results: list[BenchResult]) -> list[BenchResult]:
+    def sort_key(r: BenchResult) -> tuple[int, float, str]:
+        change = r.change_mean if r.change_mean is not None else 0.0
+        return (_VERDICT_ORDER[r.verdict], -change, r.id)
+
+    return sorted(results, key=sort_key)
+
+
+def _load(path: Path) -> Any:
+    with path.open() as f:
+        return json.load(f)
+
+
+def compare(criterion_dir: Path, threshold: float) -> CompareReport:
+    """Compare every benchmark under `criterion_dir` against its `ancestor` baseline.
+
+    A benchmark is a regression when the lower bound of criterion's 95%
+    confidence interval on the relative mean change exceeds `threshold`, and
+    an improvement when the upper bound is below `-threshold`. A benchmark
+    with no ancestor baseline is reported as new.
+    """
+    results: list[BenchResult] = []
+    warnings: list[str] = []
+
+    # Criterion copies benchmark.json into every saved baseline directory,
+    # not just "new/", so the guard on new_dir.name below is what identifies
+    # the current result and prevents counting a benchmark once per baseline
+    # it has been copied into.
+    for benchmark_json in sorted(criterion_dir.rglob("benchmark.json")):
+        new_dir = benchmark_json.parent
+        if new_dir.name != "new":
+            continue
+        bench_dir = new_dir.parent
+        full_id = _load(benchmark_json)["full_id"]
+        current_mean = _load(new_dir / "estimates.json")["mean"]["point_estimate"]
+
+        ancestor_estimates = bench_dir / "ancestor" / "estimates.json"
+        change_estimates = bench_dir / "change" / "estimates.json"
+        # A change file is only meaningful when the ancestor baseline it was
+        # computed against is present. A stale change file from an earlier
+        # run must not produce a verdict.
+        if not ancestor_estimates.exists():
+            results.append(
+                BenchResult(full_id, current_mean, None, None, None, None, Verdict.NEW)
+            )
+            continue
+        ancestor_mean = _load(ancestor_estimates)["mean"]["point_estimate"]
+        if not change_estimates.exists():
+            warnings.append(
+                f"{full_id}: ancestor baseline exists but criterion wrote no change estimate, treating as new"
+            )
+            results.append(
+                BenchResult(
+                    full_id, current_mean, ancestor_mean, None, None, None, Verdict.NEW
+                )
+            )
+            continue
+
+        change = _load(change_estimates)["mean"]
+        lower = change["confidence_interval"]["lower_bound"]
+        upper = change["confidence_interval"]["upper_bound"]
+        if lower > threshold:
+            verdict = Verdict.REGRESSION
+        elif upper < -threshold:
+            verdict = Verdict.IMPROVEMENT
+        else:
+            verdict = Verdict.UNCHANGED
+        results.append(
+            BenchResult(
+                full_id,
+                current_mean,
+                ancestor_mean,
+                change["point_estimate"],
+                lower,
+                upper,
+                verdict,
+            )
+        )
+
+    return CompareReport(_sorted(results), warnings)
+
+
+def confirm(first: CompareReport, rerun: CompareReport) -> CompareReport:
+    """Keep a regression from `first` only if `rerun` measured the same benchmark as a regression too.
+
+    A regression that the rerun measured and did not reproduce becomes
+    `UNCONFIRMED`, which never fails the step. A regression the rerun did not
+    compare at all, because it is missing from `rerun` or because criterion
+    wrote no change estimate for it, keeps its verdict and is reported with a
+    warning: the confirmation did not happen, so there is nothing to downgrade
+    on. Rows that never regressed pass through untouched.
+    """
+    by_id = {r.id: r for r in rerun.results}
+    results = []
+    warnings = list(first.warnings) + list(rerun.warnings)
+    for r in first.results:
+        if r.verdict != Verdict.REGRESSION:
+            results.append(r)
+            continue
+        again = by_id.get(r.id)
+        # `change_mean is None` is exactly "no comparison was computed": the
+        # rerun's ancestor side failed and only the current side landed.
+        if again is None or again.change_mean is None:
+            warnings.append(
+                f"{r.id}: the rerun produced no comparison, keeping the regression"
+            )
+            results.append(r)
+            continue
+        verdict = (
+            Verdict.REGRESSION
+            if again.verdict == Verdict.REGRESSION
+            else Verdict.UNCONFIRMED
+        )
+        results.append(replace(r, verdict=verdict, rerun_change=again.change_mean))
+    return CompareReport(_sorted(results), warnings)
+
+
+def format_duration(ns: float) -> str:
+    """Format nanoseconds with the largest unit that keeps the value below 1000."""
+    for unit, scale in (("s", 1e9), ("ms", 1e6), ("µs", 1e3)):
+        if ns >= scale:
+            return f"{ns / scale:.2f} {unit}"
+    return f"{ns:.2f} ns"
+
+
+def _pct(value: float) -> str:
+    return f"{value * 100:+.1f}%"
+
+
+def render_markdown(report: CompareReport) -> str:
+    """Render the results as a markdown table, one row per benchmark."""
+    lines = [
+        "| Benchmark | Ancestor | Current | Change | 95% CI | Rerun | Verdict |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for r in report.results:
+        ancestor = (
+            format_duration(r.ancestor_mean_ns)
+            if r.ancestor_mean_ns is not None
+            else ""
+        )
+        change = _pct(r.change_mean) if r.change_mean is not None else ""
+        ci = (
+            f"[{_pct(r.change_lower)}, {_pct(r.change_upper)}]"
+            if r.change_lower is not None and r.change_upper is not None
+            else ""
+        )
+        rerun = _pct(r.rerun_change) if r.rerun_change is not None else ""
+        verdict = r.verdict.value
+        if r.verdict == Verdict.REGRESSION:
+            verdict = f"**{verdict}**"
+        lines.append(
+            f"| {r.id} | {ancestor} | {format_duration(r.current_mean_ns)} | {change} | {ci} | {rerun} | {verdict} |"
+        )
+    return "\n".join(lines)

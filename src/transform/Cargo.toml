@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 differential-dataflow.workspace = true
 enum-kinds.workspace = true
+fail.workspace = true
 itertools.workspace = true
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }

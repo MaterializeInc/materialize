@@ -60,10 +60,9 @@ fn peek_max_size_wins_over_row_iteration_limit_in_every_order() {
         [2, 0, 1],
         [2, 1, 0],
     ];
-    let expected = PeekResponse::Error(PeekError::unstructured(format!(
-        "total result exceeds max size of {}",
-        ByteSize::b(max_result_size)
-    )));
+    let expected = PeekResponse::Error(PeekError::ResultExceedsMaxSize {
+        max_result_size: max_result_size.cast_into(),
+    });
 
     for permutation in permutations {
         let mut pending = PendingPeek::new();

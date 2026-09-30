@@ -961,7 +961,7 @@ impl PeekClient {
         let as_of = determination.timestamp_context.timestamp_or_default();
 
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
-        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
         // Log optimization finished
         if let Some(logging_id) = statement_logging_id {
@@ -1291,7 +1291,10 @@ impl PeekClient {
         // MIR, so we hand the expression to the subscribe optimizer directly
         // instead of going through the `SubscribePlan` path, which expects HIR.
         // An empty `output` makes the sink emit raw diffs.
-        let global_mir_plan = optimizer.optimize_query(expr, relation_desc, vec![])?;
+        // `optimize_query` is not an `Optimize` impl, so wrap it by hand.
+        let global_mir_plan = mz_transform::catch_unwind_optimize(|| {
+            optimizer.optimize_query(expr, relation_desc, vec![])
+        })?;
 
         Ok((optimizer, global_mir_plan))
     }

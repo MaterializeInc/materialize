@@ -10,6 +10,8 @@ Doc index
 - [Architecture](doc/architecture.md) - a general overview of how Console
   talks to the rest of the Materialize.
 - [Testing guide](doc/guide-testing.md) - a guide for testing in the Console.
+- [Storybook guide](doc/guide-storybook.md) - a guide for developing components
+  in isolation.
 - [Internal apps](doc/internal-apps.md) - how to build internal only features
   in console.
 - [SSO/Frontegg Debugging](doc/testing-sso.md) - how to test OpenID Connect, SAML, and anything that can be done in Frontegg staging/production but not in local development.

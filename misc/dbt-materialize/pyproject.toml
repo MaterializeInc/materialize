@@ -8,5 +8,5 @@
 # by the Apache License, Version 2.0.
 
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"

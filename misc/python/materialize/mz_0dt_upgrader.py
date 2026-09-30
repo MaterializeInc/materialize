@@ -124,7 +124,9 @@ class Materialized0dtUpgrader:
                     current_service_image = (
                         current_service.config.get("image") or "current"
                     )
-                    previous_service_image = previous_service.config.get("image")
+                    previous_service_image = (
+                        previous_service.config.get("image") or "current"
+                    )
 
                     print(f"Bringing up {current_service_image}")
                     self.c.up(current_service.name)
@@ -132,14 +134,12 @@ class Materialized0dtUpgrader:
                     self.c.await_mz_deployment_status(
                         DeploymentStatus.READY_TO_PROMOTE, current_service.name
                     )
-                    self.c.promote_mz(current_service.name)
-                    print(f"Awaiting leader status of {current_service_image}")
-                    self.c.await_mz_deployment_status(
-                        DeploymentStatus.IS_LEADER, current_service.name
+                    print(
+                        f"Promoting {current_service_image}, retiring {previous_service_image}"
                     )
-
-                    print(f"Killing {previous_service_image}")
-                    self.c.kill(previous_service.name, wait=True)
+                    self.c.promote_mz(
+                        current_service.name, retire=previous_service.name
+                    )
 
             return upgrade
 

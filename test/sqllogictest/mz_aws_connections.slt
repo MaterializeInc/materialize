@@ -11,7 +11,7 @@
 # BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
 # MZ_AWS_CONNECTIONS in src/catalog/src/builtin/mz_internal.rs and the
 # parse_connection_details helper in
-# src/expr/src/scalar/func/impls/jsonb.rs. The assume-role columns (principal,
+# src/catalog-decode/src/create_sql.rs. The assume-role columns (principal,
 # external_id, example_trust_policy) are reconstructed from the AWS context
 # functions; the sqllogictest env configures that context (see
 # ConnectionContext::for_tests), so the built-in mz_analytics connection

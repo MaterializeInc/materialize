@@ -15,9 +15,7 @@ async-trait.workspace = true
 dec.workspace = true
 deadpool-postgres.workspace = true
 futures.workspace = true
-futures-util.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
-mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
@@ -31,8 +29,3 @@ uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []
-foundationdb = ["mz-foundationdb"]
-
-[package.metadata.unused-deps]
-# futures-util is only used by the FoundationDB oracle.
-ignore = ["futures-util"]

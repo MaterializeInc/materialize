@@ -1,6 +1,6 @@
 ---
 source: src/controller/src/lib.rs
-revision: 5a4a36c4fd
+revision: 8103f7787b
 ---
 
 # controller

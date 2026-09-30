@@ -28,7 +28,7 @@ export type SentryConfig = {
   release: Sentry.BrowserOptions["release"];
 };
 
-// We have to initialize Sentry before calling withSentryReactRouterV6Routing
+// We have to initialize Sentry before calling withSentryReactRouterV7Routing
 // which prevents us from putting this in a function.
 
 if (appConfig.mode === "cloud") {
@@ -64,7 +64,7 @@ if (appConfig.mode === "cloud") {
       return txEvent;
     },
     integrations: [
-      Sentry.reactRouterV6BrowserTracingIntegration({
+      Sentry.reactRouterV7BrowserTracingIntegration({
         useEffect,
         useLocation,
         useNavigationType,
@@ -95,5 +95,5 @@ export const useSentryIdentifyOrganization = ({ user }: { user: User }) => {
 /** React router <Routes /> component wrapped with Sentry tracing */
 export const SentryRoutes =
   appConfig.mode === "cloud"
-    ? Sentry.withSentryReactRouterV6Routing(Routes)
+    ? Sentry.withSentryReactRouterV7Routing(Routes)
     : Routes;

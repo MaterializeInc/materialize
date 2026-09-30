@@ -1159,7 +1159,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::MaterializedView(&MZ_TABLES),
         // mz_sources is generated dynamically below with inlined builtin VALUES.
-        Builtin::Table(&MZ_SOURCE_REFERENCES),
+        Builtin::MaterializedView(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCE_TABLES),
         Builtin::MaterializedView(&MZ_MYSQL_SOURCE_TABLES),
@@ -1227,7 +1227,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
         Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
-        Builtin::Table(&MZ_OBJECT_GLOBAL_IDS),
+        Builtin::MaterializedView(&MZ_OBJECT_GLOBAL_IDS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
@@ -1536,7 +1536,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         // all items that follow it in the list.
         let insert_pos = builtin_items
             .iter()
-            .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_source_references"))
+            .position(|b| b.name() == "mz_source_references")
             .expect("mz_source_references must be present in builtin_items");
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_sources_ref));
     }

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 38447d1ee0
+revision: 648a0e1461
 ---
 
 # mz-sql::plan::statement::ddl
@@ -10,7 +10,7 @@ Iceberg sinks support `MODE UPSERT` and `MODE APPEND`; append mode prohibits a K
 The `iceberg_sink_builder` function accepts an optional `storage_connection: Option<ResolvedItemName>` for the AWS storage credentials; when present it must resolve to a `Connection::Aws` item; when absent the resulting `IcebergSinkConnection` carries `storage_connection_id: None`.
 `REFRESH EVERY` intervals are validated to be at least 1 ms; intervals smaller than 1 ms produce a `PlanError`. `REFRESH AT` and `REFRESH EVERY ... ALIGNED TO` timestamps are validated to be representable as a `timestamptz`; timestamps too large produce a `PlanError`.
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error.
-`SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field; `plan_create_subsource` passes it through to `generate_column_casts` to control whether OID-based casts cover the full range.
+`SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field and an `initial_lsn: Option<MzOffset>` field; `plan_create_subsource` passes `cast_oid_full_range` through to `generate_column_casts` to control whether OID-based casts cover the full range, and passes `initial_lsn` through to `PostgresSourceExportDetails` so the replication operator can skip CDC messages committed before the schema was captured.
 `plan_view` and `plan_create_materialized_view` call `plan_utils::maybe_rename_columns_exact` instead of `maybe_rename_columns`, so a column-name list shorter than the query's arity is rejected unless `unsafe_enable_incomplete_view_column_lists` is active (force-enabled during bootstrap).
 `plan_create_connection` dispatches on `CreateConnectionType::GlueSchemaRegistry` to plan `CREATE CONNECTION ... FOR AWS GLUE SCHEMA REGISTRY`, guarded by the `ENABLE_GLUE_SCHEMA_REGISTRY` feature flag.
 `plan_alter_connection` maps `Connection::Gcp(_)` to `CreateConnectionType::Gcp`.
@@ -21,5 +21,6 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected.
 `iceberg_sink_builder` enforces a minimum `COMMIT INTERVAL` of 1 second; intervals shorter than 1 second produce the error `"COMMIT INTERVAL must be at least 1 second"`.
 `plan_create_type` validates nested type references using a shared `TypeResolutionBudget`, rejecting types that exceed the nesting depth limit (128) or total resolution node limit (100,000) with graceful planning errors.
-`plan_create_metric_sink` plans `CREATE METRIC SINK` (gated by `ENABLE_METRIC_SINK`), validating that the `FROM` relation exposes the five required columns (`metric_name`, `metric_type`, `labels`, `value`, `help`) with the correct types, and that the required `PREFIX` option starts with `"mz_metric_sink_"` and satisfies the Prometheus metric family name grammar.
+`plan_create_metric_sink` plans `CREATE METRIC SINK` (gated by `ENABLE_METRIC_SINK`), validating that the `FROM` relation exposes the five required columns (`metric_name`, `metric_type`, `labels`, `value`, `help`) with the correct types, and that the required `PREFIX` option passes `validate_user_metric_sink_prefix` (satisfies the Prometheus metric family name grammar starting with `"mz_metric_sink_"`, and does not overlap `METRIC_SINK_CURATED_PREFIX_MARKER`).
 `ClusterFeatureExtracted` includes `enable_union_cancellation_after_relation_cse`, passed through to `OptimizerFeatureOverrides` when planning cluster DDL.
+`plan_create_table_from_source` extracts `ExcludeConstraints` (a `Vec<String>` of constraint names to filter) and `ExcludeAllConstraints` (a `bool`); when either is active the `enable_exclude_constraints_option` feature flag is required. The two are mutually exclusive, and only Postgres sources are supported. The extracted values are forwarded to the Postgres purification helper.

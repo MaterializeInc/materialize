@@ -19,14 +19,24 @@ cd "$(dirname "$0")/../../../.."
 
 check_all_files_referenced_in_ci() {
     RETURN=0
-    COMPOSITIONS=$(find . -name mzcompose.py \
-        -not -wholename "./misc/python/materialize/cli/mzcompose.py" `# Only glue code, no workflows` \
-        -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
-        -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
-        | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
+    UNREFERENCED_COMPOSITIONS=(
+        "misc/python/materialize/cli/mzcompose.py" # Only glue code, no workflows
+        "misc/monitoring/mzcompose.py"             # Only run manually
+        "test/canary-environment/mzcompose.py"     # Only run manually
+        "test/console/mzcompose.py"                # Only run manually
+        "test/mzcompose_examples/mzcompose.py"     # Example only
+        "test/get-cloud-hostname/mzcompose.py"     # Utility, no test
+    )
+    # Discover compositions via Git rather than `find`. `find` walks every
+    # directory on disk, so a nested checkout, such as a Git worktree or a
+    # build directory, contributes its own copies of these files, and the
+    # exclusions above do not suppress them because they are anchored at the
+    # repository root. NOTE: `git_files` lists tracked files only, so a new
+    # composition is checked once it is staged, unlike `mzbuild.Repository`,
+    # which also sees untracked files via `git.expand_globs`.
+    COMPOSITIONS=$(git_files '**/mzcompose.py' \
+        | grep -vxF -f <(printf '%s\n' "${UNREFERENCED_COMPOSITIONS[@]}") \
+        | sed -e 's|/mzcompose.py$||' -e 's|.*/||')
     while read -r composition; do
         # Anchor at end of line, otherwise a composition whose name prefixes
         # another (e.g. "cluster" vs "cluster-isolation") passes the check even
@@ -59,7 +69,8 @@ check_default_workflow_references_others() {
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
-      MATCHES_COUNT=$(grep "def workflow_" "$file" -c)
+      # `ci-cleanup` is run by the mzcompose plugin's hook, never by `default`.
+      MATCHES_COUNT=$(grep "def workflow_" "$file" | grep -vc "def workflow_ci_cleanup" || true)
 
       if (( MATCHES_COUNT > 1 )); then
         # mzcompose file contains more than one workflow

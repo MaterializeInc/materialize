@@ -38,6 +38,7 @@ const clusterReplicaMetricsColumns = buildColumns([
   { name: "memoryBytes", type_oid: MzDataType.uint8 },
   { name: "diskBytes", type_oid: MzDataType.uint8 },
   { name: "heapBytes", type_oid: MzDataType.uint8 },
+  { name: "heapLimit", type_oid: MzDataType.uint8 },
   { name: "cpuPercent", type_oid: MzDataType.float4 },
   { name: "memoryPercent", type_oid: MzDataType.float4 },
   { name: "diskPercent", type_oid: MzDataType.float4 },
@@ -55,6 +56,7 @@ function buildClusterMetrics(
     memoryBytes: "4294967296" as unknown as bigint,
     diskBytes: "28991029248" as unknown as bigint,
     heapBytes: "1073741824" as unknown as bigint,
+    heapLimit: "4294967296" as unknown as bigint,
     cpuPercent: "3.6954824" as unknown as number,
     memoryPercent: "2.5010833740234375" as unknown as number,
     diskPercent: "2.1920804624204284" as unknown as number,
@@ -62,6 +64,20 @@ function buildClusterMetrics(
     ...overrides,
   };
 }
+
+/** An emulator replica: clusterd ran without --heap-limit, so heap is unmeasured. */
+const noHeapLimitHandler = buildSqlQueryHandlerV2({
+  queryKey: clusterMetricsQueryKey({ clusterId: "u1" }),
+  results: mapKyselyToTabular({
+    rows: [
+      buildClusterMetrics({
+        heapLimit: null,
+        heapBytes: "0" as unknown as bigint,
+      }),
+    ],
+    columns: clusterReplicaMetricsColumns,
+  }),
+});
 
 const validClusterMetricsHandler = buildSqlQueryHandlerV2({
   queryKey: clusterMetricsQueryKey({ clusterId: "u1" }),
@@ -188,5 +204,43 @@ describe("ClusterMetrics", () => {
     });
     expect(await screen.findByText("Cluster is warming up")).toBeVisible();
     expect(screen.getByText("Metrics will be available shortly")).toBeVisible();
+  });
+
+  // The view falls back to memory for heap_percent when there is no heap limit,
+  // so the gauge keeps a reading on emulators. It must not claim that reading is
+  // heap, nor report heapBytes, which has no such fallback and stays 0.
+  it("labels the gauge as memory when clusterd reports no heap limit", async () => {
+    server.use(noHeapLimitHandler);
+    renderComponent(<ClusterMetrics clusterId="u1" clusterName="default" />, {
+      initializeState: ({ set }) => {
+        setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
+        set(allClusters, {
+          data: [buildCluster({ id: "u1", name: "default", disk: false })],
+          error: undefined,
+          snapshotComplete: true,
+        });
+      },
+    });
+
+    expect(await screen.findByText("Memory Utilization")).toBeVisible();
+    expect(screen.queryByText("Heap Utilization")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 B")).not.toBeInTheDocument();
+  });
+
+  it("labels the gauge as heap where a heap limit is reported", async () => {
+    server.use(validClusterMetricsHandler);
+    renderComponent(<ClusterMetrics clusterId="u1" clusterName="default" />, {
+      initializeState: ({ set }) => {
+        setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
+        set(allClusters, {
+          data: [buildCluster({ id: "u1", name: "default", disk: false })],
+          error: undefined,
+          snapshotComplete: true,
+        });
+      },
+    });
+
+    expect(await screen.findByText("Heap Utilization")).toBeVisible();
+    expect(screen.queryByText("Memory Utilization")).not.toBeInTheDocument();
   });
 });

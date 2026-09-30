@@ -403,7 +403,7 @@ def workflow_read_only(c: Composition) -> None:
 
         c.up("mz_old")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
-        c.promote_mz("mz_old")
+        c.promote_mz("mz_old", retire=None)
 
     # After promotion, the deployment should boot with writes allowed.
     with c.override(
@@ -894,7 +894,9 @@ def workflow_basic(c: Composition) -> None:
             """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        # mz_old runs without a restart policy, so its container exits once
+        # the fence stops environmentd. The loop below asserts exactly that.
+        c.promote_mz("mz_new", retire=None)
 
         # Give some time for Mz to restart after promotion
         for i in range(10):
@@ -1104,13 +1106,15 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1218,13 +1222,15 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1341,13 +1347,15 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1464,13 +1472,15 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1594,13 +1604,15 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
+        # Retire mz_old only after timing the promotion.
+        c.promote_mz("mz_new", retire=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+        c.kill_fenced_mz("mz_old")
         start_time = time.time()
         result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1712,7 +1724,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
     ):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        c.promote_mz("mz_new", retire="mz_old")
 
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
@@ -1832,7 +1844,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
             )[0][0]
             assert count > 0, f"{relation} returned {count} on the read-only generation"
 
-        c.promote_mz("mz_new")
+        c.promote_mz("mz_new", retire="mz_old")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
@@ -1916,7 +1928,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         c.up("mz_new")
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        c.promote_mz("mz_new", retire="mz_old")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
@@ -2312,7 +2324,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         ):
             c.up(mz2)
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz2)
-            c.promote_mz(mz2)
+            c.promote_mz(mz2, retire=mz1)
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz2)
 
         i += 1
@@ -2729,7 +2741,9 @@ def workflow_ddl(c: Composition) -> None:
             """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        c.promote_mz("mz_new")
+        # mz_old runs without a restart policy, so its container exits once
+        # the fence stops environmentd. The loop below asserts exactly that.
+        c.promote_mz("mz_new", retire=None)
 
         # Give some time for Mz to restart after promotion
         for i in range(10):
@@ -2893,7 +2907,7 @@ def workflow_stuck_collection(c: Composition) -> None:
 
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
@@ -2932,7 +2946,7 @@ def workflow_caught_up_stability(c: Composition) -> None:
 
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
@@ -3035,7 +3049,7 @@ def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
 
     # The replica recovers. After the stability period mz_new becomes ready.
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
@@ -3101,7 +3115,7 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
 
     # Promote mz_new to leader.
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
     # Verify ALL objects are visible on mz_new, including those created
@@ -3225,7 +3239,7 @@ def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
         count_preflight_starts() == 1
     ), "mz_new rebooted on the final DDL check with only temporary items created"
 
-    c.promote_mz("mz_new")
+    c.promote_mz("mz_new", retire="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
     # The takeover opened the catalog with write intent, which fences the old

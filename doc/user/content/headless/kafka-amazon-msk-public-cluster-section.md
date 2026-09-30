@@ -138,7 +138,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     c. Copy the url under **Private endpoint** and against **SASL/SCRAM**. This will be your `<broker-url>` going forward.
 
-    d. Connect to Materialize using the [SQL Shell](/console/),
+    d. Connect to Materialize using the [SQL Shell](/developer-tools/console/),
        or your preferred SQL client.
 
     e. Create a connection using the command below. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.

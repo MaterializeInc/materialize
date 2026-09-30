@@ -49,6 +49,8 @@ pub fn optimize_dataflow(
     transform_ctx: &mut TransformCtx,
     fast_path_optimizer: bool,
 ) -> Result<(), TransformError> {
+    fail::fail_point!("optimize_dataflow");
+
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
 

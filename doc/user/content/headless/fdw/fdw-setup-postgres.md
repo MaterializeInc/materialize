@@ -10,7 +10,7 @@ headless: true
    ```
 
 1. Create a foreign server to your Materialize, substitute your [Materialize
-   connection details](/console/connect/).
+   connection details](/developer-tools/console/connect/).
 
    ```mzsql
    CREATE SERVER remote_mz_server
@@ -28,7 +28,7 @@ headless: true
    ```
 
 1. For each view/materialized view you want to access, create the foreign table
-   mapping (you can use the [data explorer](/console/data/) to get the column
+   mapping (you can use the [data explorer](/developer-tools/console/data/) to get the column
    detials)
 
    ```mzsql

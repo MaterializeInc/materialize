@@ -38,7 +38,9 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::ProtoType;
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
-use mz_storage_types::sources::{ProtoSourceExportStatementDetails, SourceExportStatementDetails};
+use mz_storage_types::sources::{
+    MzOffset, ProtoSourceExportStatementDetails, SourceExportStatementDetails,
+};
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 use prost::Message;
@@ -132,9 +134,13 @@ fuzz_target!(|data: &[u8]| {
                 let Some(cast_oid_full_range) = arb::<bool>(&mut runner) else {
                     return;
                 };
+                let Some(initial_lsn) = arb::<Option<u64>>(&mut runner) else {
+                    return;
+                };
                 SourceExportStatementDetails::Postgres {
                     table,
                     cast_oid_full_range,
+                    initial_lsn: initial_lsn.map(MzOffset::from),
                 }
             }
             1 => {

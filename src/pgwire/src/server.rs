@@ -19,7 +19,7 @@ use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
-    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
+    MAX_FORWARDED_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
 };
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
@@ -135,7 +135,8 @@ impl Server {
                     let conn_id = adapter_client.new_conn_id()?;
                     let mut conn = Conn::Unencrypted(conn);
                     loop {
-                        let message = decode_startup(&mut conn).await?;
+                        let message =
+                            decode_startup(&mut conn, MAX_FORWARDED_STARTUP_FRAME_SIZE).await?;
 
                         match &message {
                             Some(message) => trace!("cid={} recv={:?}", conn_id, message),

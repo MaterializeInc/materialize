@@ -125,8 +125,8 @@ impl UnmaterializableFunc {
         match self {
             // Session identity and time: needed for normal query execution.
             // MzSessionRoleMemberships returns only the current session's role
-            // chain (not the full system graph), used by mz_show_my_object_privileges
-            // in mz_mcp_data_products.
+            // chain (not the full system graph). The mz_show_my_* privilege
+            // views and user views that filter rows by role depend on it.
             Self::CurrentDatabase
             | Self::CurrentSchema
             | Self::CurrentSchemasWithSystem

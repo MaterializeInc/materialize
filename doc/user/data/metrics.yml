@@ -237,6 +237,14 @@ metrics:
   - source
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_limit
+  help: Maximum number of connections proxied at once, 0 if unlimited.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_rejected_total
+  help: Count of connections refused because the connection limit was reached.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_status
   help: Count of completed network connections, by status
   labels:
@@ -249,6 +257,18 @@ metrics:
   labels:
   - build_type
   - version
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_pre_resolved_connection_active
+  help: Count of open network connections that have not yet resolved a backend.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_pre_resolved_timeout_total
+  help: Count of connections closed for not resolving a backend within the pre-resolved timeout.
+  labels:
+  - source
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_tenant_connection_active
@@ -766,6 +786,36 @@ metrics:
   - instance_id
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_logging_records_total
+  help: The number of log records handed to the logging dataflow, by log.
+  labels:
+  - log
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_bucket
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_count
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_sum
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_metric_sink_registration_retries_total
+  help: The number of times a metric sink failed to register its collector and scheduled a retry.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_peek_duration_seconds_bucket
   help: A histogram of peek durations since restart.
   labels:
@@ -987,31 +1037,31 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket
-  help: Time setting up cursor and literal constraints.
+  help: Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_count
-  help: Time setting up cursor and literal constraints.
+  help: Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_sum
-  help: Time setting up cursor and literal constraints.
+  help: Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_bucket
-  help: Time scanning the error trace for errors.
+  help: Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_count
-  help: Time scanning the error trace for errors.
+  help: Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_sum
-  help: Time scanning the error trace for errors.
+  help: Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_frontier_check_seconds_bucket
@@ -1028,46 +1078,78 @@ metrics:
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_offload_seconds_bucket
+  help: Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_count
+  help: Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_sum
+  help: Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_queue_depth
+  help: The number of offloaded index peek walks waiting for a permit to run.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_bucket
+  help: Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_count
+  help: Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_sum
+  help: Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_result_sort_rows_bucket
-  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  help: Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_rows_count
-  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  help: Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_rows_sum
-  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  help: Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_bucket
-  help: Time sorting intermediate results during peek collection.
+  help: Time thinning intermediate results down to the rows a peek's finishing needs.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_count
-  help: Time sorting intermediate results during peek collection.
+  help: Time thinning intermediate results down to the rows a peek's finishing needs.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_sum
-  help: Time sorting intermediate results during peek collection.
+  help: Time thinning intermediate results down to the rows a peek's finishing needs.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_bucket
-  help: Time constructing RowCollection from peek results.
+  help: Time constructing RowCollection from peek results, including converting the row counts the scan produced.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_count
-  help: Time constructing RowCollection from peek results.
+  help: Time constructing RowCollection from peek results, including converting the row counts the scan produced.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_sum
-  help: Time constructing RowCollection from peek results.
+  help: Time constructing RowCollection from peek results, including converting the row counts the scan produced.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_rows_bucket
@@ -1085,17 +1167,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_count
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_sum
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_bucket
@@ -1112,18 +1194,28 @@ metrics:
   help: Time in seek_fulfillment method including frontier checks and data collection.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_stashed_total
+  help: The number of index peek walks that answered with a handle to the peek response stash, always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_total_seconds_bucket
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_count
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_sum
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_walks_total
+  help: 'The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it.'
+  labels:
+  - substrate
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_kafka_partition_offset_max
@@ -1646,24 +1738,15 @@ metrics:
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_emitted_bytes
-  help: A counter with the number of emitted bytes.
-  labels:
-  - name
-  - shard
+  help: bytes emitted by backpressure operators
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_last_backpressured_bytes
-  help: The last count of bytes we are waiting to be retired in the operator. This cannot be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
-  labels:
-  - name
-  - shard
+  help: sum over backpressure operators of the inflight bytes each last stalled on; not comparable to retired bytes, but nonzero growth indicates backpressure is happening
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_retired_bytes
-  help: A counter with the number of bytes retired by downstream processing.
-  labels:
-  - name
-  - shard
+  help: bytes retired by processing downstream of backpressure operators
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_blob_cache_evictions
@@ -1703,7 +1786,7 @@ metrics:
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_blob_hedge_armed
-  help: 1 if this process opened a hedge sibling and can hedge when enabled
+  help: 1 once this process has opened a hedge sibling and can hedge when enabled
   source: src/persist/src/metrics.rs
   visibility: internal
 - name: mz_persist_blob_hedge_errors
@@ -2198,6 +2281,18 @@ metrics:
   help: count of grpc errors received
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_applied
+  help: number of diffs received via pubsub that applied
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_not_applied_out_of_order
+  help: number of diffs received via pubsub that did not apply due to out-of-order delivery
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_not_applied_stale
+  help: number of diffs received via pubsub that did not apply due to staleness
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_receiver_state_push_diff_fast_path
   help: count fast-path state push_diff calls
   source: src/persist-client/src/internal/metrics.rs
@@ -2476,14 +2571,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_batch_part_version_bytes
-  help: total bytes in batch parts by shard and version
-  labels:
-  - name
-  - shard
-  - version
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_batch_part_version_count
   help: count of batch parts by shard and version
   labels:
@@ -2573,20 +2660,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_inline_backpressure_count
-  help: count of CaA attempts retried because of inline backpressure
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_inline_part_bytes
-  help: total size of parts inline in shard metadata
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_inline_part_count
   help: count of parts inline in shard metadata
   labels:
@@ -2601,43 +2674,8 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_live_writers
-  help: number of writers that have recently appended updates to this shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_applied
-  help: number of diffs received via pubsub that applied
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_not_applied_out_of_order
-  help: number of diffs received via pubsub that did not apply due to out-of-order delivery
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_not_applied_stale
-  help: number of diffs received via pubsub that did not apply due to staleness
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_rewrite_part_count
-  help: count of batch parts with rewrites by shard
   labels:
   - name
   - shard
@@ -2657,13 +2695,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_schema_registry_version_count
-  help: count of versions in the schema registry
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_seqnos_held
   help: maximum count of gc-ineligible states by shard
   labels:
@@ -2678,22 +2709,8 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_since
-  help: since by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_spine_batch_count
   help: count of spine batches by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_stale_version
-  help: indicates whether the current version of the shard is less than the current version of the code
   labels:
   - name
   - shard
@@ -2708,13 +2725,6 @@ metrics:
   visibility: internal
 - name: mz_persist_shard_update_count
   help: count of updates by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_upper
-  help: upper by shard
   labels:
   - name
   - shard
@@ -2781,6 +2791,10 @@ metrics:
   help: The maximum length observed for the correction buffer of any single persist sink per worker.
   labels:
   - worker_id
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_stale_shard_count
+  help: count of shards on this process whose persisted state version is behind this process's build version; per-process, so summing across processes counts (shard, process) pairs, not distinct shards
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_state_apply_spine_fast_path
@@ -3670,25 +3684,6 @@ metrics:
   - build_type
   - version
   source: src/environmentd/src/environmentd/main.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_bucket
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - le
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_count
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_sum
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - worker_id
-  source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_statement_logging_actual_bytes
   help: The total amount of SQL text that was logged by statement logging.

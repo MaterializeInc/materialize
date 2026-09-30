@@ -13,10 +13,10 @@ use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment},
         core::v1::{
-            Affinity, Capabilities, Container, ContainerPort, HTTPGetAction, PodSecurityContext,
-            PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile,
-            SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec, Toleration,
-            Volume, VolumeMount,
+            Affinity, Capabilities, ConfigMapVolumeSource, Container, ContainerPort, HTTPGetAction,
+            KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe, ResourceRequirements,
+            SeccompProfile, SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec,
+            Toleration, Volume, VolumeMount,
         },
     },
     apimachinery::pkg::{
@@ -268,6 +268,34 @@ impl Context {
 
         let mut volumes = Vec::new();
         let mut volume_mounts = Vec::new();
+        if let Some(name) = &balancer.spec.configmap_name {
+            volumes.push(Volume {
+                name: "dynamic-config".to_owned(),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: name.clone(),
+                    // The file must exist at startup or balancerd skips the sync loop.
+                    optional: Some(false),
+                    items: Some(vec![KeyToPath {
+                        key: "config.json".to_owned(),
+                        path: "config.json".to_owned(),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            volume_mounts.push(VolumeMount {
+                name: "dynamic-config".to_owned(),
+                // Mount the directory: subPath mounts do not receive ConfigMap updates.
+                mount_path: "/etc/balancerd".to_owned(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+            args.extend([
+                "--config-sync-file-path=/etc/balancerd/config.json".to_owned(),
+                "--config-sync-loop-interval=1s".to_owned(),
+            ]);
+        }
         if issuer_ref_defined(
             &self.config.default_certificate_specs.balancerd_external,
             &balancer.spec.external_certificate_spec,
@@ -600,5 +628,76 @@ impl k8s_controller::Context for Context {
         self.sync_deployment_status(&client, balancer).await?;
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_cloud_resources::crd::balancer::v1alpha1::{BalancerSpec, StaticRoutingConfig};
+
+    #[mz_ore::test]
+    fn configmap_reference_controls_file_sync() {
+        let context = Context::new(Config {
+            enable_security_context: false,
+            enable_prometheus_scrape_annotations: false,
+            image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
+            scheduler_name: None,
+            balancerd_node_selector: vec![],
+            balancerd_affinity: None,
+            balancerd_tolerations: None,
+            balancerd_default_resources: None,
+            default_certificate_specs: DefaultCertificateSpecs::default(),
+            environmentd_sql_port: 6875,
+            environmentd_http_port: 6876,
+            balancerd_sql_port: 6875,
+            balancerd_http_port: 6876,
+            balancerd_internal_http_port: 6878,
+        });
+        for configmap_name in [None, Some("balancerd-settings".to_owned())] {
+            let mut balancer = Balancer::new(
+                "test",
+                BalancerSpec {
+                    configmap_name: configmap_name.clone(),
+                    static_routing: Some(StaticRoutingConfig {
+                        environmentd_namespace: "test".to_owned(),
+                        environmentd_service_name: "environmentd".to_owned(),
+                    }),
+                    ..Default::default()
+                },
+            );
+            balancer.metadata.namespace = Some("test".to_owned());
+            balancer.metadata.uid = Some("test".to_owned());
+            balancer.status = Some(balancer.status());
+            let pod = context
+                .create_deployment_object(&balancer)
+                .unwrap()
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap();
+            let container = &pod.containers[0];
+            let args = container.args.as_ref().unwrap();
+            let volumes = pod.volumes.as_ref().unwrap();
+            let mounts = container.volume_mounts.as_ref().unwrap();
+            if let Some(name) = configmap_name {
+                let source = volumes[0].config_map.as_ref().unwrap();
+                assert_eq!(source.name, name);
+                assert_eq!(source.optional, Some(false));
+                assert_eq!(source.items.as_ref().unwrap()[0].key, "config.json");
+                assert_eq!(mounts[0].read_only, Some(true));
+                assert!(mounts[0].sub_path.is_none());
+                assert!(args.contains(&format!(
+                    "--config-sync-file-path={}/config.json",
+                    mounts[0].mount_path
+                )));
+                assert!(args.contains(&"--config-sync-loop-interval=1s".to_owned()));
+            } else {
+                assert!(volumes.is_empty());
+                assert!(mounts.is_empty());
+                assert!(!args.iter().any(|arg| arg.starts_with("--config-sync-")));
+            }
+        }
     }
 }

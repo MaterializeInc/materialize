@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/rbac.rs
-revision: 4662be20df
+revision: f0e632d1b8
 ---
 
 # mz-sql::rbac
@@ -16,3 +16,4 @@ System users (`mz_system`, `mz_support`) bypass most checks, and individual chec
 `Plan::CreateMaterializedView` in `generate_rbac_requirements` requires ownership of both `replace` (the `CREATE OR REPLACE` target, if set) and `materialized_view.replacement_target` (the `FOR <target>` replacement target, if set). Both are independent and optional; ownership of whichever are present is required, mirroring the ownership check for `ALTER ... APPLY REPLACEMENT` and `CREATE INDEX`.
 `Plan::CreateTable` in `generate_rbac_requirements` requires `CREATE` on the target schema. When the table's data source is `DataSourceDesc::IngestionExport` (i.e., `CREATE TABLE ... FROM SOURCE`), it also requires `SELECT` on the ingestion source, enforced via `generate_read_privileges`.
 `Plan::CreateMetricSink` in `generate_rbac_requirements` requires `CREATE` on the target schema, `CREATE` on the cluster, and read privileges on the `FROM` relation (via `generate_read_privileges`). Metric sinks are treated as an egress path for the source relation's contents, so read access on that relation is the guard, not ownership of it.
+`check_purification` authorizes statements that are purified off-thread before planning, where the normal `check_plan` gate does not apply. It accepts a `source: Option<StatementSource>` resolved by `crate::pure::statement_source`: for `ALTER SOURCE`, it requires ownership of the named source; for `CREATE TABLE ... FROM SOURCE`, it requires read privileges (`SELECT` plus schema `USAGE`) on the source. In both cases the existing `CREATE_ITEM_USAGE` usage requirements also apply. The requirements are a subset of what `check_plan` enforces later, so a statement passing here can still be rejected by `check_plan` but not the reverse.

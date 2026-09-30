@@ -70,6 +70,10 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
 
+    /// Waits for previously queued requests to be processed, not for affected
+    /// processes to start or terminate.
+    async fn flush(&self) -> Result<(), anyhow::Error>;
+
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
 
@@ -154,6 +158,7 @@ pub struct ServiceProcessMetrics {
     pub disk_bytes: Option<u64>,
     pub heap_bytes: Option<u64>,
     pub heap_limit: Option<u64>,
+    pub swap_bytes: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.

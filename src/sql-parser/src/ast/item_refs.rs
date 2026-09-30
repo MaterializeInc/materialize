@@ -379,6 +379,25 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn doc_on_references() {
+        // DOC ON TYPE and DOC ON COLUMN references persist with ids, so a
+        // sink's dependency on a commented type is recovered from the ids
+        // bucket like any other id reference.
+        let refs = collect(
+            r#"CREATE SINK s
+               FROM [u1 AS "materialize"."public"."t"]
+               INTO KAFKA CONNECTION [u2 AS "materialize"."public"."kc"] (TOPIC 'top')
+               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION [u3 AS "materialize"."public"."csr"]
+               (DOC ON TYPE [u4 AS "materialize"."public"."point"] = 'point doc',
+                DOC ON COLUMN [u4 AS "materialize"."public"."point"].x = 'x doc')
+               ENVELOPE UPSERT"#,
+        );
+        assert_eq!(refs.ids, strings(&["u1", "u2", "u3", "u4"]));
+        assert!(refs.named_relations.is_empty());
+        assert!(refs.named_types.is_empty());
+    }
+
+    #[mz_ore::test]
     fn index_references() {
         let refs = collect(
             r#"CREATE INDEX i IN CLUSTER [u1] ON [u2 AS "materialize"."public"."t"] ("pg_catalog"."abs"(a))"#,

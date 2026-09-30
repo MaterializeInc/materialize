@@ -99,10 +99,17 @@ pub trait Strategy: Send + Sync {
 /// state, so they never participate in the compare-and-append witness. Keeping
 /// them out of [`ClusterState`] keeps that type exactly the witness material
 /// plus the observed replica set.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SignalRequest {
     /// Probe which of the cluster's replicas report all collections hydrated.
     pub hydration: bool,
+    /// Probe which of the cluster's replicas are ready to be cut over to:
+    /// hydrated, and within the configured lag of the *reference* replicas
+    /// named here, the ones the cut-over will drop. `None` does not probe.
+    ///
+    /// Surviving replicas must not raise the reference, since cut-over cannot
+    /// lose their progress.
+    pub readiness: Option<BTreeSet<ReplicaId>>,
     /// Check whether the cluster has at least one hydratable object bound to
     /// it. See `ClusterControllerCtx::has_hydratable_objects` for what counts.
     pub hydratable_objects: bool,
@@ -118,11 +125,19 @@ impl SignalRequest {
         // compile error here until its union is spelled out.
         let SignalRequest {
             hydration,
+            readiness,
             hydratable_objects,
             refresh_window,
         } = other;
         SignalRequest {
             hydration: self.hydration || hydration,
+            readiness: match (self.readiness, readiness) {
+                (None, other) | (other, None) => other,
+                (Some(mut mine), Some(theirs)) => {
+                    mine.extend(theirs);
+                    Some(mine)
+                }
+            },
             hydratable_objects: self.hydratable_objects || hydratable_objects,
             refresh_window: self.refresh_window || refresh_window,
         }
@@ -152,6 +167,11 @@ pub struct LiveSignals {
     /// The replicas observed this tick to be online and to have *all* current
     /// collections on the cluster hydrated.
     pub hydrated_replicas: BTreeSet<ReplicaId>,
+    /// The replicas observed this tick to be ready to cut over to: hydrated, and
+    /// within the configured lag of the reference replicas the request named,
+    /// the ones the cut-over will drop. Empty when not requested. The hydration
+    /// signal is populated independently, only when requested.
+    pub ready_replicas: BTreeSet<ReplicaId>,
     /// Whether the cluster has at least one hydratable object. `false` when not
     /// requested.
     pub has_hydratable_objects: bool,
@@ -167,10 +187,10 @@ pub struct LiveSignals {
 /// The implicit baseline strategy, always present.
 ///
 /// Desires `replication_factor` replicas at the cluster's realized shape
-/// (`cluster.size` plus its AZ pool and logging). It holds the steady-state set
-/// so that the policy strategies can be purely additive. They only ever add to
-/// the baseline. With only the baseline engaged, the desired set equals the
-/// realized set, so a steady-state managed cluster reconciles to no decisions.
+/// (`cluster.size` plus its AZ pool, logging, and arrangement compression). It
+/// holds the steady-state set so that policy strategies normally only add to
+/// it. With only the baseline engaged, the desired set equals the realized set,
+/// so a steady-state managed cluster reconciles to no decisions.
 ///
 /// The baseline holds the set only for MANUAL clusters. On a scheduled cluster
 /// the controller (not the user's `replication_factor`) owns the replica set,
@@ -178,8 +198,34 @@ pub struct LiveSignals {
 /// contributor. (The on-refresh strategy also normalizes a scheduled cluster's
 /// `replication_factor` to `0` via `update_state`, so the two views agree after
 /// the first tick regardless.)
+///
+/// The one case where the baseline steps aside is a forced cut-over, see
+/// `forced_cutover_pending`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BaselineStrategy;
+
+/// Whether a forced cut-over is imminent: an in-progress reconfiguration is
+/// past its deadline under `ON TIMEOUT COMMIT`, so the next cut-over commits
+/// the target whether or not it hydrated.
+///
+/// In that window the baseline yields its realized-shape replicas. Overlapping
+/// the two sets only buys availability while the target hydrates, and a forced
+/// cut-over has given up on hydration. Yielding turns the reshape into one
+/// transaction that retires the realized replicas and creates the target's, so
+/// it has to fit the larger of the two shapes rather than their sum. That is
+/// what lets a resize succeed on a budget that has no room for overlap, and it
+/// is the only way to shrink a cluster that is already near its limit.
+///
+/// If that single transaction still does not fit, it is rejected whole and the
+/// record is left in progress for `ClusterController::shed_decision` to shed,
+/// so an unaffordable target stays observable rather than half-applied.
+fn forced_cutover_pending(state: &ClusterState, now: Timestamp) -> bool {
+    state.reconfiguration.as_ref().is_some_and(|record| {
+        record.is_in_progress()
+            && now >= record.deadline
+            && matches!(record.on_timeout, OnTimeout::Commit)
+    })
+}
 
 impl Strategy for BaselineStrategy {
     fn desired_replicas(
@@ -187,9 +233,12 @@ impl Strategy for BaselineStrategy {
         state: &ClusterState,
         _signals: &LiveSignals,
         _config: &ConfigSignals,
-        _now: Timestamp,
+        now: Timestamp,
     ) -> Vec<DesiredReplica> {
         if !matches!(state.schedule, ClusterSchedule::Manual) {
+            return Vec::new();
+        }
+        if forced_cutover_pending(state, now) {
             return Vec::new();
         }
         let shape = state.realized_shape();
@@ -207,55 +256,81 @@ impl Strategy for BaselineStrategy {
 /// Engaged whenever the durable `reconfiguration` record is in progress. It
 /// desires `target.replication_factor` replicas at the target shape in addition
 /// to the baseline's realized-shape replicas, so both sets serve while the new
-/// one hydrates. Once rf-many target replicas are present and hydrated,
+/// one hydrates and catches up. Once rf-many target replicas are present and ready,
 /// `update_state` cuts over: the realized config advances to the target, the
 /// record is marked finalized, and the old replicas fall out of the union and
 /// are dropped. Success takes precedence over the deadline. On a timeout,
-/// `Commit` cuts over to the un-hydrated target anyway while `Rollback` (the
-/// default) marks the record timed out without touching the realized config and
-/// stops desiring the target replicas, reverting to the pre-reconfiguration set.
+/// `Commit` cuts over once the complete target set exists without waiting for
+/// readiness, and the baseline stops contributing in that window so the two
+/// sets swap in one transaction rather than overlapping (see
+/// `forced_cutover_pending`). `Rollback` (the default) marks the record timed
+/// out without touching the realized config and stops desiring the target
+/// replicas, reverting to the pre-reconfiguration set.
 ///
 /// Both functions are pure over the observed [`ClusterState`] and the fetched
-/// [`LiveSignals`]. Hydration is requested via [`Strategy::signal_request`]
+/// [`LiveSignals`]. Readiness is requested via [`Strategy::signal_request`]
 /// exactly while an in-progress reconfiguration is present.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GracefulReconfigurationStrategy;
 
 impl GracefulReconfigurationStrategy {
     /// Whether the cut-over precondition holds: at least
-    /// `target.replication_factor` replicas of the target shape report
-    /// hydrated.
+    /// `target.replication_factor` replicas of the target shape report ready.
     ///
-    /// Requiring rf-many hydrated replicas (not just one) preserves the
+    /// Requiring rf-many ready replicas (not just one) preserves the
     /// high-availability guarantee of `replication_factor > 1` across the
     /// cut-over. Extra target-shape replicas beyond the rf do not block: the
     /// post-cut-over reconcile retires them anyway, so waiting for them to
-    /// hydrate would only delay the cut-over.
-    fn target_hydrated(
+    /// become ready would only delay the cut-over.
+    fn target_ready(
         &self,
         state: &ClusterState,
         signals: &LiveSignals,
         record: &ReconfigurationRecord,
     ) -> bool {
         let target_shape = record.target.shape();
-        let hydrated_target_replicas = state
+        let ready_target_replicas = state
             .replicas
             .iter()
             .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&target_shape)))
-            .filter(|r| signals.hydrated_replicas.contains(&r.replica_id))
+            .filter(|r| signals.ready_replicas.contains(&r.replica_id))
             .count();
         let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
-        hydrated_target_replicas >= target_rf
+        ready_target_replicas >= target_rf
+    }
+
+    /// Whether the complete target set exists, without requiring hydration.
+    fn target_materialized(&self, state: &ClusterState, record: &ReconfigurationRecord) -> bool {
+        let target_shape = record.target.shape();
+        let target_replicas = state
+            .replicas
+            .iter()
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&target_shape)))
+            .count();
+        let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
+        target_replicas >= target_rf
     }
 }
 
 impl Strategy for GracefulReconfigurationStrategy {
     fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
+        let in_progress = state
+            .reconfiguration
+            .as_ref()
+            .is_some_and(|record| record.is_in_progress());
+        if !in_progress {
+            return SignalRequest::default();
+        }
+        // Only the realized-shape replicas are retired by this strategy.
+        let realized = state.realized_shape();
+        let reference = state
+            .replicas
+            .iter()
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&realized)))
+            .map(|r| r.replica_id)
+            .collect();
         SignalRequest {
-            hydration: state
-                .reconfiguration
-                .as_ref()
-                .is_some_and(|record| record.is_in_progress()),
+            readiness: Some(reference),
             ..Default::default()
         }
     }
@@ -276,10 +351,10 @@ impl Strategy for GracefulReconfigurationStrategy {
 
         // Cut over by advancing the realized config to the target and marking
         // the record finalized on either of two conditions:
-        //   1. rf-many target replicas are present and hydrated (success, which
+        //   1. rf-many target replicas are present and ready (success, which
         //      takes precedence over the deadline regardless of `on_timeout`), or
-        //   2. the deadline has been reached un-hydrated and `on_timeout` is
-        //      `Commit` (cut over to the not-yet-hydrated target anyway).
+        //   2. the deadline has been reached, `on_timeout` is `Commit`, and the
+        //      complete target set exists (cut over without waiting for readiness).
         //
         // NOTE: the deadline is reached at `now >= deadline`, not `now > deadline`.
         // An `ON TIMEOUT COMMIT` with a zero timeout writes `deadline = now` to
@@ -288,10 +363,18 @@ impl Strategy for GracefulReconfigurationStrategy {
         // the overlap target replicas and only a later tick would cut over. `>=`
         // fires the deadline the instant it is reached, so the zero-timeout cut-over
         // happens on the first tick, before any overlap replica is desired.
-        let hydrated = self.target_hydrated(state, signals, record);
+        // We require the target set to exist before a forced cut-over so its
+        // concrete create transaction can enforce resource limits. Otherwise a
+        // zero-timeout commit could finalize first, fail to create the new
+        // baseline, and leave no in-progress strategy for the controller to shed.
+        // The baseline yields while we wait (see `forced_cutover_pending`), so
+        // that create arrives in the same transaction that retires the realized
+        // replicas and does not have to fit alongside them.
+        let ready = self.target_ready(state, signals, record);
         let deadline_reached = now >= record.deadline;
         let commit_on_timeout = deadline_reached && matches!(record.on_timeout, OnTimeout::Commit);
-        if hydrated || commit_on_timeout {
+        let target_materialized = self.target_materialized(state, record);
+        if ready || (commit_on_timeout && target_materialized) {
             return StateWrite {
                 new_size: Some(record.target.size.clone()),
                 new_replication_factor: Some(record.target.replication_factor),
@@ -304,16 +387,16 @@ impl Strategy for GracefulReconfigurationStrategy {
                         ..record.clone()
                     }),
                     // A cut-over that only happens because the deadline passed
-                    // under `Commit` is forced: the target has not hydrated.
+                    // under `Commit` is forced: the target is not ready.
                     // Declared here because only this decision point knows.
                     // The durable status reads `Finalized` either way.
-                    audit: Some(ReconfigurationAudit::Finalized { forced: !hydrated }),
+                    audit: Some(ReconfigurationAudit::Finalized { forced: !ready }),
                 }),
                 ..Default::default()
             };
         }
 
-        // Past the deadline un-hydrated under `Rollback`: abandon the
+        // Past the deadline not ready under `Rollback`: abandon the
         // reconfiguration while leaving the realized config untouched. The
         // terminal status is the durable transition the audit event records. With
         // the record no longer in progress the strategy stops contributing the
@@ -349,7 +432,7 @@ impl Strategy for GracefulReconfigurationStrategy {
             return Vec::new();
         }
 
-        // Past the deadline with the target not hydrated under `Rollback`: stop
+        // Past the deadline with the target not ready under `Rollback`: stop
         // contributing the target replicas. `update_state` marks the record
         // timed out in this same tick's first phase, so this usually never fires
         // against a re-read state. It matters when the deadline crosses between
@@ -363,7 +446,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         // `now >= deadline` matches `update_state`'s boundary, so a zero-timeout
         // rollback stops desiring the target on the same tick it marks the
         // record timed out.
-        let timed_out = now >= record.deadline && !self.target_hydrated(state, signals, record);
+        let timed_out = now >= record.deadline && !self.target_ready(state, signals, record);
         if timed_out && matches!(record.on_timeout, OnTimeout::Rollback) {
             return Vec::new();
         }
@@ -539,8 +622,9 @@ impl Strategy for OnRefreshStrategy {
             return Vec::new();
         }
         // One replica at the realized shape (`cluster.size` plus the cluster's AZ
-        // pool and logging). The window decision rides inside the reason so the
-        // create it may produce can carry the audit detail.
+        // pool, logging, and arrangement compression). The window decision rides
+        // inside the reason so the create it may produce can carry the audit
+        // detail.
         vec![DesiredReplica {
             shape: state.realized_shape(),
             reason: CreateReason::OnRefresh(decision),
@@ -552,7 +636,7 @@ impl Strategy for OnRefreshStrategy {
 /// on overflow rather than panicking the controller on a bad input.
 ///
 /// [`Duration`]: std::time::Duration
-fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
+pub fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
     Timestamp::try_from(duration).unwrap_or(Timestamp::MAX)
 }
 

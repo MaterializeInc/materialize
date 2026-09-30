@@ -77,7 +77,7 @@ To swap the name of this cluster with another cluster:
 {{< tip >}}
 
 For help sizing your clusters, navigate to **Materialize Console >**
-[**Monitoring**](/console/monitoring/)>**Environment Overview**. This page
+[**Monitoring**](/developer-tools/console/monitoring/)>**Environment Overview**. This page
 displays cluster resource utilization and sizing advice.
 
 {{< /tip >}}
@@ -142,7 +142,7 @@ See also:
 #### Resource allocation
 
 To determine the specific resource allocation for a given cluster size, query
-the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table.
 
 {{< warning >}}
@@ -164,8 +164,8 @@ ALTER CLUSTER c1 SET (SIZE = '100cc');
 ```
 
 The statement returns immediately and the resize proceeds in the background,
-with a default deadline of 24 hours. If the new replicas have not hydrated by
-the deadline, Materialize rolls the resize back and the cluster keeps its
+with a default deadline of 24 hours. If the new replicas have not become ready
+by the deadline, Materialize rolls the resize back and the cluster keeps its
 current size.
 
 The `WAIT UNTIL READY` and `WAIT FOR` options do not enable graceful resizing,
@@ -178,7 +178,8 @@ timeout](#customizing-the-timeout).
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/concepts/hydration/).
+   [hydrate](/fundamentals/concepts/hydration/) and for their compute collections
+   to catch up to the outgoing replicas within the configured lag allowance.
 3. Retires the old replicas.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
@@ -192,14 +193,14 @@ started it. Closing the connection does not cancel it. To stop a resize, see
 ##### Customizing the timeout
 
 By default, a resize has a deadline of 24 hours, and Materialize rolls the
-resize back if the new replicas have not hydrated by then. Use the `WAIT UNTIL
-READY` or `WAIT FOR` options to change the deadline, or to change what happens
-when it passes.
+resize back if the new replicas have not become ready by then. Use the `WAIT
+UNTIL READY` or `WAIT FOR` options to change the deadline, or to change what
+happens when it passes.
 
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
-  replicas and proceed with the not-yet-hydrated new ones, which can cause
-  downtime) or `ROLLBACK` (keep the current size). Default: `ROLLBACK`.
+  replicas and proceed with the new ones even if they are not ready) or
+  `ROLLBACK` (keep the current size). Default: `ROLLBACK`.
 
   ```mzsql
   ALTER CLUSTER c1
@@ -208,16 +209,12 @@ when it passes.
 
 - `WAIT FOR '<duration>'` is equivalent to `WAIT UNTIL READY (TIMEOUT =
   '<duration>', ON TIMEOUT = 'ROLLBACK')`. Materialize cuts over once the target
-  replicas hydrate. When Materialize processes an expired timeout, it
-  rolls back the resize and keeps the current size if the target replicas are
-  still unhydrated.
+  replicas are ready. When Materialize processes an expired timeout,
+  it rolls back the resize and keeps the current size if the target replicas
+  are not ready.
 
-On current versions, both options still return immediately and let the resize
-proceed in the background. They do not hold the session open. In v26.33 and
-earlier, `WAIT UNTIL READY` blocked the session instead. See [Resizing in
-v26.33 and earlier](#resizing-in-v2633-and-earlier). For system clusters, an
-explicit `WAIT UNTIL READY` also blocked the session through v26.37. See
-[System clusters](#system-clusters).
+Both options return immediately and let the resize proceed in the background.
+Neither one holds the session open.
 
 See [Monitoring a resize](#monitoring-a-resize) to track progress and [Cancel a
 resize](#cancel-a-resize) to stop an in-flight resize.
@@ -229,23 +226,23 @@ You can monitor a resize through the following:
   summarizes any in-flight reconfiguration or hydration burst, and is `NULL`
   when the cluster is steady.
 
-- [`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+- [`mz_internal.mz_cluster_reconfigurations`](/sql/system-catalog/mz_internal/#mz_cluster_reconfigurations),
   which shows the target shape, deadline, timeout action, and lifecycle status
   of the latest reconfiguration.
 
-- [`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies),
+- [`mz_internal.mz_cluster_auto_scaling_strategies`](/sql/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies),
   which shows any in-flight hydration burst.
 
-- [`mz_internal.mz_hydration_statuses`](/reference/system-catalog/mz_internal/#mz_hydration_statuses),
+- [`mz_internal.mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses),
   which shows per-object hydration status.
 
 - The audit log
-  ([`mz_catalog.mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events)),
+  ([`mz_catalog.mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events)),
   which records each reconfiguration transition.
 
 ##### Cancel a resize
 To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
-current size. Materialize drops the pending replicas and keeps the current
+current size. Materialize drops the target replicas and keeps the current
 configuration.
 
 #### System clusters
@@ -256,35 +253,16 @@ as well as to clusters you create yourself. As with any cluster, altering one
 requires [ownership of it](#required-privileges), which for most system clusters
 means connecting as `mz_system`.
 
-{{< warning >}}
-System clusters resize gracefully in **v26.38 and later**. In v26.37 and
-earlier, resizing a system cluster **without** an explicit `WAIT UNTIL READY`
-option replaces the cluster's replicas immediately instead of waiting for the
-new ones to hydrate, so the cluster is unavailable until they do. Resizing
-`mz_catalog_server` this way makes the Materialize Console and `SHOW` commands
-unresponsive in the meantime.
+Resizing a system cluster is graceful, and behaves the same way as resizing a
+cluster you created yourself.
 
-On v26.37 and earlier, specify the option explicitly when resizing a system
-cluster:
-
-```mzsql
-ALTER CLUSTER mz_catalog_server
-SET (SIZE = '50cc') WITH (WAIT UNTIL READY (TIMEOUT = '30m'));
-```
-
-On those versions, the explicit option was the only way to resize a system
-cluster gracefully, and it also held the session open until the new replicas
-hydrated or the timeout passed. That is unlike a user cluster, which returns
-immediately.
-{{< /warning >}}
-
-#### Resizing in v26.33 and earlier {#resizing-in-v2633-and-earlier}
+#### Downtime considerations for v26.34 or before
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
 which incurs **no downtime**. Instead of restarting the cluster, this approach
 spins up an additional cluster replica under the covers with the desired new
-size, waits for the replica to be hydrated, and then replaces the original
-replica.
+size, waits for the replica to be hydrated, and then replaces the
+original replica.
 
 ```sql
 ALTER CLUSTER c1
@@ -329,7 +307,7 @@ The `REPLICATION FACTOR` option determines the number of replicas provisioned
 for the cluster. Each replica of the cluster provisions a new pool of compute
 resources to perform exactly the same computations on exactly the same data.
 Each replica incurs cost, calculated as `cluster size * replication factor` per
-second. See [Usage & billing](/administration/billing/) for more details.
+second. See [Usage & billing](/materialize-cloud/billing/) for more details.
 
 #### Replication factor and fault tolerance
 
@@ -342,7 +320,7 @@ available, the cluster can continue to maintain dataflows and serve queries.
 
 - Each replica incurs cost, calculated as `cluster size *
   replication factor` per second. See [Usage &
-  billing](/administration/billing/) for more details.
+  billing](/materialize-cloud/billing/) for more details.
 
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do
@@ -442,7 +420,7 @@ ALTER CLUSTER c1 RESET (AUTO SCALING STRATEGY);
 ```
 
 To inspect the configured strategy and any in-flight burst, query
-[`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies).
+[`mz_internal.mz_cluster_auto_scaling_strategies`](/sql/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies).
 The `strategy` column holds the configured policy, and the `state` column holds
 the in-flight burst details, or `NULL` when no burst is running:
 

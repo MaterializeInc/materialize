@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/cache/build_artifact.rs
-revision: 8ee3def844
+revision: c8a2857de2
 ---
 
 # mz-deploy::project::compiler::cache::build_artifact

@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 columnar.workspace = true
 differential-dataflow.workspace = true
+fail.workspace = true
 itertools.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
@@ -25,9 +26,12 @@ tracing.workspace = true
 [dev-dependencies]
 chrono.workspace = true
 chrono-tz.workspace = true
+hex.workspace = true
+mz-expr = { path = "../expr", features = ["func-registry"] }
 mz-pgtz = { path = "../pgtz" }
 serde-reflection.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [features]
 default = []

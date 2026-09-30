@@ -11,8 +11,8 @@
 
 - name: cross-cluster-accessibility
   content: |
-    Tables, [views](/concepts/views/#views), and [materialized
-    views](/concepts/views/#materialized-views) are accessible across clusters.
+    Tables, [views](/fundamentals/concepts/views/#views), and [materialized
+    views](/fundamentals/concepts/views/#materialized-views) are accessible across clusters.
     That is, you can query or reference them from any cluster.
 
 # Shared by the clusters concept page (Fault tolerance),

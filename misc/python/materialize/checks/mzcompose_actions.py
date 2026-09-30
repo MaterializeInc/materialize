@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
+from contextlib import nullcontext
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -278,8 +278,17 @@ class KillMz(MzcomposeAction):
         c = e.mzcompose_composition()
 
         # Don't fail since we are careful to explicitly kill and collect logs
-        # of the services thus started
-        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
+        # of the services thus started. A service the composition already
+        # defines needs no override. Overriding re-acquires its image, which
+        # exits in CI once a scenario has changed the materialized fingerprint,
+        # e.g. with BumpVersion.
+        with (
+            nullcontext()
+            if self.mz_service in c.compose["services"]
+            else c.override(
+                Materialized(name=self.mz_service), fail_on_new_service=False
+            )
+        ):
             c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:
@@ -445,24 +454,15 @@ class WaitReadyMz(MzcomposeAction):
 class PromoteMz(MzcomposeAction):
     """Promote environmentd to leader, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#post-apileaderpromote"""
 
-    def __init__(self, mz_service: str = "materialized") -> None:
+    def __init__(self, mz_service: str = "materialized", *, retire: str | None) -> None:
+        """See `Composition.promote_mz` for `retire`."""
         self.mz_service = mz_service
+        self.retire = retire
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        result = json.loads(
-            c.exec(
-                self.mz_service,
-                "curl",
-                "-s",
-                "-X",
-                "POST",
-                "http://127.0.0.1:6878/api/leader/promote",
-                capture=True,
-            ).stdout
-        )
-        assert result["result"] == "Success", f"Unexpected result {result}"
+        c.promote_mz(self.mz_service, retire=self.retire)
 
         # Wait until new Materialize is ready to handle queries
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)

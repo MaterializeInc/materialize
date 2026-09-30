@@ -25,10 +25,7 @@ import ExternalLinkIcon from "~/svg/ExternalLinkIcon";
 import { MaterializeTheme } from "~/theme";
 
 export type IntegrationStatus =
-  | "Native"
-  | "Partner"
-  | "Compatible"
-  | "Coming soon";
+  "Native" | "Partner" | "Compatible" | "Coming soon";
 
 interface IntegrationCardProps {
   imagePath: string;

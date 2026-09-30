@@ -2941,6 +2941,8 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
+        # Applies to replicas provisioned after the flip.
+        self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -3018,6 +3020,11 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'30d'",
         ]
+        self.flags_with_values["replica_hydration_history_retention_period"] = [
+            "'0s'",
+            "'1min'",
+            "'120d'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
@@ -3067,10 +3074,51 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_peek_row_iteration_limit"] = ["1000000000"]
+        self.flags_with_values["enable_compute_index_peek_offload"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        # The production default, a value that offloads all but the shortest
+        # peeks, and one that keeps every peek inline.
+        self.flags_with_values["compute_index_peek_inline_budget"] = [
+            "1024",
+            "1",
+            "1000000000",
+        ]
+        # The production default, a value that lets one activation serve a
+        # single position across all peeks, and one that lifts the aggregate
+        # so every pending peek spends its full inline budget in one pass.
+        self.flags_with_values["compute_index_peek_activation_budget"] = [
+            "8192",
+            "1",
+            "1000000000",
+        ]
+        # The production default, a value that checks for cancellation after
+        # every position, and one that checks once per walk of any arrangement
+        # this workload builds.
+        self.flags_with_values["compute_index_peek_yield_granularity"] = [
+            "10000",
+            "1",
+            "100000",
+        ]
+        # Four permits per worker (the default), a bound that serializes every
+        # offloaded walk, and one that never queues. A fraction of the process's
+        # worker count, floored at one permit, so any tiny fraction serializes.
+        self.flags_with_values["compute_index_peek_permit_fraction"] = [
+            "4.0",
+            "0.0001",
+            "1000.0",
+        ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
+        ]
+        # The default, a value that cuts every batch at the threshold, and one
+        # that puts any answer this workload stashes into a single batch.
+        self.flags_with_values["compute_peek_response_stash_batch_bytes"] = [
+            "1048576",
+            "0",
+            "1073741824",
         ]
         self.flags_with_values["compute_subscribe_snapshot_optimization"] = (
             BOOLEAN_FLAG_VALUES
@@ -3100,6 +3148,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_columnar_merge_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_columnar_accumulable_diff"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3230,7 +3279,6 @@ class FlipFlagsAction(Action):
             "enable_compute_replica_expiration",
             "compute_mv_sink_advance_persist_frontiers",
             "compute_replica_expiration_offset",
-            "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",
             "enable_replica_targeted_materialized_views",
@@ -3311,6 +3359,8 @@ class FlipFlagsAction(Action):
             "balancerd_sigterm_connection_wait",
             "balancerd_sigterm_listen_wait",
             "balancerd_inject_proxy_protocol_header_http",
+            "balancerd_max_connections",
+            "balancerd_pre_resolved_timeout",
             "balancerd_log_filter",
             "balancerd_opentelemetry_filter",
             "balancerd_log_filter_defaults",
@@ -3393,8 +3443,6 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
             "mz_metrics_usage_refresh_interval",
-            "compute_peek_stash_num_batches",
-            "compute_peek_stash_batch_size",
             "compute_peek_response_stash_batch_max_runs",
             "compute_peek_response_stash_read_batch_size_bytes",
             "compute_peek_response_stash_read_memory_budget_bytes",
@@ -3427,6 +3475,11 @@ class FlipFlagsAction(Action):
             "read_then_write_max_dependencies",
             "enable_hydration_burst",
             "default_hydration_burst_linger",
+            # The graceful cut-over lag gate. Flipping the gate off or the
+            # allowance to an arbitrary value mid-reconfiguration changes when a
+            # cut-over fires, which the workload does not model.
+            "enable_cluster_reconfiguration_lag_gate",
+            "cluster_reconfiguration_allowed_lag",
         ]
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
@@ -5024,9 +5077,11 @@ class ZeroDowntimeDeployAction(Action):
             self.composition.await_mz_deployment_status(
                 DeploymentStatus.READY_TO_PROMOTE, mz_service, timeout=1800
             )
-            self.composition.promote_mz(mz_service)
-            self.composition.await_mz_deployment_status(
-                DeploymentStatus.IS_LEADER, mz_service
+            self.composition.promote_mz(
+                mz_service,
+                retire=(
+                    "materialized2" if mz_service == "materialized" else "materialized"
+                ),
             )
 
         time.sleep(self.rng.uniform(60, 120))
@@ -6210,6 +6265,9 @@ class ExplainFilterPushdownAction(Action):
                 'is not allowed from the "mz_catalog_server" cluster',
                 # Scanning persist part stats can outrun statement_timeout.
                 "canceling statement due to statement timeout",
+                # Under real-time recency the EXPLAIN waits for the source
+                # like a SELECT does, and can hit the RTR timeout (SS-303).
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued",
             ]
         )
         if exe.db.complexity == Complexity.DDL:

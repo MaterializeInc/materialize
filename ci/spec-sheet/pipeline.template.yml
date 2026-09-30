@@ -111,7 +111,7 @@ steps:
       queue: linux-aarch64-small
 
   - id: cluster-spec-sheet-staging
-    label: "Cluster spec sheet: Staging"
+    label: "Cluster spec sheet: envd Scalability + Cluster Object Count Limits (against Staging)"
     timeout_in_minutes: 3600
     depends_on: devel-docker-tags
     parallelism: 7

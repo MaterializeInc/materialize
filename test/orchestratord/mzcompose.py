@@ -498,7 +498,9 @@ def download_repo_file_at_tag(path: str, tag: str) -> bytes:
     requests/hour), which is what CI relies on. Falls back to anonymous
     raw.githubusercontent.com otherwise. Anonymous raw content throttles
     shared CI IPs with 429, so retry with backoff on rate-limit and 5xx
-    statuses, honoring Retry-After when present.
+    statuses, honoring Retry-After when present. The Contents API also
+    occasionally answers 404 for a path that exists at the tag, so 404 is
+    retried too; a genuine 404 surfaces after the full backoff.
     """
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
@@ -519,7 +521,7 @@ def download_repo_file_at_tag(path: str, tag: str) -> bytes:
         response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             return response.content
-        if response.status_code not in (429, 500, 502, 503, 504):
+        if response.status_code not in (404, 429, 500, 502, 503, 504):
             break
         wait = float(response.headers.get("Retry-After", delay))
         print(f"Got {response.status_code} for {url}, retrying in {wait}s")
@@ -765,6 +767,87 @@ class BalancerdNodeSelector(Modification):
                 assert not balancerd["items"], f"Unexpected items: {balancerd['items']}"
 
         # Balancerd can take a while to start up
+        retry(check, 240)
+
+
+# Must match test/orchestratord/priorityclass.yaml.
+PRIORITY_CLASS_NAME = "mz-test-priority"
+PRIORITY_CLASS_VALUE = 1000000000
+# Release in which environmentd learned
+# --orchestrator-kubernetes-priority-class-name. Must match `V26_42_0` in
+# src/orchestratord/src/controller/materialize/generation.rs: the operator
+# forwards the flag from 26.42.0-dev.0 on, so the gate has to name the -dev.0
+# prerelease or every 26.42.0 release candidate sorts below it.
+PRIORITY_CLASS_VERSION = "v26.42.0-dev.0"
+
+
+def assert_priority_class(pod: dict[str, Any], expected: str | None) -> None:
+    """Assert a pod's priority class by name and by resolved value.
+
+    `spec.priority` is filled in by the API server from the named class, so
+    checking it is what distinguishes a class Kubernetes actually resolved from
+    a string the operator copied into the spec.
+    """
+    spec = pod["spec"]
+    name = pod["metadata"]["name"]
+    actual = spec.get("priorityClassName")
+    priority = spec.get("priority")
+    if expected is None:
+        assert not actual, f"{name}: unexpected priorityClassName {actual}"
+        assert not priority, f"{name}: unexpected priority {priority}"
+    else:
+        assert actual == expected, f"{name}: expected {expected}, got {actual}"
+        assert (
+            priority == PRIORITY_CLASS_VALUE
+        ), f"{name}: expected priority {PRIORITY_CLASS_VALUE}, got {priority}"
+
+
+class PriorityClassName(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, PRIORITY_CLASS_NAME]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if not self.value:
+            return
+        definition["operator"]["environmentd"]["priorityClassName"] = self.value
+        definition["operator"]["clusterd"]["priorityClassName"] = self.value
+        # environmentd and clusterd only pick up generation-affecting changes on
+        # a requested rollout, so without this the pods keep the spec they were
+        # created with and the assertions below check the wrong generation.
+        request = str(uuid.uuid4())
+        if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+            definition["materialize"]["spec"]["requestRollout"] = request
+        definition["materialize"]["spec"]["forceRollout"] = request
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        # The operator sets environmentd's class directly, but forwards
+        # clusterd's to environmentd behind a version gate, so an older image
+        # gets one and not the other.
+        clusterd_expected = (
+            self.value
+            if version >= MzVersion.parse_mz(PRIORITY_CLASS_VERSION)
+            else None
+        )
+
+        def check() -> None:
+            environmentd = get_environmentd_data()["items"]
+            clusterd = get_clusterd_data()["items"]
+            # A class the API server cannot resolve yields no pod at all, which
+            # an assertion over an empty list would otherwise call a pass.
+            assert environmentd, "no environmentd pods"
+            assert clusterd, "no clusterd pods"
+            for pod in environmentd:
+                assert_priority_class(pod, self.value)
+            for pod in clusterd:
+                assert_priority_class(pod, clusterd_expected)
+
+        # Clusterd is recreated by the rollout and can take a while
         retry(check, 240)
 
 
@@ -1133,6 +1216,62 @@ class ConsoleReplicas(Modification):
 
         # console doesn't get launched until last
         retry(check_replicas, 120)
+
+
+def balancerd_configmap() -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "balancerd-settings",
+            "namespace": "materialize-environment",
+        },
+        "data": {"config.json": json.dumps({"balancerd_max_connections": 123})},
+    }
+
+
+class BalancerdConfigMap(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.44.0-dev.0"):
+            return [None, "balancerd-settings"]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["balancerdConfigmapName"] = self.value
+        if self.value is not None:
+            definition["balancerd_configmap"] = balancerd_configmap()
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[BalancerdEnabled] or MzVersion.parse_mz(
+            mods[EnvironmentdImageRef]
+        ) < MzVersion.parse_mz("v26.44.0-dev.0"):
+            return
+
+        def check() -> None:
+            pods = get_balancerd_data()["items"]
+            assert pods
+            for pod in pods:
+                volumes = [
+                    v for v in pod["spec"]["volumes"] if v["name"] == "dynamic-config"
+                ]
+                args = pod["spec"]["containers"][0]["args"]
+                if self.value is None:
+                    assert not volumes
+                    assert not any(
+                        arg.startswith("--config-sync-file-path=") for arg in args
+                    )
+                else:
+                    assert len(volumes) == 1
+                    assert volumes[0]["configMap"]["name"] == self.value
+                    assert "--config-sync-file-path=/etc/balancerd/config.json" in args
+                    assert "--config-sync-loop-interval=1s" in args
+
+        retry(check, 240)
 
 
 class SystemParamConfigMap(Modification):
@@ -2278,9 +2417,13 @@ def workflow_documentation_defaults(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
+        # The docs fetch MinIO from main rather than a release tag.
+        shutil.copyfile(
+            "misc/helm-charts/testing/minio.yaml",
+            os.path.join(dir, "sample-minio.yaml"),
+        )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
-            "sample-minio.yaml": "misc/helm-charts/testing/minio.yaml",
             "sample-materialize.yaml": "misc/helm-charts/testing/materialize.yaml",
         }
 
@@ -2313,6 +2456,17 @@ def workflow_documentation_defaults(
                 "--for=condition=Available",
                 "--timeout=300s",
                 "deployment/minio",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Complete",
+                "--timeout=300s",
+                "job/minio-setup",
             ]
         )
         spawn.runv(
@@ -2683,8 +2837,146 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
     definition = setup(c, args)
+    if args.tag is None:
+        definition["balancerd_configmap"] = balancerd_configmap()
+        definition["balancer"]["spec"]["configmapName"] = "balancerd-settings"
     init(definition)
     run_balancer(definition, False)
+    if args.tag is None:
+        check_balancer_config_sync(definition)
+
+
+def check_balancer_config_sync(definition: dict[str, Any]) -> None:
+    namespace = definition["balancer"]["metadata"]["namespace"]
+    pods = get_balancerd_data()["items"]
+    assert pods, "Expected balancerd pods"
+
+    def pod_state() -> dict[str, tuple[str, list[int]]]:
+        return {
+            pod["metadata"]["name"]: (
+                pod["metadata"]["uid"],
+                [s["restartCount"] for s in pod["status"].get("containerStatuses", [])],
+            )
+            for pod in get_balancerd_data()["items"]
+        }
+
+    initial_pod_state = pod_state()
+    volume = next(
+        v for v in pods[0]["spec"]["volumes"] if v["name"] == "dynamic-config"
+    )
+    config_map_name = volume["configMap"]["name"]
+    assert config_map_name == "balancerd-settings"
+
+    def read_config() -> dict[str, Any]:
+        cm = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "configmap",
+                    config_map_name,
+                    "-n",
+                    namespace,
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        assert not cm["metadata"].get(
+            "ownerReferences"
+        ), "Operator adopted an external ConfigMap"
+        return json.loads(cm["data"]["config.json"])
+
+    def check_limit(expected: int) -> None:
+        for pod in pods:
+            container = pod["spec"]["containers"][0]
+            port = next(
+                p["containerPort"]
+                for p in container["ports"]
+                if p["name"] == "internal-http"
+            )
+            name = pod["metadata"]["name"]
+            metrics = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "--raw",
+                    f"/api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/metrics",
+                ]
+            )
+            assert (
+                f"mz_balancer_connection_limit {expected}" in metrics.splitlines()
+            ), metrics
+
+    assert read_config() == {"balancerd_max_connections": 123}
+    retry(lambda: check_limit(123), 60)
+    for index, limit in enumerate((456, 0)):
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "configmap",
+                config_map_name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps(
+                    {
+                        "data": {
+                            "config.json": json.dumps(
+                                {"balancerd_max_connections": limit}
+                            )
+                        }
+                    }
+                ),
+            ]
+        )
+        # A spec change forces reconciliation, which must leave the external
+        # ConfigMap unchanged.
+        replicas = len(pods) + index + 1
+        name = definition["balancer"]["metadata"]["name"]
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "balancer",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"replicas": replicas}}),
+            ]
+        )
+        deployment = pods[0]["metadata"]["labels"]["materialize.cloud/name"]
+
+        def check_reconciled() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "deployment",
+                        deployment,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert data["spec"]["replicas"] == replicas
+
+        retry(check_reconciled, 60)
+        assert read_config() == {"balancerd_max_connections": limit}
+        # Kubelet projection can take two minutes before the one-second sync.
+        retry(lambda: check_limit(limit), 180)
+        current_pod_state = pod_state()
+        for name, state in initial_pod_state.items():
+            assert (
+                current_pod_state.get(name) == state
+            ), "balancerd restarted during config sync"
 
 
 def get_materialize_v1alpha1() -> dict[str, Any]:
@@ -3457,6 +3749,8 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["materialize2"])
     if "system_params_configmap" in definition:
         defs.append(definition["system_params_configmap"])
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
     kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
@@ -4571,6 +4865,14 @@ def setup(c: Composition, args) -> dict[str, Any]:
                 MZ_ROOT / "test" / "orchestratord" / "storageclass.yaml",
             ]
         )
+        spawn.runv(
+            [
+                "kubectl",
+                "apply",
+                "-f",
+                MZ_ROOT / "test" / "orchestratord" / "priorityclass.yaml",
+            ]
+        )
 
     if not args.tag:
         services = [
@@ -5066,8 +5368,10 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
     defs = [
         definition["namespace"],
-        definition["balancer"],
     ]
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
+    defs.append(definition["balancer"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],

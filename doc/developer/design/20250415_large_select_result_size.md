@@ -108,21 +108,25 @@ This is the approach:
 
 ### Key Implementation Details:
 
-- **New enum variant**: In `compute_state.rs` we add `PendingPeek::Stash` for
-  async stashing operations
-- **Background processing**: Uses async tasks to pump rows into persist batches
-  while the main worker thread continues other work and periodically pumps rows
-  from the arrangement to the async task
+- **One walk**: The scan that reads the index for a peek is the scan that feeds
+  the stash. A peek whose accumulated rows cross the threshold hands them over
+  as a batch and continues from where it stopped, on an offloaded task that
+  writes the batches to persist, so the worker never walks the arrangement a
+  second time. `doc/developer/design/20260825_peek_execution.md` describes the
+  scan and its drivers
 - **Configurable parameters**: Multiple system variables control the behavior:
   - `enable_compute_peek_response_stash`: Feature flag (default: false)
   - `peek_response_stash_threshold_bytes`: Size threshold for using stash
-  - `peek_stash_batch_size`: Batch size for row processing
-  - `peek_stash_num_batches`: Number of batches to process per pump cycle
+  - `peek_response_stash_batch_bytes`: Size of the batches a stash-bound peek
+    hands to its upload, after the first one at the threshold
   - `peek_response_stash_batch_max_runs`: Max runs per persist batch, for
     controller consolidation on the worker, which reduces work in
     `environmentd`
 
-- **Metrics**: We add `stashed_peek_seconds` histogram to track performance
+- **Metrics**: `mz_index_peek_stashed_total` counts the peeks the stash
+  answered. The walk that writes to the stash is the same walk that reads the
+  index, so its time is reported by the index peek phase histograms rather than
+  by a histogram of its own
 
 - **Response handling**: New `PeekResponse::Stashed` variant contains persist
   shard information that `environmentd` uses to stream results back

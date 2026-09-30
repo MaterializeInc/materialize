@@ -202,6 +202,30 @@ impl<B: Builder> Builder for ArcBuilder<B> {
     }
 }
 
+impl<B: Builder + mz_timely_util::columnar::chunk::ChainState>
+    mz_timely_util::columnar::chunk::ChainState for ArcBuilder<B>
+{
+    type State = B::State;
+
+    fn wants_bodies() -> bool {
+        B::wants_bodies()
+    }
+
+    fn observe(state: &mut Self::State, input: &Self::Input) {
+        B::observe(state, input)
+    }
+
+    fn observe_records(state: &mut Self::State, records: usize) {
+        B::observe_records(state, records)
+    }
+
+    fn from_state(state: Self::State) -> Self {
+        ArcBuilder {
+            builder: B::from_state(state),
+        }
+    }
+}
+
 /// Merges [`ArcBatch`]es, delegating to the inner batch's merger.
 pub struct ArcMerger<B: Batch> {
     merger: B::Merger,

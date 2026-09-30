@@ -4,7 +4,7 @@ columns:
 rows:
   - "Tier": "**All-in-one cluster**"
     Description: |
-      **A cluster** for [sources](/concepts/sources/), compute/transformation
+      **A cluster** for [sources](/fundamentals/concepts/sources/), compute/transformation
       and serving queries:
 
       - Sources to ingest data.

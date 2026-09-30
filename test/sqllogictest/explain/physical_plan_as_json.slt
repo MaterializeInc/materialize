@@ -461,7 +461,7 @@ SELECT c + d, 1 FROM u
               {
                 "Ok": {
                   "data": [
-                    45,
+                    41,
                     1
                   ]
                 }
@@ -1719,7 +1719,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          45,
+                          41,
                           5
                         ]
                       }

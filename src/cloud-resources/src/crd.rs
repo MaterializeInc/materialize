@@ -23,7 +23,7 @@ use kube::{
     core::crd::merge_crds,
     runtime::{conditions, wait::await_condition},
 };
-use rand::{Rng, distr::Uniform};
+use rand::{RngExt, distr::Uniform};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};

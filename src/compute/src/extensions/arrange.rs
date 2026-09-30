@@ -15,12 +15,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
 use mz_dyncfg::ConfigSet;
 use mz_row_spine::ArcBatch;
+use mz_timely_util::containers::HeapSize;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
@@ -49,9 +51,11 @@ pub enum ArrangementBatcher {
     /// `ColumnChunker` + `Col2ValColBatcher` + `RowRowColPagedBuilder`.
     /// Chains are resident `Column`s.
     Columnar,
-    /// `ColumnChunker` + `Col2ValPagedBatcher` + `RowRowColPagedBuilder`.
-    /// Chains are `Column`s routed through the pager, which may spill them.
-    ColumnarPaged,
+    /// `ChunkChunker` + `ChunkBatcher` + `UnchunkBuilder<RowRowColPagedBuilder>`.
+    /// Chains are chunks whose bodies the process buffer pool spills while
+    /// the process chunk spill gate is set, and that stay resident
+    /// otherwise.
+    Chunked,
 }
 
 impl ArrangementBatcher {
@@ -59,12 +63,12 @@ impl ArrangementBatcher {
     ///
     /// `ENABLE_COLUMN_PAGED_BATCHER` wins over
     /// `ENABLE_COLUMNAR_MERGE_BATCHER`, because it asks for the same columnar
-    /// chains plus paging. Call this once per arrange site at operator
-    /// construction time, so a dataflow keeps one batcher for its whole life
-    /// even if the flags flip underneath it.
+    /// chains plus the option to spill them. Call this once per arrange site
+    /// at operator construction time, so a dataflow keeps one batcher for its
+    /// whole life even if the flags flip underneath it.
     pub fn from_config(config: &ConfigSet) -> Self {
         if ENABLE_COLUMN_PAGED_BATCHER.get(config) {
-            Self::ColumnarPaged
+            Self::Chunked
         } else if ENABLE_COLUMNAR_MERGE_BATCHER.get(config) {
             Self::Columnar
         } else {
@@ -497,10 +501,10 @@ where
     }
 }
 
-impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowAgent<T, R>>
+impl<'scope, T, DC> ArrangementSize for Arranged<'scope, RowAgent<T, DC::Owned, DC>>
 where
     T: MzTimestamp,
-    R: Semigroup + Ord + MzArrangeData + 'static,
+    DC: BatchContainer<Owned: Semigroup + 'static> + HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |batch| {

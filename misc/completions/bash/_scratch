@@ -29,7 +29,7 @@ _shtab_scratch_list___output_format_choices=(table csv)
 _shtab_scratch_ls___output_format_choices=(table csv)
 _shtab_scratch_destroy___output_format_choices=(table csv)
 _shtab_scratch_rm___output_format_choices=(table csv)
-_shtab_scratch_completion_pos_0_choices=(bash zsh tcsh fish)
+_shtab_scratch_completion_pos_0_choices=(bash zsh tcsh fish powershell)
 _shtab_scratch_pos_0_choices=(login create list ls ssh sftp destroy rm push completion forward go claude)
 
 _shtab_scratch_login__h_nargs=0

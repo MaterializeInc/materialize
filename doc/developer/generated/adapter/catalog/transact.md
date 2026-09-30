@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/transact.rs
-revision: 39dcae2fba
+revision: f17e93f6be
 ---
 
 # adapter::catalog::transact

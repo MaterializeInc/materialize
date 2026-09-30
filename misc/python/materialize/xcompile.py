@@ -126,13 +126,9 @@ def cargo(
     if sys.platform == "darwin":
         _bootstrap_darwin(arch)
         lld_prefix = spawn.capture(["brew", "--prefix", "lld"]).strip()
-        libfdb_c_prefix = spawn.capture(
-            ["brew", "--prefix", f"libfdb-c-{target(arch)}"]
-        ).strip()
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [
             f"-L{sysroot}/lib",
-            f"-L{libfdb_c_prefix}/lib",
             "-Clink-arg=-fuse-ld=lld",
             f"-Clink-arg=-B{lld_prefix}/bin",
         ]
@@ -233,7 +229,6 @@ def _bootstrap_darwin(arch: Arch) -> None:
             "install",
             "lld",
             f"materializeinc/crosstools/{target(arch)}",
-            f"materializeinc/crosstools/libfdb-c-{target(arch)}",
         ]
     )
     spawn.runv(["rustup", "target", "add", target(arch)])

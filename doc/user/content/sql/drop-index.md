@@ -41,7 +41,7 @@ To execute the `DROP INDEX` statement, you need:
 {{< tip >}}
 
 In the **Materialize Console**, you can view existing indexes in the [**Database
-object explorer**](/console/data/). Alternatively, you can use the
+object explorer**](/developer-tools/console/data/). Alternatively, you can use the
 [`SHOW INDEXES`](/sql/show-indexes) command.
 
 {{< /tip >}}

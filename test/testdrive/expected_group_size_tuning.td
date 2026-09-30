@@ -115,6 +115,15 @@ $ set-sql-timeout duration=240s
 "Dataflow: materialize.public.lineitem_by_suppkey" ReduceHierarchical 8 5 4095
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
 
+# The curated metric sinks run on this replica too, and this view has no
+# internal-dataflow filter. Their `min` aggregate carries a group-size hint, so it
+# renders one reduce stage and offers nothing to cut. Without the hint each sink
+# dataflow would add a row here, in a view users are pointed at for tuning advice.
+> SELECT count(*)
+  FROM mz_introspection.mz_expected_group_size_advice
+  WHERE dataflow_name LIKE '%metric-sink-%';
+0
+
 # Validate the reported memory savings for the entries above. The `savings` column
 # sums arrangement heap sizes (mz_arrangement_sizes.size), which are logged
 # asynchronously and best-effort, lagging the structural columns above and sometimes

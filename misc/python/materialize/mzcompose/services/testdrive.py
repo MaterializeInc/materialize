@@ -22,7 +22,6 @@ from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )
-from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.metadata_store import (
     EXTERNAL_METADATA_STORE_ADDRESS,
@@ -235,20 +234,14 @@ class Testdrive(Service):
                 entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
             if external_metadata_store:
-                if metadata_store == "foundationdb":
-                    entrypoint.append(
-                        "--persist-consensus-url=foundationdb:?prefix=consensus"
-                    )
-                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
-                else:
-                    address = (
-                        metadata_store
-                        if external_metadata_store == True
-                        else external_metadata_store
-                    )
-                    entrypoint.append(
-                        f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus"
-                    )
+                address = (
+                    metadata_store
+                    if external_metadata_store == True
+                    else external_metadata_store
+                )
+                entrypoint.append(
+                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus"
+                )
             else:
                 entrypoint.append(
                     f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"

@@ -44,18 +44,19 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Use the column-paged merge batcher code path at arrange sites. When
-/// `true`, arrange operators use `Col2ValPagedBatcher` (in
-/// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
-/// `mz_row_spine`), the columnar-native batcher that the pager can spill
-/// (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). Read at operator
-/// construction time. Flips take effect on dataflows created after the
-/// change.
+/// Use the chunked merge batcher code path at arrange sites. When `true`,
+/// arrange operators batch through `ChunkBatcher` over
+/// `ColumnChunk` (in `mz_timely_util::columnar::chunk`) and build batches
+/// with `RowRowColPagedBuilder` (in `mz_row_spine`) behind
+/// `UnchunkBuilder`: columnar-native chains whose bodies the process buffer
+/// pool can spill (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). Read at
+/// operator construction time. Flips take effect on dataflows created after
+/// the change.
 ///
 /// Takes precedence over [`ENABLE_COLUMNAR_MERGE_BATCHER`]: both select
-/// columnar chains, and this one additionally routes them through the pager.
-/// With both `false` the arrange sites use the columnation
-/// `Col2ValBatcher` / `RowRowBuilder` path. See
+/// columnar chains, and this one additionally makes them spillable. With
+/// both `false` the arrange sites use the columnation `Col2ValBatcher` /
+/// `RowRowBuilder` path. See
 /// `mz_compute::extensions::arrange::ArrangementBatcher` for the resolution.
 ///
 /// Disabled by default while the new path is stabilizing.
@@ -64,23 +65,23 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
 pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
     "enable_column_paged_batcher",
     false,
-    "Use the columnar-native paged merge batcher at arrange sites. Takes precedence over \
-     enable_columnar_merge_batcher; with both false, arranges use the columnation \
-     `Col2ValBatcher` / `RowRowBuilder` path.",
+    "Use the columnar-native chunked merge batcher at arrange sites, whose chunk bodies the \
+     process buffer pool can spill. Takes precedence over enable_columnar_merge_batcher; \
+     with both false, arranges use the columnation `Col2ValBatcher` / `RowRowBuilder` path.",
     ParameterScope::Replica,
 );
 
 /// Use the resident columnar merge batcher at arrange sites. When `true`,
 /// arrange operators use `Col2ValColBatcher` (in `mz_timely_util::columnar`)
 /// and `RowRowColPagedBuilder` (in `mz_row_spine`): the same `Column` chains
-/// and the same builder as the paged arm, merged by `ColumnMerger` with no
-/// pager and no spill budget. When `false` (the default), the arrange sites
+/// and the same builder as the chunked arm, merged by `ColumnMerger` with
+/// no spill budget. When `false` (the default), the arrange sites
 /// use the columnation `Col2ValBatcher` / `RowRowBuilder` path. Read at
 /// operator construction time. Flips take effect on dataflows created after
 /// the change.
 ///
 /// This is the columnation-versus-columnar axis on its own, so the two paths
-/// can be compared without the pager in the measurement. It is ignored while
+/// can be compared without spilling in the measurement. It is ignored while
 /// [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
 pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
     "enable_columnar_merge_batcher",
@@ -90,10 +91,26 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Allow the column-paged batcher's pager to evict chunks under memory
-/// pressure. Only meaningful when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
-/// With the spill flag off the pager keeps every chunk resident regardless of
-/// budget.
+/// Store the accumulable reduce's accumulators in columnar form.
+///
+/// The accumulable reduce keeps one accumulator per aggregate in the diff of its
+/// input arrangement. When `true`, that arrangement holds its diffs in a columnar
+/// container, which lays the accumulators out by variant so each pays only for its
+/// own fields. When `false` (the default), the diffs live in a columnation stack at
+/// the width of the largest variant. Read at operator construction time, so flips
+/// take effect on dataflows created after the change.
+pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
+    "enable_columnar_accumulable_diff",
+    false,
+    "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by \
+     variant, instead of a columnation stack of fixed-width accumulator enums.",
+    ParameterScope::Replica,
+);
+
+/// Allow chunk bodies to spill to the process buffer pool under memory
+/// pressure. Sets compute's leg of the process-wide chunk spill gate, which
+/// the arrange batchers read when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
+/// With the gate clear every chunk stays resident regardless of budget.
 ///
 /// This flag (or the storage-side `enable_upsert_paged_spill`) also gates
 /// installation of the process buffer pool (`mz_ore::pool`): the first
@@ -101,14 +118,18 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
 /// address space and spawns its spill threads. Turning the gates back off
 /// stops retuning but does not tear the installed pool down.
 ///
+/// It additionally enables the process-global column pager, which the MV
+/// sink's correction buffer and storage's paged upsert stash draw from, so
+/// it is not exclusive to the arrange path.
+///
 /// Off by default, even when the batcher path itself is on, so the
 /// no-pressure case stays a pure resident operation. Tune the budget via
 /// [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
 pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     "enable_column_paged_batcher_spill",
     false,
-    "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
-     meaningful when `enable_column_paged_batcher = true`.",
+    "Allow chunk bodies to spill to the process buffer pool under memory pressure. Only \
+     meaningful for arrange sites when `enable_column_paged_batcher = true`.",
     ParameterScope::Replica,
 );
 
@@ -516,14 +537,6 @@ pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Whether to render `as_specific_collection` using a fueled flat-map operator.
-pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Config::new(
-    "enable_compute_render_fueled_as_specific_collection",
-    true,
-    "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
-    ParameterScope::Environment,
-);
-
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
@@ -594,6 +607,20 @@ pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The size at which a peek bound for the stash hands its accumulated rows to the upload, once
+/// the first batch at [`PEEK_RESPONSE_STASH_THRESHOLD_BYTES`] has decided that the answer is not
+/// an inline one.
+///
+/// Kept apart from the threshold because they answer different questions: the threshold sizes
+/// what an inline answer may hold, this sizes one hand-over. Each hand-over costs a round trip
+/// through the blocking pool, and a scan retains up to this much between them.
+pub const PEEK_RESPONSE_STASH_BATCH_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_batch_bytes",
+    1024 * 1024,
+    "The size in bytes at which a peek bound for the peek response stash hands its rows to the upload, after the first batch at the stash threshold.",
+    ParameterScope::Replica,
+);
+
 /// The target number of maximum runs in the batches written to the stash.
 ///
 /// Setting this reasonably low will make it so batches get consolidated/sorted
@@ -626,23 +653,6 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     ParameterScope::Environment,
 );
 
-/// The number of batches to pump from the peek result iterator when stashing peek responses.
-pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
-    "compute_peek_stash_num_batches",
-    100,
-    "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Environment,
-);
-
-/// The size of each batch, as number of rows, pumped from the peek result
-/// iterator when stashing peek responses.
-pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
-    "compute_peek_stash_batch_size",
-    100000,
-    "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Environment,
-);
-
 /// Whether compute should stop peeks that iterate over too many rows.
 pub const ENABLE_PEEK_ROW_ITERATION_LIMIT: Config<bool> = Config::new(
     "enable_compute_peek_row_iteration_limit",
@@ -652,11 +662,106 @@ pub const ENABLE_PEEK_ROW_ITERATION_LIMIT: Config<bool> = Config::new(
 );
 
 /// The maximum number of rows a peek may iterate over on each worker.
+///
+/// The count spans a peek's whole walk of its arrangement, rows written to the peek stash
+/// included, because a peek walks its arrangement once and the count travels with that walk.
 pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
     "compute_peek_row_iteration_limit",
     1000,
-    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. Does not apply once a peek's results move to the peek stash.",
+    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. The count spans the peek's whole walk, rows written to the peek stash included.",
     ParameterScope::Environment,
+);
+
+/// Whether a fast-path index peek may move its walk off the timely worker for latency.
+///
+/// Off, a peek walks on the worker that owns it until it answers, delaying every other message
+/// that worker serves. On, a peek that outruns [`INDEX_PEEK_INLINE_BUDGET`] finishes away from it.
+///
+/// This gates latency offload only. A peek whose rows outgrow an inline answer is offloaded either
+/// way, because the driver that writes to the peek stash is the offloaded one. Off means an ordinary
+/// peek runs where it used to, not that none leaves the worker.
+pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
+    "enable_compute_index_peek_offload",
+    true,
+    "Whether a fast-path index peek may move its walk off the timely worker.",
+    ParameterScope::Replica,
+);
+
+/// How far one peek may walk on the worker before it is offloaded, in consumed cursor positions.
+///
+/// A peek that exceeds it has been measured expensive, not predicted to be, so a point lookup over
+/// a skewed hot key offloads without a special case.
+///
+/// Counted in cursor positions, not rows returned: the result iterator steps the cursor without
+/// returning anything whenever the MFP rejects a row, so a selective filter over a large
+/// arrangement would never spend a row-counted budget. No wall-clock component, since under memory
+/// pressure a time bound anti-correlates with progress, one major fault consuming a whole slice.
+///
+/// Zero walks one position, not none: a peek granted no fuel would suspend having walked nowhere
+/// and be offloaded for it.
+pub const INDEX_PEEK_INLINE_BUDGET: Config<usize> = Config::new(
+    "compute_index_peek_inline_budget",
+    1024,
+    "How far one index peek may walk on the timely worker, in consumed cursor positions, before it is offloaded.",
+    ParameterScope::Replica,
+);
+
+/// What all peeks together may spend in one worker activation, in consumed cursor positions.
+///
+/// Every activation visits every pending peek, so a per-peek budget with no aggregate lets N
+/// pending peeks cost N times [`INDEX_PEEK_INLINE_BUDGET`] in one pass, unbounded in N. Peeks that
+/// get no turn are served first on the next activation.
+///
+/// Raising the ratio to the inline budget drains a burst in fewer activations, lowering it caps
+/// how long one activation withholds the worker.
+pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
+    "compute_index_peek_activation_budget",
+    8 * 1024,
+    "What all index peeks together may spend in one timely worker activation, in consumed cursor positions.",
+    ParameterScope::Replica,
+);
+
+/// How often an offloaded scan checks for cancellation and re-reads its configuration, in
+/// consumed cursor positions.
+///
+/// At a plausible 100ns to 1us per position this bounds cancellation latency to single-digit
+/// milliseconds. Larger than [`INDEX_PEEK_INLINE_BUDGET`] because an offloaded scan is off the
+/// worker's critical path, so its slices answer to cancellation latency, not to the worker's
+/// availability. A check is a few loads and no hand-off, so a finer granularity costs little.
+///
+/// An upper bound, not a period: a walk bound for the peek stash suspends once its accumulation
+/// crosses `peek_response_stash_threshold_bytes`, by far the smaller trigger at that threshold's
+/// default, and unspent fuel is not carried over.
+pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
+    "compute_index_peek_yield_granularity",
+    10000,
+    "How often an offloaded index peek scan checks for cancellation, in consumed cursor positions.",
+    ParameterScope::Replica,
+);
+
+/// How many offloaded index peek scans may run at once, as a fraction of the timely workers a
+/// compute runtime runs.
+///
+/// A fraction so the bound scales with the replica instead of being retuned per size. `1.0` admits
+/// one scan per worker, `0.5` one per two workers, and the bound is never below one scan.
+///
+/// The default admits four per worker because a scan holds its permit while it waits on its
+/// peek-stash upload, which is I/O rather than CPU. At one per worker, stash-heavy replicas queued
+/// scans behind uploads. At four per worker the wait disappeared with no increase in timely step
+/// duration.
+///
+/// Per compute runtime, not global: a process running a maintenance and an interactive runtime
+/// admits it once per runtime.
+///
+/// This bounds running scans only. Scans that do not fit queue, costing a queue entry holding a
+/// suspended scan instead of a thread. Queue depth is a signal to alert on, not a second bound,
+/// since capping it would mean failing peeks.
+pub const INDEX_PEEK_PERMIT_FRACTION: Config<f64> = Config::new(
+    "compute_index_peek_permit_fraction",
+    4.0,
+    "How many offloaded index peek scans may run at once in one compute runtime, as a fraction of \
+     the timely workers it runs. Never below one scan.",
+    ParameterScope::Replica,
 );
 
 /// The collection interval for the Prometheus metrics introspection source.
@@ -732,25 +837,29 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
-        .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
         .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
+        .add(&PEEK_RESPONSE_STASH_BATCH_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
         .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
-        .add(&PEEK_STASH_NUM_BATCHES)
-        .add(&PEEK_STASH_BATCH_SIZE)
         .add(&ENABLE_PEEK_ROW_ITERATION_LIMIT)
         .add(&PEEK_ROW_ITERATION_LIMIT)
+        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
+        .add(&INDEX_PEEK_INLINE_BUDGET)
+        .add(&INDEX_PEEK_ACTIVATION_BUDGET)
+        .add(&INDEX_PEEK_YIELD_GRANULARITY)
+        .add(&INDEX_PEEK_PERMIT_FRACTION)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
+        .add(&ENABLE_COLUMNAR_ACCUMULABLE_DIFF)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)

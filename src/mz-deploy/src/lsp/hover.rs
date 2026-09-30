@@ -227,7 +227,7 @@ mod tests {
     use super::*;
     use crate::project::compiler::cache::ProjectCache;
     use crate::project::ir::object_id::ObjectId;
-    use crate::types::ColumnType;
+    use crate::types::{ColumnType, DataType};
     use std::collections::BTreeMap;
 
     fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -427,7 +427,7 @@ mod tests {
         columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: Some("Primary key".to_string()),
@@ -436,7 +436,7 @@ mod tests {
         columns.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,
@@ -521,7 +521,7 @@ mod tests {
         columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -530,7 +530,7 @@ mod tests {
         columns.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,
@@ -577,7 +577,7 @@ mod tests {
         columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -621,7 +621,7 @@ mod tests {
         columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -630,7 +630,7 @@ mod tests {
         columns.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,

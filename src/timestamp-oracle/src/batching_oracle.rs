@@ -96,6 +96,20 @@ where
     }
 }
 
+/// Waits forever, for a `read_ts` whose worker task is no longer there to
+/// answer it.
+///
+/// The worker task owns both ends of the internal channels, and while a caller
+/// holds a sender the only thing that ends it is the Tokio runtime dropping it
+/// during shutdown: a panic in the task would abort the process instead
+/// (`mz_ore::panic::install_enhanced_handler`). There is no timestamp that
+/// could be invented here without breaking linearizability, so the caller waits
+/// and shutdown drops its task at this await point.
+async fn worker_task_gone<T>() -> T {
+    tracing::debug!("BatchingTimestampOracle worker task is gone, parking read_ts");
+    std::future::pending().await
+}
+
 #[async_trait]
 impl<T> TimestampOracle<T> for BatchingTimestampOracle<T>
 where
@@ -112,12 +126,14 @@ where
     async fn read_ts(&self) -> T {
         let (tx, rx) = oneshot::channel();
 
-        self.command_tx.send(Command::ReadTs(tx)).expect(
-            "worker task cannot stop while we still have senders for the command/request channel",
-        );
+        if self.command_tx.send(Command::ReadTs(tx)).is_err() {
+            return worker_task_gone().await;
+        }
 
-        rx.await
-            .expect("worker task cannot stop while there are outstanding commands/requests")
+        match rx.await {
+            Ok(ts) => ts,
+            Err(_) => worker_task_gone().await,
+        }
     }
 
     async fn apply_write(&self, write_ts: T) {
@@ -135,6 +151,50 @@ mod tests {
     use crate::postgres_oracle::{PostgresTimestampOracle, PostgresTimestampOracleConfig};
 
     use super::*;
+
+    /// An oracle that answers nothing, for tests that only exercise the
+    /// batching wrapper's own plumbing.
+    #[derive(Debug)]
+    struct PendingOracle;
+
+    #[async_trait]
+    impl TimestampOracle<Timestamp> for PendingOracle {
+        async fn write_ts(&self) -> WriteTimestamp<Timestamp> {
+            std::future::pending().await
+        }
+
+        async fn peek_write_ts(&self) -> Timestamp {
+            std::future::pending().await
+        }
+
+        async fn read_ts(&self) -> Timestamp {
+            std::future::pending().await
+        }
+
+        async fn apply_write(&self, _write_ts: Timestamp) {
+            std::future::pending().await
+        }
+    }
+
+    /// Runtime shutdown drops the worker task while callers still hold the
+    /// oracle, so `read_ts` must wait rather than panic on the closed channel.
+    /// Dropping the runtime the worker was spawned on, while keeping the oracle
+    /// alive on another one, reproduces that state deterministically.
+    #[mz_ore::test]
+    fn test_read_ts_waits_when_worker_task_is_gone() {
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+        let worker_runtime = tokio::runtime::Runtime::new().expect("can build runtime");
+        let oracle = worker_runtime
+            .block_on(async { BatchingTimestampOracle::new(metrics, Arc::new(PendingOracle)) });
+        drop(worker_runtime);
+
+        let caller_runtime = tokio::runtime::Runtime::new().expect("can build runtime");
+        caller_runtime.block_on(async {
+            let read_ts = std::pin::pin!(oracle.read_ts());
+            assert!(futures::poll!(read_ts).is_pending());
+        });
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`

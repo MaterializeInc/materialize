@@ -1,12 +1,12 @@
 ---
-title: "Guide: Handle upstream schema changes with zero downtime"
+title: "Handle upstream schema changes"
 description: "How to add a column, or drop a column, from your source MySQL database, without any downtime in Materialize"
 
 menu:
     main:
         parent: "mysql"
         identifier: "mysql-source-versioning"
-        weight: 85
+        weight: 60
 ---
 
 {{< public-preview />}}

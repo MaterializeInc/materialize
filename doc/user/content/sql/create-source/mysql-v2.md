@@ -40,7 +40,7 @@ SOURCE`](/sql/create-table/) allows for the handling of certain upstream schema
 changes, specifically adding or dropping columns in the upstream tables, without
 downtime.
 
-See [Guide: Handle upstream schema
+See [Handle upstream schema
 changes](/ingest-data/mysql/source-versioning/) for details.
 
 See also [Handling upstream operations](#handling-upstream-operations) for

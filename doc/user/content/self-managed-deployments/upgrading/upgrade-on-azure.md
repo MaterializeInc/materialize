@@ -151,7 +151,7 @@ If you were running the old stack, upgrading **destroys** its Helm releases and
 PersistentVolumeClaims. Up to 15 days of local Prometheus data goes with them,
 along with anything hand-created in the old Grafana. There is no backfill. See
 [How to upgrade from previous versions of the Materialize Terraform
-Modules](/manage/monitor/self-managed/grafana/#how-to-upgrade-from-previous-versions-of-the-materialize-terraform-modules).
+Modules](/observability/self-managed/grafana/#how-to-upgrade-from-previous-versions-of-the-materialize-terraform-modules).
 {{< /warning >}}
 
 ### If you use the example configuration
@@ -243,9 +243,9 @@ may need to grow before the apply can schedule all of them.
 
 For accessing Grafana, pointing the stack at a database you already run, sizing
 profiles, and retention, see
-[Grafana](/manage/monitor/self-managed/grafana/). For what the stack stores and
+[Grafana](/observability/self-managed/grafana/). For what the stack stores and
 the backends it can forward to, see [How logs and metrics are
-stored](/manage/monitor/self-managed/storage/).
+stored](/observability/self-managed/storage/).
 
 ## See also
 

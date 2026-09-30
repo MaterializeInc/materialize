@@ -374,6 +374,9 @@ $ unset-regex
 2 two
 3 three
 
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_stat_activity WHERE backend_type = 'walsender' AND application_name = 'materialize') THEN RAISE EXCEPTION 'no walsender with application_name materialize'; END IF; END $$
+
 > SELECT * FROM nonpk_table;
 1 1
 1 1

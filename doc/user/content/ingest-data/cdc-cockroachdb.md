@@ -4,7 +4,7 @@ description: "How to propagate Change Data Capture (CDC) data from a CockroachDB
 menu:
   main:
     parent: "crdb"
-    name: "Using Kafka and Changefeeds"
+    name: "Use Kafka and changefeeds"
     identifier: "crdb-kafka-changefeeds"
     weight: 5
 aliases:
@@ -100,7 +100,7 @@ authentication and networking configurations, so refer to the
 [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation for further
 guidance.
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the credentials to connect to your Kafka broker
    and, optionally, schema registry:
@@ -178,5 +178,5 @@ new data arrives, and serving results efficiently.
   or [`SUBSCRIBE`](/sql/subscribe/) or to an external message broker with
   [`CREATE SINK`](/sql/create-sink/).
 
-- Check out the [tools and integrations](/integrations/) supported by
+- Check out the [tools and integrations](/developer-tools/integrations/) supported by
   Materialize.

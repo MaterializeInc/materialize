@@ -51,5 +51,6 @@ $ set-sql-timeout duration=360s
   JOIN mz_introspection.mz_dataflows d ON d.id = e.dataflow_id
   WHERE e.export_id LIKE 't%' AND
         d.name NOT LIKE '%introspection-subscribe%' AND
-        d.name NOT LIKE '%oneshot-select%'
+        d.name NOT LIKE '%oneshot-select%' AND
+        d.name NOT LIKE '%metric-sink%'
 0

@@ -32,9 +32,7 @@ export interface AffectedComponent {
 
 export interface Incident extends Event {
   current_worst_impact:
-    | "partial_outage"
-    | "degraded_performance"
-    | "full_outage";
+    "partial_outage" | "degraded_performance" | "full_outage";
   status: "identified" | "investigating" | "monitoring";
 }
 
@@ -51,9 +49,7 @@ export interface ScheduledMaintenance extends Event {
 }
 
 export type EventTypes =
-  | Incident
-  | InProgressMaintenance
-  | ScheduledMaintenance;
+  Incident | InProgressMaintenance | ScheduledMaintenance;
 
 export function isIncident(event: EventTypes): event is Incident {
   return (

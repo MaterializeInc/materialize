@@ -1167,6 +1167,8 @@ fn humanize_sql_for_show_create(
             stmt.with_options.retain_mut(|o| match o.name {
                 TableFromSourceOptionName::TextColumns => true,
                 TableFromSourceOptionName::ExcludeColumns => true,
+                TableFromSourceOptionName::ExcludeConstraints => true,
+                TableFromSourceOptionName::ExcludeAllConstraints => true,
                 // Drop details, which does not roundtrip.
                 TableFromSourceOptionName::Details => false,
                 TableFromSourceOptionName::PartitionBy => true,

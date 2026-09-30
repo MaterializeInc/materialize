@@ -1,6 +1,6 @@
 ---
 source: src/service/src/transport.rs
-revision: 2bb8e26dbb
+revision: 535597a04a
 ---
 
 # mz-service::transport

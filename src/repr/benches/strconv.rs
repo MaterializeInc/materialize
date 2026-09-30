@@ -13,7 +13,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_repr::strconv;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn bench_parse_float32(c: &mut Criterion) {
     for s in &["-3.0", "9.7", "NaN", "inFiNiTy"] {

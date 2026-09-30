@@ -48,7 +48,7 @@ _shtab_scratch_claude_defaults_added=0
 
 _shtab_scratch_completion_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
-  ":print shell completion script:(bash zsh tcsh fish)"
+  ":print shell completion script:(bash zsh tcsh fish powershell)"
 )
 
 # guard to ensure default positional specs are added only once per session

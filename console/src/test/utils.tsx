@@ -218,6 +218,14 @@ export const createProviderWrapper = async ({
   };
 };
 
+/**
+ * A `BrowserRouter` for passing to `renderHook`'s `wrapper`, which takes a
+ * component rather than an element.
+ */
+export const RouterWrapper = ({ children }: React.PropsWithChildren) => (
+  <BrowserRouter>{children}</BrowserRouter>
+);
+
 export function buildCluster(
   overrides: Partial<ClusterWithOwnership> = {},
   replicas: Array<Replica> = [],

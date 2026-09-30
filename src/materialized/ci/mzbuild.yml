@@ -12,4 +12,3 @@ description: Materialize is a fast, distributed SQL database built on streaming 
 pre-image:
   - type: cargo-build
     bin: [ materialized ]
-    features: [ mz-materialized/foundationdb ]

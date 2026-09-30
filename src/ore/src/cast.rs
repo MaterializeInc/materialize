@@ -59,6 +59,7 @@ macro_rules! cast_from {
         paste::paste! {
             impl crate::cast::CastFrom<$from> for $to {
                 #[allow(clippy::as_conversions)]
+                #[inline(always)]
                 fn cast_from(from: $from) -> $to {
                     from as $to
                 }
@@ -75,6 +76,7 @@ macro_rules! cast_from {
 
             impl crate::cast::CastFrom<std::num::NonZero<$from>> for $to {
                 #[allow(clippy::as_conversions)]
+                #[inline(always)]
                 fn cast_from(from: std::num::NonZero<$from>) -> $to {
                     from.get() as $to
                 }

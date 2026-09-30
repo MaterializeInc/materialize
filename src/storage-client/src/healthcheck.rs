@@ -174,6 +174,7 @@ pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(
         )
         .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
+        .with_column("swap_bytes", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 

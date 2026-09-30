@@ -26,7 +26,7 @@
 
         {{< tip >}}
         If possible, use a cluster dedicated just for sources. See also
-        [Operational guidelines](/manage/operational-guidelines/#sources).
+        [Operational guidelines](/clusters/operational-guidelines/#sources).
         {{< /tip >}}
 
     - name: "`<connection_name>`"

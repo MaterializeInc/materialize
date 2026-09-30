@@ -1335,6 +1335,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     SumNumeric,
+    SumInterval,
     Count,
     Any,
     All,
@@ -1434,6 +1435,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => mz_expr::AggregateFunc::SumFloat32,
             AggregateFunc::SumFloat64 => mz_expr::AggregateFunc::SumFloat64,
             AggregateFunc::SumNumeric => mz_expr::AggregateFunc::SumNumeric,
+            AggregateFunc::SumInterval => mz_expr::AggregateFunc::SumInterval,
             AggregateFunc::Count => mz_expr::AggregateFunc::Count,
             AggregateFunc::Any => mz_expr::AggregateFunc::Any,
             AggregateFunc::All => mz_expr::AggregateFunc::All,
@@ -1520,6 +1522,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
@@ -1609,6 +1612,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Dummy => input_type.scalar_type,
             AggregateFunc::FusedWindowAgg { funcs } => {
                 let input_types = input_type.scalar_type.unwrap_record_element_column_type();

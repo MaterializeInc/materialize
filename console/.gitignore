@@ -31,3 +31,6 @@ yarn-error.log
 
 # Test logs
 /log
+
+# Storybook static build
+/storybook-static

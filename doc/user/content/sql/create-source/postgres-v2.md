@@ -53,7 +53,7 @@ additional upstream operation considerations.
 
 With the new syntax, after a PostgreSQL source is created, you [`CREATE TABLE
 FROM SOURCE`](/sql/create-table/) to create a corresponding table in
-Matererialize and start ingesting data.
+Materialize and start ingesting data.
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-supported-types" %}}
@@ -109,6 +109,10 @@ name="postgres-physical-standby" %}}
 ## Handling upstream operations
 
 {{% upstream-schema-change-behavior connector="postgres" %}}
+
+## Source failure states and recovery
+
+{{% include-headless "/headless/postgres-failure-states" %}}
 
 ## Examples
 

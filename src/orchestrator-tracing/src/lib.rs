@@ -516,6 +516,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         self.inner.list_services().await
     }
 
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        self.inner.flush().await
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         self.inner.watch_services()
     }

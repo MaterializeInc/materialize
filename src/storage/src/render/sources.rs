@@ -238,7 +238,13 @@ where
             let (upsert, health_update) = scope.scoped(
                 &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
-                    let (previous, previous_token, feedback_handle, backpressure_metrics) = {
+                    let (
+                        previous_ok,
+                        previous_err,
+                        previous_token,
+                        feedback_handle,
+                        backpressure_metrics,
+                    ) = {
                         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
                         let backpressure_max_inflight_bytes = get_backpressure_max_inflight_bytes(
@@ -282,7 +288,9 @@ where
                                             progress_stream: feedback_data,
                                             max_inflight_bytes: storage_dataflow_max_inflight_bytes,
                                             summary: (Default::default(), Subtime::least_summary()),
-                                            metrics: backpressure_metrics.clone(),
+                                            metrics: backpressure_metrics
+                                                .as_ref()
+                                                .map(|m| m.operator_metrics()),
                                         }),
                                         backpressure_metrics,
                                     )
@@ -300,7 +308,7 @@ where
                         let error_handler =
                             storage_state.error_handler("upsert_rehydration", export_id);
 
-                        let (stream, tok) = persist_source::persist_source_core(
+                        let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
                             outer_mz_scope,
                             scope,
                             export_id,
@@ -317,7 +325,8 @@ where
                             error_handler,
                         );
                         (
-                            stream.as_collection(),
+                            ok_stream.as_collection(),
+                            err_stream.as_collection(),
                             Some(tok),
                             feedback_handle,
                             backpressure_metrics,
@@ -350,7 +359,8 @@ where
                                 upsert_input.enter(scope),
                                 upsert_envelope.clone(),
                                 refine_antichain(&resume_upper),
-                                previous,
+                                previous_ok,
+                                previous_err,
                                 previous_token,
                                 export_config,
                                 backpressure_metrics,
@@ -361,7 +371,8 @@ where
                                 upsert_input.enter(scope),
                                 upsert_envelope.clone(),
                                 refine_antichain(&resume_upper),
-                                previous,
+                                previous_ok,
+                                previous_err,
                                 previous_token,
                                 export_config,
                                 &storage_state.instance_context,

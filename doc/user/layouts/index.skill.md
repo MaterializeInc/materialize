@@ -1,6 +1,6 @@
 {{- /* Home page template - generates SKILL.md for Claude */ -}}
 ---
-name: materialize-docs
+name: mz-docs
 description: Materialize documentation for SQL syntax, data ingestion, concepts, and best practices. Use when users ask about Materialize queries, sources, sinks, views, or clusters.
 ---
 
@@ -13,7 +13,7 @@ This skill provides comprehensive documentation for Materialize, a streaming dat
 When a user asks about Materialize:
 
 1. **For SQL syntax/commands**: Read files in the `sql/` directory
-2. **For core concepts**: Read files in the `concepts/` directory
+2. **For core concepts**: Read files in the `fundamentals/concepts/` directory
 3. **For data ingestion**: Read files in the `ingest-data/` directory
 4. **For transformations**: Read files in the `transform-data/` directory
 

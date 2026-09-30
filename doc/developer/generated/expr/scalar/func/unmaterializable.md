@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/unmaterializable.rs
-revision: 94ee2d5448
+revision: c0bf390f78
 ---
 
 # mz-expr::scalar::func::unmaterializable

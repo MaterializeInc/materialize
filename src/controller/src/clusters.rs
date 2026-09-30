@@ -26,7 +26,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
+    TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -312,10 +313,11 @@ impl ReplicaLocation {
         }
     }
 
-    /// A pending replica is created as part of an alter cluster of an managed
-    /// cluster. the configuration of a pending replica will not match that of
-    /// the clusters until the alter has been finalized promoting the pending
-    /// replicas and setting this value to false.
+    /// Whether the replica is durably marked `pending`.
+    ///
+    /// Vestigial: no path creates one anymore. A crash on a version that still
+    /// staged reconfigurations through overlap replicas could have left one
+    /// behind, and the catalog-open migration reaps those.
     pub fn pending(&self) -> bool {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
@@ -374,7 +376,7 @@ pub struct ManagedReplicaLocation {
     /// concretization, not read back from a durable record.
     #[serde(skip)]
     pub availability_zones: Vec<String>,
-    /// Whether the replica is pending reconfiguration
+    /// See [`ReplicaLocation::pending`].
     pub pending: bool,
 }
 
@@ -456,7 +458,6 @@ impl Controller {
         role: ClusterRole,
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
-        enable_storage_introspection_logs: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -484,7 +485,6 @@ impl Controller {
                     role,
                     m,
                     enable_worker_core_affinity,
-                    enable_storage_introspection_logs,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -625,6 +625,7 @@ impl Controller {
             }
         }
 
+        self.orchestrator.flush().await?;
         Ok(())
     }
 
@@ -684,7 +685,6 @@ impl Controller {
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
-        enable_storage_introspection_logs: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -703,11 +703,6 @@ impl Controller {
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
-        // TODO(teskje): use the same values as for compute?
-        let storage_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: 1337,
-            ..Default::default()
-        };
         // These configure the replica's process rather than environmentd's, so
         // they are `ParameterScope::Replica` and must be read through this
         // replica's scoped overrides. They are baked into the process
@@ -715,15 +710,23 @@ impl Controller {
         // environment-wide value or the override reaches the replica only when
         // it is next provisioned.
         let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+        // Storage and compute arrangements share one maintenance policy, so a
+        // unified replica runs both kinds of arrangement under the same reach.
+        let arrangement_exert_proportionality =
+            ARRANGEMENT_EXERT_PROPORTIONALITY.get_with_overrides(&self.dyncfg, overrides);
+        let storage_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality,
+            ..Default::default()
+        };
         let compute_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY
-                .get_with_overrides(&self.dyncfg, overrides),
+            arrangement_exert_proportionality,
             enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get_with_overrides(&self.dyncfg, overrides),
             enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC
                 .get_with_overrides(&self.dyncfg, overrides),
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get_with_overrides(&self.dyncfg, overrides),
             ..Default::default()
         };
+        let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -809,8 +812,8 @@ impl Controller {
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
                     }
-                    if enable_storage_introspection_logs {
-                        args.push("--enable-storage-introspection-logs".into());
+                    if unified_cluster {
+                        args.push("--unified-cluster".into());
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());

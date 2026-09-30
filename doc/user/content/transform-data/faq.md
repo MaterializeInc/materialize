@@ -3,7 +3,7 @@ title: "FAQ: Indexes"
 description: "Frequently asked questions about indexes."
 menu:
   main:
-    name: "FAQ: Indexes"
+    name: "FAQ: indexes"
     identifier: faq-indexes
     parent: transform-data
     weight: 100

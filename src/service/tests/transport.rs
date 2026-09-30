@@ -33,6 +33,13 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Common setup for turmoil tests.
 fn setup() -> turmoil::Sim<'static> {
+    setup_with(|builder| builder)
+}
+
+/// Like [`setup`], but applies additional simulation settings.
+fn setup_with(
+    configure: impl FnOnce(&mut turmoil::Builder) -> &mut turmoil::Builder,
+) -> turmoil::Sim<'static> {
     configure_tracing_for_turmoil();
 
     let seed = std::env::var("SEED")
@@ -42,10 +49,8 @@ fn setup() -> turmoil::Sim<'static> {
 
     info!("initializing rng with seed {seed}");
 
-    turmoil::Builder::new()
-        .enable_random_order()
-        .rng_seed(seed)
-        .build()
+    let mut builder = turmoil::Builder::new();
+    configure(builder.enable_random_order().rng_seed(seed)).build()
 }
 
 /// Helper for connecting to a CTP server that retries until it succeeds.
@@ -151,7 +156,7 @@ fn test_server_error() {
 
     sim.host("server", move || async {
         let (in_tx, mut in_rx) = mpsc::unbounded_channel();
-        let (_out_tx, out_rx) = mpsc::unbounded_channel::<()>();
+        let (out_tx, out_rx) = mpsc::unbounded_channel::<()>();
         let handler = ChannelHandler::new(in_tx, out_rx);
         let handler = Arc::new(Mutex::new(Some(handler)));
 
@@ -167,10 +172,12 @@ fn test_server_error() {
             ),
         );
 
-        // Wait for the client to connect, then shut down.
+        // Wait for the client to connect, then close the handler channel to tear the connection
+        // down. The host stays up so that it answers the client's later writes with a reset.
         assert_eq!(in_rx.recv().await, Some(1));
+        drop(out_tx);
 
-        Ok(())
+        future::pending().await
     });
 
     sim.client("client", async move {
@@ -182,16 +189,97 @@ fn test_server_error() {
         // Server has disconnected.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("unexpected end of file".into()),
+            Err("recv error: unexpected end of file".into()),
         );
+        // Give the send task time to fail on the closed connection as well. The first error is
+        // the one that explains what happened, so it must not be overwritten by the second.
+        tokio::time::sleep(TIMEOUT).await;
+
         // Trying to receive on a failed connection yields more errors.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("unexpected end of file".into()),
+            Err("recv error: unexpected end of file".into()),
         );
 
         Ok(())
     });
+
+    sim.run().unwrap();
+}
+
+/// Tests that a send error is reported even though the recv task fails afterwards.
+///
+/// The one-way partition lets the client keep receiving while its keepalives exhaust the send
+/// window, so only its write deadline can fire. Crashing the server afterwards makes the recv task
+/// fail second, on the error that must not be reported.
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_send_error_reported_first() {
+    // Time at which the server is crashed, chosen to be past the client's write deadline.
+    const CRASH_TIME: Duration = Duration::from_secs(20);
+
+    let mut sim = setup_with(|builder| {
+        builder
+            .tcp_capacity(8)
+            .simulation_duration(Duration::from_secs(60))
+    });
+
+    sim.host("server", move || async {
+        let (in_tx, _in_rx) = mpsc::unbounded_channel::<i32>();
+        let (out_tx, out_rx) = mpsc::unbounded_channel::<i32>();
+        let handler = ChannelHandler::new(in_tx, out_rx);
+        let handler = Arc::new(Mutex::new(Some(handler)));
+
+        // Use a high idle timeout so that the server does not sever the connection itself.
+        mz_ore::task::spawn(
+            || "serve",
+            transport::serve(
+                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                VERSION,
+                Some("server".into()),
+                Duration::from_secs(60 * 60),
+                move || handler.lock().unwrap().take().unwrap(),
+                NoopMetrics,
+            ),
+        );
+
+        // Keep the client's read side busy so that only its write side can time out.
+        loop {
+            out_tx.send(1)?;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+
+    let (ready_tx, mut ready_rx) = oneshot::channel();
+
+    sim.client("client", async move {
+        let mut client =
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+
+        client.recv().await?;
+        ready_tx.send(1).unwrap();
+
+        let error = loop {
+            match client.recv().await {
+                Ok(_) => continue,
+                Err(error) => break error.to_string(),
+            }
+        };
+        assert_eq!(error, "send error: timed out");
+
+        Ok(())
+    });
+
+    // Wait until the client is connected, then drop everything it sends.
+    while ready_rx.try_recv().is_err() {
+        sim.step().unwrap();
+    }
+    sim.partition_oneway("client", "server");
+
+    while sim.elapsed() < CRASH_TIME {
+        sim.step().unwrap();
+    }
+    sim.crash("server");
 
     sim.run().unwrap();
 }
@@ -350,7 +438,7 @@ fn test_idle_timeout() {
         // Connection timed out.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("timed out".into()),
+            Err("recv error: timed out".into()),
         );
 
         Ok(())
@@ -442,7 +530,7 @@ fn test_connection_cancelation() {
         // Connection canceled.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("unexpected end of file".into()),
+            Err("recv error: unexpected end of file".into()),
         );
 
         Ok(())

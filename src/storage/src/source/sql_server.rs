@@ -109,6 +109,7 @@ impl From<DefiniteError> for DataflowError {
         let msg = val.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
             error: SourceErrorDetails::Other(msg),
+            hint: None,
         }))
     }
 }

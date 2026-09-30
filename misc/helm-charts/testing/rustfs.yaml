@@ -1,0 +1,103 @@
+---
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustfs
+  namespace: materialize
+  labels:
+    app: rustfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rustfs
+  template:
+    metadata:
+      labels:
+        app: rustfs
+    spec:
+      containers:
+      - name: rustfs
+        image: rustfs/rustfs:1.0.0-beta.12-preview.1
+        env:
+        - name: RUSTFS_ACCESS_KEY
+          value: "rustfsadmin"
+        - name: RUSTFS_SECRET_KEY
+          value: "rustfsadmin"
+        - name: RUSTFS_ADDRESS
+          value: ":9000"
+        - name: RUSTFS_VOLUMES
+          value: "/data"
+        ports:
+        - containerPort: 9000
+        volumeMounts:
+        - name: storage
+          mountPath: /data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs
+  namespace: materialize
+spec:
+  ports:
+    - port: 9000
+      targetPort: 9000
+  selector:
+    app: rustfs
+---
+# RustFS does not create buckets on its own. `mb` fails if the bucket already
+# exists, so `ls` is the fallback that lets a retried pod succeed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rustfs-setup
+  namespace: materialize
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: awscli
+        image: amazon/aws-cli:2.31.19
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          value: "rustfsadmin"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "rustfsadmin"
+        - name: AWS_DEFAULT_REGION
+          value: "us-east-1"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          ep=http://rustfs.materialize.svc.cluster.local:9000
+          until aws --endpoint-url "$ep" s3 mb s3://bucket ||
+                aws --endpoint-url "$ep" s3 ls s3://bucket; do
+            echo "waiting for rustfs..."; sleep 3
+          done

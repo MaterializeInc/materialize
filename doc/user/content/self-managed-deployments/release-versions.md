@@ -4,6 +4,7 @@ description: ""
 menu:
   main:
     parent: "sm-deployments"
+    name: "Self-Managed release versions"
     weight: 95
 aliases:
   - /installation/release-versions/

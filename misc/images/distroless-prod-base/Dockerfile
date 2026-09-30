@@ -13,7 +13,7 @@
 # Debian packages for the distroless final image, which has no package manager.
 # Installing them explicitly pulls current security-patched builds.
 # The digest pin is bumped by dependabot, which also busts the layer cache.
-FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS apt-deps
+FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS apt-deps
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates eatmydata liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,7 +26,7 @@ MZFROM tini-static AS tini
 # The `materialize` user (uid/gid 999), built here because the distroless final
 # image has no shell to run `useradd`. uid 999 matches the orchestrator's
 # hardcoded runAsUser/fsGroup, so no UID gate is needed.
-FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS useradd
+FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS useradd
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata /scratch \
@@ -35,7 +35,7 @@ RUN groupadd --system --gid=999 materialize \
 # `debug-nonroot` adds a busybox shell (`/busybox/sh`), kept intentionally so
 # entrypoint.sh and `kubectl exec` keep working. A later step can drop to the
 # shell-less variant. The digest pin is bumped by dependabot.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:0501a0f4bf6e8b6b2b72d6cbd7271d851c834053d2ae825595be0359fbb0e1ad
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:f525a9a37aed3e8a848f46cfe055999782d66ed797e9e2886928c8caaaa4fc52
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1
@@ -56,16 +56,6 @@ COPY --from=apt-deps /usr/lib/*/liblzma.so.5* /usr/lib/
 # The distroless base ships a CA bundle frozen at its build time. Copy a
 # current one from the apt stage instead.
 COPY --from=apt-deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
-# FoundationDB client library, dynamically linked by environmentd and clusterd.
-# NOTE: this tag is coupled to two other pins and all three must move
-# together: the same COPY in `debian-base` (both prod bases must ship an
-# identical libfdb_c.so, since environmentd and clusterd share one FoundationDB
-# cluster during a rolling upgrade) and the
-# `foundationdb` crate's `fdb-7_3` API feature in the root Cargo.toml. A
-# dependabot bump here that is not matched in the other two is a bug, not a
-# routine update.
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 
 # Replace the base image's glibc example nsswitch.conf, whose `compat`
 # backend segfaults the statically-linked `ssh` (see comments in the file).

@@ -1,0 +1,38 @@
+{
+  "type": "record",
+  "name": "ledger_entry_envelope",
+  "namespace": "cdc_bare_",
+  "fields": [
+    {
+      "name": "record",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "ledger_entry",
+          "fields": [
+            {"name": "id", "type": ["null", "string"], "default": null,
+             "__crdb__": "id UUID NOT NULL DEFAULT gen_random_uuid()"},
+            {"name": "account_id", "type": ["null", "long"], "default": null,
+             "__crdb__": "account_id INT8 NOT NULL"},
+            {"name": "type", "type": ["null", "string"], "default": null,
+             "__crdb__": "type public.ledger_entry_type NOT NULL"},
+            {"name": "created", "type": ["null", {"type": "long", "logicalType": "timestamp-micros"}],
+             "default": null, "__crdb__": "created TIMESTAMPTZ NOT NULL DEFAULT now():::TIMESTAMPTZ"},
+            {"name": "amount",
+             "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 14, "scale": 4}, "string"],
+             "default": null, "__crdb__": "amount DECIMAL(14,4) NOT NULL"},
+            {"name": "fee",
+             "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 14, "scale": 4}, "string"],
+             "default": null, "__crdb__": "fee DECIMAL(14,4) NOT NULL"},
+            {"name": "currency", "type": ["null", "string"], "default": null,
+             "__crdb__": "currency VARCHAR(3) NOT NULL"},
+            {"name": "details", "type": ["null", "string"], "default": null,
+             "__crdb__": "details JSONB NULL"}
+          ]
+        }
+      ],
+      "default": null
+    }
+  ]
+}

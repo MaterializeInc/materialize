@@ -15,8 +15,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, MAX_REQUEST_SIZE, Pgbuf,
-    parse_frame_len,
+    Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, MAX_PREAUTH_FRAME_SIZE,
+    MAX_REQUEST_SIZE, Pgbuf, parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
@@ -37,6 +37,11 @@ impl From<ErrorResponse> for BackendMessage {
 }
 
 /// A connection that manages the encoding and decoding of pgwire frames.
+///
+/// This decodes at most one frame per connection, the client's credential, and
+/// is bounded by [`MAX_PREAUTH_FRAME_SIZE`] throughout. Once the destination is
+/// resolved the connection is spliced and the remaining bytes are proxied
+/// without being framed.
 pub struct FramedConn<A> {
     inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
 }
@@ -249,7 +254,7 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let msg_type = src[0];
-                    let frame_len = parse_frame_len(&src[1..])?;
+                    let frame_len = parse_frame_len(&src[1..], MAX_PREAUTH_FRAME_SIZE)?;
                     src.advance(5);
                     src.reserve(frame_len);
                     self.decode_state = DecodeState::Data(msg_type, frame_len);

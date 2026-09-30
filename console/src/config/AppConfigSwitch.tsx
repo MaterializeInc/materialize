@@ -37,8 +37,7 @@ type CloudFronteggRuntimeConfig = {
 };
 
 export type CloudRuntimeConfig =
-  | CloudFronteggRuntimeConfig
-  | CloudImpersonationRuntimeConfig;
+  CloudFronteggRuntimeConfig | CloudImpersonationRuntimeConfig;
 
 type SelfManagedOidcAvailableRuntimeConfig = {
   isOidcAvailable: true;
@@ -73,8 +72,7 @@ type SelfManagedConfigElementFunction = (
 ) => React.ReactNode;
 
 type SelfManagedConfigElement =
-  | React.ReactNode
-  | SelfManagedConfigElementFunction;
+  React.ReactNode | SelfManagedConfigElementFunction;
 
 const CloudConfigElementWrapper = ({
   cloudAppConfig,

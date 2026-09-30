@@ -51,6 +51,24 @@ impl std::fmt::Display for RangeLower {
 }
 impl crate::func::FuncName for RangeLower {
     const NAME: &'static str = stringify!(range_lower);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(sqlname = \"rangelower\", is_monotone = true,)] fn range_lower<'a, T>(a: Range<T>) -> Option<T>",
+        signature: "fn(Range<T>) -> Option<T>",
+        body_fingerprint: 17676087085653280109u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Range<Datum<'static>>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()

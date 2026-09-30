@@ -35,7 +35,7 @@ tracing.workspace = true
 sentry-tracing.workspace = true
 
 [dev-dependencies]
-mz-ore = { path = "../ore", features = ["turmoil"] }
+mz-ore = { path = "../ore", features = ["test", "turmoil"] }
 rand.workspace = true
 tracing-subscriber.workspace = true
 turmoil.workspace = true

@@ -67,7 +67,7 @@ impl BlobHedgeMetrics {
             )),
             armed: registry.register(metric!(
                 name: "mz_persist_blob_hedge_armed",
-                help: "1 if this process opened a hedge sibling and can hedge when enabled",
+                help: "1 once this process has opened a hedge sibling and can hedge when enabled",
             )),
             rtt_latency: registry.register(metric!(
                 name: "mz_persist_blob_hedge_rtt_latency",

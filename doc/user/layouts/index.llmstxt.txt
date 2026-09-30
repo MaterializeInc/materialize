@@ -56,7 +56,7 @@
   when it canonically stands for a top-level content section: either its page IS
   that section's index page, or its identifier resolves to one. The first test
   has to compare paths, not just .Section, because a nested page can register a
-  top-level nav entry (content/integrations/mcp-server/_index.md does, at weight
+  top-level nav entry (content/developer-tools/mcp-server/_index.md does, at weight
   48) and would otherwise claim the whole integrations group at the wrong
   position. The identifier test covers the header-only entries declared in
   config.toml, which have no page at all.

@@ -61,7 +61,7 @@ When using Looker with Materialize, be aware of the following limitations:
       ```
 
    b. Via the Materialize Console:
-      - Go to [Materialize Console](/console/)
+      - Go to [Materialize Console](/developer-tools/console/)
       - Navigate to Query History
       - Filter by 'Running' queries
       - Click on the query you want to cancel

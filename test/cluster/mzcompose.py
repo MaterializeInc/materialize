@@ -256,6 +256,12 @@ def workflow_test_github_3553(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
+# How many dataflows `test_github_4443` tolerates as not yet compacted out of a
+# command history. Compaction is asynchronous, so a sample can catch dataflows
+# the history has already dropped but not yet collapsed.
+MAX_LINGERING_DATAFLOWS = 5
+
+
 def workflow_test_github_4443(c: Composition) -> None:
     """
     Test that compute command history does not leak peek commands.
@@ -355,24 +361,41 @@ def workflow_test_github_4443(c: Composition) -> None:
         # Obtain initial history size and dataflow count.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
         (
-            controller_command_count,
+            initial_controller_command_count,
             controller_dataflow_count,
-            replica_command_count,
+            initial_replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
-        assert controller_command_count > 0, "controller history cannot be empty"
+
+        # Curated metric sinks install one dataflow per definition on every replica,
+        # so they add to the aggregate history dataflow counts above. That metric
+        # carries no per-dataflow label to filter on, so subtract the live count of
+        # curated sink dataflows rather than hardcoding it, keeping the bounds
+        # correct as the CURATED set grows. Read the count off cluster1's own
+        # replica, the one whose history the metrics above describe.
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            cursor.execute(
+                b"SELECT count(*) FROM mz_introspection.mz_dataflows"
+                b" WHERE name LIKE '%metric-sink-%'"
+            )
+            metric_sink_dataflows = int(cursor.fetchall()[0][0])
+
+        assert (
+            initial_controller_command_count > 0
+        ), "controller history cannot be empty"
         assert (
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in controller history"
-        assert replica_command_count > 0, "replica history cannot be empty"
+        assert initial_replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -411,23 +434,41 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
+        # `ComputeCommandHistory` compacts only once the command count exceeds twice the count
+        # left by the previous compaction, so a healthy history oscillates between the compacted
+        # size and twice it. Both samples are drawn at an unknown point of that cycle, so the
+        # second can legitimately be twice the first. On top of that sits an allowance for the
+        # lingering dataflows the bounds below tolerate, each of which holds a `CreateDataflow`,
+        # a `Schedule`, and an `AllowCompaction` command. Bounding the second sample that way
+        # still catches a history that grows per peek, which is what this test is about: 400
+        # peeks that fail to retire land orders of magnitude above it. A fixed bound would
+        # instead need retuning whenever the object count installed at boot changes.
+        lingering_dataflow_commands = 3 * MAX_LINGERING_DATAFLOWS
         assert (
-            controller_command_count < 100
-        ), f"controller history grew more than expected after peeks, got {controller_command_count}"
+            controller_command_count
+            <= 2 * initial_controller_command_count + lingering_dataflow_commands
+        ), (
+            "controller history grew more than expected after peeks, got"
+            f" {controller_command_count}, started at {initial_controller_command_count}"
+        )
         assert (
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
-            replica_command_count < 100
-        ), f"replica history grew more than expected after peeks, got {replica_command_count}"
+            replica_command_count
+            <= 2 * initial_replica_command_count + lingering_dataflow_commands
+        ), (
+            "replica history grew more than expected after peeks, got"
+            f" {replica_command_count}, started at {initial_replica_command_count}"
+        )
         assert (
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
@@ -2461,7 +2502,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         time.sleep(10)
         envd = c.invoke("logs", "materialized", capture=True)
         print(envd.stdout)
-        assert "replica task failed: timed out" in envd.stdout
+        assert "replica task failed: recv error: timed out" in envd.stdout
 
 
 class Metrics:
@@ -5206,6 +5247,89 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
 
 
+def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
+    """A panic during optimization fails the statement and leaves environmentd
+    running, on every sequencing path and at every optimization stage the
+    path reaches.
+
+    Each path is meant to run the optimizer through `catch_unwind_optimize`,
+    which turns a panic into an internal error. A path that calls the
+    optimizer directly lets the panic reach the panic hook, which aborts the
+    process; the OCC read-then-write path did that (SQL-686). The
+    `optimize_mir_local`, `optimize_dataflow` and `finalize_dataflow`
+    failpoints sit at the start of the three stages, so a path with two
+    wrapped calls gets both of them exercised.
+    """
+    LOCAL = "optimize_mir_local"
+    GLOBAL = "optimize_dataflow"
+    LIR = "finalize_dataflow"
+    # Statements are expected to fail, so nothing they would create exists
+    # for the next round.
+    cases = [
+        ("SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("SUBSCRIBE (SELECT * FROM t)", [LOCAL, GLOBAL, LIR]),
+        ("CREATE VIEW v2 AS SELECT * FROM t", [LOCAL]),
+        ("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("CREATE INDEX i ON t (a)", [GLOBAL, LIR]),
+        ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
+    ]
+
+    def check(frontend_peek: bool) -> None:
+        c.sql(
+            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
+            port=6877,
+            user="mz_system",
+        )
+        # The peek flag is read when a connection is set up, so use a fresh one.
+        with c.sql_cursor() as cur:
+            # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
+            # rows forever.
+            cur.execute("SET statement_timeout = '30s'")
+            for statement, failpoints in cases:
+                for failpoint in failpoints:
+                    cur.execute(
+                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                    )
+                    try:
+                        cur.execute(statement.encode())
+                    except DatabaseError as e:
+                        assert "unexpected panic during query optimization" in str(e), (
+                            statement,
+                            failpoint,
+                            e,
+                        )
+                    else:
+                        raise AssertionError(
+                            f"{statement!r} succeeded with {failpoint} set to panic"
+                        )
+                    finally:
+                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+            # The statements failed on their own; the process they ran in did not.
+            cur.execute("SELECT count(*) FROM t")
+            assert cur.fetchall() == [(1,)]
+
+    # Read at startup, so the read-then-write path needs a restart to switch.
+    for occ in (False, True):
+        with c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "enable_adapter_frontend_occ_read_then_write": str(occ).lower()
+                },
+            )
+        ):
+            c.up("materialized")
+            c.sql(dedent("""
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (a int);
+                INSERT INTO t VALUES (1);
+                CREATE VIEW v AS SELECT a FROM t;
+                """))
+            for frontend_peek in (False, True):
+                check(frontend_peek)
+            c.kill("materialized")
+            c.rm("materialized")
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
@@ -6371,6 +6495,121 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                   WHERE replica_id = '{replica_id}'
                 true
                 """))
+
+
+def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
+    c.up("materialized")
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_background_alter_cluster = true;
+        ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
+        ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
+        ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
+        SET failpoints = 'cluster_controller_hold_readiness=return';
+        """,
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("""
+        CREATE CLUSTER lag_gate SIZE 'scale=1,workers=1';
+        CREATE TABLE lag_gate_table (a int);
+        CREATE DEFAULT INDEX IN CLUSTER lag_gate ON lag_gate_table;
+        INSERT INTO lag_gate_table VALUES (1);
+        ALTER CLUSTER lag_gate SET (SIZE = 'scale=1,workers=2');
+        """)
+
+    def wait_for(query: str) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if c.sql_query(query) == [(True,)]:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"condition did not become true: {query}")
+
+    replicas = """
+        SELECT r.id FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id
+        WHERE c.name = 'lag_gate'
+    """
+    wait_for(f"SELECT count(*) = 2 FROM ({replicas})")
+    outgoing, target = sorted(
+        (row[0] for row in c.sql_query(replicas)), key=lambda id: int(id[1:])
+    )
+    index_id = c.sql_query("""
+        SELECT i.id FROM mz_indexes i JOIN mz_tables t ON i.on_id = t.id
+        WHERE t.name = 'lag_gate_table'
+        """)[0][0]
+    wait_for(f"""
+        SELECT count(*) = 2 AND bool_and(hydrated)
+        FROM mz_internal.mz_compute_hydration_statuses
+        WHERE object_id = '{index_id}' AND replica_id IN ('{outgoing}', '{target}')
+        """)
+
+    # The process orchestrator records each worker process in its service's
+    # run directory. Stop only the replacement after real hydration, leaving
+    # its connection and the outgoing replica running.
+    pid_files = c.exec(
+        "materialized",
+        "find",
+        "/tmp",
+        "-path",
+        f"*/cluster-*-replica-{target}-gen-*/0.pid",
+        capture=True,
+    ).stdout.splitlines()
+    assert len(pid_files) == 1, pid_files
+    pid = c.exec(
+        "materialized", "head", "-n", "1", pid_files[0], capture=True
+    ).stdout.strip()
+    assert pid.isdigit(), pid
+    c.exec("materialized", "kill", "-STOP", pid)
+    try:
+        c.sql("INSERT INTO lag_gate_table VALUES (2)")
+        wait_for(f"""
+            SELECT old.write_frontier > new.write_frontier
+            FROM mz_catalog.mz_cluster_replica_frontiers old
+            JOIN mz_catalog.mz_cluster_replica_frontiers new USING (object_id)
+            WHERE old.object_id = '{index_id}'
+              AND old.replica_id = '{outgoing}' AND new.replica_id = '{target}'
+            """)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+        # Observe an actual failed readiness probe before asserting retention.
+        # Merely sleeping and checking the catalog could pass without a probe.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            assert len(c.sql_query(replicas)) == 2, "cut over to a lagging replacement"
+            logs = c.invoke("logs", "materialized", capture=True).stdout
+            if any(
+                "collections are not ready" in line
+                and re.search(
+                    rf"lagging_ticks=\{{[^}}]*User\({index_id[1:]}\): [1-9][0-9]*", line
+                )
+                for line in logs.splitlines()
+            ):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("no lagging replacement readiness probe observed")
+        assert len(c.sql_query(replicas)) == 2
+        assert c.sql_query("SELECT size FROM mz_clusters WHERE name = 'lag_gate'") == [
+            ("scale=1,workers=1",)
+        ]
+    finally:
+        c.exec("materialized", "kill", "-CONT", pid)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+
+    wait_for("""
+        SELECT size = 'scale=1,workers=2' FROM mz_clusters WHERE name = 'lag_gate'
+        """)
+    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+    assert c.sql_query(replicas) == [(target,)]
 
 
 def workflow_test_zero_downtime_reconfigure(

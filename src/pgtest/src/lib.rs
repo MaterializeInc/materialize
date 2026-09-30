@@ -27,11 +27,11 @@
 //! messages sent and received.
 //!
 //! Supported `send` types:
-//! - [`Query`](struct.Query.html)
-//! - [`Parse`](struct.Parse.html)
-//! - [`Describe`](struct.Describe.html)
-//! - [`Bind`](struct.Bind.html)
-//! - [`Execute`](struct.Execute.html)
+//! - [`Query`]
+//! - [`Parse`]
+//! - [`Describe`]
+//! - [`Bind`]
+//! - [`Execute`]
 //! - `Sync`
 //!
 //! Supported `until` arguments:

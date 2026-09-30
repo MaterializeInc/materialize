@@ -7,10 +7,10 @@ Cluster autoscaling
 
 When you create an index, materialized view, or Kafka upsert source, or when a
 cluster restarts, the cluster must
-[hydrate](/concepts/hydration/) the affected
+[hydrate](/fundamentals/concepts/hydration/) the affected
 objects before they can serve results. Hydration reads the input data
 and rebuilds in-memory state, and its speed scales with the cluster
-[size](#available-sizes).
+[size](/sql/create-cluster/#available-sizes).
 
 The `AUTO SCALING STRATEGY (ON HYDRATION)` option lets a cluster **automatically
 provision an extra burst replica at the configured `HYDRATION SIZE` while it has
@@ -19,7 +19,7 @@ cluster up before hydration and back down afterward. The steady-size replicas
 continue hydrating in parallel, and once one of them catches up with the burst,
 the burst replica lingers for the `LINGER DURATION` and is then removed. The
 burst replica is an ordinary cluster replica, billed only for the time it is
-provisioned. See [Usage & billing](/administration/billing/) for details.
+provisioned. See [Usage & billing](/materialize-cloud/billing/) for details.
 
 `AUTO SCALING STRATEGY (ON HYDRATION)` is particularly useful for [blue/green
 deployments](/manage/blue-green/), where a new cluster must hydrate before the
@@ -44,7 +44,7 @@ You can specify the following options:
 
 Option | Description
 -------|------------
-`HYDRATION SIZE` | The [size](#available-sizes) of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
+`HYDRATION SIZE` | The [size](/sql/create-cluster/#available-sizes) of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
 `LINGER DURATION` | Optional. How long the burst replica lingers after a steady-size replica catches up, before it is removed. Default: `0s`.
 
 Provisioning the burst replica requires enough compute capacity to run it. In
@@ -60,5 +60,5 @@ To remove the autoscaling strategy from a cluster, use `ALTER CLUSTER ... RESET
 ()`.
 
 You can inspect the configured strategy and any in-flight burst in the
-[`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies)
+[`mz_internal.mz_cluster_auto_scaling_strategies`](/sql/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies)
 catalog view.

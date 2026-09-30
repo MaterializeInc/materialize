@@ -199,6 +199,10 @@ name="postgres-inherited-tables-action-legacy" %}}
 
 {{% upstream-schema-change-behavior connector="postgres" %}}
 
+## Source failure states and recovery
+
+{{% include-headless "/headless/postgres-failure-states" %}}
+
 ## Examples
 
 {{< important >}}

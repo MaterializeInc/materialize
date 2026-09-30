@@ -1365,12 +1365,9 @@ fn follow_up_write_gets_a_permit(client: &mut postgres::Client, iteration: i32, 
 /// installs for itself. An OCC read-then-write's internal subscribe is a
 /// dataflow, so this catches a `SubscribeHandle` whose drop never tore it down.
 fn wait_for_no_dataflows(client: &mut postgres::Client, context: &str) {
-    // Storage operators have their IDs offset by STORAGE_ID_OFFSET (1 << 48),
-    // so they are excluded by id.
     const DATAFLOW_QUERY: &str = "SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%' \
-        AND id < 281474976710656";
+        WHERE name NOT LIKE '%introspection-subscribe%'";
 
     Retry::default()
         .max_duration(Duration::from_secs(60))

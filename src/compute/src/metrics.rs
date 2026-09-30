@@ -46,6 +46,9 @@ pub struct ComputeMetrics {
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
 
+    // logging
+    logging_records_total: raw::IntCounterVec,
+
     // timings
     //
     // Note that this particular metric unfortunately takes some care to
@@ -57,8 +60,8 @@ pub struct ComputeMetrics {
     // yielding, but it should hopefully alert us when there is something to
     // look at.
     timely_step_duration_seconds: HistogramVec,
+    logging_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
-    stashed_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
 
     // Index peek timing phases (per-cluster, no worker label)
@@ -72,6 +75,11 @@ pub struct ComputeMetrics {
     index_peek_result_sort_rows: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
+    index_peek_walks_total: raw::IntCounterVec,
+    index_peek_stashed_total: IntCounter,
+    index_peek_permit_queue_depth: UIntGauge,
+    index_peek_permit_wait_seconds: Histogram,
+    index_peek_offload_seconds: Histogram,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -85,6 +93,9 @@ pub struct ComputeMetrics {
 
     // subscribes
     subscribe_snapshots_skipped_total: IntCounter,
+
+    // metric sinks
+    metric_sink_registration_retries_total: IntCounter,
 }
 
 /// Applies the per-role const label to `opts`, unless `role` is `Solo`.
@@ -191,6 +202,17 @@ impl ComputeMetrics {
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
             ), role)),
+            logging_step_duration_seconds: registry.register(with_role(metric!(
+                name: "mz_compute_logging_step_duration_seconds",
+                help: "The time spent in each scheduling of the logging dataflow.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_016, 8.0),
+            ), role)),
+            logging_records_total: registry.register(with_role(metric!(
+                name: "mz_compute_logging_records_total",
+                help: "The number of log records handed to the logging dataflow, by log.",
+                var_labels: ["worker_id", "log"],
+            ), role)),
             shared_row_heap_capacity_bytes: registry.register(with_role(metric!(
                 name: "mz_dataflow_shared_row_heap_capacity_bytes",
                 help: "The heap capacity of the shared row.",
@@ -199,12 +221,6 @@ impl ComputeMetrics {
             persist_peek_seconds: registry.register(with_role(metric!(
                 name: "mz_persist_peek_seconds",
                 help: "Time spent in (experimental) Persist fast-path peeks.",
-                var_labels: ["worker_id"],
-                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            ), role)),
-            stashed_peek_seconds: registry.register(with_role(metric!(
-                name: "mz_stashed_peek_seconds",
-                help: "Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).",
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
@@ -217,7 +233,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.",
+                help: "Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
@@ -227,17 +243,17 @@ impl ComputeMetrics {
             ), role)),
             index_peek_error_scan_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_error_scan_seconds",
-                help: "Time scanning the error trace for errors.",
+                help: "Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_cursor_setup_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_cursor_setup_seconds",
-                help: "Time setting up cursor and literal constraints.",
+                help: "Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows and evaluating MFP.",
+                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_rows: registry.register(with_role(metric!(
@@ -247,12 +263,12 @@ impl ComputeMetrics {
             ), role)),
             index_peek_result_sort_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_seconds",
-                help: "Time sorting intermediate results during peek collection.",
+                help: "Time thinning intermediate results down to the rows a peek's finishing needs.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_result_sort_rows: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_rows",
-                help: "Number of intermediate result rows sorted during peek collection, summed across sort operations.",
+                help: "Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.",
                 buckets: index_peek_row_buckets,
             ), role)),
             index_peek_frontier_check_seconds: registry.register(with_role(metric!(
@@ -262,7 +278,30 @@ impl ComputeMetrics {
             ), role)),
             index_peek_row_collection_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_collection_seconds",
-                help: "Time constructing RowCollection from peek results.",
+                help: "Time constructing RowCollection from peek results, including converting the row counts the scan produced.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            index_peek_walks_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_walks_total",
+                help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it.",
+                var_labels: ["substrate"],
+            ), role)),
+            index_peek_stashed_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_stashed_total",
+                help: "The number of index peek walks that answered with a handle to the peek response stash, always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`.",
+            ), role)),
+            index_peek_permit_queue_depth: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_queue_depth",
+                help: "The number of offloaded index peek walks waiting for a permit to run.",
+            ), role)),
+            index_peek_permit_wait_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_wait_seconds",
+                help: "Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            index_peek_offload_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_offload_seconds",
+                help: "Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             replica_expiration_timestamp_seconds: registry.register(with_role(metric!(
@@ -283,6 +322,10 @@ impl ComputeMetrics {
             subscribe_snapshots_skipped_total: registry.register(with_role(metric!(
                 name: "mz_subscribe_snapshots_skipped_total",
                 help: "The number of collection snapshots that were skipped by the subscribe snapshot optimization.",
+            ), role)),
+            metric_sink_registration_retries_total: registry.register(with_role(metric!(
+                name: "mz_compute_metric_sink_registration_retries_total",
+                help: "The number of times a metric sink failed to register its collector and scheduled a retry.",
             ), role)),
         }
     }
@@ -305,7 +348,6 @@ impl ComputeMetrics {
             .timely_step_duration_seconds
             .with_label_values(&[&worker]);
         let persist_peek_seconds = self.persist_peek_seconds.with_label_values(&[&worker]);
-        let stashed_peek_seconds = self.stashed_peek_seconds.with_label_values(&[&worker]);
         let handle_command_duration_seconds = CommandMetrics::build(|typ| {
             self.handle_command_duration_seconds
                 .with_label_values(&[worker.as_ref(), typ])
@@ -320,6 +362,14 @@ impl ComputeMetrics {
         let index_peek_result_sort_rows = self.index_peek_result_sort_rows.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
+        let index_peek_walks_inline = self.index_peek_walks_total.with_label_values(&["inline"]);
+        let index_peek_walks_offloaded = self
+            .index_peek_walks_total
+            .with_label_values(&["offloaded"]);
+        let index_peek_stashed_total = self.index_peek_stashed_total.clone();
+        let index_peek_permit_queue_depth = self.index_peek_permit_queue_depth.clone();
+        let index_peek_permit_wait_seconds = self.index_peek_permit_wait_seconds.clone();
+        let index_peek_offload_seconds = self.index_peek_offload_seconds.clone();
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -337,7 +387,6 @@ impl ComputeMetrics {
             arrangement_maintenance_active_info,
             timely_step_duration_seconds,
             persist_peek_seconds,
-            stashed_peek_seconds,
             handle_command_duration_seconds,
             index_peek_total_seconds,
             index_peek_seek_fulfillment_seconds,
@@ -349,11 +398,28 @@ impl ComputeMetrics {
             index_peek_result_sort_rows,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
+            index_peek_walks_inline,
+            index_peek_walks_offloaded,
+            index_peek_stashed_total,
+            index_peek_permit_queue_depth,
+            index_peek_permit_wait_seconds,
+            index_peek_offload_seconds,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
         }
     }
+}
+
+/// Per-worker metrics of the logging dataflow.
+#[derive(Clone, Debug)]
+pub(crate) struct LoggingMetrics {
+    pub(crate) timely_records_total: IntCounter,
+    pub(crate) reachability_records_total: IntCounter,
+    pub(crate) differential_records_total: IntCounter,
+    pub(crate) compute_records_total: IntCounter,
+    /// Duration of each scheduling of the logging dataflow as a whole.
+    pub(crate) step_duration_seconds: Histogram,
 }
 
 /// Per-worker metrics.
@@ -374,8 +440,6 @@ pub struct WorkerMetrics {
     pub(crate) timely_step_duration_seconds: Histogram,
     /// Histogram of persist peek durations.
     pub(crate) persist_peek_seconds: Histogram,
-    /// Histogram of stashed peek durations.
-    pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
     /// Histogram of total index peek durations.
@@ -398,6 +462,25 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.
     pub(crate) index_peek_row_collection_seconds: Histogram,
+    /// Counts index peek walks that ran on the timely worker.
+    ///
+    /// Both substrate series are resolved when the worker's metrics are built, so each exists at
+    /// zero before its first walk. A series at zero says the offload never engaged, where an absent
+    /// series says nothing.
+    pub(crate) index_peek_walks_inline: IntCounter,
+    /// Counts index peek walks that ran away from the timely worker.
+    pub(crate) index_peek_walks_offloaded: IntCounter,
+    /// Counts index peek walks that answered from the peek response stash.
+    ///
+    /// Resolved when the worker's metrics are built, so it reports zero before the first stashed
+    /// answer rather than being absent. Whether a peek reached the stash has no other signal.
+    pub(crate) index_peek_stashed_total: IntCounter,
+    /// How many offloaded index peek walks are waiting for a permit.
+    pub(crate) index_peek_permit_queue_depth: UIntGauge,
+    /// Histogram of how long an offloaded index peek walk waited for its permit.
+    pub(crate) index_peek_permit_wait_seconds: Histogram,
+    /// Histogram of how long an offloaded index peek walk was away from the worker.
+    pub(crate) index_peek_offload_seconds: Histogram,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.
@@ -407,6 +490,24 @@ pub struct WorkerMetrics {
 }
 
 impl WorkerMetrics {
+    pub(crate) fn for_logging(&self) -> LoggingMetrics {
+        let records_total = |log| {
+            self.metrics
+                .logging_records_total
+                .with_label_values(&[self.worker_label.as_ref(), log])
+        };
+        LoggingMetrics {
+            timely_records_total: records_total("timely"),
+            reachability_records_total: records_total("reachability"),
+            differential_records_total: records_total("differential"),
+            compute_records_total: records_total("compute"),
+            step_duration_seconds: self
+                .metrics
+                .logging_step_duration_seconds
+                .with_label_values(&[&self.worker_label]),
+        }
+    }
+
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let command_counts = CommandMetrics::build(|typ| {
             self.metrics
@@ -505,6 +606,15 @@ impl WorkerMetrics {
 
     pub fn inc_subscribe_snapshot_optimization(&self) {
         self.metrics.subscribe_snapshots_skipped_total.inc()
+    }
+
+    /// Increment the count of metric sink collector registrations that collided and will be
+    /// retried.
+    ///
+    /// Unlabeled on purpose: this is an "is registration contending" signal, and the sink's
+    /// identity comes from the log line the sink emits on its first failure.
+    pub fn inc_metric_sink_registration_retries(&self) {
+        self.metrics.metric_sink_registration_retries_total.inc()
     }
 
     /// Sets the workload class for the compute metrics.

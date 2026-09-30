@@ -1,6 +1,6 @@
 ---
 source: src/avro/src/writer.rs
-revision: 96f48dd2ed
+revision: cb515b8ef6
 ---
 
 Provides the `Writer<W>` type for producing Avro Object Container Files.

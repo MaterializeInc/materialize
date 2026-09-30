@@ -38,7 +38,7 @@ use mz_repr::{Datum, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker, ColumnMerger};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use timely::container::ContainerBuilder;
 use timely::container::PushInto;
 use timely::progress::Antichain;

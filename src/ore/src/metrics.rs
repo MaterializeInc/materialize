@@ -42,6 +42,7 @@
 //! ```
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -306,25 +307,41 @@ impl MetricsRegistry {
     /// missing series rather than taking down the whole scrape. The contract is that a caller
     /// replacing a collector must drop the old handle before registering the new one: doing so
     /// unregisters the old descriptor id first, so the re-registration succeeds cleanly.
+    ///
+    /// A caller that expects such a collision should use
+    /// [`MetricsRegistry::try_register_collector_with_dropper`] instead.
     pub fn register_collector_with_dropper<C>(&self, collector: C) -> Box<dyn Any + Send + Sync>
     where
         C: 'static + prometheus::core::Collector + Clone + Send + Sync,
     {
-        match self.inner.register(Box::new(collector.clone())) {
-            Ok(()) => {
-                // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the
-                // same underlying registry the collector was registered into.
-                let registry = self.inner.clone();
-                Box::new(scopeguard::guard(collector, move |c| {
-                    let _ = registry.unregister(Box::new(c));
-                }))
-            }
-            Err(e) => {
+        self.try_register_collector_with_dropper(collector)
+            .unwrap_or_else(|e| {
                 crate::soft_panic_or_log!("collector already registered: {e}");
                 // Nothing was registered, so the handle must not unregister anything on drop.
                 Box::new(())
-            }
-        }
+            })
+    }
+
+    /// Like [`MetricsRegistry::register_collector_with_dropper`], but returns `Err` on a duplicate
+    /// descriptor id instead of soft-panicking.
+    ///
+    /// For callers that expect a transient collision, where a collector is re-registered before
+    /// its predecessor's teardown has dropped the old handle, and want to retry until the id frees
+    /// up. Nothing is registered on `Err`, so the caller may retry with the same collector.
+    pub fn try_register_collector_with_dropper<C>(
+        &self,
+        collector: C,
+    ) -> Result<Box<dyn Any + Send + Sync>, prometheus::Error>
+    where
+        C: 'static + prometheus::core::Collector + Clone + Send + Sync,
+    {
+        self.inner.register(Box::new(collector.clone()))?;
+        // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the same
+        // underlying registry the collector was registered into.
+        let registry = self.inner.clone();
+        Ok(Box::new(scopeguard::guard(collector, move |c| {
+            let _ = registry.unregister(Box::new(c));
+        })))
     }
 
     /// Registers a metric postprocessor.
@@ -1027,10 +1044,45 @@ pub fn describe_runtime_metrics() -> Vec<(String, String, Vec<String>, &'static 
         .collect()
 }
 
+/// Removes every child of `vec` whose label `name` has the value `value`.
+///
+/// Prometheus removes children only by their full label tuple, so this learns
+/// the tuples by collecting the vec, which clones every child once. Meant for
+/// occasional cleanup such as dropping an object's series, not for hot paths.
+pub fn remove_children_with_label<V: MetricVec_ + Collector>(vec: &V, name: &str, value: &str) {
+    let descs = vec.desc();
+    // A metric vec has exactly one `Desc`.
+    let Some(desc) = descs.first() else {
+        return;
+    };
+    for family in vec.collect() {
+        for child in family.get_metric() {
+            let labels: BTreeMap<&str, &str> = child
+                .get_label()
+                .iter()
+                .map(|pair| (pair.name(), pair.value()))
+                .collect();
+            if labels.get(name) != Some(&value) {
+                continue;
+            }
+            let values: Vec<&str> = desc
+                .variable_labels
+                .iter()
+                .map(|label| labels.get(label.as_str()).copied().unwrap_or_default())
+                .collect();
+            // `remove_label_values` fails when the series is already gone, which happens
+            // if another caller removed it between the `collect` snapshot above and now.
+            // That is the state we wanted, so the error is ignored.
+            let _ = vec.remove_label_values(&values);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use prometheus::core::Collector;
     use prometheus::{CounterVec, HistogramVec};
 
     use crate::stats::histogram_seconds_buckets;
@@ -1107,8 +1159,9 @@ mod tests {
 
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
-        // This future will normally complete very quickly, but it's hard to guarantee any particular
-        // timing in an arbitrary test environment, so we don't assert on it here.
+        // This future will normally complete very quickly, but it's hard to guarantee any
+        // particular timing in an arbitrary test environment, so we don't assert on it
+        // here.
 
         let wall_family = reports
             .iter()
@@ -1207,5 +1260,70 @@ mod tests {
 
         drop(handle);
         assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn try_register_errors_on_duplicate_then_succeeds_after_drop() {
+        use prometheus::IntGauge;
+
+        // The fallible variant reports the collision instead of soft-panicking, and the collision
+        // clears as soon as the incumbent's handle drops. This is the retry contract the metric
+        // sink operator leans on when a new incarnation races the old one's teardown.
+        let registry = MetricsRegistry::new();
+        let old = IntGauge::new("mz_test_try_register", "help").unwrap();
+        let new = IntGauge::new("mz_test_try_register", "help").unwrap();
+        let before = registry.gather().len();
+
+        let handle = registry
+            .try_register_collector_with_dropper(old)
+            .expect("first registration succeeds");
+        assert_eq!(registry.gather().len(), before + 1);
+
+        let err = registry
+            .try_register_collector_with_dropper(new.clone())
+            .err()
+            .expect("duplicate descriptor id is rejected");
+        assert!(matches!(err, prometheus::Error::AlreadyReg));
+        // The failed attempt registered nothing, so the incumbent is still the only series.
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        let handle = registry
+            .try_register_collector_with_dropper(new)
+            .expect("registration succeeds once the id is free");
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn remove_children_with_label_removes_only_matching_children() {
+        let registry = MetricsRegistry::new();
+        let vec: HistogramVec = registry.register(metric!(
+            name: "labeled_hist",
+            help: "help",
+            var_labels: ["cluster", "kind"],
+            buckets: histogram_seconds_buckets(0.000_128, 8.0),
+        ));
+        vec.with_label_values(&["u1", "a"]).observe(1.0);
+        vec.with_label_values(&["u1", "b"]).observe(1.0);
+        vec.with_label_values(&["u2", "a"]).observe(1.0);
+
+        super::remove_children_with_label(&vec, "cluster", "u1");
+
+        let remaining: Vec<Vec<String>> = vec
+            .collect()
+            .into_iter()
+            .flat_map(|family| family.get_metric().to_vec())
+            .map(|child| {
+                child
+                    .get_label()
+                    .iter()
+                    .map(|pair| pair.value().to_string())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(remaining, vec![vec!["u2".to_string(), "a".to_string()]]);
     }
 }

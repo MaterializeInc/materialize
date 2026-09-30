@@ -24,6 +24,7 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_types::region::Region;
@@ -356,6 +357,14 @@ impl Blob for S3Blob {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
+        //
+        // Not every S3-compatible store reports the part count. Its response
+        // to the first request is then indistinguishable from a single-part
+        // object's, except that `Content-Range` still carries the object's
+        // total size. The remainder is fetched by byte range in that case, and
+        // the reassembled length is checked against the total either way, so a
+        // store that misbehaves fails the get instead of handing the decoder a
+        // truncated blob.
 
         // For each header and body that we fetch, we track the fastest, and
         // any large deviations from it.
@@ -385,56 +394,74 @@ impl Blob for S3Blob {
             }
         };
 
-        // Get the remaining number of parts
-        let num_parts = match first_part.parts_count() {
-            // For a non-multipart upload, parts_count will be None. The rest of  the code works
-            // perfectly well if we just pretend this was a multipart upload of 1 part.
-            None => 1,
-            // For any positive value greater than 0, just return it.
-            Some(parts @ 1..) => parts,
+        // The object's total size comes from `Content-Range`, which s3 returns
+        // for any request that names a part. Its denominator is the length of
+        // the whole object, not of the part that was asked for, which is what
+        // makes it usable as the completeness check below. A store that put
+        // the part's length there instead would fail every multipart get.
+        let total_len = first_part
+            .content_range()
+            .and_then(parse_content_range_total);
+        let first_len = first_part
+            .content_length()
+            .and_then(|len| u64::try_from(len).ok());
+
+        let remaining: Vec<PartSelector> = match first_part.parts_count() {
+            // For a non-multipart upload, parts_count will be None, and the
+            // first request already returned the whole object. A store that
+            // does not report the count looks the same, except that the first
+            // part falls short of the total. Its remainder is fetched by byte
+            // range in chunks of the first part's size, which is the size the
+            // upload used for every part but the last.
+            None => match (first_len, total_len) {
+                (Some(first_len), Some(total_len)) if first_len < total_len => {
+                    remaining_ranges(first_len, total_len)
+                        .into_iter()
+                        .map(PartSelector::Range)
+                        .collect()
+                }
+                _ => Vec::new(),
+            },
+            Some(parts @ 1..) => (2..=parts).map(PartSelector::Number).collect(),
             // A non-positive value is invalid.
             Some(bad) => {
                 assert!(bad <= 0);
                 return Err(anyhow!("unexpected number of s3 object parts: {}", bad).into());
             }
         };
+        let num_requests = remaining.len() + 1;
 
         trace!(
-            "s3 download first header took {:?} ({num_parts} parts)",
+            "s3 download first header took {:?} ({num_requests} requests)",
             start_overall.elapsed(),
         );
 
         let mut body_futures = FuturesOrdered::new();
-        let mut first_part = Some(first_part);
+        let mut requests = vec![PartRequest::First(first_part)];
+        requests.extend(remaining.into_iter().map(PartRequest::Fetch));
 
-        // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
-        // did part 1.)
-        for part_num in 1..=num_parts {
+        for request in requests {
             // Clone a handle to our MinElapsed trackers so we can give one to
             // each download task.
             let min_header_elapsed = Arc::clone(&min_header_elapsed);
             let min_body_elapsed = Arc::clone(&min_body_elapsed);
             let get_invalid_resp = self.metrics.get_invalid_resp.clone();
-            let first_part = first_part.take();
             let path = &path;
             let request_future = async move {
-                // Fetch the headers of the rest of the parts. (Using the existing headers
-                // for part 1.
-                let mut object = match first_part {
-                    Some(first_part) => {
-                        assert_eq!(part_num, 1, "only the first part should be prefetched");
-                        first_part
-                    }
-                    None => {
-                        assert_ne!(part_num, 1, "first part should be prefetched");
-                        // Request our headers.
+                let mut object = match request {
+                    // Fetched above, together with the headers that shaped
+                    // the remaining requests.
+                    PartRequest::First(object) => object,
+                    PartRequest::Fetch(selector) => {
                         let header_start = Instant::now();
-                        let object = self
-                            .client
-                            .get_object()
-                            .bucket(&self.bucket)
-                            .key(path)
-                            .part_number(part_num)
+                        let req = self.client.get_object().bucket(&self.bucket).key(path);
+                        let req = match selector {
+                            PartSelector::Number(part_num) => req.part_number(part_num),
+                            PartSelector::Range(range) => {
+                                req.range(format!("bytes={}-{}", range.start, range.end - 1))
+                            }
+                        };
+                        let object = req
                             .send()
                             .await
                             .inspect_err(|err| self.update_error_metrics("GetObject", err))
@@ -444,7 +471,6 @@ impl Blob for S3Blob {
                         object
                     }
                 };
-
                 // Request the body.
                 let body_start = Instant::now();
 
@@ -503,10 +529,26 @@ impl Blob for S3Blob {
             segments.append(&mut part_body);
         }
 
+        // A store that reports neither the part count nor a range it honors
+        // hands back less than the object. Fail the get here rather than let
+        // the decoder find out. This runs for every store, not just the ones
+        // needing the byte-range fallback, so any short read becomes a
+        // retryable error instead of a corrupt blob.
+        if let Some(total_len) = total_len {
+            let fetched_len: u64 = segments.iter().map(|s| u64::cast_from(s.len())).sum();
+            if fetched_len != total_len {
+                self.metrics.get_invalid_resp.inc();
+                return Err(anyhow!(
+                    "s3 GetObject {path} returned {fetched_len} bytes of a {total_len} byte object"
+                )
+                .into());
+            }
+        }
+
         debug!(
-            "s3 GetObject took {:?} ({} parts)",
+            "s3 GetObject took {:?} ({} requests)",
             start_overall.elapsed(),
-            num_parts
+            num_requests
         );
         Ok(Some(SegmentedBytes::from(segments)))
     }
@@ -915,6 +957,44 @@ impl S3Blob {
     }
 }
 
+/// One request of a multi-request `get`.
+enum PartRequest {
+    /// The first part, already fetched to learn the object's shape.
+    First(GetObjectOutput),
+    /// A piece of the object still to fetch.
+    Fetch(PartSelector),
+}
+
+/// How a `GetObject` request names the piece of the object it wants.
+enum PartSelector {
+    /// A part by the number it was uploaded with.
+    Number(i32),
+    /// A byte range, for stores that do not report the part count.
+    Range(Range<u64>),
+}
+
+/// The total size in a `Content-Range` header (`bytes 0-8388607/9711660`), if
+/// the header states one.
+fn parse_content_range_total(content_range: &str) -> Option<u64> {
+    content_range.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+/// Byte ranges covering `[first_len, total_len)` in chunks of `first_len`.
+///
+/// A store reporting a zero-length first part leaves no chunk size to reuse,
+/// so the whole object is fetched in a single range instead.
+fn remaining_ranges(first_len: u64, total_len: u64) -> Vec<Range<u64>> {
+    let chunk_len = if first_len == 0 { total_len } else { first_len };
+    let mut ranges = Vec::new();
+    let mut start = first_len;
+    while start < total_len {
+        let end = cmp::min(start + chunk_len, total_len);
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
+}
+
 #[derive(Clone, Debug)]
 struct MultipartConfig {
     multipart_threshold: usize,
@@ -1083,6 +1163,33 @@ mod tests {
     use crate::location::tests::blob_impl_test;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn content_range_total() {
+        assert_eq!(
+            parse_content_range_total("bytes 0-8388607/9711660"),
+            Some(9711660)
+        );
+        assert_eq!(parse_content_range_total("bytes */42"), Some(42));
+        assert_eq!(parse_content_range_total("bytes 0-1/*"), None);
+        assert_eq!(parse_content_range_total("garbage"), None);
+    }
+
+    #[mz_ore::test]
+    fn ranges_for_unreported_parts() {
+        let mib = 1024 * 1024;
+        assert_eq!(remaining_ranges(8 * mib, 9711660), vec![8 * mib..9711660]);
+        assert_eq!(
+            remaining_ranges(8 * mib, 3 * 8 * mib + 5),
+            vec![
+                8 * mib..16 * mib,
+                16 * mib..24 * mib,
+                24 * mib..24 * mib + 5
+            ]
+        );
+        assert_eq!(remaining_ranges(8 * mib, 8 * mib), Vec::<Range<u64>>::new());
+        assert_eq!(remaining_ranges(0, 10), vec![0..10]);
+    }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
@@ -1258,5 +1365,191 @@ mod tests {
             iter.collect::<Vec<_>>(),
             vec![(1, 0..10), (2, 10..20), (3, 20..21)]
         );
+    }
+
+    /// None of the SDK timeouts covers a response body, so a body that stops
+    /// arriving is bounded only by the SDK's stalled-stream protection (on by
+    /// default for downloads). The hedged-gets design relies on it, so these
+    /// tests pin it against a fake S3 endpoint.
+    mod stalled_body {
+        use std::net::SocketAddr;
+
+        use mz_dyncfg::{ConfigSet, ConfigUpdates};
+        use mz_ore::task::{AbortOnDropHandle, JoinSetExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::task::JoinSet;
+
+        use crate::hedge::{BLOB_HEDGED_GET_ENABLED, HedgeSibling, HedgedBlob};
+        use crate::metrics::BlobHedgeMetrics;
+
+        use super::*;
+
+        const BODY_LEN: usize = 1024 * 1024;
+
+        /// The production defaults of the `persist_blob_*_timeout` configs.
+        #[derive(Debug)]
+        struct ProdKnobs;
+
+        impl BlobKnobs for ProdKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(180)
+            }
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(90)
+            }
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(7)
+            }
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+        }
+
+        /// A fake S3 endpoint on 127.0.0.1. A GET of the key `target` gets a
+        /// response head promising `BODY_LEN` bytes, then the body, or, if
+        /// `stall` is set, no body byte at all while the connection stays
+        /// open. Every other key gets a 404 NoSuchKey, which is what the health
+        /// check in `S3Blob::open` expects.
+        struct FakeS3 {
+            addr: SocketAddr,
+            _accept: AbortOnDropHandle<()>,
+        }
+
+        impl FakeS3 {
+            async fn start(stall: bool) -> FakeS3 {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+                let accept = mz_ore::task::spawn(|| "fake_s3_accept", async move {
+                    // Dropping this task aborts every connection handler.
+                    let mut conns = JoinSet::new();
+                    loop {
+                        let (stream, _) = listener.accept().await.expect("accept");
+                        conns.spawn_named(|| "fake_s3_conn", serve(stream, stall));
+                    }
+                })
+                .abort_on_drop();
+                FakeS3 {
+                    addr,
+                    _accept: accept,
+                }
+            }
+
+            async fn open(&self) -> S3Blob {
+                let config = S3BlobConfig::new(
+                    "bucket".into(),
+                    "prefix".into(),
+                    None,
+                    Some(format!("http://{}", self.addr)),
+                    Some("us-east-1".into()),
+                    Some(("user".into(), "pass".into())),
+                    Box::new(ProdKnobs),
+                    S3BlobMetrics::new(&MetricsRegistry::new()),
+                )
+                .await
+                .expect("config");
+                S3Blob::open(config).await.expect("open")
+            }
+        }
+
+        async fn serve(mut stream: TcpStream, stall: bool) {
+            let mut buf = Vec::new();
+            loop {
+                let head_end = loop {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos;
+                    }
+                    let mut chunk = [0u8; 4096];
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+                buf.drain(..head_end + 4);
+                let path = head.split_whitespace().nth(1).unwrap_or_default();
+                if !path.contains("/target") {
+                    let body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                                <Error><Code>NoSuchKey</Code></Error>";
+                    let resp = format!(
+                        "HTTP/1.1 404 Not Found\r\n\
+                         Content-Type: application/xml\r\n\
+                         Content-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    if stream.write_all(resp.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                let mut resp = format!(
+                    "HTTP/1.1 206 Partial Content\r\n\
+                     ETag: \"etag\"\r\n\
+                     Content-Range: bytes 0-{last}/{BODY_LEN}\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Length: {BODY_LEN}\r\n\r\n",
+                    last = BODY_LEN - 1,
+                )
+                .into_bytes();
+                if !stall {
+                    resp.resize(resp.len() + BODY_LEN, b'x');
+                }
+                if stream.write_all(&resp).await.is_err() {
+                    return;
+                }
+                if stall {
+                    // Hold the connection open until the client closes it.
+                    let mut chunk = [0u8; 4096];
+                    while let Ok(n) = stream.read(&mut chunk).await {
+                        if n == 0 {
+                            return;
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
+        #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+        async fn stalled_body_fails_the_get() {
+            let server = FakeS3::start(true).await;
+            let blob = server.open().await;
+            // The protection fires after about 6 s without a byte. The
+            // generous timeout only catches a get that hangs.
+            let res = tokio::time::timeout(Duration::from_secs(60), blob.get("target"))
+                .await
+                .expect("a stalled body must fail the get, not hang it");
+            assert!(res.is_err(), "unexpected success");
+        }
+
+        #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+        async fn hedge_rescues_stalled_body() {
+            let primary_server = FakeS3::start(true).await;
+            let sibling_server = FakeS3::start(false).await;
+            let primary: Arc<dyn Blob> = Arc::new(primary_server.open().await);
+            let sibling: Arc<dyn Blob> = Arc::new(sibling_server.open().await);
+            let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
+            let mut updates = ConfigUpdates::default();
+            updates.add(&BLOB_HEDGED_GET_ENABLED, true);
+            updates.apply(&cfg);
+            let metrics = BlobHedgeMetrics::new(&MetricsRegistry::new());
+            let blob = HedgedBlob::new(
+                primary,
+                HedgeSibling::Isolated(sibling),
+                Arc::new(cfg),
+                metrics.clone(),
+            );
+            let res = tokio::time::timeout(Duration::from_secs(60), blob.get("target"))
+                .await
+                .expect("the hedge must rescue the get");
+            let bytes = res.expect("get").expect("blob exists");
+            assert_eq!(bytes.len(), BODY_LEN);
+            assert_eq!(metrics.won.get(), 1);
+        }
     }
 }

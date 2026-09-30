@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/metric_sink.rs
-revision: a702b8be70
+revision: 41e1741ca3
 ---
 
 # adapter::optimize::metric_sink
@@ -25,4 +25,4 @@ No rows are filtered: the operator needs every row, including invalid ones, to c
 
 `METRIC_NAME_PATTERN` is the Prometheus metric name grammar regexp (`^[a-zA-Z_:][a-zA-Z0-9_:]*$`), stored as a constant for use in the MIR `IsRegexpMatchCaseSensitive` scalar.
 
-The `Optimizer` struct for metric sinks implements `Optimize<MetricSink>` (MIR stage, producing `GlobalMirPlan`) and `Optimize<GlobalMirPlan>` (LIR stage, producing `GlobalLirPlan`). Like `CREATE INDEX`, the pipeline starts directly from the `GlobalId` of the collection to export rather than lowering a new relational expression from HIR. Unlike a materialized view sink, there is no persist shard, so there is no storage-metadata stage.
+The `Optimizer` struct for metric sinks implements `Optimize<MetricSink>` (MIR stage, producing `GlobalMirPlan`) and `Optimize<GlobalMirPlan>` (LIR stage, producing `GlobalLirPlan`). The source is described by `MetricSinkFrom`: `MetricSinkFrom::Id(GlobalId)` starts from an existing catalog collection (like `CREATE INDEX`, no HIR to lower), while `MetricSinkFrom::Query { expr, desc }` lowers a planned HIR query (what a coordinator-installed curated sink built from SQL uses). In both cases the row-wise shaping is appended in MIR and the dataflow exports a single `MetricSink`. The `MetricSink` wrapper also carries an optional `label` field for the `sink` label on health gauges; `None` defaults to the sink's `GlobalId` (for user sinks), while curated sinks pass their stable name. Unlike a materialized view sink, there is no persist shard, so there is no storage-metadata stage.

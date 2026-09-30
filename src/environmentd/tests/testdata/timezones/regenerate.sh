@@ -29,7 +29,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-EXPECTED_TZDATA=2025b
+EXPECTED_TZDATA=2026c
 IMAGE=mz-timezone-snapshot
 
 DATES=("$@")

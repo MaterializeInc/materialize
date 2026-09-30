@@ -40,11 +40,11 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::{Broadcast, Map};
 use timely::dataflow::operators::{Capture, Leave, Probe};
-use timely::dataflow::{ProbeHandle, Scope, StreamVec};
+use timely::dataflow::{ProbeHandle, Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
-use timely::{PartialOrder, WorkerConfig};
+use timely::{Container, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::TxnsCodecDefault;
@@ -114,31 +114,83 @@ where
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
 {
-    let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = txns_progress_source_global::<K, V, T, D, P, C>(
+    let (progress, source_button) = TxnsProgress::new::<K, V, D, C, F>(
         passthrough.scope(),
         name,
-        ctx.clone(),
-        client_fn(),
+        ctx,
+        client_fn,
         txns_id,
         data_id,
         as_of,
         data_key_schema,
         data_val_schema,
-        unique_id,
     );
-    // Each of the `txns_frontiers` workers wants the full copy of the remap
-    // information.
-    let remap = remap.broadcast();
-    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C>(
-        remap,
-        passthrough,
-        name,
-        data_id,
-        until,
-        unique_id,
-    );
+    let (passthrough, frontiers_button) = progress.translate(passthrough, until);
     (passthrough, vec![source_button, frontiers_button])
+}
+
+/// A subscription to one data shard's remap information, from which any number of streams
+/// read off that shard can have their frontiers translated.
+///
+/// The subscription is the expensive half and does not depend on what is read, so it is
+/// rendered once by [`TxnsProgress::new`]. [`TxnsProgress::translate`] then renders one
+/// passthrough operator per stream, and is generic over the container so streams of
+/// different shapes can share a subscription.
+#[derive(Debug)]
+pub struct TxnsProgress<'scope, T: Timestamp> {
+    /// Broadcast remap stream, one operator per call to `translate` reads it.
+    remap: StreamVec<'scope, T, DataRemapEntry<T>>,
+    name: String,
+    data_id: ShardId,
+    /// Disambiguates the log lines of operators rendered for the same shard.
+    unique_id: u64,
+}
+
+impl<'scope, T> TxnsProgress<'scope, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
+{
+    /// Subscribe to `data_id`'s remap information and broadcast it to every worker.
+    pub fn new<K, V, D, C, F>(
+        scope: Scope<'scope, T>,
+        name: &str,
+        ctx: &TxnsContext,
+        client_fn: impl Fn() -> F,
+        txns_id: ShardId,
+        data_id: ShardId,
+        as_of: T,
+        data_key_schema: Arc<K::Schema>,
+        data_val_schema: Arc<V::Schema>,
+    ) -> (Self, PressOnDropButton)
+    where
+        K: Debug + Codec + Send + Sync,
+        V: Debug + Codec + Send + Sync,
+        D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
+        C: TxnsCodec + 'static,
+        F: Future<Output = PersistClient> + Send + 'static,
+    {
+        let unique_id = (name, scope.addr()).hashed();
+        let (remap, source_button) = txns_progress_source_global::<K, V, T, D, C>(
+            scope,
+            name,
+            ctx.clone(),
+            client_fn(),
+            txns_id,
+            data_id,
+            as_of,
+            data_key_schema,
+            data_val_schema,
+            unique_id,
+        );
+        // Each of the `txns_frontiers` workers wants the full copy of the remap information.
+        let progress = TxnsProgress {
+            remap: remap.broadcast(),
+            name: name.to_owned(),
+            data_id,
+            unique_id,
+        };
+        (progress, source_button)
+    }
 }
 
 /// Event sent from the subscribe Tokio task to the sync `txns_progress_source`
@@ -165,7 +217,7 @@ enum SourceEvent<T> {
 ///
 /// [reclocking design doc]:
 ///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-fn txns_progress_source_global<'scope, K, V, T, D, P, C>(
+fn txns_progress_source_global<'scope, K, V, T, D, C>(
     scope: Scope<'scope, T>,
     name: &str,
     ctx: TxnsContext,
@@ -182,7 +234,6 @@ where
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
-    P: Debug + Clone + 'static,
     C: TxnsCodec + 'static,
 {
     let worker_idx = scope.index();
@@ -333,54 +384,55 @@ where
     (remap_stream, shutdown_button.press_on_drop())
 }
 
-/// The block ordering inside the schedule closure is load-bearing: pending
-/// passthrough input is emitted at the pre-activation capability BEFORE any
-/// capability downgrade, which keeps the differential invariant `send_time <=
-/// record_time` and avoids dropping in-flight rows when the passthrough
-/// frontier crosses `until` in the same activation (SQL-299). Do not reorder.
-fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
-    remap: StreamVec<'scope, T, DataRemapEntry<T>>,
-    passthrough: StreamVec<'scope, T, P>,
-    name: &str,
-    data_id: ShardId,
-    until: Antichain<T>,
-    unique_id: u64,
-) -> (StreamVec<'scope, T, P>, PressOnDropButton)
+impl<'scope, T> TxnsProgress<'scope, T>
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Clone + 'static + Monoid + Codec64 + Send + Sync,
-    P: Debug + Clone + 'static,
-    C: TxnsCodec,
 {
-    let scope = passthrough.scope();
-    let name = format!("txns_progress_frontiers({})", name);
-    let mut builder = OperatorBuilderRc::new(name.clone(), scope.clone());
-    let info = builder.operator_info();
-    let name = format!(
-        "{} [{}] {}/{} {:.9}",
-        name,
-        unique_id,
-        scope.index(),
-        scope.peers(),
-        data_id.to_string(),
-    );
-    let (passthrough_output, passthrough_stream) = builder.new_output::<Vec<P>>();
-    let mut passthrough_output = OutputBuilder::from(passthrough_output);
-    // Both inputs are disconnected from the output: capability advancement is
-    // driven manually based on the remap stream and the passthrough frontier.
-    // NB: the output is created BEFORE the inputs on purpose. `new_output`
-    // connects to whatever inputs already exist (here, none); the `[]`
-    // connection arg below records the input-to-output summary but does not by
-    // itself disconnect the output. Creating an input before the output would
-    // silently connect them and break the manual capability management.
-    let mut remap_input = builder.new_input_connection(remap, Pipeline, []);
-    let mut passthrough_input = builder.new_input_connection(passthrough, Pipeline, []);
+    /// Delay `passthrough`'s capability by the subscription's remap, translating the data
+    /// shard's physical frontier into the logical one.
+    ///
+    /// Call once per stream read off the shard. Streams of different container types can
+    /// share one subscription.
+    ///
+    /// The block ordering inside the schedule closure is load-bearing: pending
+    /// passthrough input is emitted at the pre-activation capability BEFORE any
+    /// capability downgrade, which keeps the differential invariant `send_time <=
+    /// record_time` and avoids dropping in-flight rows when the passthrough
+    /// frontier crosses `until` in the same activation (SQL-299). Do not reorder.
+    pub fn translate<C: Container>(
+        &self,
+        passthrough: Stream<'scope, T, C>,
+        until: Antichain<T>,
+    ) -> (Stream<'scope, T, C>, PressOnDropButton) {
+        let remap = self.remap.clone();
+        let (data_id, unique_id) = (self.data_id, self.unique_id);
+        let scope = passthrough.scope();
+        let name = format!("txns_progress_frontiers({})", self.name);
+        let mut builder = OperatorBuilderRc::new(name.clone(), scope.clone());
+        let info = builder.operator_info();
+        let name = format!(
+            "{} [{}] {}/{} {:.9}",
+            name,
+            unique_id,
+            scope.index(),
+            scope.peers(),
+            data_id.to_string(),
+        );
+        let (passthrough_output, passthrough_stream) = builder.new_output::<C>();
+        let mut passthrough_output = OutputBuilder::from(passthrough_output);
+        // Both inputs are disconnected from the output: capability advancement is
+        // driven manually based on the remap stream and the passthrough frontier.
+        // NB: the output is created BEFORE the inputs on purpose. `new_output`
+        // connects to whatever inputs already exist (here, none); the `[]`
+        // connection arg below records the input-to-output summary but does not by
+        // itself disconnect the output. Creating an input before the output would
+        // silently connect them and break the manual capability management.
+        let mut remap_input = builder.new_input_connection(remap, Pipeline, []);
+        let mut passthrough_input = builder.new_input_connection(passthrough, Pipeline, []);
 
-    let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
+        let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
 
-    builder.build_reschedule(move |capabilities| {
+        builder.build_reschedule(move |capabilities| {
         // The output capability's time tracks how far we've progressed in
         // copying along the passthrough input. `None` indicates that we've
         // dropped the capability to shut down.
@@ -474,7 +526,7 @@ where
             if let Some(cap) = capability.as_ref() {
                 let mut output = passthrough_output.activate();
                 passthrough_input.for_each(|_input_cap, data| {
-                    debug!("{} emitting data {:?}", name, data);
+                    debug!("{} emitting {} records", name, data.record_count());
                     output.session(cap).give_container(data);
                 });
             } else {
@@ -550,7 +602,8 @@ where
         }
     });
 
-    (passthrough_stream, shutdown_button.press_on_drop())
+        (passthrough_stream, shutdown_button.press_on_drop())
+    }
 }
 
 /// The process global [`TxnsRead`] that any operator can communicate with.
@@ -1328,14 +1381,13 @@ mod tests {
         pass: StreamVec<'a, u64, i64>,
         until: Antichain<u64>,
     ) -> (StreamVec<'a, u64, i64>, PressOnDropButton) {
-        txns_progress_frontiers::<String, (), u64, i64, i64, TxnsCodecDefault>(
+        let progress = TxnsProgress {
             remap,
-            pass,
-            "test",
-            ShardId::new(),
-            until,
-            0,
-        )
+            name: "test".into(),
+            data_id: ShardId::new(),
+            unique_id: 0,
+        };
+        progress.translate(pass, until)
     }
 
     /// Generates a random schedule for the no-data-loss fuzz test. Interleaves

@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/chunk.rs
-revision: 24cd10bf65
+revision: feff142553
 ---
 
 # timely-util::columnar::chunk
@@ -12,7 +12,7 @@ revision: 24cd10bf65
 A `ColumnChunk` is a sorted, consolidated run of `(D, T, R)` updates. It has two storage variants:
 
 - **`Resident`** — an `Rc`-shared `Column<(D, T, R)>` on the heap. Fresh input, merge output, and small tails live here.
-- **`Spilled`** — the serialized column body in the process `Pool`, with a resident `SpilledBody` holding the record count, the first and last data items (the fence entries), the time bounds (`time_lower` / `time_upper`) that `extract` consults for whole-chunk passthrough, and a `compressed` flag recording which codec the body was stored under. The generational depth is stored in the `Spilled` variant itself, not in the body, because a body is `Rc`-shared across chunk copies and aging must not depend on how many callers hold it. No reference into pool memory ever exists outside a single call: `extract_into` and `fetch_into` copy out into caller-owned scratch.
+- **`Spilled`** — the serialized column body in the process `Pool`, with a resident `SpilledBody` holding the record count, the first and last data items (the fence entries), the time bounds (`time_lower` / `time_upper`) that `extract` consults for whole-chunk passthrough, a `compressed` flag recording which codec the body was stored under, and `len_bytes` recording the body's serialized size before the pool's codec saw it (retained because the pool reports no per-chunk figure, so a chunk that reported nothing would drop its operator's share of the batcher's memory out of introspection tables). The generational depth is stored in the `Spilled` variant itself, not in the body, because a body is `Rc`-shared across chunk copies and aging must not depend on how many callers hold it. No reference into pool memory ever exists outside a single call: `extract_into` and `fetch_into` copy out into caller-owned scratch.
 
 ## Spill gate
 
@@ -35,7 +35,7 @@ Every chunk carries a `u8` depth counting merge cadences survived. Fresh chunks 
 - **`merge`** — disjoint-range fast path: if one front's key span lies entirely below the other's first key, the lower front is forwarded via `survive_merge` (incrementing its depth and migrating its codec if it crossed the compression floor). Overlapping fronts are loaded, merged via `Column::merge_from` (gallop bulk-copies + semigroup consolidation), and re-spilled if above the floor. Untouched survivors from the exhausted-input drain phase also pass through `survive_merge`.
 - **`extract`** — partitions one chunk by time frontier into `keep` and `ship` sides. Consults resident time bounds (`chunk_time_bounds`) first: if all maximal times are strictly before the frontier the chunk ships whole; if all minimal times are at or after the frontier the chunk is kept whole. Both whole-chunk paths leave spilled bodies unloaded. Otherwise the body is loaded and records are partitioned element-by-element.
 - **`advance`** — concatenates all input chunks, advances times by the frontier lattice-monotonically, consolidates per-group advanced times, withholds the trailing `D` group as carry (unless `done`).
-- **`settle`** — coalesces sub-threshold residents into a carry until the carry reaches `at_commit_size`, then commits it via `ColumnChunk::commit`. Already-spilled chunks pass through untouched.
+- **`settle`** — coalesces sub-threshold residents into a carry until the carry reaches `at_commit_size`, then commits it via `ColumnChunk::commit`. Already-spilled chunks pass through untouched. An internal `settle_graded` variant accepts a `commit` flag; callers that read output back immediately pass `false` so the body is not serialized into a pool slot only to be copied straight back out.
 
 ## Compression codec
 

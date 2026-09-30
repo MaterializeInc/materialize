@@ -24,7 +24,7 @@ you to learn and prototype with no external dependencies.
 All you need is a Materialize account. If you already have one —
 great! If not, [sign up for a free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) first.
 
-When you're ready, head over to the [Materialize console](/console/),
+When you're ready, head over to the [Materialize console](/developer-tools/console/),
 and pop open the SQL Shell.
 
 ## Step 1. Create a secret

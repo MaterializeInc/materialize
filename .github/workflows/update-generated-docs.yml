@@ -15,24 +15,26 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch: {} # Allow manual triggering
 
+permissions: {}
+
 jobs:
   update-docs:
+    name: update-docs
     if: github.repository == 'MaterializeInc/materialize'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
-      # Required by the "Set CLA status for bot author" step below, which
-      # POSTs a commit status. GITHUB_TOKEN cannot trigger the CLA workflow
-      # on bot-authored PRs, so we set the status directly instead.
-      statuses: write
+      contents: write # Pushes the automated docs branch.
+      pull-requests: write # Opens the docs PR.
+      id-token: write # Exchanges an OIDC token for the Claude GitHub App token.
+      # GITHUB_TOKEN cannot trigger the CLA workflow on bot-authored PRs, so
+      # the "Set CLA status for bot author" step sets the status directly.
+      statuses: write # POSTs the cla-assistant commit status.
     env:
       BRANCH: automated/update-generated-docs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -72,7 +74,7 @@ jobs:
 
       - name: Run Claude Code to update docs
         id: claude
-        uses: anthropics/claude-code-action@02438e66d09982e371c6559d3a2ccdff9032f203 # v1.0.77
+        uses: anthropics/claude-code-action@ff9acae5886d41a99ed4ec14b7dc147d55834722 # v1.0.77
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |

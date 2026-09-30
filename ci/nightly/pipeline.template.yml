@@ -296,6 +296,33 @@ steps:
                 - --other-tag
                 - common-ancestor
 
+      - id: cargo-bench
+        label: ":rust: Cargo bench against ancestor"
+        sanitizer: skip
+        depends_on: []
+        # Measured: 48 minutes for the largest closure built twice on the
+        # 8-core queue, 73 minutes for a shard that also ran its benchmarks.
+        timeout_in_minutes: 240
+        # Annotation-only while the noise floor on this hardware is being
+        # calibrated. QAR-162 covers dropping `soft_fail` so regressions and
+        # HEAD build failures fail the build.
+        soft_fail: true
+        # One shard per package with bench targets, so this should track that
+        # package count. Extra shards exit as no-ops, fewer shards double up.
+        parallelism: 9
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cargo-bench
+              ci-builder: stable
+        agents:
+          # Dedicated hardware for stable timings.
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+
       - id: workload-replay
         topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Workload Replay (1% initial data)"
@@ -473,21 +500,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=8, --azurite, --slow]
-
-      - id: testdrive-fdb
-        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
-        label: "testdrive with FoundationDB"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        parallelism: 2
-        inputs: [test/testdrive]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              env:
-                - EXTERNAL_METADATA_STORE: foundationdb
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-alloydb
         topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
@@ -1227,6 +1239,19 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-upgrade-entire-mz-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
+        label: "Checks upgrade, whole-Mz restart with :azure: blob store"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
+
       - id: checks-self-managed-upgrade
         topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade, whole-Mz restart"
@@ -1239,6 +1264,19 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-self-managed-upgrade-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
+        label: "Checks Self-Managed upgrade, whole-Mz restart with :azure: blob store"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-self-managed-upgrade-previous
         topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
@@ -1278,7 +1316,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky due to https://linear.app/materializeinc/issue/DB-85"
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
@@ -3008,19 +3045,6 @@ steps:
     agents:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
       queue: hetzner-x86-64-4cpu-8gb
-
-  - id: fdb
-    topics: [cockroach]
-    label: "FoundationDB"
-    depends_on: build-aarch64
-    timeout_in_minutes: 40
-    inputs: [test/foundationdb]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: foundationdb
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
 
 
   - group: Language

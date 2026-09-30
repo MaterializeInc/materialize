@@ -83,6 +83,12 @@ ERROR_RE = re.compile(
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | fatal\ runtime\ error: # stack overflow
+    # glibc heap-consistency aborts: the process dies with SIGABRT and no
+    # Rust panic, so these lines are the only trace
+    | (malloc|free|realloc|munmap_chunk)\(\):
+    | double\ free\ or\ corruption
+    | corrupted\ (size\ vs\.\ prev_size|double-linked\ list)
+    | stack\ smashing\ detected
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
     | \[SQLancer\+\+\] # Unknown errors are logged
@@ -94,6 +100,7 @@ ERROR_RE = re.compile(
     | SUMMARY:\ .*Sanitizer
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
     | :\ test\ timed\ out
+    | :\ ci-cleanup\ workflow\ failed
     | very\ slow\ coordinator\ message
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)

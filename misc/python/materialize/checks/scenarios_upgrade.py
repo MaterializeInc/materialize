@@ -507,7 +507,8 @@ class PreflightCheckContinue(Scenario):
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
             start_mz_read_only(self, tag=None, deploy_generation=1),
             WaitReadyMz(),
-            PromoteMz(),
+            # KillMz above already removed the previous generation.
+            PromoteMz(retire=None),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
@@ -652,9 +653,7 @@ def upgrade_service_actions(
             system_parameter_defaults=service_info.system_parameter_defaults,
         ),
         WaitReadyMz(service_info.service_name),
-        PromoteMz(service_info.service_name),
-        # Cleanup the previous service
-        KillMz(capture_logs=True, mz_service=previous_service_info.service_name),
+        PromoteMz(service_info.service_name, retire=previous_service_info.service_name),
     ]
 
 

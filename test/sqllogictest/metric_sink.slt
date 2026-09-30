@@ -125,6 +125,38 @@ CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = '')
 statement error metric sink prefix "app_" must start with "mz_metric_sink_"
 CREATE METRIC SINK ms_unmarked FROM shaped WITH (PREFIX = 'app_')
 
+# `mz_metric_sink_curated_` is reserved for the built-in sinks. The reservation is
+# bidirectional: a user prefix may neither start with it nor be one it starts with,
+# since the published name appends an arbitrary `metric_name`. `mz_metric_sink_` plus
+# a row named `curated_arrangement_size_bytes` is exactly the second case.
+
+statement error metric sink prefix "mz_metric_sink_curated_" overlaps "mz_metric_sink_curated_", which is reserved for the built-in metric sinks
+CREATE METRIC SINK ms_curated FROM shaped WITH (PREFIX = 'mz_metric_sink_curated_')
+
+statement error metric sink prefix "mz_metric_sink_curated_mine_" overlaps "mz_metric_sink_curated_", which is reserved for the built-in metric sinks
+CREATE METRIC SINK ms_curated_mine FROM shaped WITH (PREFIX = 'mz_metric_sink_curated_mine_')
+
+statement error metric sink prefix "mz_metric_sink_" overlaps "mz_metric_sink_curated_", which is reserved for the built-in metric sinks
+CREATE METRIC SINK ms_bare FROM shaped WITH (PREFIX = 'mz_metric_sink_')
+
+statement error metric sink prefix "mz_metric_sink_cur" overlaps "mz_metric_sink_curated_", which is reserved for the built-in metric sinks
+CREATE METRIC SINK ms_cur FROM shaped WITH (PREFIX = 'mz_metric_sink_cur')
+
+# A prefix that diverges from the curated prefix is fine, and so is one that merely
+# contains the marker further along.
+
+statement ok
+CREATE METRIC SINK ms_curatex FROM shaped WITH (PREFIX = 'mz_metric_sink_curatex_')
+
+statement ok
+DROP METRIC SINK ms_curatex
+
+statement ok
+CREATE METRIC SINK ms_my_curated FROM shaped WITH (PREFIX = 'mz_metric_sink_my_curated_')
+
+statement ok
+DROP METRIC SINK ms_my_curated
+
 # Prefixes on one cluster have to be prefix-free, not merely distinct: `app_`
 # plus a row named `svc_x` publishes exactly what `app_svc_` plus a row named
 # `x` does, and the Prometheus registry merges same-named families silently.

@@ -10,7 +10,7 @@ menu:
 Use `CREATE MATERIALIZED VIEW` to:
 
 - Create a materialized view that maintains [fresh
-  results](/concepts/reaction-time) by persisting them in durable storage and
+  results](/fundamentals/concepts/reaction-time) by persisting them in durable storage and
   incrementally updating them as new data arrives.
 
 - Create a replacement for an existing materialized view that can be applied in
@@ -20,15 +20,15 @@ Use `CREATE MATERIALIZED VIEW` to:
 Materialized views are particularly useful when you need **cross-cluster
 access** to results or want to sink data to external systems like
 [Kafka](/sql/create-sink). When you create a materialized view, a
-[cluster](/concepts/clusters/), responsible for maintaining the view, is
+[cluster](/fundamentals/concepts/clusters/), responsible for maintaining the view, is
 associated with it, but the results can be **queried from any cluster**. This
 allows you to separate the compute resources used for view maintenance from
 those used for serving queries.
 
 If you do not need durability or cross-cluster sharing, and you are primarily
 interested in fast query performance within a single cluster, you may prefer to
-[create a view and index it](/concepts/views/#views). In Materialize, [indexes
-on views](/concepts/indexes/) also maintain results incrementally, but store
+[create a view and index it](/fundamentals/concepts/views/#views). In Materialize, [indexes
+on views](/fundamentals/concepts/indexes/) also maintain results incrementally, but store
 them in memory, scoped to the cluster where the index was created. This approach
 offers lower latency for direct querying within that cluster.
 

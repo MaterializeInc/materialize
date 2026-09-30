@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/healthcheck.rs
-revision: 96fa447160
+revision: 8103f7787b
 ---
 
 # storage-client::healthcheck

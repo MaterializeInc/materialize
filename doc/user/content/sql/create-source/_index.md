@@ -173,7 +173,7 @@ The following guides step you through setting up sources:
 ### Separate cluster(s) for sources
 
 In production, if possible, use a dedicated cluster for
-[sources](/concepts/sources/); i.e., avoid putting sources on the same cluster
+[sources](/fundamentals/concepts/sources/); i.e., avoid putting sources on the same cluster
 that hosts compute objects, sinks, and/or serves queries.
 
 {{% include-from-yaml data="best_practices_details" name="architecture-upsert-source" %}}
@@ -204,7 +204,7 @@ some burst capacity.
 
 ## Related pages
 
-- [Sources](/concepts/sources/)
+- [Sources](/fundamentals/concepts/sources/)
 - [`SHOW SOURCES`](/sql/show-sources/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SOURCE`](/sql/show-create-source/)

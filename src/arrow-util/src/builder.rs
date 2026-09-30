@@ -974,6 +974,17 @@ impl ArrowColumn {
             (ColBuilder::LargeStringBuilder(builder), Datum::Interval(iv)) => {
                 builder.append_value(iv.to_string())
             }
+            // Uuid-to-string conversion for destinations that don't support a uuid type
+            // natively. Iceberg's spec does have a `uuid` primitive, but our bridge to it
+            // converts on the Arrow `DataType` alone and so cannot reach it; see
+            // `iceberg_type_overrides`. `Display` renders the lowercase hyphenated form,
+            // matching what Materialize itself produces for `uuid::text`.
+            (ColBuilder::StringBuilder(builder), Datum::Uuid(val)) => {
+                builder.append_value(val.to_string())
+            }
+            (ColBuilder::LargeStringBuilder(builder), Datum::Uuid(val)) => {
+                builder.append_value(val.to_string())
+            }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {
                     anyhow::bail!("Cannot represent special numeric value {} in parquet", dec)

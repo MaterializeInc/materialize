@@ -16,10 +16,10 @@ modules](/self-managed-deployments/installation/#install-using-terraform-modules
 The stack collects metrics and logs from Materialize and from the cluster,
 stores them in your own infrastructure, and ships dashboards to query them:
 
-- [How logs and metrics are stored](/manage/monitor/self-managed/storage/), including
+- [How logs and metrics are stored](/observability/self-managed/storage/), including
   the backends you can forward them to.
 
-- [Grafana](/manage/monitor/self-managed/grafana/), the dashboards and query
+- [Grafana](/observability/self-managed/grafana/), the dashboards and query
   interface that ship with the stack.
 
 To configure the stack outside the Materialize Terraform modules, or to see the

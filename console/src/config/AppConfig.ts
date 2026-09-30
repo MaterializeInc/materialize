@@ -71,10 +71,7 @@ type SaslAuthMode = "Sasl";
 type OidcAuthMode = "Oidc";
 type CloudAuthMode = FronteggAuthMode;
 export type SelfManagedAuthMode =
-  | PasswordAuthMode
-  | NoneAuthMode
-  | SaslAuthMode
-  | OidcAuthMode;
+  PasswordAuthMode | NoneAuthMode | SaslAuthMode | OidcAuthMode;
 
 type AuthMode =
   | FronteggAuthMode

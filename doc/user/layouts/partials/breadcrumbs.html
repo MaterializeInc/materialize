@@ -2,7 +2,7 @@
 {{ define "breadcrumb" }}
   {{ with .Parent }}
     {{ template "breadcrumb" . }}
-    {{ if not .IsHome }}&nbsp;/&nbsp;&nbsp;{{end}}<a href="{{ .RelPermalink }}">{{ if .IsHome }}Home{{ else }}{{.Title}}{{ end }}</a>
+    {{ if not .IsHome }}&nbsp;/&nbsp;&nbsp;{{end}}<a href="{{ .RelPermalink }}">{{ if .IsHome }}Home{{ else }}{{.LinkTitle}}{{ end }}</a>
   {{ end }}
 {{ end }}
 {{ if not .Params.suppress_breadcrumb }}

@@ -32,7 +32,6 @@ mz_external_calls_count
 mz_external_long_lived_connection_count
 mz_cloud_egress_check_reachability_count
 mz_dataflow_initial_output_duration_seconds
-mz_storage_messages_sent_bytes_count
 
 # --- Labels and identifiers that merely look like metric names ---
 mz_version
@@ -59,3 +58,28 @@ mz_catalog
 mz_persist_columnar_validation_count
 mz_txn_placeholder_schema_apply
 mz_query_latency_bucket
+mz_query_latency
+
+# The `Container Max RSS Memory Usage` panel plots mz_metrics_libc_ru_maxrss
+# scaled by 1024. The live metric is mz_metrics_libc_ru_maxrss_bytes, so the
+# scaled series is empty and the panel shows one line where it should show two.
+mz_metrics_libc_ru_maxrss
+
+# The storage controller protocol panels straddle a rename with an `or`. These
+# are the dead arm, kept in the reference because the `or` is deliberate and
+# worth imitating. The live names are mz_storage_commands_total,
+# mz_storage_responses_total, mz_storage_command_message_bytes_total, and
+# mz_storage_response_message_bytes_total.
+mz_storage_messages_sent_bytes_count
+mz_storage_messages_received_bytes_count
+mz_storage_messages_sent_bytes_sum
+mz_storage_messages_received_bytes_sum
+
+# Removed with the autospill upsert backend. The reference marks the row dead
+# because the percentage panel still plots it and so renders empty.
+mz_storage_upsert_state_rocksdb_autospill_in_use
+
+# Named only to say it does not exist. The GC roster once listed it, but the
+# already-done case is mz_persist_gc_noop and the only `skipped` counter is
+# mz_persist_compaction_skipped.
+mz_persist_gc_skipped

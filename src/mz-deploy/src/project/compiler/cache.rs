@@ -28,6 +28,16 @@ pub(crate) use project_cache::ProjectCache;
 
 pub(crate) const DB_FILE: &str = "build_artifact.db";
 
+/// Decode a `typecheck_columns.column_type` value.
+///
+/// The column holds JSON rather than a type name because a record's structure
+/// has to survive the round trip; see [`crate::types::data_type`].
+fn decode_column_type(json: String) -> rusqlite::Result<crate::types::DataType> {
+    crate::types::DataType::from_json(&json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
 /// Compute the path to the compiler cache database for a given project and profile.
 pub(crate) fn db_path(
     root: &Path,

@@ -6,6 +6,7 @@ disable_toc: true
 menu:
   main:
     parent: "security"
+    name: "Self-Managed"
     identifier: "security-sm"
     weight: 20
 aliases:

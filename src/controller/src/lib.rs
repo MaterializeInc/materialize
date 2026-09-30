@@ -636,6 +636,7 @@ impl Controller {
                     Datum::TimestampTz(now_tz),
                     m.heap_bytes.into(),
                     m.heap_limit.into(),
+                    m.swap_bytes.into(),
                 ]);
                 (row.clone(), mz_repr::Diff::ONE)
             })

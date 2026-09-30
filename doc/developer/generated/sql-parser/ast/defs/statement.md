@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: 96c4e5a965
+revision: 8b1c640604
 ---
 
 # mz-sql-parser::ast::defs::statement
@@ -41,6 +41,7 @@ In redacted `AstDisplay` output, `WithOptionValue::Secret` is not redacted: a se
 
 `CommentStatement<T>`'s `AstDisplay` impl redacts the comment body when `f.redacted()` is true, writing `'<REDACTED>'` in place of the escaped literal. `NULL` stays verbatim in all modes.
 
+`TableFromSourceOptionName` includes `ExcludeConstraints` (for `EXCLUDE CONSTRAINTS ('name1', ...)`, which filters out named upstream constraints at purification) and `ExcludeAllConstraints` (for `EXCLUDE ALL CONSTRAINTS`, which drops all upstream keys and marks every column nullable). Both variants return `true` from `redact_value()`.
 `TableOptionName::PartitionBy` and `TableFromSourceOptionName::PartitionBy` return `true` from `redact_value()`, so scalar literals in `PARTITION BY` option values are redacted. Column-list identifiers (e.g. `PARTITION BY (a, b)`) remain verbatim because `WithOptionValue`'s per-type logic redacts only scalar literals.
 
 `RoleAttribute::Password`'s `AstDisplay` impl prints `PASSWORD NULL` for `Password(None)` and `PASSWORD '<REDACTED>'` for `Password(Some(_))`. The redacted form is a parseable placeholder string rather than a bare `PASSWORD` keyword (which would fail to reparse without a following `NULL` or string literal).

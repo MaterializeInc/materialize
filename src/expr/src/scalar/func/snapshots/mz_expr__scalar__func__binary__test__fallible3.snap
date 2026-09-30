@@ -51,6 +51,24 @@ impl std::fmt::Display for Fallible3 {
 }
 impl crate::func::FuncName for Fallible3 {
     const NAME: &'static str = stringify!(fallible3);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(test = true)] fn fallible3(a: f32, b: f32) -> Result<Option<f32>, EvalError>",
+        signature: "fn(f32, f32) -> Result<Option<f32>, EvalError>",
+        body_fingerprint: 10202159772278290357u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<f32>(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<f32>(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 #[allow(dead_code)]
 fn fallible3(a: f32, b: f32) -> Result<Option<f32>, EvalError> {

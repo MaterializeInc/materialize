@@ -7,12 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS builder
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS builder
 
 WORKDIR /app
 
-# Enable Corepack
-RUN corepack enable
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in package.json. Reinstall corepack
+# so it can provision that yarn version. Same reason as in console/Dockerfile.
+RUN npm install -g corepack && corepack enable
 
 # Copy the application source code
 COPY ../../ .
@@ -38,7 +40,7 @@ RUN yarn build
 
 # Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
 # digest for security fixes.
-FROM nginxinc/nginx-unprivileged:alpine@sha256:f972e5322b9797dc2a6b830030094426437b1ae7032e4644496395336ac6fdac
+FROM nginxinc/nginx-unprivileged:alpine@sha256:6a23acdfca2b9cfbcec61419e3f1426bcbedb91362f2f19306a8567423bb4612
 
 # Add labels
 LABEL maintainer="support@materialize.com" \

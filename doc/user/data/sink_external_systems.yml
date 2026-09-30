@@ -7,42 +7,42 @@ rows:
   - External system: "Amazon S3 or S3-compatible storage"
     Method: "Use `COPY TO` command"
     Guide(s) or Example(s): |
-      - [Sink to Amazon S3](/serve-results/sink/s3/)
+      - [Sink to Amazon S3](/export-data/s3/)
 
   - External system: "Census supported destinations"
     Method: "Use Census as an intermediate step"
     Guide(s) or Example(s): |
-      - [Sink to Census](/serve-results/sink/census/)
+      - [Sink to Census](/export-data/census/)
 
   - External system: "Snowflake and other systems that can read from S3"
     Method: "Use `COPY TO` S3 or S3-compatible storage as an intermediate step"
     Guide(s) or Example(s): |
-      - [Sink to Snowflake](/serve-results/sink/snowflake/)
+      - [Sink to Snowflake](/export-data/snowflake/)
 
   - External system: "Kafka/Redpanda"
     Method: "Use a native connector"
     Guide(s) or Example(s): |
-      - [Sink to Kafka/Redpanda](/serve-results/sink/kafka/)
+      - [Sink to Kafka/Redpanda](/export-data/kafka/)
 
   - External system: "Elasticsearch"
     Method: "Use the Kafka sink + Kafka Connect"
     Guide(s) or Example(s): |
-      - [Sink to Elasticsearch](/serve-results/sink/elasticsearch/)
+      - [Sink to Elasticsearch](/export-data/elasticsearch/)
 
   - External system: "OpenSearch"
     Method: "Use the Kafka sink + Kafka Connect"
     Guide(s) or Example(s): |
-      - [Sink to OpenSearch](/serve-results/sink/opensearch/)
+      - [Sink to OpenSearch](/export-data/opensearch/)
 
   - External system: "turbopuffer"
     Method: "Use the Kafka sink + `mz-tpuf-sink`"
     Guide(s) or Example(s): |
-      - [Sink to turbopuffer](/serve-results/sink/turbopuffer/)
+      - [Sink to turbopuffer](/export-data/turbopuffer/)
 
   - External system: "Apache Iceberg hosted on AWS S3 Tables"
     Method: "Use a native connector"
     Guide(s) or Example(s): |
-      - [Sink to Iceberg](/serve-results/sink/iceberg/)
+      - [Sink to Iceberg](/export-data/iceberg/)
 
 
   - External system: "Various"

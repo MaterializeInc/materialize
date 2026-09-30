@@ -1,6 +1,6 @@
 ---
 source: src/walkabout/src/ir.rs
-revision: e757b4d11b
+revision: 6ba85a265d
 ---
 
 # mz-walkabout::ir

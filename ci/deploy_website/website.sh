@@ -43,7 +43,7 @@ if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANC
 else
     hugo --gc --baseURL /docs --destination public/docs
     # Build skill docs to public/docs/markdown-docs/.
-    hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
+    hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
 fi
 hugo deploy --maxDeletes -1
 

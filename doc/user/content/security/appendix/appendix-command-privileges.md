@@ -4,6 +4,7 @@ description: ""
 menu:
   main:
     parent: security-appendix
+    name: "Appendix: privileges by commands"
     weight: 10
 disable_toc: true
 aliases:

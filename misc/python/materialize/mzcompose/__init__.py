@@ -50,13 +50,19 @@ DEFAULT_MZ_VOLUMES = [
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
 ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
-    # Benchmarks measure the intended production configuration. For hedged
-    # blob gets that is the planned enablement state (on, at production
-    # tuning), not the CI-wide coverage tuning below, whose short delay
-    # would add duplicate fetches to any measured get slower than it.
+    # Benchmarks measure the production configuration. For hedged blob gets
+    # that is on at the production tuning, not the CI-wide coverage tuning
+    # below, whose short delay would add duplicate fetches to any measured
+    # get slower than it. `enabled` is set explicitly even though it is the
+    # default now, because benchmarks compare against older releases whose
+    # default is off.
     "persist_blob_hedged_get_enabled": "true",
     "persist_blob_hedged_get_delay": "2s",
     "persist_blob_hedged_get_budget_ratio": "0.01",
+    # The unified cluster defaults off in production, so benchmarks measure the
+    # two-cluster topology we ship. Correctness coverage is unaffected: the
+    # rest of CI still gets "true" from get_minimal_system_parameters().
+    "enable_unified_cluster": "false",
 }
 
 
@@ -102,6 +108,7 @@ def get_minimal_system_parameters(
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
+        "enable_exclude_constraints_option": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
@@ -121,9 +128,16 @@ def get_minimal_system_parameters(
         "enable_background_alter_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
+        "enable_cluster_reconfiguration_lag_gate": (
+            "true" if version >= MzVersion.parse_mz("v26.44.0-dev") else "false"
+        ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
-        "enable_storage_introspection_logs": "true",
+        # Introspection goldens depend on the replica topology, so tests need
+        # one consistent value rather than a varying one.
+        "enable_unified_cluster": (
+            "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
+        ),
         "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
@@ -143,6 +157,12 @@ def get_minimal_system_parameters(
         # Exercise the row-limit check without constraining normal test queries.
         config["compute_peek_row_iteration_limit"] = "1000000000"
         config["enable_compute_peek_row_iteration_limit"] = "true"
+
+        # Exercise the peek offload path in tests. Binaries before v26.44
+        # default it off, so this keeps mixed-version runs on the path current
+        # versions take. The budgets stay at their code defaults so tests make
+        # the same placement decisions production makes.
+        config["enable_compute_index_peek_offload"] = "true"
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
@@ -168,11 +188,11 @@ def get_minimal_system_parameters(
         )
 
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
-    # from v26.41 on. Older binaries still gate it behind this feature flag, so
+    # from v26.42 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
     # themselves, and in a mixed-version run some of their phases execute
     # against the old binary.
-    if version < MzVersion.parse_mz("v26.41.0-dev"):
+    if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
 
     return config
@@ -199,8 +219,7 @@ def get_variable_system_parameters(
     # the lockless CRDB_* consensus queries are only linearizable under
     # SERIALIZABLE and persist asserts on the connection's isolation level. On
     # Postgres-backed consensus the query family is linearizable under READ
-    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
-    # Postgres consensus, so leaving it off there is a harmless no-op.
+    # COMMITTED, so default it on and let it vary.
     read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
     persist_pg_consensus_read_committed = VariableSystemParameter(
         "persist_pg_consensus_read_committed",
@@ -278,6 +297,24 @@ def get_variable_system_parameters(
         # off in production while it earns trust.
         VariableSystemParameter(
             "enable_columnar_merge_batcher", "true", ["true", "false"]
+        ),
+        # Varied rather than defaulted on, unlike the two flags above. This one
+        # takes precedence over `enable_columnar_merge_batcher`, so defaulting it
+        # on would take the columnar arm's coverage away rather than add to it.
+        VariableSystemParameter(
+            "enable_column_paged_batcher", "false", ["true", "false"]
+        ),
+        # Varied for the same reason, and because it reaches past the arrange
+        # sites: it installs the process buffer pool and enables the column pager
+        # the MV sink's correction buffer and storage's upsert stash draw from, so
+        # defaulting it on would move several subsystems' memory behavior at once.
+        VariableSystemParameter(
+            "enable_column_paged_batcher_spill", "false", ["true", "false"]
+        ),
+        # On by default so CI exercises the columnar accumulable diff layout, which
+        # is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_accumulable_diff", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
@@ -535,6 +572,17 @@ def get_variable_system_parameters(
             if version >= MzVersion.parse_mz("v26.40.0-dev")
             else []
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "replica_hydration_history_retention_period",
+                    "120d",
+                    ["0s", "1min", "120d"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.44.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
@@ -660,8 +708,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
-    "enable_column_paged_batcher",
-    "enable_column_paged_batcher_spill",
     "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
@@ -690,7 +736,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_mv_sink_advance_persist_frontiers",
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
-    "enable_compute_render_fueled_as_specific_collection",
     "compute_logical_backpressure_max_retained_capabilities",
     "compute_logical_backpressure_inflight_slack",
     "persist_fetch_semaphore_cost_adjustment",
@@ -757,6 +802,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "balancerd_sigterm_connection_wait",
     "balancerd_sigterm_listen_wait",
     "balancerd_inject_proxy_protocol_header_http",
+    "balancerd_max_connections",
+    "balancerd_pre_resolved_timeout",
     "balancerd_log_filter",
     "balancerd_opentelemetry_filter",
     "balancerd_log_filter_defaults",
@@ -827,10 +874,15 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_rusage_refresh_interval",
     "mz_metrics_usage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
+    # The offload's budgets, left at their code defaults so tests exercise the
+    # placement decisions production makes. parallel-workload varies them.
+    "compute_index_peek_inline_budget",
+    "compute_index_peek_activation_budget",
+    "compute_index_peek_yield_granularity",
+    "compute_index_peek_permit_fraction",
+    "compute_peek_response_stash_batch_bytes",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
-    "compute_peek_stash_num_batches",
-    "compute_peek_stash_batch_size",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
     "kafka_retry_backoff",
@@ -865,6 +917,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "read_then_write_max_dependencies",
     "enable_hydration_burst",
     "default_hydration_burst_linger",
+    "cluster_reconfiguration_allowed_lag",
 ]
 
 

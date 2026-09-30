@@ -69,7 +69,12 @@ ingestion.
 
 Dropping a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint that existed when
 the table was created puts the affected table into an error state.
-
+{{ if $is_postgres }}
+If using the new [`CREATE SOURCE` and `CREATE TABLE FROM
+SOURCE`](/sql/create-source/postgres-v2/) syntax, you can safely drop such a
+constraint by first excluding it in Materialize. See [Handle upstream
+constraint drop](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
+{{ end }}
 {{ else -}}
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
@@ -138,6 +143,20 @@ Removing the capture instance that Materialize is using puts the affected table
 into an error state. Removing a capture instance that Materialize is not using does not affect
 ingestion.
 
+### Disabling CDC on a table
+
+Running `sys.sp_cdc_disable_table` removes the capture instance Materialize is
+ingesting from, which puts the affected table into an error state. The other
+tables in the source keep replicating. You can recover without re-creating the
+whole source by dropping just the affected table in Materialize:
+
+```mzsql
+DROP TABLE table_1;
+```
+
+Then re-create it, optionally after re-enabling CDC on the upstream table with
+`sys.sp_cdc_enable_table`.
+
 {{ end -}}
 ### Table-level operations
 
@@ -145,7 +164,7 @@ The following upstream operations put the affected table into an error state.
 Ingestion for that table stops, and you must drop and recreate the affected
 table in Materialize to resume:
 
-- Dropping a table (`DROP TABLE`){{ if $is_postgres }}, removing it from the publication (`ALTER PUBLICATION ... DROP TABLE`), or dropping the publication (`DROP PUBLICATION`){{ end }}.
+- Dropping a table (`DROP TABLE`){{ if $is_postgres }}, or removing it from the publication (`ALTER PUBLICATION ... DROP TABLE`){{ end }}.
 - Renaming a table or moving it to a different schema.
 {{ if $is_postgres }}- Setting a table's replica identity to anything other than `FULL` (`ALTER TABLE ... REPLICA IDENTITY`).
 {{ end }}{{ if ne $connector "sql-server" }}- Truncating a table (`TRUNCATE`). To clear a table without putting it into an error state, use an unqualified `DELETE FROM t;` instead.

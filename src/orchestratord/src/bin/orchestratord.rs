@@ -236,11 +236,15 @@ pub struct Args {
     #[clap(long, value_parser = parse_resources)]
     environmentd_default_resources: Option<ResourceRequirements>,
     #[clap(long)]
+    environmentd_priority_class_name: Option<String>,
+    #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, value_parser = parse_affinity)]
     clusterd_affinity: Option<Affinity>,
     #[clap(long = "clusterd-toleration", value_parser = parse_tolerations)]
     clusterd_tolerations: Option<Vec<Toleration>>,
+    #[clap(long)]
+    clusterd_priority_class_name: Option<String>,
     #[clap(long)]
     balancerd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, value_parser = parse_affinity)]
@@ -666,9 +670,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             environmentd_affinity: args.environmentd_affinity,
             environmentd_tolerations: args.environmentd_tolerations,
             environmentd_default_resources: args.environmentd_default_resources,
+            environmentd_priority_class_name: args.environmentd_priority_class_name,
             clusterd_node_selector: args.clusterd_node_selector,
             clusterd_affinity: args.clusterd_affinity,
             clusterd_tolerations: args.clusterd_tolerations,
+            clusterd_priority_class_name: args.clusterd_priority_class_name,
             image_pull_policy: args.image_pull_policy,
             network_policies_internal_enabled: args.network_policies_internal_enabled,
             network_policies_ingress_enabled: args.network_policies_ingress_enabled,

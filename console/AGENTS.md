@@ -29,6 +29,9 @@ yarn typecheck
 yarn lint          # Check for issues
 yarn lint:fix      # Auto-fix issues (run before committing)
 
+# Develop components in isolation (see doc/guide-storybook.md)
+yarn storybook
+
 # Run unit/integration tests
 yarn test
 

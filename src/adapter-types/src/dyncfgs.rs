@@ -421,19 +421,27 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     ParameterScope::Environment,
 );
 
-/// How often to sweep replicas for completed object hydration episodes.
+/// How often to sweep replicas for completed object and replica hydration episodes.
 pub const HYDRATION_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     "hydration_history_collection_interval",
-    Duration::ZERO,
-    "How often to record completed object hydration episodes. A zero duration disables collection.",
+    Duration::from_secs(60),
+    "How often to record completed object and replica hydration episodes. A zero duration prevents new collection and retention sweeps.",
     ParameterScope::Environment,
 );
 
-/// How long to retain completed object and replica hydration episodes.
+/// How long to retain completed object hydration episodes.
 pub const HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
     "hydration_history_retention_period",
     Duration::from_hours(30 * 24),
-    "How long to retain rows in mz_internal.mz_object_hydration_history and mz_internal.mz_replica_hydration_history.",
+    "How long to retain rows in mz_internal.mz_object_hydration_history.",
+    ParameterScope::Environment,
+);
+
+/// How long to retain completed replica hydration episodes for capacity planning.
+pub const REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
+    "replica_hydration_history_retention_period",
+    Duration::from_hours(120 * 24),
+    "How long to retain rows in mz_internal.mz_replica_hydration_history.",
     ParameterScope::Environment,
 );
 
@@ -463,6 +471,28 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     "cluster_controller_tick_interval",
     Duration::from_secs(5),
     "How often the cluster controller runs a reconcile tick.",
+    ParameterScope::Environment,
+);
+
+/// Whether a replica must be caught up, not merely hydrated, before a graceful
+/// reconfiguration cuts over to it.
+///
+/// Enabled by default.
+pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
+    "enable_cluster_reconfiguration_lag_gate",
+    true,
+    "Whether a graceful reconfiguration requires its target replicas to be within \
+    cluster_reconfiguration_allowed_lag of the replicas they replace, on top of being hydrated.",
+    ParameterScope::Environment,
+);
+
+/// How far behind a graceful reconfiguration's target replicas may be and still
+/// be cut over to.
+pub const CLUSTER_RECONFIGURATION_ALLOWED_LAG: Config<Duration> = Config::new(
+    "cluster_reconfiguration_allowed_lag",
+    Duration::from_secs(60),
+    "Maximum allowed lag when determining whether a graceful reconfiguration's target replicas \
+    have caught up with the replicas they replace.",
     ParameterScope::Environment,
 );
 
@@ -527,6 +557,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
+        .add(&ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE)
+        .add(&CLUSTER_RECONFIGURATION_ALLOWED_LAG)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
         .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
         .add(&ENABLE_HYDRATION_BURST)
@@ -575,6 +607,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
         .add(&HYDRATION_HISTORY_COLLECTION_INTERVAL)
         .add(&HYDRATION_HISTORY_RETENTION_PERIOD)
+        .add(&REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
         .add(&FRONTEND_READ_THEN_WRITE)

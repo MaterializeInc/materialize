@@ -698,15 +698,12 @@ impl Coordinator {
             isolation_level,
         )?;
         self.metrics
-            .determine_timestamp
-            .with_label_values(&[
-                match det.respond_immediately() {
-                    true => "true",
-                    false => "false",
-                },
-                isolation_level.as_variant_str(),
-                &compute_instance.to_string(),
-            ])
+            .by_cluster
+            .determine_timestamp(
+                compute_instance,
+                det.respond_immediately(),
+                *isolation_level,
+            )
             .inc();
         if !det.respond_immediately()
             && isolation_level.is_bounded_staleness()
@@ -725,8 +722,8 @@ impl Coordinator {
                 )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
-                        .timestamp_difference_for_bounded_staleness_ms
-                        .with_label_values(&[compute_instance.to_string().as_str()])
+                        .by_cluster
+                        .timestamp_difference_for_bounded_staleness_ms(compute_instance)
                         .observe(f64::cast_lossy(u64::from(
                             serializable.saturating_sub(*bs_ts),
                         )));

@@ -471,7 +471,7 @@ pub(super) fn validate_unit_test(
             if !extra.is_empty() || !missing.is_empty() || !type_mismatches.is_empty() {
                 let actual_schema: Vec<(String, String)> = actual_columns
                     .iter()
-                    .map(|(name, col_type)| (name.clone(), col_type.r#type.clone()))
+                    .map(|(name, col_type)| (name.clone(), col_type.r#type.to_string()))
                     .collect();
 
                 return Err(TestValidationError::MockSchemaMismatch(
@@ -498,7 +498,7 @@ pub(super) fn validate_unit_test(
         if !extra.is_empty() || !missing.is_empty() || !type_mismatches.is_empty() {
             let actual_schema: Vec<(String, String)> = target_columns
                 .iter()
-                .map(|(name, col_type)| (name.clone(), col_type.r#type.clone()))
+                .map(|(name, col_type)| (name.clone(), col_type.r#type.to_string()))
                 .collect();
 
             return Err(TestValidationError::ExpectedSchemaMismatch(
@@ -565,7 +565,7 @@ fn compare_columns(
         .map(|s| {
             let typ = actual_columns
                 .get(*s)
-                .map(|c| c.r#type.clone())
+                .map(|c| c.r#type.to_string())
                 .unwrap_or_default();
             ((*s).to_string(), typ)
         })
@@ -576,16 +576,16 @@ fn compare_columns(
         .filter_map(|(name, test_type)| {
             actual_columns.get(name).and_then(|actual| {
                 let test_normalized = normalize_type(test_type);
-                let actual_normalized = normalize_type(&actual.r#type);
+                let actual_type = actual.r#type.to_string();
+                let actual_normalized = normalize_type(&actual_type);
 
                 if test_normalized != actual_normalized {
-                    // SHOW COLUMNS returns bare container types (e.g. "list"
-                    // instead of "int8 list"); treat bare containers as matching
-                    // any parameterized variant.
+                    // A test file may spell a container bare, and so may a
+                    // lock file captured before element types were recorded.
                     if types_match_with_bare_containers(&test_normalized, &actual_normalized) {
                         None
                     } else {
-                        Some((name.clone(), test_type.clone(), actual.r#type.clone()))
+                        Some((name.clone(), test_type.clone(), actual_type))
                     }
                 } else {
                     None
@@ -599,9 +599,8 @@ fn compare_columns(
 
 /// Check if two normalized types match when accounting for bare container types.
 ///
-/// SHOW COLUMNS returns bare container types (e.g. "list" instead of "int8 list"),
-/// stripping the element type. This function treats bare containers as matching
-/// any parameterized variant of the same container.
+/// A bare container (`list` rather than `int8 list`) names the container
+/// without its element type, so it matches any parameterized variant.
 fn types_match_with_bare_containers(a: &str, b: &str) -> bool {
     if a == "list" && b.ends_with(" list") || b == "list" && a.ends_with(" list") {
         return true;
@@ -848,7 +847,7 @@ SELECT 'UNEXPECTED', * FROM expected{}"#,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ColumnType;
+    use crate::types::{ColumnType, DataType};
     use std::collections::BTreeMap;
 
     #[mz_ore::test]
@@ -927,7 +926,7 @@ mod tests {
         users_cols.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -936,7 +935,7 @@ mod tests {
         users_cols.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,
@@ -945,7 +944,7 @@ mod tests {
         users_cols.insert(
             "email".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 2,
                 comment: None,
@@ -960,7 +959,7 @@ mod tests {
         orders_cols.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -969,7 +968,7 @@ mod tests {
         orders_cols.insert(
             "user_id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 1,
                 comment: None,
@@ -978,7 +977,7 @@ mod tests {
         orders_cols.insert(
             "amount".to_string(),
             ColumnType {
-                r#type: "numeric".to_string(),
+                r#type: DataType::named("numeric"),
                 nullable: true,
                 position: 2,
                 comment: None,
@@ -993,7 +992,7 @@ mod tests {
         summary_cols.insert(
             "user_id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1002,7 +1001,7 @@ mod tests {
         summary_cols.insert(
             "user_name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,
@@ -1011,7 +1010,7 @@ mod tests {
         summary_cols.insert(
             "total_orders".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: true,
                 position: 2,
                 comment: None,
@@ -1025,7 +1024,6 @@ mod tests {
         );
 
         Types {
-            version: 1,
             tables: objects,
             kinds: BTreeMap::new(),
             comments: BTreeMap::new(),
@@ -1663,7 +1661,7 @@ mod tests {
         actual_columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1672,7 +1670,7 @@ mod tests {
         actual_columns.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -1696,7 +1694,7 @@ mod tests {
         actual_columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1705,7 +1703,7 @@ mod tests {
         actual_columns.insert(
             "count".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1729,7 +1727,7 @@ mod tests {
         actual_columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1749,7 +1747,7 @@ mod tests {
         actual_columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1758,7 +1756,7 @@ mod tests {
         actual_columns.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -1778,7 +1776,7 @@ mod tests {
         actual_columns.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "bigint".to_string(),
+                r#type: DataType::named("bigint"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -1946,7 +1944,7 @@ mod tests {
         actual_columns.insert(
             "ids".to_string(),
             ColumnType {
-                r#type: "list".to_string(),
+                r#type: DataType::named("list"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -1971,7 +1969,7 @@ mod tests {
         actual_columns.insert(
             "data".to_string(),
             ColumnType {
-                r#type: "map".to_string(),
+                r#type: DataType::named("map"),
                 nullable: true,
                 position: 0,
                 comment: None,

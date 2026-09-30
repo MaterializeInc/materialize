@@ -5,6 +5,7 @@ disable_list: true
 menu:
   main:
     parent: "sm-deployments"
+    name: "Materialize CRD field descriptions"
     identifier: "materialize-crd-field-descriptions"
     weight: 66
 aliases:

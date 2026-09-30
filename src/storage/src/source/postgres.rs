@@ -90,6 +90,7 @@ use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::schema_change::SchemaChangeError;
 use mz_postgres_util::{Client, PostgresError, Sql, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
@@ -105,7 +106,7 @@ use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
@@ -168,6 +169,7 @@ impl SourceRender for PostgresSourceConnection {
                 casts,
                 resume_upper,
                 export_id: id.clone(),
+                initial_lsn: details.initial_lsn.unwrap_or_else(MzOffset::minimum),
             };
             table_info
                 .entry(output.desc.oid)
@@ -235,7 +237,11 @@ impl SourceRender for PostgresSourceConnection {
         let errs = snapshot_err.concat(repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let hint = match &err {
+                ReplicationError::Definite(err) => err.hint(),
+                ReplicationError::Transient(_) => None,
+            };
+            let update = HealthStatusUpdate::halting(err_string.clone(), hint);
 
             let namespace = match err {
                 ReplicationError::Transient(err)
@@ -279,6 +285,26 @@ struct SourceOutputInfo {
     casts: Vec<(CastType, StorageScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
+    /// An upper bound on the LSN whose upstream schema `desc` describes, read during purification
+    /// once `desc` was in hand. Outputs created before this was recorded fall back to
+    /// [`MzOffset::minimum`], which ignores nothing.
+    initial_lsn: MzOffset,
+}
+
+impl SourceOutputInfo {
+    /// Whether this output must skip replication messages committed at `commit_lsn`.
+    ///
+    /// Such messages fall outside the range this output describes. Its snapshot is taken at an LSN
+    /// at or after `initial_lsn`, so the rewind that subtracts the replication stream from that
+    /// snapshot stops at the same point. They also need not line up with `desc`, since the
+    /// upstream schema may have changed between them and `initial_lsn`.
+    ///
+    /// The comparison is strict because `initial_lsn` is an upper. Everything committed when it
+    /// was read is strictly below it, so a transaction landing exactly on it is one this output
+    /// has to ingest.
+    fn ignores(&self, commit_lsn: MzOffset) -> bool {
+        commit_lsn < self.initial_lsn
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -347,6 +373,13 @@ pub enum DefiniteError {
     )]
     InvalidTimelineId { expected: u64, actual: u64 },
     #[error(
+        "unsupported action: upstream went back in time. Expected a snapshot at or after LSN {initial_lsn} but the snapshot was taken at {snapshot_lsn}"
+    )]
+    InvalidSnapshotLsn {
+        initial_lsn: MzOffset,
+        snapshot_lsn: MzOffset,
+    },
+    #[error(
         "unsupported action: upstream physical replica status changed (e.g. a physical replica was promoted to a primary). Expected pg_is_in_recovery()={expected} but got {actual}"
     )]
     InvalidPhysicalReplica { expected: bool, actual: bool },
@@ -358,9 +391,8 @@ pub enum DefiniteError {
         "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     DefaultReplicaIdentity,
-    #[error("incompatible schema change: {0}")]
-    // TODO: proper error variants for all the expected schema violations
-    IncompatibleSchema(String),
+    #[error("{0}")]
+    IncompatibleSchema(SchemaChangeError),
     #[error("invalid UTF8 string: {0:?}")]
     InvalidUTF8(Vec<u8>),
     #[error("failed to cast raw column: {0}")]
@@ -369,10 +401,20 @@ pub enum DefiniteError {
     UnexpectedBinaryData,
 }
 
+impl DefiniteError {
+    fn hint(&self) -> Option<String> {
+        match self {
+            DefiniteError::IncompatibleSchema(err) => err.hint(),
+            _ => None,
+        }
+    }
+}
+
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
+            hint: err.hint().map(Into::into),
             error: match &err {
                 DefiniteError::SlotCompactedPastResumePoint(_, _) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated => SourceErrorDetails::Other(m),
@@ -382,6 +424,7 @@ impl From<DefiniteError> for DataflowError {
                 DefiniteError::MissingColumn => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidCopyInput => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidTimelineId { .. } => SourceErrorDetails::Initialization(m),
+                DefiniteError::InvalidSnapshotLsn { .. } => SourceErrorDetails::Initialization(m),
                 DefiniteError::InvalidPhysicalReplica { .. } => {
                     SourceErrorDetails::Initialization(m)
                 }
@@ -486,7 +529,7 @@ fn verify_schema(
         .determine_compatibility(current_desc, &allow_oids_to_change_by_col_num)
     {
         Ok(()) => Ok(()),
-        Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
+        Err(err) => Err(DefiniteError::IncompatibleSchema(err)),
     }
 }
 

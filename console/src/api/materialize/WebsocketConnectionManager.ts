@@ -44,10 +44,7 @@ const DEFAULT_OPTIONS = {
 };
 
 export type ConnectionStatus =
-  | "disconnected"
-  | "connected"
-  | "reconnecting"
-  | "failed";
+  "disconnected" | "connected" | "reconnecting" | "failed";
 
 export interface ReconnectionState {
   status: ConnectionStatus;

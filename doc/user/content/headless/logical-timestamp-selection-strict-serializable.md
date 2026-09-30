@@ -2,7 +2,7 @@
 headless: true
 ---
 When using the [strict
-serializable](/reference/isolation-level#strict-serializable) isolation level,
+serializable](/serve-results/isolation-level#strict-serializable) isolation level,
 Materialize attempts to keep the logical timestamp reasonably close to wall
 clock time. In most cases, the logical timestamp of a query will be within a few
 seconds of the wall clock time. For example, when executing a strict

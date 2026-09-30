@@ -145,11 +145,6 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
-        "--foundationdb",
-        help="Build with the foundationdb feature, enabling FoundationDB as a consensus and timestamp oracle backend",
-        action="store_true",
-    )
-    parser.add_argument(
         "-p",
         "--package",
         help="Package to run tests for",
@@ -257,11 +252,10 @@ def main() -> int:
             _handle_lingering_services(kill=args.reset)
             scratch = MZ_ROOT / "scratch"
             dbconn = _connect_sql(args.postgres)
-            if dbconn:
-                for schema in ["consensus", "tsoracle", "storage"]:
-                    if args.reset:
-                        _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                    _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            for schema in ["consensus", "tsoracle", "storage"]:
+                if args.reset:
+                    _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             # Keep this after clearing out Postgres. Otherwise there is a race
             # where a ctrl-c could leave persist with references in Postgres to
             # files that have been deleted. There's no race if we reset in the
@@ -365,8 +359,6 @@ def main() -> int:
         command = _cargo_command(args, "nextest", "run")
 
         features = []
-        if args.foundationdb:
-            features.append("foundationdb")
         if args.features:
             features.extend(args.features.split(","))
         if features:
@@ -480,8 +472,6 @@ def _cargo_build(
             + " "
             + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
         )
-    if args.foundationdb:
-        features.append("foundationdb")
     if args.features:
         features.extend(args.features.split(","))
     if features:
@@ -550,10 +540,7 @@ def _macos_codesign(path: str) -> None:
     spawn.runv(command, env=env)
 
 
-def _connect_sql(urlstr: str) -> psycopg.Connection | None:
-    if urlstr.startswith("foundationdb:"):
-        return None
-
+def _connect_sql(urlstr: str) -> psycopg.Connection:
     hint = """Have you correctly configured CockroachDB or PostgreSQL?
 
 For CockroachDB:

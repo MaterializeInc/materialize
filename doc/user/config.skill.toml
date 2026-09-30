@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 #
 # config.skill.toml - Configuration overlay for generating Claude skill output.
-# Use with: hugo --cleanDestinationDir  --config config.toml,config.skill.toml --disableKinds sitemap,robotsTXT,taxonomy
+# Use with: hugo --cleanDestinationDir  --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy
 
 publishDir = "public/markdown-docs"
 

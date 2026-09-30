@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/metrics/upsert.rs
-revision: 18fb1f796d
+revision: 11e6a79394
 ---
 
 # mz-storage::metrics::upsert

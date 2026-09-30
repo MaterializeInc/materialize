@@ -16,6 +16,7 @@ chrono.workspace = true
 clap.workspace = true
 fail.workspace = true
 futures.workspace = true
+hex.workspace = true
 maplit.workspace = true
 mz-cloud-resources = { path = "../cloud-resources", default-features = false, features = ["vpc-endpoints"] }
 mz-orchestrator = { path = "../orchestrator", default-features = false }

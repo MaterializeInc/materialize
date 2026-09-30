@@ -21,7 +21,7 @@ aliases:
     Materialize](/releases/#mcp-server-for-agents)
   - [MCP server for developers: give coding agents observability into your
     Materialize environment](/releases/#mcp-server-for-developers)
-  - [Agent skills](/integrations/coding-agent-skills/)
+  - [Agent skills](/developer-tools/mcp-server/coding-agent-skills/)
 
 For more information on these and other changes, see the [Release Notes](/releases/).
 

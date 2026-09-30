@@ -23,20 +23,29 @@ spec:
           claimName: minio-pv-claim
       containers:
       - name: minio
-        # Pulls the default Minio image from Docker Hub
-        image: minio/minio:latest
+        # `image` is the `minio` mzbuild image, set by
+        # `Minio.deployment_manifest`. That image has no entrypoint, so
+        # `command` names the binary.
+        command:
+        - minio
         args:
         - server
         - /storage
         env:
-        # Minio access key and secret key
-        - name: MINIO_ACCESS_KEY
+        - name: MINIO_ROOT_USER
           value: "minio"
-        - name: MINIO_SECRET_KEY
+        - name: MINIO_ROOT_PASSWORD
           value: "minio123"
         ports:
         - containerPort: 9000
           hostPort: 9000
+        # Without a readiness probe the deployment reports Available as soon as
+        # the container starts, before MinIO accepts connections.
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          periodSeconds: 1
         # Mount the volume into the pod
         volumeMounts:
         - name: storage # must match the volume name, above

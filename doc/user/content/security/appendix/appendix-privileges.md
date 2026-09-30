@@ -4,6 +4,7 @@ description: "List of available  privileges in Materialize."
 menu:
   main:
     parent: security-appendix
+    name: "Appendix: privileges"
     weight: 5
 aliases:
   - /manage/access-control/appendix-privileges/

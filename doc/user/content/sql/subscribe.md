@@ -140,7 +140,7 @@ with several additional columns that describe the nature of the update:
 ### `AS OF`
 
 When a [history rentention
-period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+period](/serve-results/durable-subscriptions/#history-retention-period)
 is configured for the object(s) powering the subscription, the `AS OF` clause
 allows specifying a timestamp at which the `SUBSCRIBE` command should begin
 returning results. If `AS OF` is specified, no rows whose timestamp is earlier
@@ -150,7 +150,7 @@ an error is thrown.
 
 To configure the history retention period for objects used in a subscription,
 see [Durable
-subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period).
+subscriptions](/serve-results/durable-subscriptions/#history-retention-period).
 If `AS OF` is unspecified, the system automatically chooses an `AS OF`
 timestamp.
 
@@ -263,7 +263,7 @@ timestamp `4` implies that there are no more updates for either timestamp
 
 Because Materialize is wire-compatible with PostgreSQL, you can use any
 PostgreSQL connection pooler with Materialize. For example in using PgBouncer,
-see [Connection Pooling](/integrations/connection-pooling).
+see [Connection Pooling](/serve-results/connection-pooling).
 
 ## Examples
 
@@ -329,13 +329,13 @@ COPY (SUBSCRIBE (SELECT * FROM bids)) TO STDOUT;
 
 | Additional guides |
 | ---------------------- |
-| [Go](/integrations/client-libraries/golang/#stream)|
-| [Java](/integrations/client-libraries/java-jdbc/#stream)|
-| [Node.js](/integrations/client-libraries/node-js/#stream)|
-| [PHP](/integrations/client-libraries/php/#stream)|
-| [Python](/integrations/client-libraries/python/#stream)|
-| [Ruby](/integrations/client-libraries/ruby/#stream)|
-| [Rust](/integrations/client-libraries/rust/#stream)|
+| [Go](/serve-results/client-libraries/golang/#stream)|
+| [Java](/serve-results/client-libraries/java-jdbc/#stream)|
+| [Node.js](/serve-results/client-libraries/node-js/#stream)|
+| [PHP](/serve-results/client-libraries/php/#stream)|
+| [Python](/serve-results/client-libraries/python/#stream)|
+| [Ruby](/serve-results/client-libraries/ruby/#stream)|
+| [Rust](/serve-results/client-libraries/rust/#stream)|
 
 ### Mapping rows to their updates
 
@@ -580,13 +580,13 @@ DROP SOURCE auction CASCADE;
 Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
 [history retention
-period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+period](/serve-results/durable-subscriptions/#history-retention-period)
 for the objects a subscription depends on, and then use [`AS OF`](#as-of) to
 pick up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
 For more information, see [durable
-subscriptions](/transform-data/patterns/durable-subscriptions/).
+subscriptions](/serve-results/durable-subscriptions/).
 
 ## Privileges
 

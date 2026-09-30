@@ -679,6 +679,8 @@ pub const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
 /// - `UInt64` -> `Decimal128(20, 0)`
 /// - `MzTimestamp` (which uses UInt64) -> `Decimal128(20, 0)`
 /// - `Interval` -> string (`LargeUtf8`)
+/// - `Uuid` -> string (`Utf8`). Unity Catalog does not support fixed binary types, so we use string
+///  instead of `FixedSizeBinary(16)`.
 ///
 /// Pass this to `mz_arrow_util::builder::desc_to_schema_with_overrides`
 /// when producing the Arrow schema for an iceberg sink, and to
@@ -701,6 +703,7 @@ pub fn iceberg_type_overrides(
             "mz_timestamp".to_string(),
         )),
         SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
+        SqlScalarType::Uuid => Some((DataType::Utf8, "uuid".to_string())),
         _ => None,
     }
 }

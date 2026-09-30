@@ -31,8 +31,7 @@ aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
 aws-types.workspace = true
 azure_identity.workspace = true
-azure_storage.workspace = true
-azure_storage_blobs.workspace = true
+azure_storage_blob.workspace = true
 azure_core.workspace = true
 base64.workspace = true
 bytes.workspace = true
@@ -40,7 +39,6 @@ deadpool-postgres.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
 futures-util.workspace = true
-mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 itertools.workspace = true
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }
@@ -55,7 +53,7 @@ prometheus.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
-rand = { workspace = true, features = ["small_rng"] }
+rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
@@ -69,13 +67,6 @@ url.workspace = true
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
-# While this crate doesn't directly depend on `sha2` we want to ensure that the
-# `asm` feature is enabled since computing SHA256 hashes is taking a
-# significant amount of CPU time when uploading data to S3
-[dependencies.sha2]
-workspace = true
-features = ["asm"]
-
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json.workspace = true
@@ -87,10 +78,4 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
-foundationdb = ["mz-foundationdb"]
 turmoil = ["dep:serde_json", "dep:turmoil"]
-
-[package.metadata.unused-deps]
-# Depended on for its `asm` feature rather than its API, see the comment on the
-# `[dependencies.sha2]` section above.
-ignore = ["sha2"]

@@ -198,6 +198,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
+    cluster_reconfiguration_allowed_lag
     cluster_soften_az_affinity
     cluster_soften_az_affinity_weight
     cluster_soften_replication_anti_affinity
@@ -208,6 +209,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
     compute_flat_map_fuel
+    compute_index_peek_activation_budget
+    compute_index_peek_inline_budget
+    compute_index_peek_permit_fraction
+    compute_index_peek_yield_granularity
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers
     compute_peek_row_iteration_limit
@@ -230,6 +235,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_cluster_reconfiguration_timeout
     default_hydration_burst_linger
     default_timestamp_interval
+    disabled_metric_sinks
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
@@ -239,13 +245,15 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
+    enable_cluster_reconfiguration_lag_gate
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
+    enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
     enable_compute_half_join2
+    enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
-    enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
     enable_default_connection_validation
     enable_dequadratic_eqprop_map
@@ -287,6 +295,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
+    enable_unified_cluster
     enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
     enable_will_distinct_propagation
@@ -335,7 +344,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_blob_connect_timeout
     persist_blob_hedged_get_budget_ratio
     persist_blob_hedged_get_delay
-    persist_blob_hedged_get_enabled
     persist_blob_hedged_get_max_concurrent
     persist_blob_hedged_get_warm_interval
     persist_blob_operation_attempt_timeout
@@ -395,6 +403,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     postgres_fetch_slot_resume_lsn_interval
     privatelink_status_update_quota_per_minute
     read_then_write_max_dependencies
+    replica_hydration_history_retention_period
     replica_metrics_history_retention_interval
     replica_status_history_retention_window
     scram_iterations
@@ -478,6 +487,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_multi_replica_sources
     enable_reduce_reduction
     enable_repr_typecheck
+    enable_storage_introspection_logs
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
     enable_zero_downtime_cluster_reconfiguration

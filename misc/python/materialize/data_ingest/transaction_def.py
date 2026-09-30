@@ -125,6 +125,7 @@ class ZeroDowntimeDeploy(TransactionDef):
         if random.random() < self.probability:
             self.workload.deploy_generation += 1
 
+            previous_mz_service = self.workload.mz_service
             if self.workload.deploy_generation % 2 == 0:
                 self.workload.mz_service = "materialized"
                 ports = ["16875:6875"]
@@ -157,9 +158,8 @@ class ZeroDowntimeDeploy(TransactionDef):
                 self.composition.await_mz_deployment_status(
                     DeploymentStatus.READY_TO_PROMOTE, self.workload.mz_service
                 )
-                self.composition.promote_mz(self.workload.mz_service)
-                self.composition.await_mz_deployment_status(
-                    DeploymentStatus.IS_LEADER, self.workload.mz_service
+                self.composition.promote_mz(
+                    self.workload.mz_service, retire=previous_mz_service
                 )
 
         yield None

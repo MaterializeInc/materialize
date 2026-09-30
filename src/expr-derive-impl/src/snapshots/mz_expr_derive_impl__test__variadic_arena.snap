@@ -52,4 +52,30 @@ impl std::fmt::Display for ArrayFill {
 }
 impl crate::func::FuncName for ArrayFill {
     const NAME: &'static str = stringify!(array_fill);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(ArrayFill, sqlname = \"array_fill\", introduces_nulls = false,)] fn array_fill<'a>(&self, fill: Datum<'a>, dims: Datum<'a>, lb: OptionalArg<Datum<'a>>, temp_storage: &RowArena,) -> Result<Datum<'a>, EvalError>",
+        signature: "fn(Datum<'a>, Datum<'a>, OptionalArg<Datum<'a>>) -> Result<Datum<'a>, EvalError>",
+        body_fingerprint: 4726381389472009124u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }

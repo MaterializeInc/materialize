@@ -2,7 +2,7 @@
 headless: true
 ---
 If your JSON messages have a consistent shape, we recommend creating a parsing
-[view](/concepts/views) that maps the individual fields to
+[view](/fundamentals/concepts/views) that maps the individual fields to
 columns with the required data types:
 
 ```mzsql

@@ -75,6 +75,10 @@ class Minio(K8sResource):
         with open(MINIO_YAML_DIRECTORY / "minio-standalone-deployment.yaml") as f:
             deployment = yaml.safe_load(f)
 
+        deployment["spec"]["template"]["spec"]["containers"][0]["image"] = self.image(
+            "minio", tag=None, release_mode=True
+        )
+
         if self.apply_node_selectors:
             deployment["spec"]["template"]["spec"]["nodeSelector"] = {
                 "supporting-services": "true"
@@ -83,20 +87,25 @@ class Minio(K8sResource):
         return yaml.dump(deployment)
 
     def create_buckets(self, buckets: list[str]) -> None:
+        # NOTE: `mc` treats a path under an unknown alias as a local directory,
+        # so after a failed `mc alias set`, `mc mb myminio/<bucket>` reports
+        # success without creating a bucket. The service can refuse connections
+        # briefly even after the deployment is Available, so retry the alias,
+        # and fail the pod if `mc mb` fails.
         cmds = [
-            f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123"
+            f"until mc alias set myminio http://minio-service.{self.namespace()}:9000 minio minio123; do sleep 1; done"
         ]
         for bucket in buckets:
             cmds.extend(
                 [
                     f"mc rm -r --force myminio/{bucket}",
-                    f"mc mb myminio/{bucket}",
+                    f"mc mb --ignore-existing myminio/{bucket} || exit 1",
                 ]
             )
         self.kubectl(
             "run",
             "minio",
-            "--image=minio/mc:RELEASE.2023-07-07T05-25-51Z",
+            f"--image={self.image('mc', tag=None, release_mode=True)}",
             "--restart=Never",
             "--command",
             "/bin/sh",

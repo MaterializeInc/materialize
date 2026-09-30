@@ -66,6 +66,26 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### Background reconcilers own convergence resource failures
+
+When a catalog mutation writes desired state that a background reconciler
+materializes, the sequencer must not predict the reconciler's transient resource
+footprint. The prediction would have to reproduce every strategy that contributes
+to desired state, along with their sharing and shedding rules. It will diverge as
+those strategies evolve.
+
+The sequencer should validate properties intrinsic to the requested state, such
+as valid replica sizes, availability zones, and role permissions. The catalog
+transaction enforces resource limits against concrete creates. If a reconciler
+cannot apply those creates, it owns the response and the durable or logged
+observability for that outcome.
+
+Catalog accounting and downstream side-effect ordering must agree. If one
+transaction nets replacement drops against creates, its implications must queue
+those drops before the creates. An orchestrator can retry a failed create
+indefinitely. Queuing the drop behind it would deadlock a replacement against
+the same physical quota that catalog accounting correctly considered available.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds

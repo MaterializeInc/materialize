@@ -15,7 +15,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::prelude::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 /// Configures a retry operation.
 #[derive(Debug, Clone, PartialEq)]

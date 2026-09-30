@@ -66,6 +66,9 @@ pub mod v1alpha1 {
     pub struct BalancerSpec {
         /// The balancerd image to run.
         pub balancerd_image_ref: String,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// dynamic configuration as a JSON object in `config.json`.
+        pub configmap_name: Option<String>,
         // Resource requirements for the balancerd pod
         pub resource_requirements: Option<ResourceRequirements>,
         // Number of balancerd pods to create

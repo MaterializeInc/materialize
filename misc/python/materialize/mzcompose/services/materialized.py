@@ -31,7 +31,6 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
-from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.listener_config import (
     resolve_listeners_config_path,
@@ -314,16 +313,6 @@ class Materialized(Service):
                     # v0.92.0).
                     f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
                 ]
-            elif metadata_store == "foundationdb":
-                command += [
-                    "--persist-consensus-url=foundationdb:?prefix=consensus",
-                    "--timestamp-oracle-url=foundationdb:?prefix=ts_oracle",
-                ]
-
-                # Generate fdb.cluster file dynamically based on the metadata store address
-                min_version = MzVersion.parse_mz("v26.9.0")
-                if image_version is None or image_version >= min_version:
-                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",

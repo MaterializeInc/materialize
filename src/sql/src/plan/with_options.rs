@@ -21,7 +21,9 @@ use mz_sql_parser::ast::{
     NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
-use mz_storage_types::connections::{IcebergAccessDelegation, IcebergCatalogType};
+use mz_storage_types::connections::{
+    IcebergAccessDelegation, IcebergCatalogType, IcebergStorageProvider,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
@@ -65,6 +67,33 @@ impl TryFromValue<WithOptionValue<Aug>> for IcebergCatalogType {
 impl ImpliedValue for IcebergCatalogType {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an iceberg catalog type")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for IcebergStorageProvider {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match String::try_from_value(v)? {
+            s if s.eq_ignore_ascii_case("s3") => Ok(IcebergStorageProvider::S3),
+            s if s.eq_ignore_ascii_case("gcs") => Ok(IcebergStorageProvider::Gcs),
+            s if s.eq_ignore_ascii_case("adls") => Ok(IcebergStorageProvider::Adls),
+            _ => sql_bail!("invalid iceberg storage provider, expected 's3', 'gcs', or 'adls'"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Value(Value::String(
+            self.as_str().to_string(),
+        )))
+    }
+
+    fn name() -> String {
+        "iceberg storage provider".to_string()
+    }
+}
+
+impl ImpliedValue for IcebergStorageProvider {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an iceberg storage provider")
     }
 }
 

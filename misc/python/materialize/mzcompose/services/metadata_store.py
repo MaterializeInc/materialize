@@ -11,7 +11,7 @@
 Metadata store configuration for mzcompose.
 
 This module provides utilities for selecting and configuring the metadata
-store backend (CockroachDB, FoundationDB, or PostgreSQL) used by Materialize.
+store backend (CockroachDB or PostgreSQL) used by Materialize.
 """
 
 from __future__ import annotations
@@ -21,12 +21,6 @@ from typing import TYPE_CHECKING
 
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.foundationdb import (
-    FDB_NUM_NODES,
-    FoundationDB,
-    fdb_coordinator_addresses,
-    foundationdb_services,
-)
 
 if TYPE_CHECKING:
     from materialize.mzcompose.services.alloydb import AlloyDB
@@ -47,7 +41,7 @@ def metadata_store_name() -> str:
 
 def metadata_store_service(
     metadata_store: str,
-) -> type[Cockroach | FoundationDB | PostgresMetadata | AlloyDB] | None:
+) -> type[Cockroach | PostgresMetadata | AlloyDB] | None:
     """
     Returns the service class corresponding to the specified metadata store, or None if an internal store is used.
     :param metadata_store: The name of the metadata store.
@@ -59,8 +53,6 @@ def metadata_store_service(
     match metadata_store:
         case "cockroach":
             return Cockroach
-        case "foundationdb":
-            return FoundationDB
         case "postgres-metadata":
             return PostgresMetadata
         case "alloydb":
@@ -78,7 +70,7 @@ def is_external_metadata_store(metadata_store: str) -> bool:
     :param metadata_store: The name of the metadata store.
     """
     match metadata_store:
-        case "cockroach" | "foundationdb" | "postgres-metadata" | "alloydb":
+        case "cockroach" | "postgres-metadata" | "alloydb":
             return True
         case "postgres-internal":
             return False
@@ -97,8 +89,7 @@ def external_metadata_store() -> str | bool:
     """
     Returns the appropriate external_metadata_store value for Materialized/Testdrive.
 
-    - For multi-node FoundationDB: returns coordinator addresses string
-    - For other external stores: returns True
+    - For external stores: returns True
     - For internal stores: returns False
     """
     # We'd like this to be `is_external_metadata_store(METADATA_STORE)`, but
@@ -107,13 +98,10 @@ def external_metadata_store() -> str | bool:
     if not is_external_metadata_store(name):
         return False
     # Map the metadata store to the `external_metadata_store: str | bool` argument.
-    # Metadata stores where the name matches the address (or specific metadata) return `True`,
-    # others, like FoundationDB, return a string that is more instructive.
+    # Metadata stores where the name matches the address (or specific metadata) return `True`.
     match METADATA_STORE:
         case "cockroach":
             return True
-        case "foundationdb":
-            return fdb_coordinator_addresses()
         case "postgres-metadata":
             return True
         case "alloydb":
@@ -140,7 +128,6 @@ def metadata_store_companions(
 
     Returns an empty list when the store is internal or disabled.
 
-    For FoundationDB, returns multiple services (server nodes + cluster service).
     :param metadata_store: The metadata store backend name.
     :param external_metadata_store: The resolved `external_metadata_store` value;
         a falsy value means an internal store and yields no companions.
@@ -152,8 +139,6 @@ def metadata_store_companions(
     service = metadata_store_service(metadata_store)
     if service is None:
         return []
-    if metadata_store == "foundationdb":
-        return foundationdb_services(num_nodes=FDB_NUM_NODES, **kwargs)
     return [service(*args, **kwargs)]
 
 

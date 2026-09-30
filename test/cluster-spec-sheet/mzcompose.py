@@ -13,8 +13,10 @@ Reproduces cluster spec sheet results on Materialize Cloud (or local Docker).
 
 import argparse
 import csv
+import functools
 import glob
 import itertools
+import json
 import os
 import re
 import shlex
@@ -104,7 +106,10 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 }
 
 
+@functools.cache
 def staging_version() -> str:
+    # Cached: the version cannot change within a run, and `parse_cargo` shells
+    # out to cargo, whose failure must not surface inside a region retry loop.
     return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
 
 
@@ -208,15 +213,51 @@ def default_cluster_object_limits_sizes(max_n: int) -> list[int]:
     return sizes
 
 
+# `SET LOCAL` is excluded because it only lasts until the end of the current
+# transaction, which a reconnect discards anyway.
+_SESSION_SET_RE = re.compile(
+    r"SET\s+(?:SESSION\s+)?(?!LOCAL\b)(\w+)\s*(?:=|\s+TO\s+).*",
+    re.IGNORECASE | re.DOTALL,
+)
+_SESSION_RESET_RE = re.compile(r"RESET\s+(\w+)\s*;?", re.IGNORECASE)
+
+
 class ConnectionHandler:
     def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
         self.new_connection = new_connection
         self.connection = self.new_connection()
         self.cursor: psycopg.Cursor | None = None
+        # Session `SET` statements keyed by lowercased variable name, replayed
+        # on every new connection.
+        self.session_sets: dict[str, str] = {}
+
+    def record_session_statement(self, query: str) -> None:
+        """Record `query` if it is a session-level `SET` or `RESET`.
+
+        Must be called only after `query` succeeded outside an explicit
+        transaction. Statements executed directly on a cursor are not recorded.
+        """
+        if m := _SESSION_SET_RE.fullmatch(query):
+            self.session_sets[m.group(1).lower()] = query
+        elif m := _SESSION_RESET_RE.fullmatch(query):
+            name = m.group(1).lower()
+            if name == "all":
+                self.session_sets.clear()
+            else:
+                self.session_sets.pop(name, None)
 
     def __ensure_connection(self):
         if not self.connection or self.connection.closed:
             self.connection = self.new_connection()
+            try:
+                for stmt in self.session_sets.values():
+                    self.connection.execute(stmt.encode())
+            except BaseException:
+                # Close so that the next call reconnects and replays all
+                # statements, instead of reusing a partially configured
+                # session.
+                self.connection.close()
+                raise
 
     def __enter__(self) -> psycopg.Cursor:
         self.__ensure_connection()
@@ -310,9 +351,19 @@ class ScenarioRunner:
         if "CREATE SECRET" not in query:
             print(f"> {query} {params or ''}")
         for retry in range(retries + 1):
+            in_transaction = False
             try:
                 with self.connection as cur:
+                    in_transaction = (
+                        self.connection.connection.info.transaction_status
+                        != psycopg.pq.TransactionStatus.IDLE
+                    )
                     cur.execute(query.encode(), params)
+                    # A `SET` inside an explicit transaction is undone by
+                    # `ROLLBACK`, and a reconnect reruns the whole transaction
+                    # including the `SET`, so only record it outside one.
+                    if not in_transaction:
+                        self.connection.record_session_statement(query)
                     if fetch:
                         return cur.fetchall()
                     else:
@@ -322,7 +373,12 @@ class ScenarioRunner:
                 OperationalError,
                 psycopg.errors.SystemError,
             ) as e:
-                if retry >= retries:
+                # A retry runs on a fresh connection that lacks the open
+                # transaction's state, such as a declared cursor. Re-raise so
+                # that `ConnectionHandler.retryable` reconnects and reruns the
+                # whole statement sequence. All caught errors derive from
+                # `InterfaceError` or `OperationalError`, which it retries.
+                if retry >= retries or in_transaction:
                     raise
                 print(f"Retryable error (attempt {retry + 1}/{retries}): {e}")
                 time.sleep(5 * (retry + 1))
@@ -3386,16 +3442,47 @@ class EnvdObjectsSweep(Scenario):
 # TODO: We should factor the region helpers below out into a separate module.
 # (Similar `disable_region` functions also occur in other tests.)
 def disable_region(composition: Composition, hard: bool) -> None:
+    # `mz region disable` reports a region that does not exist as success (its
+    # `disable` maps the API's 404 to "Region already disabled"), so any failure
+    # here is a real one (auth, API error) and must surface.
     print("Shutting down region ...")
+    if hard:
+        composition.run("mz", "region", "disable", "--hard", rm=True)
+    else:
+        composition.run("mz", "region", "disable", rm=True)
 
+
+def verify_region_disabled(composition: Composition, region: str) -> None:
+    """Fail unless `mz region list` reports `region` as disabled.
+
+    `mz region disable` returning is not proof: it can be answered by a stale
+    or failing API, and a region that survives a cleanup keeps costing money
+    and load until someone notices. "disabled" also covers a region whose
+    deletion is still pending, so the check proves that no enabled region is
+    left, not that the deletion has completed.
+    """
+    output = composition.run(
+        "mz", "region", "list", "--format", "json", rm=True, capture_and_print=True
+    ).stdout
+    # `mz region list` reports a cloud provider whose lookup failed as an
+    # `Error: ...` line on stdout before the JSON array, so parsing the whole
+    # output would fail on an unrelated provider's hiccup.
+    lines = output.strip().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("[")), None)
     try:
-        if hard:
-            composition.run("mz", "region", "disable", "--hard", rm=True)
-        else:
-            composition.run("mz", "region", "disable", rm=True)
-    except UIError:
-        # Can return: status 404 Not Found
-        pass
+        if start is None:
+            raise ValueError("no JSON array in the output")
+        statuses = {
+            entry["region"]: entry["status"]
+            for entry in json.loads("\n".join(lines[start:]))
+        }
+    except (ValueError, KeyError, TypeError) as e:
+        raise UIError(f"unexpected `mz region list` output: {output!r}") from e
+    status = statuses.get(region)
+    if status is None:
+        raise UIError(f"region {region} missing from `mz region list` output")
+    if status != "disabled":
+        raise UIError(f"region {region} is still {status} after disable")
 
 
 def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
@@ -3417,11 +3504,12 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # Production Cloud forbids callers from injecting environmentd args and rejects
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
-            "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s"
+            "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            # Pin the image built for this PR. Production does not accept a
+            # custom version.
+            "--version",
+            staging_version(),
         ]
-
-    if target.version is not None:
-        args += ["--version", target.version]
 
     target.composition.run("mz", "region", "enable", *args, rm=True)
 
@@ -3480,19 +3568,19 @@ def cloud_recreate_region_with_envd_cpus(
     soon as it has booted, in about a minute.
     """
     for attempt in range(1, attempts + 1):
-        disable_region(target.composition, hard=True)
         try:
+            disable_region(target.composition, hard=True)
             enable_region(target, envd_cpus=envd_cpus)
             break
         except UIError as e:
             # A sweep does a dozen of these calls and the staging Cloud API returns the
-            # occasional 502, which `mz region enable` does not retry on its own. We
-            # disable again before retrying, so that a half-finished enable can't leave
-            # the region running with the previous allocation.
+            # occasional 502 that surfaces despite the CLI's own retries. A retry starts
+            # over with the disable, so that a half-finished enable can't leave the
+            # region running with the previous allocation.
             if attempt == attempts:
                 raise
             print(
-                f"WARNING: 'mz region enable' failed (attempt {attempt}/{attempts}): {e}"
+                f"WARNING: recreating the region failed (attempt {attempt}/{attempts}): {e}"
             )
             time.sleep(30)
 
@@ -3748,16 +3836,91 @@ def log_environment_info(target: "BenchTarget") -> None:
             pass
 
 
-def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
-    """
-    Run the bench workflow by default
-    """
+def add_target_arguments(parser: argparse.ArgumentParser) -> None:
+    """The arguments `workflow_default` and `workflow_ci_cleanup` share."""
     parser.add_argument(
         "--cleanup",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Destroy the region at the end of the workflow.",
+        help="Destroy the region when the workflow ends, and from CI's ci-cleanup after a cancel or timeout.",
     )
+    # Required rather than defaulting to cloud-production: `ci-cleanup` runs
+    # unattended from the CI plugin's exit trap and destroys the target's
+    # region, so a missing or malformed target must fail loudly instead of
+    # quietly selecting production. Every CI step passes it explicitly.
+    parser.add_argument(
+        "--target",
+        required=True,
+        choices=["cloud-production", "cloud-staging", "docker"],
+        help="Target to deploy to.",
+    )
+
+
+def make_target(composition: Composition, target: str) -> tuple["BenchTarget", Mz]:
+    """The bench target for `--target`, with the `mz` service configured for it."""
+    if target == "cloud-production":
+        bench_target: BenchTarget = CloudTarget(
+            composition,
+            PRODUCTION_USERNAME,
+            PRODUCTION_APP_PASSWORD or "",
+            region=PRODUCTION_REGION,
+        )
+        mz = Mz(
+            region=PRODUCTION_REGION,
+            environment=PRODUCTION_ENVIRONMENT,
+            app_password=PRODUCTION_APP_PASSWORD or "",
+        )
+    elif target == "cloud-staging":
+        staging_username, staging_app_password = staging_credentials()
+        bench_target = CloudTarget(
+            composition,
+            staging_username,
+            staging_app_password,
+            region=STAGING_REGION,
+            is_staging=True,
+        )
+        mz = Mz(
+            region=STAGING_REGION,
+            environment=STAGING_ENVIRONMENT,
+            app_password=staging_app_password,
+        )
+    elif target == "docker":
+        bench_target = DockerTarget(composition)
+        mz = Mz(app_password="")
+    else:
+        raise ValueError(f"Unknown target: {target}")
+    return bench_target, mz
+
+
+def workflow_ci_cleanup(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Destroy the Cloud region of a run that did not get to its own cleanup.
+
+    The CI mzcompose plugin runs this workflow after `default` has exited, however
+    it exited, with the same arguments. A cancelled or timed-out job ends `default`
+    with SIGTERM, which skips its `finally` block, so for such a run this is the
+    only region cleanup there is. Only `--cleanup` and `--target` are read.
+    """
+    add_target_arguments(parser)
+    args, _ = parser.parse_known_args()
+    if not args.cleanup:
+        print("Not destroying the region: the run was started without --cleanup")
+        return
+    target, mz = make_target(composition, args.target)
+    if not isinstance(target, CloudTarget):
+        print(f"Nothing to clean up for --target={args.target}")
+        return
+    with composition.override(mz):
+        target.cleanup()
+
+
+def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Run the bench workflow by default
+    """
+    add_target_arguments(parser)
     parser.add_argument(
         "--record",
         default=f"results_{int(time.time())}.csv",
@@ -3768,12 +3931,6 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Analyze results after completing test. Dispatches to cluster-scale or envd-scale focused analyses based on the file suffix: `.cluster.csv` or `.envd.csv`.",
-    )
-    parser.add_argument(
-        "--target",
-        default="cloud-production",
-        choices=["cloud-production", "cloud-staging", "docker"],
-        help="Target to deploy to (default: cloud-production).",
     )
     parser.add_argument(
         "--max-scale",
@@ -3865,34 +4022,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             f"{', '.join(sorted(cluster_object_limits_requested))}."
         )
 
-    if args.target == "cloud-production":
-        target: BenchTarget = CloudTarget(
-            composition, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
-        )
-        mz = Mz(
-            region=PRODUCTION_REGION,
-            environment=PRODUCTION_ENVIRONMENT,
-            app_password=PRODUCTION_APP_PASSWORD or "",
-        )
-    elif args.target == "cloud-staging":
-        staging_username, staging_app_password = staging_credentials()
-        target: BenchTarget = CloudTarget(
-            composition,
-            staging_username,
-            staging_app_password,
-            is_staging=True,
-            version=staging_version(),
-        )
-        mz = Mz(
-            region=STAGING_REGION,
-            environment=STAGING_ENVIRONMENT,
-            app_password=staging_app_password,
-        )
-    elif args.target == "docker":
-        target = DockerTarget(composition)
-        mz = Mz(app_password="")
-    else:
-        raise ValueError(f"Unknown target: {args.target}")
+    target, mz = make_target(composition, args.target)
 
     with composition.override(mz):
         target_max = target.max_scale()
@@ -3941,32 +4071,40 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         test_failed = True
         try:
-            scenarios_list = buildkite.shard_list(sorted(list(scenarios)), lambda s: s)
-            composition.test_parts(scenarios_list, process)
-            test_failed = False
-        finally:
+            try:
+                scenarios_list = buildkite.shard_list(
+                    sorted(list(scenarios)), lambda s: s
+                )
+                composition.test_parts(scenarios_list, process)
+                test_failed = False
+            finally:
+                for stream in streams.values():
+                    stream.file.close()
+
+            # Upload, archive, and analyze each result stream uniformly. The
+            # cluster_object_limits stream's extra `healthy` / `failure_mode`
+            # columns are silently dropped on upload (CSV writer uses
+            # extrasaction="ignore"); to recover them, consult the artifact
+            # CSV directly.
             for stream in streams.values():
-                stream.file.close()
+                stream.spec.upload(composition, stream.path, not test_failed)
+
+            assert not test_failed
+
+            if buildkite.is_in_buildkite():
+                for stream in streams.values():
+                    buildkite.upload_artifact(stream.path, cwd=MZ_ROOT, quiet=True)
+
+            if args.analyze:
+                for stream in streams.values():
+                    stream.spec.analyze(stream.path)
+        finally:
+            # Only after the results are out: the teardown can fail (a slow
+            # hard delete, a transient API error in its verify) and must not
+            # cost a multi-hour run its data. The CI plugin's `ci-cleanup`
+            # repeats the teardown after the workflow, however it ended.
             if args.cleanup:
                 target.cleanup()
-
-        # Upload, archive, and analyze each result stream uniformly. The
-        # cluster_object_limits stream's extra `healthy` / `failure_mode`
-        # columns are silently dropped on upload (CSV writer uses
-        # extrasaction="ignore"); to recover them, consult the artifact
-        # CSV directly.
-        for stream in streams.values():
-            stream.spec.upload(composition, stream.path, not test_failed)
-
-        assert not test_failed
-
-        if buildkite.is_in_buildkite():
-            for stream in streams.values():
-                buildkite.upload_artifact(stream.path, cwd=MZ_ROOT, quiet=True)
-
-        if args.analyze:
-            for stream in streams.values():
-                stream.spec.analyze(stream.path)
 
 
 class BenchTarget:
@@ -4016,19 +4154,15 @@ class CloudTarget(BenchTarget):
         composition: Composition,
         username: str,
         app_password: str,
+        region: str,
         is_staging: bool = False,
-        version: str | None = None,
     ) -> None:
         self.composition = composition
         self.username = username
+        self.region = region
         self.app_password = app_password
         self.new_app_password: str | None = None
         self.is_staging = is_staging
-        # Set for staging runs so `mz region enable --version <version>` pins the
-        # exact image built for this PR. Must be None for production (production
-        # doesn't accept a custom version).
-        self.version = version
-        assert (version is not None) == is_staging
 
     def dbbench_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
@@ -4083,6 +4217,7 @@ class CloudTarget(BenchTarget):
 
     def cleanup(self) -> None:
         disable_region(self.composition, hard=True)
+        verify_region_disabled(self.composition, self.region)
 
     # M.1 size with the same worker count as the {scale}00cc size. Scales
     # above 8 have no available M.1 equivalent.

@@ -12,11 +12,9 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-stream.workspace = true
-bytesize.workspace = true
 chrono.workspace = true
 columnar.workspace = true
 columnation.workspace = true
-dec = { workspace = true, features = ["serde"] }
 differential-dataflow.workspace = true
 differential-dogs3.workspace = true
 fail.workspace = true
@@ -33,10 +31,14 @@ mz-expr = { path = "../expr" }
 mz-metrics = { path = "../metrics" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow", "pager", "region"] }
 mz-proto = { path = "../proto" }
+mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-row-spine = { path = "../row-spine" }
+mz-rocksdb = { path = "../rocksdb" }
+mz-storage = { path = "../storage" }
+mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
@@ -47,6 +49,7 @@ prost.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 smallvec = { workspace = true, features = ["serde", "union"] }
+thiserror.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -57,6 +60,7 @@ core_affinity = "0.8.3"
 
 [dev-dependencies]
 criterion.workspace = true
+mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true
 rand.workspace = true

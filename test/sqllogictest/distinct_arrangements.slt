@@ -21,6 +21,15 @@ ALTER SYSTEM SET enable_introspection_subscribes = false;
 ----
 COMPLETE 0
 
+# Curated metric sinks install one dataflow per definition on every replica,
+# each carrying its own arrangements, which would land in every golden below.
+# Turning the flag off only affects replicas created from then on, and every
+# cluster this file uses is created after this point.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = false;
+----
+COMPLETE 0
+
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
 statement ok
