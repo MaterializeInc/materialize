@@ -17,13 +17,14 @@
 //!   the durably committed uppers of the subsources/exports associated with
 //!   this source. As the source makes progress this operator does two things:
 //!     1. If [`CDC_CLEANUP_CHANGE_TABLE`] is enabled, will delete entries from
-//!        the upstream change table that _all_ exports have ingested.
+//!        each capture instance's change table that _all_ of its exports have
+//!        ingested.
 //!     2. Update each export's `SourceStatistics` to notify listeners of its new
 //!        "committed LSN".
 //!
 //! [`SqlServerSourceConnection`]: mz_storage_types::sources::SqlServerSourceConnection
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use futures::StreamExt;
 use mz_ore::future::InTask;
@@ -144,19 +145,24 @@ pub(crate) fn render<'scope>(
             // Offset that is measured from the upstream SQL Server instance. Tracked to detect an offset that moves backwards.
             let mut prev_offset_known: Option<Lsn> = None;
 
-            // This stream of "resume uppers" tracks all of the Lsn's that we have durably
-            // committed for all subsources/exports and thus we can notify the upstream that the
-            // change tables can be cleaned up.
+            // This stream of "resume uppers" tracks the Lsn each subsource/export has durably
+            // committed, and thus we can notify the upstream that the change tables can be
+            // cleaned up.
             let mut committed_uppers = std::pin::pin!(committed_uppers);
             let cleanup_change_table =
                 CDC_CLEANUP_CHANGE_TABLE.handle(config.config.config_set());
             let cleanup_max_deletes =
                 CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES
                     .handle(config.config.config_set());
-            let capture_instances: BTreeSet<_> = outputs
-                .into_values()
-                .map(|info| info.capture_instance)
-                .collect();
+            // Each capture instance's exports, and the low water mark its change table was last
+            // cleaned up to. Replication resumes each capture instance from the least resume
+            // upper of its exports (`resume_lsns` in `replication.rs`), so its change table can
+            // be cleaned up to the meet of those exports alone.
+            let mut capture_instances: BTreeMap<_, (Vec<GlobalId>, Option<Lsn>)> =
+                BTreeMap::new();
+            for (id, info) in outputs {
+                capture_instances.entry(info.capture_instance).or_default().0.push(id);
+            }
 
             loop {
                 tokio::select! {
@@ -208,20 +214,21 @@ pub(crate) fn render<'scope>(
                             }
                         }
 
-                        let committed_upper = uppers.source.as_ref();
-                        let Some(committed_upper) = committed_upper.and_then(|u| u.as_option())
-                        else {
-                            // The upper of all exports is unknown while an export snapshots. It's
-                            // also possible that the source has been dropped, in which case this
-                            // can observe an empty upper. This operator should continue to loop
-                            // until the drop dataflow propagates.
-                            continue;
-                        };
-
                         // If enabled, tell the upstream SQL Server instance to
                         // cleanup the underlying change table.
                         if cleanup_change_table.get() {
-                            for instance in &capture_instances {
+                            for (instance, (exports, cleaned)) in capture_instances.iter_mut() {
+                                let Some(low_water_mark) = committed_lsn(exports, &uppers.exports)
+                                else {
+                                    continue;
+                                };
+                                // `uppers` changes whenever any export's upper moves, usually
+                                // leaving this capture instance's low water mark unchanged. A
+                                // failed cleanup is retried once the low water mark moves.
+                                if *cleaned == Some(low_water_mark) {
+                                    continue;
+                                }
+                                *cleaned = Some(low_water_mark);
                                 // TODO(sql_server3): The number of rows that got cleaned
                                 // up should be present in informational notices sent back
                                 // from the upstream, but the tiberius crate does not
@@ -230,7 +237,7 @@ pub(crate) fn render<'scope>(
                                     mz_sql_server_util::inspect::cleanup_change_table(
                                         &mut client,
                                         instance,
-                                        committed_upper,
+                                        &low_water_mark,
                                         cleanup_max_deletes.get(),
                                     ).await;
                                 // TODO(sql_server2): Track this in a more user observable way.
@@ -248,4 +255,57 @@ pub(crate) fn render<'scope>(
     let error_stream = transient_errors.map(ReplicationError::Transient);
 
     (error_stream, probe_stream, button.press_on_drop())
+}
+
+/// The [`Lsn`] that every export in `exports` has durably committed through.
+///
+/// `None` while some export has not committed beyond the ingestion's as_of, and once every
+/// export's upper is empty, which happens when the source is dropped.
+fn committed_lsn(exports: &[GlobalId], uppers: &BTreeMap<GlobalId, Antichain<Lsn>>) -> Option<Lsn> {
+    let mut meet = None;
+    for id in exports {
+        if let Some(lsn) = uppers.get(id)?.as_option() {
+            meet = Some(meet.map_or(*lsn, |meet: Lsn| meet.min(*lsn)));
+        }
+    }
+    meet
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lsn(block_id: u32) -> Lsn {
+        Lsn {
+            vlf_id: 1,
+            block_id,
+            record_id: 0,
+        }
+    }
+
+    #[mz_ore::test]
+    fn committed_lsn_is_meet_of_exports() {
+        let (a, b, closed) = (GlobalId::User(1), GlobalId::User(2), GlobalId::User(3));
+        let uppers = BTreeMap::from([
+            (a, Antichain::from_elem(lsn(5))),
+            (b, Antichain::from_elem(lsn(3))),
+            (closed, Antichain::new()),
+        ]);
+        assert_eq!(committed_lsn(&[a, b], &uppers), Some(lsn(3)));
+        assert_eq!(
+            committed_lsn(&[a, closed], &uppers),
+            Some(lsn(5)),
+            "an empty upper does not constrain the meet",
+        );
+        assert_eq!(
+            committed_lsn(&[closed], &uppers),
+            None,
+            "every upper is empty"
+        );
+        assert_eq!(
+            committed_lsn(&[a, GlobalId::User(4)], &uppers),
+            None,
+            "an export has not committed beyond the as_of",
+        );
+    }
 }
