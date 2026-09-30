@@ -182,8 +182,8 @@ SELECT mv.id AS materialized_view_id,
        mv.name AS materialized_view_name,
        rs.type AS refresh_strategy,
        rs.interval AS refresh_interval,
-       rs.aligned_to AS refresh_interval_phase,
-       rs.at AS refresh_time,
+       rs.aligned_to_expression AS refresh_interval_phase,
+       rs.at_expression AS refresh_time,
        r.last_completed_refresh,
        r.next_refresh
 FROM mz_internal.mz_materialized_view_refresh_strategies rs
