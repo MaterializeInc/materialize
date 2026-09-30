@@ -52,6 +52,7 @@ use crate::controller::error::{
     CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::instance_client::PeekError;
+use crate::controller::peek_lifecycle::PeekLifecycle;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionReadiness, ComputeControllerResponse, IntrospectionUpdates, PeekNotification,
@@ -1370,7 +1371,7 @@ impl Instance {
         let mut peek_responses = Vec::new();
         let mut to_drop = Vec::new();
         for (uuid, peek) in self.peeks_targeting(id) {
-            peek_responses.push(ComputeControllerResponse::PeekNotification(
+            peek_responses.push((
                 uuid,
                 PeekNotification::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 peek.otel_ctx.clone(),
@@ -1378,7 +1379,7 @@ impl Instance {
             to_drop.push(uuid);
         }
         for response in peek_responses {
-            self.deliver_response(response);
+            self.deliver_peek_notification(response.0, response.1, response.2);
         }
         for uuid in to_drop {
             let response =
@@ -1782,6 +1783,7 @@ impl Instance {
         mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1812,6 +1814,7 @@ impl Instance {
                 requested_at: Instant::now(),
                 read_hold,
                 peek_response_tx,
+                lifecycle,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
             },
@@ -1850,11 +1853,7 @@ impl Instance {
         let otel_ctx = peek.otel_ctx.clone();
         otel_ctx.attach_as_parent();
 
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            PeekNotification::Canceled,
-            otel_ctx,
-        ));
+        self.deliver_peek_notification(uuid, PeekNotification::Canceled, otel_ctx);
 
         // Finish the peek.
         // This will also propagate the cancellation to the replicas.
@@ -2040,6 +2039,28 @@ impl Instance {
         drop(peek.read_hold);
     }
 
+    fn deliver_peek_notification(
+        &self,
+        uuid: Uuid,
+        notification: PeekNotification,
+        otel_ctx: OpenTelemetryContext,
+    ) {
+        if let Some(lifecycle) = self
+            .peeks
+            .get(&uuid)
+            .and_then(|peek| peek.lifecycle.as_ref())
+        {
+            otel_ctx.attach_as_parent();
+            lifecycle.complete(notification);
+        } else {
+            self.deliver_response(ComputeControllerResponse::PeekNotification(
+                uuid,
+                notification,
+                otel_ctx,
+            ));
+        }
+    }
+
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
     /// use the replica epoch to drop stale responses.
     fn handle_response(&mut self, (replica_id, epoch, response): ReplicaResponse) {
@@ -2144,11 +2165,7 @@ impl Instance {
         let notification = PeekNotification::new(&response, peek.offset, peek.limit);
         // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
         // currently want the parent to be whatever the compute worker did with this peek.
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            notification,
-            otel_ctx,
-        ));
+        self.deliver_peek_notification(uuid, notification, otel_ctx);
 
         self.finish_peek(uuid, response)
     }
@@ -3080,6 +3097,7 @@ impl RefreshIntrospectionState {
 /// A note of an outstanding peek response.
 #[derive(Debug)]
 struct PendingPeek {
+    lifecycle: Option<Arc<PeekLifecycle>>,
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
     ///
     /// If this value is `None`, we pass on the first response.
