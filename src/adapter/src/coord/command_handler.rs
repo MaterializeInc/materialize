@@ -32,7 +32,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
+use mz_repr::{Diff, SqlScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
     CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind,
@@ -64,7 +64,6 @@ use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use uuid::Uuid;
 
 use crate::client::truncate_sql_for_logging;
 use crate::command::{
@@ -72,7 +71,6 @@ use crate::command::{
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
 use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
-use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
     PurifiedStatementReady, validate_ip_with_policy_rules,
@@ -80,7 +78,6 @@ use crate::coord::{
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
-use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
 use crate::util::ClientTransmitter;
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
@@ -428,13 +425,13 @@ impl Coordinator {
                 }
 
                 Command::ExecuteSlowPathPeek {
+                    peek,
                     dataflow_plan,
                     determination,
                     finishing,
                     compute_instance,
                     target_replica,
                     intermediate_result_type,
-                    source_ids,
                     conn_id,
                     max_result_size,
                     max_query_result_size,
@@ -443,13 +440,13 @@ impl Coordinator {
                 } => {
                     let result = self
                         .implement_slow_path_peek(
+                            peek,
                             *dataflow_plan,
                             determination,
                             finishing,
                             compute_instance,
                             target_replica,
                             intermediate_result_type,
-                            source_ids,
                             conn_id,
                             max_result_size,
                             max_query_result_size,
@@ -573,27 +570,15 @@ impl Coordinator {
                             });
                     let _ = tx.send(conn);
                 }
-                Command::RegisterFrontendPeek {
-                    uuid,
+                Command::InstallFrontendPeekWatchSets {
                     conn_id,
-                    cluster_id,
-                    depends_on,
-                    is_fast_path,
                     watch_set,
                     tx,
                 } => {
-                    self.handle_register_frontend_peek(
-                        uuid,
-                        conn_id,
-                        cluster_id,
-                        depends_on,
-                        is_fast_path,
-                        watch_set,
-                        tx,
+                    let result = self.install_peek_watch_sets(conn_id, watch_set).map_err(
+                        AdapterError::concurrent_dependency_drop_from_compute_lookup_error,
                     );
-                }
-                Command::UnregisterFrontendPeek { uuid, reason, tx } => {
-                    self.handle_unregister_frontend_peek(uuid, reason, tx);
+                    let _ = tx.send(result);
                 }
                 Command::ExplainTimestamp {
                     conn_id,
@@ -938,6 +923,7 @@ impl Coordinator {
                     .create_frontend(build_info_human_version);
 
                 let resp = Ok(StartupResponse {
+                    peek_registry: Arc::clone(&self.frontend_peeks),
                     frontend_cancel_rx,
                     role_id,
                     write_notify: notify,
@@ -2000,6 +1986,7 @@ impl Coordinator {
     /// interactive work for the named `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+        self.frontend_peeks.cancel_connection(&conn_id);
         if let Some(conn) = self.active_conns.get(&conn_id) {
             conn.frontend_cancel_tx.send_replace(());
         }
@@ -2099,6 +2086,7 @@ impl Coordinator {
             self.active_conns.contains_key(&conn_id),
             "unknown connection: {conn_id:?}"
         );
+        self.frontend_peeks.close_connection(&conn_id);
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
@@ -2264,66 +2252,5 @@ impl Coordinator {
         });
         let _ = tx.send(response);
     }
-
-    /// Handle registration of a frontend peek, for statement logging and query cancellation
-    /// handling.
-    fn handle_register_frontend_peek(
-        &mut self,
-        uuid: Uuid,
-        conn_id: ConnectionId,
-        cluster_id: mz_controller_types::ClusterId,
-        depends_on: BTreeSet<GlobalId>,
-        is_fast_path: bool,
-        watch_set: Option<WatchSetCreation>,
-        tx: oneshot::Sender<Result<(), AdapterError>>,
-    ) {
-        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
-        if let Some(ws) = watch_set {
-            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e),
-                ));
-                return;
-            }
-        }
-
-        // Store the peek in pending_peeks for later retrieval when results arrive
-        self.pending_peeks.insert(
-            uuid,
-            PendingPeek {
-                conn_id: conn_id.clone(),
-                cluster_id,
-                depends_on,
-                ctx_extra: ExecuteContextGuard::new(
-                    statement_logging_id,
-                    self.internal_cmd_tx.clone(),
-                ),
-                is_fast_path,
-            },
-        );
-
-        // Also track it by connection ID for cancellation support
-        self.client_pending_peeks
-            .entry(conn_id)
-            .or_default()
-            .insert(uuid, cluster_id);
-
-        let _ = tx.send(Ok(()));
-    }
-
-    /// Handles [`Command::UnregisterFrontendPeek`]; see its documentation for
-    /// the end-of-execution ownership contract.
-    fn handle_unregister_frontend_peek(
-        &mut self,
-        uuid: Uuid,
-        reason: StatementEndedExecutionReason,
-        tx: oneshot::Sender<()>,
-    ) {
-        // A peek missing from `pending_peeks` was already retired, and its end
-        // logged, by a concurrent teardown.
-        if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-            self.retire_execution(reason, pending_peek.ctx_extra.defuse());
-        }
-        let _ = tx.send(());
-    }
+    // Checked up front so that an unknown connection panics before the cleanup below runs.
 }
