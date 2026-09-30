@@ -4856,15 +4856,31 @@ fn plan_role_attributes(
 
 #[derive(Debug)]
 pub enum PlannedRoleVariable {
-    Set { name: String, value: VariableValue },
-    Reset { name: String },
+    Set {
+        name: String,
+        /// The name as written in the statement. See `plan_variable_name`.
+        written_name: String,
+        value: VariableValue,
+    },
+    Reset {
+        name: String,
+        /// The name as written in the statement. See `plan_variable_name`.
+        written_name: String,
+    },
 }
 
 impl PlannedRoleVariable {
     pub fn name(&self) -> &str {
         match self {
             PlannedRoleVariable::Set { name, .. } => name,
-            PlannedRoleVariable::Reset { name } => name,
+            PlannedRoleVariable::Reset { name, .. } => name,
+        }
+    }
+
+    pub fn written_name(&self) -> &str {
+        match self {
+            PlannedRoleVariable::Set { written_name, .. } => written_name,
+            PlannedRoleVariable::Reset { written_name, .. } => written_name,
         }
     }
 }
@@ -4875,7 +4891,10 @@ fn plan_role_variable(
 ) -> Result<PlannedRoleVariable, PlanError> {
     let plan = match variable {
         SetRoleVar::Set { name, value } => {
-            let name = scl::plan_variable_name(name);
+            let scl::PlannedVariableName {
+                name,
+                written: written_name,
+            } = scl::plan_variable_name(name);
             let value = scl::plan_set_variable_to(value)?;
             // Gate feature-flagged isolation levels, matching the `SET` and
             // connection-option paths in `SessionVars::set`.
@@ -4886,11 +4905,19 @@ fn plan_role_variable(
                     scx.catalog.system_vars(),
                 )?;
             }
-            PlannedRoleVariable::Set { name, value }
+            PlannedRoleVariable::Set {
+                name,
+                written_name,
+                value,
+            }
         }
-        SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
-            name: scl::plan_variable_name(name),
-        },
+        SetRoleVar::Reset { name } => {
+            let scl::PlannedVariableName { name, written } = scl::plan_variable_name(name);
+            PlannedRoleVariable::Reset {
+                name,
+                written_name: written,
+            }
+        }
     };
     Ok(plan)
 }
@@ -8132,9 +8159,10 @@ pub fn plan_alter_system_set(
     _: &StatementContext,
     AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
-    let name = scl::plan_variable_name(name);
+    let scl::PlannedVariableName { name, written } = scl::plan_variable_name(name);
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
         name,
+        written_name: written,
         value: scl::plan_set_variable_to(to)?,
     }))
 }
@@ -8150,8 +8178,11 @@ pub fn plan_alter_system_reset(
     _: &StatementContext,
     AlterSystemResetStatement { name }: AlterSystemResetStatement,
 ) -> Result<Plan, PlanError> {
-    let name = scl::plan_variable_name(name);
-    Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
+    let scl::PlannedVariableName { name, written } = scl::plan_variable_name(name);
+    Ok(Plan::AlterSystemReset(AlterSystemResetPlan {
+        name,
+        written_name: written,
+    }))
 }
 
 pub fn describe_alter_system_reset_all(

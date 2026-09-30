@@ -3368,7 +3368,10 @@ impl Coordinator {
             }
             PlannedAlterRoleOption::Variable(variable) => {
                 // Get the variable to make sure it's valid and visible.
-                let session_var = session.vars().inspect(variable.name())?;
+                let session_var = session.vars().inspect(variable.name()).map_err(|e| {
+                    AdapterError::from(e)
+                        .with_written_variable_name(variable.name(), variable.written_name())
+                })?;
                 // Return early if it's not visible.
                 session_var.visible(session.user(), catalog.system_vars())?;
 
@@ -3379,6 +3382,7 @@ impl Coordinator {
                 } else if let PlannedRoleVariable::Set {
                     name,
                     value: VariableValue::Values(vals),
+                    ..
                 } = &variable
                 {
                     if name == vars::CLUSTER.name() && vals[0] == vars::OLD_CATALOG_SERVER_CLUSTER {
@@ -3387,7 +3391,7 @@ impl Coordinator {
                 }
 
                 let var_name = match variable {
-                    PlannedRoleVariable::Set { name, value } => {
+                    PlannedRoleVariable::Set { name, value, .. } => {
                         // Update our persisted set.
                         match &value {
                             VariableValue::Default => {
@@ -3406,7 +3410,7 @@ impl Coordinator {
                         };
                         name
                     }
-                    PlannedRoleVariable::Reset { name } => {
+                    PlannedRoleVariable::Reset { name, .. } => {
                         // Remove it from our persisted values.
                         vars.remove(&name);
                         name
@@ -4263,7 +4267,11 @@ impl Coordinator {
     pub(super) async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
-        plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
+        plan::AlterSystemSetPlan {
+            name,
+            written_name: _,
+            value,
+        }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         // We want to ensure that the network policy we're switching too actually exists.
@@ -4294,7 +4302,10 @@ impl Coordinator {
     pub(super) async fn sequence_alter_system_reset(
         &mut self,
         session: &Session,
-        plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
+        plan::AlterSystemResetPlan {
+            name,
+            written_name: _,
+        }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };

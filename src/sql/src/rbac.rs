@@ -1677,14 +1677,21 @@ fn generate_rbac_requirements(
         | Plan::DiscardAll
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
-        | Plan::ShowVariable(plan::ShowVariablePlan { name: _ })
+        | Plan::ShowVariable(plan::ShowVariablePlan {
+            name: _,
+            written_name: _,
+        })
         | Plan::InspectShard(plan::InspectShardPlan { id: _ })
         | Plan::SetVariable(plan::SetVariablePlan {
             name: _,
+            written_name: _,
             value: _,
             local: _,
         })
-        | Plan::ResetVariable(plan::ResetVariablePlan { name: _ })
+        | Plan::ResetVariable(plan::ResetVariablePlan {
+            name: _,
+            written_name: _,
+        })
         | Plan::SetTransaction(plan::SetTransactionPlan { local: _, modes: _ })
         | Plan::StartTransaction(plan::StartTransactionPlan {
             access: _,
@@ -1697,8 +1704,15 @@ fn generate_rbac_requirements(
             transaction_type: _,
         })
         | Plan::AlterNoop(plan::AlterNoopPlan { object_type: _ })
-        | Plan::AlterSystemSet(plan::AlterSystemSetPlan { name: _, value: _ })
-        | Plan::AlterSystemReset(plan::AlterSystemResetPlan { name: _ })
+        | Plan::AlterSystemSet(plan::AlterSystemSetPlan {
+            name: _,
+            written_name: _,
+            value: _,
+        })
+        | Plan::AlterSystemReset(plan::AlterSystemResetPlan {
+            name: _,
+            written_name: _,
+        })
         | Plan::AlterSystemResetAll(plan::AlterSystemResetAllPlan {})
         | Plan::Declare(plan::DeclarePlan {
             name: _,

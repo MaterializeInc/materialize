@@ -960,10 +960,22 @@ UTC
 statement ok
 RESET "TimeZone"
 
-# Unknown variables report the normalized (lowercased) name.
+# Unknown variables are reported as written, as in PostgreSQL.
+
+statement error unrecognized configuration parameter "NO_SUCH_PARAMETER"
+SET "NO_SUCH_PARAMETER" = 1
 
 statement error unrecognized configuration parameter "no_such_parameter"
-SET "NO_SUCH_PARAMETER" = 1
+SET no_such_parameter = 1
+
+statement error unrecognized configuration parameter "No_Such_Parameter"
+SHOW "No_Such_Parameter"
+
+statement error unrecognized configuration parameter "NO_SUCH_PARAMETER"
+RESET "NO_SUCH_PARAMETER"
+
+statement error unrecognized configuration parameter "NO_SUCH_PARAMETER"
+ALTER ROLE materialize SET "NO_SUCH_PARAMETER" = 1
 
 # ALTER SYSTEM SET/RESET accept quoted spellings, and deliberately mixed
 # spellings across SET and RESET address the same underlying entry.
@@ -991,7 +1003,12 @@ SHOW max_kafka_connections
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET "NO_SUCH_PARAMETER" = 1;
 ----
-db error: ERROR: unrecognized configuration parameter "no_such_parameter"
+db error: ERROR: unrecognized configuration parameter "NO_SUCH_PARAMETER"
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET "NO_SUCH_PARAMETER";
+----
+db error: ERROR: unrecognized configuration parameter "NO_SUCH_PARAMETER"
 
 # The mid-transaction validations for `transaction_isolation` and `cluster`
 # must also fire for quoted, non-lowercase spellings.
