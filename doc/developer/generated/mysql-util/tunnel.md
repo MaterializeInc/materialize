@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/tunnel.rs
-revision: 1d07b38a9c
+revision: 1e7894153c
 ---
 
 # mysql-util::tunnel

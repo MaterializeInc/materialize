@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/connections/iceberg_credentials.rs
-revision: 6e55add85b
+revision: 0a070511dd
 ---
 
 # `storage_types::connections::iceberg_credentials`
