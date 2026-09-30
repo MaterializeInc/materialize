@@ -4775,7 +4775,9 @@ def registered_fast_peek_teardown(c: Composition, drop_cluster: bool) -> None:
                     cur.execute("SET auto_route_catalog_queries = false")
                     cur.execute("SET cluster = victim")
                     cur.execute("SELECT pg_backend_pid()")
-                    peeker_pid.append(cur.fetchone()[0])
+                    pid_row = cur.fetchone()
+                    assert pid_row is not None
+                    peeker_pid.append(pid_row[0])
                     # We connect and configure *before* the failpoint is armed so
                     # that connection-setup peeks aren't caught by it.
                     peeker_ready.set()
@@ -4806,7 +4808,7 @@ def registered_fast_peek_teardown(c: Composition, drop_cluster: bool) -> None:
             if drop_cluster:
                 control.execute("DROP CLUSTER victim CASCADE")
             else:
-                control.execute(f"SELECT pg_cancel_backend({peeker_pid[0]})")
+                control.execute("SELECT pg_cancel_backend(%s)", (peeker_pid[0],))
                 assert control.fetchone() == (True,)
             # Retirement must prevent issue, and later cleanup must be a no-op.
             control.execute(f"SET failpoints = '{failpoint}=off'")
