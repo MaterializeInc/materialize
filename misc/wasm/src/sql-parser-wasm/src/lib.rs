@@ -105,6 +105,8 @@ fn refine_show_kind(stmt: &ShowStatement<Raw>) -> &'static str {
         ShowStatement::ShowCreateConnection(_) => "show_create_connection",
         ShowStatement::ShowCreateCluster(_) => "show_create_cluster",
         ShowStatement::ShowCreateType(_) => "show_create_type",
+        ShowStatement::ShowCreateFunction(_) => "show_create_function",
+        ShowStatement::ShowCreateWasmModule(_) => "show_create_wasm_module",
         ShowStatement::ShowObjects(_) => "show_objects",
         ShowStatement::ShowColumns(_) => "show_columns",
         ShowStatement::ShowVariable(_) => "show_variable",

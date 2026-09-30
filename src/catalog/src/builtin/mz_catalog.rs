@@ -2360,6 +2360,75 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         }),
     }
 });
+pub static MZ_WASM_MODULES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_wasm_modules",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_WASM_MODULES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("hash", SqlScalarType::String.nullable(false))
+        .with_column("size", SqlScalarType::UInt64.nullable(false))
+        .with_key(vec![0])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "Materialize's unique ID for the WebAssembly module."),
+        (
+            "oid",
+            "A PostgreSQL-compatible OID for the WebAssembly module.",
+        ),
+        (
+            "schema_id",
+            "The ID of the schema to which the module belongs. Corresponds to `mz_schemas.id`.",
+        ),
+        ("name", "The name of the module."),
+        (
+            "owner_id",
+            "The role ID of the owner of the module. Corresponds to `mz_roles.id`.",
+        ),
+        ("privileges", "The privileges belonging to the module."),
+        (
+            "hash",
+            "The SHA-256 of the module's bytes, as hex. Identical modules share a hash.",
+        ),
+        ("size", "The size of the module in bytes."),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "wasm_module",
+        description: "A WebAssembly module that implements user-defined functions",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "in_schema",
+                    target: "schema",
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "owned_by",
+                    target: "role",
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                },
+            ]
+        },
+        column_semantic_types: &const {
+            [
+                ("id", SemanticType::CatalogItemId),
+                ("oid", SemanticType::OID),
+                ("schema_id", SemanticType::SchemaId),
+                ("owner_id", SemanticType::RoleId),
+            ]
+        },
+    }),
+});
 pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_operators",
     schema: MZ_CATALOG_SCHEMA,
@@ -2935,6 +3004,7 @@ SELECT
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
         WHEN '19' THEN 'metric-sink'
+        WHEN '20' THEN 'wasm-module'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3160,6 +3230,7 @@ SELECT
         WHEN '15' THEN 'function'
         -- variant 16 reserved/unused in mz_catalog_protos::ObjectType.
         WHEN '17' THEN 'network policy'
+        WHEN '19' THEN 'wasm module'
     END AS object_type,
     mz_internal.parse_catalog_id(data->'key'->'grantee') AS grantee,
     mz_internal.parse_catalog_acl_mode(data->'value'->'privileges') AS privileges
@@ -3441,7 +3512,7 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the object."),
             ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the object."),
-            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`."),
+            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, `function`, or `wasm-module`."),
             ("owner_id", "The role ID of the owner of the object. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the object."),
@@ -3463,7 +3534,9 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets
+UNION ALL
+    SELECT id, oid, schema_id, name, 'wasm-module', owner_id, NULL::text, privileges FROM mz_catalog.mz_wasm_modules",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "object",
@@ -3820,6 +3893,7 @@ mod tests {
                 ProtoObjectType::Schema => Some(SqlObjectType::Schema),
                 ProtoObjectType::Func => Some(SqlObjectType::Func),
                 ProtoObjectType::NetworkPolicy => Some(SqlObjectType::NetworkPolicy),
+                ProtoObjectType::WasmModule => Some(SqlObjectType::WasmModule),
             }
         }
 
@@ -3846,6 +3920,7 @@ mod tests {
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
             ProtoObjectType::MetricSink,
+            ProtoObjectType::WasmModule,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;

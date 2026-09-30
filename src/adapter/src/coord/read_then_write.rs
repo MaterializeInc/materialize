@@ -332,7 +332,9 @@ pub(crate) fn validate_read_then_write_dependencies(
                 // Cannot select from sinks or indexes.
                 Sink | MetricSink | Index => unreachable!(),
                 Table => id.is_user() && is_writable_table,
-                Type => true,
+                // A function references its module; the module itself holds no
+                // data a DML statement could read.
+                Type | WasmModule => true,
             },
             DependencyPolicy::SystemReads => {
                 id.is_system()

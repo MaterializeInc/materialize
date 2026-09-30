@@ -22,8 +22,9 @@ use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences,
     ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement,
-    ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType,
-    SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue,
+    ShowCreateFunctionStatement, ShowCreateMaterializedViewStatement, ShowCreateTypeStatement,
+    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
+    WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -33,13 +34,15 @@ use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateMetricSinkStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
-    ShowCreateViewStatement, ShowObjectsStatement, ShowStatementFilter, Statement, Value,
+    ShowCreateViewStatement, ShowCreateWasmModuleStatement, ShowObjectsStatement,
+    ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
     self, Aug, NameSimplifier, ObjectId, ResolvedClusterName, ResolvedDataType,
     ResolvedDatabaseName, ResolvedIds, ResolvedItemName, ResolvedRoleName, ResolvedSchemaName,
 };
+use crate::normalize;
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::unplan_create_cluster;
@@ -223,6 +226,28 @@ pub fn plan_show_create_metric_sink(
     )
 }
 
+pub fn describe_show_create_wasm_module(
+    _: &StatementContext,
+    _: ShowCreateWasmModuleStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_wasm_module(
+    scx: &StatementContext,
+    ShowCreateWasmModuleStatement {
+        module_name,
+        redacted,
+    }: ShowCreateWasmModuleStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    plan_show_create_item(scx, &module_name, CatalogItemType::WasmModule, redacted)
+}
+
 pub fn describe_show_create_index(
     _: &StatementContext,
     _: ShowCreateIndexStatement<Aug>,
@@ -313,6 +338,39 @@ pub fn plan_show_create_type(
     Ok(ShowCreatePlan {
         id: ObjectId::Item(id),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
+    })
+}
+
+pub fn describe_show_create_function(
+    _: &StatementContext,
+    _: ShowCreateFunctionStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_function(
+    scx: &StatementContext,
+    ShowCreateFunctionStatement {
+        function_name,
+        redacted,
+    }: ShowCreateFunctionStatement,
+) -> Result<ShowCreatePlan, PlanError> {
+    let name = normalize::unresolved_item_name(function_name)?;
+    let item = scx.catalog.resolve_function(&name)?;
+    let full_name = scx.catalog.resolve_full_name(item.name()).to_string();
+    if item.id().is_system() {
+        sql_bail!("cannot show create for system function {full_name}");
+    }
+    let create_sql =
+        humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql(), redacted)?;
+    Ok(ShowCreatePlan {
+        id: ObjectId::Item(item.id()),
+        row: Row::pack_slice(&[Datum::String(&full_name), Datum::String(&create_sql)]),
     })
 }
 
@@ -433,6 +491,7 @@ pub fn show_objects<'a>(
             show_cluster_replicas(scx, filter)
         }
         ShowObjectType::Secret => show_secrets(scx, from, filter),
+        ShowObjectType::WasmModule => show_wasm_modules(scx, from, filter),
         ShowObjectType::Connection => show_connections(scx, from, filter),
         ShowObjectType::MaterializedView { in_cluster } => {
             show_materialized_views(scx, from, in_cluster, filter)
@@ -800,7 +859,8 @@ pub fn show_columns<'a>(
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type
         | ty @ CatalogItemType::Sink
-        | ty @ CatalogItemType::MetricSink => {
+        | ty @ CatalogItemType::MetricSink
+        | ty @ CatalogItemType::WasmModule => {
             sql_bail!("{full_name} is a {ty} and so does not have columns");
         }
     }
@@ -877,6 +937,22 @@ pub fn show_secrets<'a>(
     );
 
     ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
+}
+
+pub fn show_wasm_modules<'a>(
+    scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+
+    let query = format!(
+        "SELECT name, hash, size
+        FROM mz_catalog.mz_wasm_modules
+        WHERE schema_id = '{schema_spec}'",
+    );
+
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "hash", "size"]))
 }
 
 pub fn show_privileges<'a>(

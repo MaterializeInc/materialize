@@ -615,7 +615,8 @@ impl CatalogState {
                 | CatalogItem::Source(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => (),
+                | CatalogItem::Secret(_)
+                | CatalogItem::WasmModule(_) => (),
             }
         }
 
@@ -1059,6 +1060,21 @@ impl CatalogState {
             conn_id,
         )
         .items
+        .get(&name.item)
+        .and_then(|id| self.try_get_entry(id))
+    }
+
+    pub fn get_function_by_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: &ConnectionId,
+    ) -> Option<&CatalogEntry> {
+        self.get_schema(
+            &name.qualifiers.database_spec,
+            &name.qualifiers.schema_spec,
+            conn_id,
+        )
+        .functions
         .get(&name.item)
         .and_then(|id| self.try_get_entry(id))
     }
@@ -1737,10 +1753,29 @@ impl CatalogState {
                     resolved_ids,
                 })
             }
+            Plan::CreateFunction(mz_sql::plan::CreateFunctionPlan { function, .. }) => {
+                CatalogItem::Func(mz_catalog::memory::objects::Func {
+                    inner: mz_catalog::memory::objects::FuncDef::Wasm(
+                        mz_catalog::memory::objects::WasmFunction {
+                            create_sql: function.create_sql,
+                            resolved_ids,
+                            definition: function.wasm,
+                        },
+                    ),
+                    global_id,
+                })
+            }
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
                 global_id,
             }),
+            Plan::CreateWasmModule(mz_sql::plan::CreateWasmModulePlan { module, .. }) => {
+                CatalogItem::WasmModule(mz_catalog::memory::objects::WasmModule {
+                    create_sql: module.create_sql.clone(),
+                    global_id,
+                    definition: module,
+                })
+            }
             Plan::CreateConnection(CreateConnectionPlan {
                 connection:
                     mz_sql::plan::Connection {
@@ -2087,6 +2122,7 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
+            | CatalogItemType::WasmModule
             | CatalogItemType::Connection => schema.items[builtin.name()],
         }
     }
@@ -2915,7 +2951,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => Some(*id),
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::WasmModule(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2945,7 +2982,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => {
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::WasmModule(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

@@ -398,6 +398,7 @@ pub(crate) async fn initialize(
             ObjectType::Schema => mz_audit_log::ObjectType::Schema,
             ObjectType::Func => mz_audit_log::ObjectType::Func,
             ObjectType::NetworkPolicy => mz_audit_log::ObjectType::NetworkPolicy,
+            ObjectType::WasmModule => mz_audit_log::ObjectType::WasmModule,
         };
         audit_events.push((
             mz_audit_log::EventType::Grant,

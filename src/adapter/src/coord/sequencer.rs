@@ -302,6 +302,16 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
+                Plan::CreateFunction(plan) => {
+                    let result = self
+                        .sequence_create_function(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                }
+                Plan::CreateWasmModule(plan) => {
+                    let result = self.sequence_create_wasm_module(ctx.session(), plan).await;
+                    ctx.retire(result);
+                }
                 Plan::CreateNetworkPolicy(plan) => {
                     let res = self
                         .sequence_create_network_policy(ctx.session(), plan)

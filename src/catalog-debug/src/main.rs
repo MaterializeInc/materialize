@@ -732,6 +732,7 @@ async fn upgrade_check(
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
         });

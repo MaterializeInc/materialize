@@ -171,14 +171,16 @@ impl WasmFunc {
         if let Some(invoker) = self.invoker.0.get() {
             return Ok(invoker);
         }
-        let runtime = WASM_RUNTIME.get().ok_or_else(|| {
-            EvalError::Internal(
-                format!(
-                    "WebAssembly function {} evaluated without a runtime",
-                    self.name
-                )
-                .into(),
+        // Only cluster replicas and the CLI install a runtime. Everywhere else,
+        // in practice environmentd evaluating a statement's constant
+        // expressions, a call is a user error rather than an internal one.
+        let runtime = WASM_RUNTIME.get().ok_or_else(|| EvalError::Unsupported {
+            feature: format!(
+                "calling WebAssembly function {} outside a query that runs on a cluster",
+                self.name
             )
+            .into(),
+            discussion_no: None,
         })?;
         let invoker = runtime.bind(self)?;
         Ok(self.invoker.0.get_or_init(|| invoker))

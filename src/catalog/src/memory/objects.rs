@@ -749,6 +749,14 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.func()
     }
 
+    fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        self.entry.wasm_function()
+    }
+
+    fn wasm_module(&self) -> Option<&mz_sql::plan::WasmModule> {
+        self.entry.wasm_module()
+    }
+
     fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.entry.source_desc()
     }
@@ -866,6 +874,7 @@ pub enum CatalogItem {
     Secret(Secret),
     Connection(Connection),
     MetricSink(MetricSink),
+    WasmModule(WasmModule),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1660,11 +1669,58 @@ pub struct Type {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
-    /// Static definition of the function.
     #[serde(skip)]
-    pub inner: &'static mz_sql::func::Func,
+    pub inner: FuncDef,
     /// [`GlobalId`] used to reference this function from outside the catalog.
     pub global_id: GlobalId,
+}
+
+/// The definition of a function.
+#[derive(Debug, Clone)]
+pub enum FuncDef {
+    /// A builtin function, with its static definition.
+    Builtin(&'static mz_sql::func::Func),
+    /// A user-defined WebAssembly function.
+    Wasm(WasmFunction),
+}
+
+#[derive(Debug, Clone)]
+pub struct WasmFunction {
+    /// Parse-able SQL that defines this function.
+    pub create_sql: String,
+    /// Other catalog objects referenced by this function's signature.
+    pub resolved_ids: ResolvedIds,
+    pub definition: mz_sql::plan::WasmFunction,
+}
+
+impl Func {
+    /// The static definition of a builtin function, or `None` for a
+    /// user-defined function.
+    pub fn builtin(&self) -> Option<&'static mz_sql::func::Func> {
+        match &self.inner {
+            FuncDef::Builtin(func) => Some(func),
+            FuncDef::Wasm(_) => None,
+        }
+    }
+
+    /// The definition of a user-defined WebAssembly function, or `None` for a
+    /// builtin.
+    pub fn wasm(&self) -> Option<&WasmFunction> {
+        match &self.inner {
+            FuncDef::Builtin(_) => None,
+            FuncDef::Wasm(wasm) => Some(wasm),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WasmModule {
+    /// Parse-able SQL that defines this module, including its bytes.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this module from outside the catalog.
+    pub global_id: GlobalId,
+    #[serde(skip)]
+    pub definition: mz_sql::plan::WasmModule,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1774,6 +1830,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => CatalogItemType::Type,
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
+            CatalogItem::WasmModule(_) => CatalogItemType::WasmModule,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
             CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
         }
@@ -1793,6 +1850,7 @@ impl CatalogItem {
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::WasmModule(module) => module.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => {
@@ -1816,6 +1874,7 @@ impl CatalogItem {
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::WasmModule(module) => module.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
@@ -1906,6 +1965,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => false,
         }
@@ -1932,6 +1992,7 @@ impl CatalogItem {
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::Type(_)
             | CatalogItem::MetricSink(_) => None,
@@ -1943,7 +2004,10 @@ impl CatalogItem {
         entry: &CatalogEntry,
     ) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         match &self {
-            CatalogItem::Func(func) => Ok(func.inner),
+            CatalogItem::Func(Func {
+                inner: FuncDef::Builtin(func),
+                ..
+            }) => Ok(func),
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
                 actual_type: entry.item_type(),
@@ -1990,7 +2054,10 @@ impl CatalogItem {
     pub fn references(&self) -> &ResolvedIds {
         static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(ResolvedIds::empty);
         match self {
-            CatalogItem::Func(_) => &*EMPTY,
+            CatalogItem::Func(func) => match &func.inner {
+                FuncDef::Builtin(_) => &*EMPTY,
+                FuncDef::Wasm(wasm) => &wasm.resolved_ids,
+            },
             CatalogItem::Index(idx) => &idx.resolved_ids,
             CatalogItem::Sink(sink) => &sink.resolved_ids,
             CatalogItem::Source(source) => &source.resolved_ids,
@@ -2000,6 +2067,7 @@ impl CatalogItem {
             CatalogItem::View(view) => &view.resolved_ids,
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
+            CatalogItem::WasmModule(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
         }
@@ -2027,6 +2095,7 @@ impl CatalogItem {
                 uses.extend(mview.dependencies.0.iter().copied())
             }
             CatalogItem::Secret(_) => {}
+            CatalogItem::WasmModule(_) => {}
             CatalogItem::Connection(_) => {}
             CatalogItem::MetricSink(_) => {}
         }
@@ -2055,6 +2124,7 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => BTreeSet::new(),
         }
@@ -2072,6 +2142,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
@@ -2091,6 +2162,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
@@ -2116,6 +2188,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
@@ -2200,11 +2273,22 @@ impl CatalogItem {
                 i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Type(i))
             }
-            CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            CatalogItem::Func(i) => {
+                let mut i = i.clone();
+                if let FuncDef::Wasm(wasm) = &mut i.inner {
+                    wasm.create_sql = do_rewrite(std::mem::take(&mut wasm.create_sql))?;
+                }
+                Ok(CatalogItem::Func(i))
+            }
             CatalogItem::MetricSink(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::MetricSink(i))
+            }
+            CatalogItem::WasmModule(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::WasmModule(i))
             }
         }
     }
@@ -2268,9 +2352,21 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Secret(i))
             }
-            CatalogItem::Func(_) | CatalogItem::Type(_) => {
-                unreachable!("{}s cannot be renamed", self.typ())
+            // A user function references its module, so renaming the module
+            // rewrites the function. Builtin functions reference nothing.
+            CatalogItem::Func(i) => {
+                let mut i = i.clone();
+                if let FuncDef::Wasm(wasm) = &mut i.inner {
+                    wasm.create_sql = do_rewrite(std::mem::take(&mut wasm.create_sql))?;
+                }
+                Ok(CatalogItem::Func(i))
             }
+            CatalogItem::WasmModule(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::WasmModule(i))
+            }
+            CatalogItem::Type(_) => unreachable!("types cannot be renamed"),
             CatalogItem::Connection(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
@@ -2335,9 +2431,19 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Secret(i)
             }
-            CatalogItem::Func(_) | CatalogItem::Type(_) => {
-                unreachable!("references of {}s cannot be replaced", self.typ())
+            CatalogItem::Func(i) => {
+                let mut i = i.clone();
+                if let FuncDef::Wasm(wasm) = &mut i.inner {
+                    wasm.create_sql = do_rewrite(std::mem::take(&mut wasm.create_sql));
+                }
+                CatalogItem::Func(i)
             }
+            CatalogItem::WasmModule(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::WasmModule(i)
+            }
+            CatalogItem::Type(_) => unreachable!("references of types cannot be replaced"),
             CatalogItem::Connection(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
@@ -2525,6 +2631,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
+            | CatalogItem::WasmModule(WasmModule { create_sql, .. })
             | CatalogItem::Connection(Connection { create_sql, .. })
             | CatalogItem::MetricSink(MetricSink { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
@@ -2562,6 +2669,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -2591,6 +2699,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_) => false,
         }
     }
@@ -2619,6 +2728,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -2637,6 +2747,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => None,
         }
@@ -2659,6 +2770,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => return None,
         };
@@ -2684,6 +2796,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => return None,
         };
@@ -2705,6 +2818,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => false,
         }
@@ -2757,12 +2871,18 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => {
                 (secret.create_sql.clone(), secret.global_id, BTreeMap::new())
             }
+            CatalogItem::WasmModule(module) => {
+                (module.create_sql.clone(), module.global_id, BTreeMap::new())
+            }
             CatalogItem::Connection(connection) => (
                 connection.create_sql.clone(),
                 connection.global_id,
                 BTreeMap::new(),
             ),
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::Func(func) => match &func.inner {
+                FuncDef::Builtin(_) => unreachable!("builtin functions cannot be serialized"),
+                FuncDef::Wasm(wasm) => (wasm.create_sql.clone(), func.global_id, BTreeMap::new()),
+            },
             CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
         }
     }
@@ -2805,10 +2925,16 @@ impl CatalogItem {
                 (create_sql, typ.global_id, BTreeMap::new())
             }
             CatalogItem::Secret(secret) => (secret.create_sql, secret.global_id, BTreeMap::new()),
+            CatalogItem::WasmModule(module) => {
+                (module.create_sql, module.global_id, BTreeMap::new())
+            }
             CatalogItem::Connection(connection) => {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::Func(func) => match func.inner {
+                FuncDef::Builtin(_) => unreachable!("builtin functions cannot be serialized"),
+                FuncDef::Wasm(wasm) => (wasm.create_sql, func.global_id, BTreeMap::new()),
+            },
             CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
         }
     }
@@ -2827,6 +2953,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => return Some(ty.global_id),
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
+            CatalogItem::WasmModule(module) => return Some(module.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
             CatalogItem::MetricSink(metric_sink) => return Some(metric_sink.global_id),
         };
@@ -2857,6 +2984,24 @@ impl CatalogEntry {
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         self.item.func(self)
+    }
+
+    /// Returns the definition of this entry if it is a user-defined
+    /// WebAssembly function.
+    pub fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        match self.item() {
+            CatalogItem::Func(func) => func.wasm().map(|wasm| &wasm.definition),
+            _ => None,
+        }
+    }
+
+    /// Returns the definition of a WebAssembly module, or `None` if the entry
+    /// is anything else.
+    pub fn wasm_module(&self) -> Option<&mz_sql::plan::WasmModule> {
+        match self.item() {
+            CatalogItem::WasmModule(module) => Some(&module.definition),
+            _ => None,
+        }
     }
 
     /// Returns the inner [`Index`] if this entry is an index, else `None`.
@@ -3033,6 +3178,7 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::WasmModule(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => None,
         }
@@ -3168,6 +3314,7 @@ impl CatalogEntry {
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
+            WasmModule => CommentObjectId::WasmModule(self.id),
             MetricSink => CommentObjectId::MetricSink(self.id),
         }
     }
@@ -4149,6 +4296,14 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
+    fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        CatalogEntry::wasm_function(self)
+    }
+
+    fn wasm_module(&self) -> Option<&mz_sql::plan::WasmModule> {
+        CatalogEntry::wasm_module(self)
+    }
+
     fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.source_desc()
     }
@@ -4176,9 +4331,13 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
                 create_sql.as_deref().unwrap_or("<builtin>")
             }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
+            CatalogItem::WasmModule(WasmModule { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
-            CatalogItem::Func(_) => "<builtin>",
+            CatalogItem::Func(func) => match &func.inner {
+                FuncDef::Builtin(_) => "<builtin>",
+                FuncDef::Wasm(wasm) => &wasm.create_sql,
+            },
             CatalogItem::Log(_) => "<builtin>",
         }
     }

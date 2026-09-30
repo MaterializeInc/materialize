@@ -219,9 +219,17 @@ impl<'a> Transaction<'a> {
                             // `item_type` is slow, only compute if needed.
                             let a_type = a.item_type();
                             let b_type = b.item_type();
-                            (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                                || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                                || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                            // Functions resolve in their own namespace, so a
+                            // function only conflicts with another function.
+                            if a_type == CatalogItemType::Func || b_type == CatalogItemType::Func {
+                                a_type == b_type
+                            } else {
+                                (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                                    || (a_type == CatalogItemType::Type
+                                        && b_type.conflicts_with_type())
+                                    || (b_type == CatalogItemType::Type
+                                        && a_type.conflicts_with_type())
+                            }
                         }
                 },
                 |prev: &ItemValue, next| {
@@ -872,7 +880,8 @@ impl<'a> Transaction<'a> {
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)
                 | CommentObjectId::Type(item_id)
-                | CommentObjectId::Secret(item_id) => item_ids.contains(&item_id),
+                | CommentObjectId::Secret(item_id)
+                | CommentObjectId::WasmModule(item_id) => item_ids.contains(&item_id),
                 CommentObjectId::Role(_)
                 | CommentObjectId::Database(_)
                 | CommentObjectId::Schema(_)

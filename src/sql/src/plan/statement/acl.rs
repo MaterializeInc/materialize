@@ -646,6 +646,7 @@ fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
         Privilege::CREATEDB => AclMode::CREATE_DB,
         Privilege::CREATECLUSTER => AclMode::CREATE_CLUSTER,
         Privilege::CREATENETWORKPOLICY => AclMode::CREATE_NETWORK_POLICY,
+        Privilege::CREATEWASMMODULE => AclMode::CREATE_WASM_MODULE,
     }
 }
 
@@ -697,6 +698,7 @@ pub fn plan_alter_default_privileges(
         | ObjectType::Index
         | ObjectType::Type
         | ObjectType::Secret
+        | ObjectType::WasmModule
         | ObjectType::Connection
         | ObjectType::Cluster
         | ObjectType::Database

@@ -168,6 +168,7 @@ pub enum ObjectType {
     Table,
     Type,
     View,
+    WasmModule,
 }
 
 impl ObjectType {
@@ -192,6 +193,7 @@ impl ObjectType {
             ObjectType::Table => "Table",
             ObjectType::Type => "Type",
             ObjectType::View => "View",
+            ObjectType::WasmModule => "WebAssembly Module",
         }
     }
 }

@@ -300,6 +300,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_unified_cluster
     enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
+    enable_wasm_functions
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback
     grpc_client_connect_timeout
@@ -326,6 +327,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     max_rules_per_network_policy
     max_sql_server_connections
     max_timestamp_interval
+    max_wasm_function_fuel
+    max_wasm_function_memory
+    max_wasm_module_size
+    max_wasm_modules
     mcp_max_response_size
     mcp_request_timeout
     memory_limiter_usage_bias

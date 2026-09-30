@@ -31,6 +31,7 @@ fn comment_object_type_name(obj: &CommentObjectType<Raw>) -> &'static str {
         CommentObjectType::Column { .. } => "COLUMN",
         CommentObjectType::Index { .. } => "INDEX",
         CommentObjectType::Func { .. } => "FUNCTION",
+        CommentObjectType::WasmModule { .. } => "WASM MODULE",
         CommentObjectType::Type { .. } => "TYPE",
         CommentObjectType::Role { .. } => "ROLE",
         CommentObjectType::Cluster { .. } => "CLUSTER",

@@ -437,6 +437,7 @@ pub enum CommentObject {
     Connection(CatalogItemId),
     Type(CatalogItemId),
     Secret(CatalogItemId),
+    WasmModule(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema(ResolvedSchema),
@@ -1938,6 +1939,7 @@ pub mod audit_log_event_v1 {
         ContinualTask = 17,
         NetworkPolicy = 18,
         MetricSink = 19,
+        WasmModule = 20,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2252,6 +2254,7 @@ pub enum CatalogItemType {
     Secret = 9,
     Connection = 10,
     MetricSink = 11,
+    WasmModule = 12,
 }
 
 #[derive(
@@ -2287,4 +2290,5 @@ pub enum ObjectType {
     Func = 15,
     NetworkPolicy = 17,
     MetricSink = 18,
+    WasmModule = 19,
 }

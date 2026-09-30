@@ -177,6 +177,12 @@ use crate::session::vars::{
 use crate::{names, parse};
 
 mod connection;
+mod function;
+
+pub use function::{
+    describe_create_function, describe_create_wasm_module, plan_create_function,
+    plan_create_wasm_module,
+};
 
 // TODO: Figure out what the maximum number of columns we can actually support is, and set that.
 //
@@ -601,6 +607,10 @@ pub fn plan_create_webhook_source(
         // are older than a certain threshold.
         if expression.contains_unmaterializable_except(&[UnmaterializableFunc::CurrentTimestamp]) {
             return Err(PlanError::WebhookValidationNonDeterministic);
+        }
+        // environmentd evaluates CHECK, and only compute runs guest code.
+        if expression.contains_wasm_call() {
+            sql_bail!("webhook CHECK expressions cannot call WebAssembly functions");
         }
     }
 
@@ -3325,7 +3335,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | Type | Func | Secret | Connection | WasmModule => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4182,6 +4192,10 @@ fn kafka_sink_builder(
                 &SqlScalarType::UInt64,
             )?;
             let expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
+            // Storage evaluates PARTITION BY, and only compute runs guest code.
+            if expr.contains_wasm_call() {
+                sql_bail!("PARTITION BY cannot call WebAssembly functions");
+            }
 
             Some(expr)
         }
@@ -4453,7 +4467,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | Type | Func | Secret | Connection | WasmModule => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -5940,6 +5954,40 @@ pub fn describe_drop_objects(
     Ok(StatementDesc::new(None))
 }
 
+/// Checks the argument list of `DROP FUNCTION name (argtype, ...)` against the
+/// function's signature. Type modifiers do not count, as in Postgres.
+fn check_drop_function_args(
+    scx: &StatementContext,
+    id: CatalogItemId,
+    args: &[String],
+) -> Result<(), PlanError> {
+    let item = scx.get_item(&id);
+    let Some(function) = item.wasm_function() else {
+        return Ok(());
+    };
+    let given = args
+        .iter()
+        .map(|arg| {
+            let raw = mz_sql_parser::parser::parse_data_type(arg)?;
+            let resolved = crate::names::resolve_data_type(scx.catalog, raw)?;
+            Ok(scalar_type_from_sql(scx, &resolved)?.without_modifiers())
+        })
+        .collect::<Result<Vec<_>, PlanError>>()?;
+    let declared: Vec<_> = function
+        .arg_types
+        .iter()
+        .map(|t| t.without_modifiers())
+        .collect();
+    if given != declared {
+        sql_bail!(
+            "function {}({}) does not exist",
+            scx.catalog.resolve_full_name(item.name()),
+            args.join(", ")
+        );
+    }
+    Ok(())
+}
+
 pub fn plan_drop_objects(
     scx: &mut StatementContext,
     DropObjectsStatement {
@@ -5947,11 +5995,9 @@ pub fn plan_drop_objects(
         if_exists,
         names,
         cascade,
+        function_args,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    if object_type == mz_sql_parser::ast::ObjectType::Func {
-        bail_unsupported!("DROP FUNCTION");
-    }
     let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
@@ -5976,7 +6022,18 @@ pub fn plan_drop_objects(
                 // Defer the dependency check until all names are resolved, so a
                 // dependent that is itself being dropped in this same statement
                 // does not block a non-cascade drop.
-                plan_drop_item_name(scx, object_type, if_exists, name.clone())?.map(ObjectId::Item)
+                let mut id = plan_drop_item_name(scx, object_type, if_exists, name.clone())?;
+                if let (Some(item), Some(args)) = (id, &function_args) {
+                    // With `IF EXISTS`, a function of another signature is a
+                    // function that does not exist.
+                    if let Err(e) = check_drop_function_args(scx, item, args) {
+                        if !if_exists {
+                            return Err(e);
+                        }
+                        id = None;
+                    }
+                }
+                id.map(ObjectId::Item)
             }
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
@@ -6228,7 +6285,10 @@ fn ensure_no_blocking_dependents(
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
 fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> bool {
     match object_type {
-        ObjectType::Type => true,
+        // An index on another object can depend on a type or a function
+        // through its key expressions; dropping either must not silently drop
+        // that index.
+        ObjectType::Type | ObjectType::Func => true,
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
@@ -6243,8 +6303,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Schema
-        | ObjectType::Func
-        | ObjectType::NetworkPolicy => match dep.item_type() {
+        | ObjectType::NetworkPolicy
+        | ObjectType::WasmModule => match dep.item_type() {
             CatalogItemType::Func
             | CatalogItemType::Table
             | CatalogItemType::Source
@@ -6254,7 +6314,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::MetricSink
             | CatalogItemType::Type
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => true,
+            | CatalogItemType::Connection
+            | CatalogItemType::WasmModule => true,
             CatalogItemType::Index => false,
         },
     }
@@ -7047,7 +7108,8 @@ pub fn plan_alter_item_set_cluster(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => {
+        | ObjectType::NetworkPolicy
+        | ObjectType::WasmModule => {
             bail_never_supported!(
                 format!("ALTER {object_type} SET CLUSTER"),
                 "sql/alter-set-cluster/",
@@ -7111,7 +7173,8 @@ pub fn plan_alter_object_rename(
             | ObjectType::Index
             | ObjectType::Sink
             | ObjectType::Secret
-            | ObjectType::Connection,
+            | ObjectType::Connection
+            | ObjectType::WasmModule,
             UnresolvedObjectName::Item(name),
         ) => plan_alter_item_rename(scx, object_type, name, to_item_name, if_exists),
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
@@ -7490,7 +7553,8 @@ pub fn plan_alter_object_swap(
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Func
-            | ObjectType::NetworkPolicy,
+            | ObjectType::NetworkPolicy
+            | ObjectType::WasmModule,
             _,
             _,
         ) => Err(PlanError::Unsupported {
@@ -8353,7 +8417,8 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Connection { name }
         | com_ty @ CommentObjectType::Source { name }
         | com_ty @ CommentObjectType::Sink { name }
-        | com_ty @ CommentObjectType::Secret { name } => {
+        | com_ty @ CommentObjectType::Secret { name }
+        | com_ty @ CommentObjectType::WasmModule { name } => {
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
@@ -8382,6 +8447,9 @@ pub fn plan_comment(
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
                     (CommentObjectId::Secret(item.id()), None)
+                }
+                (CommentObjectType::WasmModule { .. }, CatalogItemType::WasmModule) => {
+                    (CommentObjectId::WasmModule(item.id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -8569,6 +8637,7 @@ pub(crate) fn resolve_item_or_type<'a>(
     let name = normalize::unresolved_item_name(name)?;
     let catalog_item = match object_type {
         ObjectType::Type => scx.catalog.resolve_type(&name),
+        ObjectType::Func => scx.catalog.resolve_function(&name),
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
@@ -8583,8 +8652,8 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Schema
-        | ObjectType::Func
-        | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
+        | ObjectType::NetworkPolicy
+        | ObjectType::WasmModule => scx.catalog.resolve_item(&name),
     };
 
     match catalog_item {

@@ -1604,6 +1604,8 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
+        | Plan::CreateFunction(_)
+        | Plan::CreateWasmModule(_)
         | Plan::CreateSink(_)
         | Plan::CreateTable(_)
         | Plan::CreateView(_)

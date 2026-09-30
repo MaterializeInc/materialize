@@ -1454,6 +1454,8 @@ impl Coordinator {
                     | Statement::CreateRole(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
+                    | Statement::CreateFunction(_)
+                    | Statement::CreateWasmModule(_)
                     | Statement::CreateSink(_)
                     | Statement::CreateMetricSink(_)
                     | Statement::CreateSubsource(_)

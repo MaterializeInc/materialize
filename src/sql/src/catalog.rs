@@ -837,6 +837,14 @@ pub trait CatalogItem {
     /// anything other than a function), it returns an error.
     fn func(&self) -> Result<&'static Func, CatalogError>;
 
+    /// Returns the definition of a user-defined WebAssembly function, or
+    /// `None` if the item is anything else, including a builtin function.
+    fn wasm_function(&self) -> Option<&crate::plan::WasmFunction>;
+
+    /// Returns the definition of a WebAssembly module, or `None` if the item
+    /// is anything else.
+    fn wasm_module(&self) -> Option<&crate::plan::WasmModule>;
+
     /// Returns the resolved source connection.
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`
@@ -973,6 +981,8 @@ pub enum CatalogItemType {
     Connection,
     /// A metric sink.
     MetricSink,
+    /// A WebAssembly module.
+    WasmModule,
 }
 
 impl CatalogItemType {
@@ -1007,6 +1017,7 @@ impl CatalogItemType {
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
             CatalogItemType::MetricSink => false,
+            CatalogItemType::WasmModule => false,
         }
     }
 }
@@ -1025,6 +1036,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::MetricSink => f.write_str("metric sink"),
+            CatalogItemType::WasmModule => f.write_str("wasm module"),
         }
     }
 }
@@ -1043,6 +1055,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
             CatalogItemType::MetricSink => ObjectType::MetricSink,
+            CatalogItemType::WasmModule => ObjectType::WasmModule,
         }
     }
 }
@@ -1061,6 +1074,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
             CatalogItemType::MetricSink => mz_audit_log::ObjectType::MetricSink,
+            CatalogItemType::WasmModule => mz_audit_log::ObjectType::WasmModule,
         }
     }
 }
@@ -1592,6 +1606,7 @@ pub enum ObjectType {
     Schema,
     Func,
     NetworkPolicy,
+    WasmModule,
 }
 
 impl ObjectType {
@@ -1614,7 +1629,8 @@ impl ObjectType {
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
             | ObjectType::Role
-            | ObjectType::NetworkPolicy => false,
+            | ObjectType::NetworkPolicy
+            | ObjectType::WasmModule => false,
         }
     }
 }
@@ -1640,6 +1656,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql_parser::ast::ObjectType::WasmModule => ObjectType::WasmModule,
         }
     }
 }
@@ -1664,6 +1681,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+            CommentObjectId::WasmModule(_) => ObjectType::WasmModule,
         }
     }
 }
@@ -1688,6 +1706,7 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::WasmModule => "WASM MODULE",
         })
     }
 }

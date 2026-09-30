@@ -64,6 +64,8 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    CreateFunction(CreateFunctionStatement<T>),
+    CreateWasmModule(CreateWasmModuleStatement),
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
@@ -141,6 +143,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateSecret(stmt) => f.write_node(stmt),
+            Statement::CreateFunction(stmt) => f.write_node(stmt),
+            Statement::CreateWasmModule(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
@@ -214,14 +218,17 @@ impl StatementKind {
     }
 
     /// Whether this kind of statement can carry sensitive material that we
-    /// redact from logged SQL text (and error messages): secret values, or
-    /// bulk/PII user data in `INSERT`/`UPDATE`/`EXECUTE`. A superset of
-    /// [`Self::is_secret`].
+    /// redact from logged SQL text (and error messages): secret values, bulk
+    /// or PII user data in `INSERT`/`UPDATE`/`EXECUTE`, or the module bytes of
+    /// `CREATE WASM MODULE`. A superset of [`Self::is_secret`].
     pub fn is_sensitive(&self) -> bool {
         self.is_secret()
             || matches!(
                 self,
-                StatementKind::Insert | StatementKind::Update | StatementKind::Execute
+                StatementKind::Insert
+                    | StatementKind::Update
+                    | StatementKind::Execute
+                    | StatementKind::CreateWasmModule
             )
     }
 }
@@ -252,6 +259,8 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::CreateFunction => "create_function",
+        StatementKind::CreateWasmModule => "create_wasm_module",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
@@ -2289,6 +2298,214 @@ impl<T: AstInfo> AstDisplay for CreateSecretStatement<T> {
 }
 impl_display_t!(CreateSecretStatement);
 
+/// `CREATE FUNCTION ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateFunctionStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub if_not_exists: bool,
+    pub args: Vec<FunctionArg<T>>,
+    pub returns: T::DataType,
+    pub language: Ident,
+    pub volatility: Option<FunctionVolatility>,
+    pub null_behavior: Option<FunctionNullBehavior>,
+    /// The WebAssembly module that implements the function (`USING MODULE`).
+    pub module: T::ItemName,
+    pub with_options: Vec<CreateFunctionOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateFunctionStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE FUNCTION ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.args));
+        f.write_str(") RETURNS ");
+        f.write_node(&self.returns);
+        f.write_str(" LANGUAGE ");
+        f.write_node(&self.language);
+        if let Some(volatility) = &self.volatility {
+            f.write_str(" ");
+            f.write_node(volatility);
+        }
+        if let Some(null_behavior) = &self.null_behavior {
+            f.write_str(" ");
+            f.write_node(null_behavior);
+        }
+        f.write_str(" USING MODULE ");
+        f.write_node(&self.module);
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CreateFunctionStatement);
+
+/// `CREATE WASM MODULE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWasmModuleStatement {
+    pub name: UnresolvedItemName,
+    pub if_not_exists: bool,
+    pub body: WasmModuleBody,
+}
+
+impl AstDisplay for CreateWasmModuleStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE WASM MODULE ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_node(&self.body);
+    }
+}
+impl_display!(CreateWasmModuleStatement);
+
+/// A parameter in a `CREATE FUNCTION` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionArg<T: AstInfo> {
+    pub name: Option<Ident>,
+    pub data_type: T::DataType,
+}
+
+impl<T: AstInfo> AstDisplay for FunctionArg<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if let Some(name) = &self.name {
+            f.write_node(name);
+            f.write_str(" ");
+        }
+        f.write_node(&self.data_type);
+    }
+}
+impl_display_t!(FunctionArg);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunctionVolatility {
+    Immutable,
+    Stable,
+    Volatile,
+}
+
+impl AstDisplay for FunctionVolatility {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            FunctionVolatility::Immutable => "IMMUTABLE",
+            FunctionVolatility::Stable => "STABLE",
+            FunctionVolatility::Volatile => "VOLATILE",
+        });
+    }
+}
+impl_display!(FunctionVolatility);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunctionNullBehavior {
+    /// `STRICT`
+    Strict,
+    /// `RETURNS NULL ON NULL INPUT`, a synonym for `STRICT`.
+    ReturnsNullOnNullInput,
+    /// `CALLED ON NULL INPUT`
+    CalledOnNullInput,
+}
+
+impl FunctionNullBehavior {
+    /// Whether a `NULL` argument yields `NULL` without calling the function.
+    pub fn is_strict(&self) -> bool {
+        match self {
+            FunctionNullBehavior::Strict | FunctionNullBehavior::ReturnsNullOnNullInput => true,
+            FunctionNullBehavior::CalledOnNullInput => false,
+        }
+    }
+}
+
+impl AstDisplay for FunctionNullBehavior {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            FunctionNullBehavior::Strict => "STRICT",
+            FunctionNullBehavior::ReturnsNullOnNullInput => "RETURNS NULL ON NULL INPUT",
+            FunctionNullBehavior::CalledOnNullInput => "CALLED ON NULL INPUT",
+        });
+    }
+}
+impl_display!(FunctionNullBehavior);
+
+/// The bytes of a WebAssembly module.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WasmModuleBody {
+    /// `USING BASE64 '...'`: a compiled module, base64-encoded.
+    Base64(String),
+    /// `USING BASE64 $n`: a compiled module, base64-encoded and bound as a
+    /// parameter, which keeps it out of the statement text and its size
+    /// limit. Planning replaces it with [`WasmModuleBody::Base64`].
+    Base64Parameter(usize),
+}
+
+impl AstDisplay for WasmModuleBody {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            WasmModuleBody::Base64Parameter(n) => {
+                f.write_str("USING BASE64 $");
+                f.write_str(n);
+            }
+            WasmModuleBody::Base64(module) => {
+                f.write_str("USING BASE64 ");
+                if f.redacted() {
+                    f.write_str("'<REDACTED>'");
+                } else {
+                    f.write_node(&Value::String(module.clone()));
+                }
+            }
+        }
+    }
+}
+impl_display!(WasmModuleBody);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CreateFunctionOptionName {
+    /// The guest function a SQL function binds to.
+    Export,
+    /// The fuel available to one call.
+    Fuel,
+    /// The memory limit of one call.
+    Memory,
+}
+
+impl AstDisplay for CreateFunctionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateFunctionOptionName::Export => "EXPORT",
+            CreateFunctionOptionName::Fuel => "FUEL",
+            CreateFunctionOptionName::Memory => "MEMORY",
+        });
+    }
+}
+
+impl WithOptionName for CreateFunctionOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateFunctionOptionName::Export
+            | CreateFunctionOptionName::Fuel
+            | CreateFunctionOptionName::Memory => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateFunctionOption<T: AstInfo> {
+    pub name: CreateFunctionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(CreateFunctionOption);
+
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTypeStatement<T: AstInfo> {
@@ -3447,6 +3664,13 @@ pub struct DropObjectsStatement {
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` was specified.
     pub cascade: bool,
+    /// The argument types of `DROP FUNCTION name (argtype, ...)`, which must
+    /// match the function's signature. Only allowed with a single name.
+    ///
+    /// The types are kept as SQL text: this statement is not generic over
+    /// [`AstInfo`], so name resolution does not reach them, and planning
+    /// parses and resolves each one itself.
+    pub function_args: Option<Vec<String>>,
 }
 
 impl AstDisplay for DropObjectsStatement {
@@ -3458,6 +3682,11 @@ impl AstDisplay for DropObjectsStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&display::comma_separated(&self.names));
+        if let Some(args) = &self.function_args {
+            f.write_str("(");
+            f.write_str(args.join(", "));
+            f.write_str(")");
+        }
         if self.cascade && self.object_type != ObjectType::Database {
             f.write_str(" CASCADE");
         } else if !self.cascade && self.object_type == ObjectType::Database {
@@ -3631,6 +3860,7 @@ pub enum ShowObjectType<T: AstInfo> {
         role: Option<T::RoleName>,
     },
     NetworkPolicy,
+    WasmModule,
 }
 /// `SHOW <object>S`
 ///
@@ -3674,6 +3904,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
+            ShowObjectType::WasmModule => "WASM MODULES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -3900,6 +4131,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateMetricSinkStatement<T> {
 }
 impl_display_t!(ShowCreateMetricSinkStatement);
 
+/// `SHOW [REDACTED] CREATE WASM MODULE <module>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateWasmModuleStatement<T: AstInfo> {
+    pub module_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateWasmModuleStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE WASM MODULE ");
+        f.write_node(&self.module_name);
+    }
+}
+impl_display_t!(ShowCreateWasmModuleStatement);
+
 /// `SHOW [REDACTED] CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateIndexStatement<T: AstInfo> {
@@ -3983,6 +4233,28 @@ impl<T: AstInfo> AstDisplay for ShowCreateTypeStatement<T> {
         f.write_node(&self.type_name);
     }
 }
+
+/// `SHOW [REDACTED] CREATE FUNCTION <name>`
+///
+/// The name stays unresolved in the AST, because functions live in their own
+/// namespace; the planner resolves it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateFunctionStatement {
+    pub function_name: UnresolvedItemName,
+    pub redacted: bool,
+}
+
+impl AstDisplay for ShowCreateFunctionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE FUNCTION ");
+        f.write_node(&self.function_name);
+    }
+}
+impl_display!(ShowCreateFunctionStatement);
 
 /// `SET TRANSACTION ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -4477,6 +4749,7 @@ pub enum ObjectType {
     Func,
     Subsource,
     NetworkPolicy,
+    WasmModule,
 }
 
 impl ObjectType {
@@ -4493,7 +4766,8 @@ impl ObjectType {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
-            | ObjectType::Subsource => true,
+            | ObjectType::Subsource
+            | ObjectType::WasmModule => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -4525,6 +4799,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::WasmModule => "WASM MODULE",
         })
     }
 }
@@ -5561,6 +5836,8 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
     ShowCreateType(ShowCreateTypeStatement<T>),
+    ShowCreateFunction(ShowCreateFunctionStatement),
+    ShowCreateWasmModule(ShowCreateWasmModuleStatement<T>),
     ShowVariable(ShowVariableStatement),
     InspectShard(InspectShardStatement),
 }
@@ -5580,6 +5857,8 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateType(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateFunction(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateWasmModule(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
             ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }
@@ -5637,6 +5916,7 @@ pub enum Privilege {
     CREATEDB,
     CREATECLUSTER,
     CREATENETWORKPOLICY,
+    CREATEWASMMODULE,
 }
 
 impl AstDisplay for Privilege {
@@ -5652,6 +5932,7 @@ impl AstDisplay for Privilege {
             Privilege::CREATEDB => "CREATEDB",
             Privilege::CREATECLUSTER => "CREATECLUSTER",
             Privilege::CREATENETWORKPOLICY => "CREATENETWORKPOLICY",
+            Privilege::CREATEWASMMODULE => "CREATEWASMMODULE",
         });
     }
 }
@@ -6036,6 +6317,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Connection { name: T::ItemName },
     Type { ty: T::DataType },
     Secret { name: T::ItemName },
+    WasmModule { name: T::ItemName },
     Role { name: T::RoleName },
     Database { name: T::DatabaseName },
     Schema { name: T::SchemaName },
@@ -6091,6 +6373,10 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             Secret { name } => {
                 f.write_str("SECRET ");
+                f.write_node(name);
+            }
+            WasmModule { name } => {
+                f.write_str("WASM MODULE ");
                 f.write_node(name);
             }
             Role { name } => {

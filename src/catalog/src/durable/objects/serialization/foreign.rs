@@ -218,6 +218,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             CatalogItemType::Secret => proto::CatalogItemType::Secret,
             CatalogItemType::Connection => proto::CatalogItemType::Connection,
             CatalogItemType::MetricSink => proto::CatalogItemType::MetricSink,
+            CatalogItemType::WasmModule => proto::CatalogItemType::WasmModule,
         }
     }
 
@@ -234,6 +235,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             proto::CatalogItemType::Secret => CatalogItemType::Secret,
             proto::CatalogItemType::Connection => CatalogItemType::Connection,
             proto::CatalogItemType::MetricSink => CatalogItemType::MetricSink,
+            proto::CatalogItemType::WasmModule => CatalogItemType::WasmModule,
             proto::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -262,6 +264,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Func => proto::ObjectType::Func,
             ObjectType::NetworkPolicy => proto::ObjectType::NetworkPolicy,
             ObjectType::MetricSink => proto::ObjectType::MetricSink,
+            ObjectType::WasmModule => proto::ObjectType::WasmModule,
         }
     }
 
@@ -284,6 +287,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Func => Ok(ObjectType::Func),
             proto::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             proto::ObjectType::MetricSink => Ok(ObjectType::MetricSink),
+            proto::ObjectType::WasmModule => Ok(ObjectType::WasmModule),
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -420,6 +424,9 @@ impl RustType<proto::CommentObject> for CommentObjectId {
             CommentObjectId::Secret(global_id) => {
                 proto::CommentObject::Secret(global_id.into_proto())
             }
+            CommentObjectId::WasmModule(item_id) => {
+                proto::CommentObject::WasmModule(item_id.into_proto())
+            }
             CommentObjectId::Role(role_id) => proto::CommentObject::Role(role_id.into_proto()),
             CommentObjectId::Database(database_id) => {
                 proto::CommentObject::Database(database_id.into_proto())
@@ -465,6 +472,9 @@ impl RustType<proto::CommentObject> for CommentObjectId {
             }
             proto::CommentObject::Type(item_id) => CommentObjectId::Type(item_id.into_rust()?),
             proto::CommentObject::Secret(item_id) => CommentObjectId::Secret(item_id.into_rust()?),
+            proto::CommentObject::WasmModule(item_id) => {
+                CommentObjectId::WasmModule(item_id.into_rust()?)
+            }
             proto::CommentObject::NetworkPolicy(global_id) => {
                 CommentObjectId::NetworkPolicy(global_id.into_rust()?)
             }

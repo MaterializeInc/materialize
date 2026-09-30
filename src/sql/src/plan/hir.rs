@@ -3696,6 +3696,21 @@ impl HirScalarExpr {
         contains
     }
 
+    /// Whether the expression calls a WebAssembly function.
+    pub fn contains_wasm_call(&self) -> bool {
+        let mut contains = false;
+        self.visit_post(&mut |e| {
+            if let Self::CallVariadic {
+                func: VariadicFunc::Wasm(_),
+                ..
+            } = e
+            {
+                contains = true;
+            }
+        });
+        contains
+    }
+
     /// Constructs an unnamed column reference in the current scope.
     /// Use [`HirScalarExpr::named_column`] when a name is known.
     /// Use [`HirScalarExpr::unnamed_column`] for a `ColumnRef`.
