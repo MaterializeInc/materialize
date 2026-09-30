@@ -21,8 +21,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.44.0
-*Released to Materialize Cloud: 2026-10-01* <br>
-*Released to Materialize Self-Managed: 2026-10-02* <br>
+*Released to Materialize Cloud: 2026-09-30* <br>
+*Released to Materialize Self-Managed: 2026-10-01* <br>
 
 ### SCIM group-to-role mapping is generally available {#v26.44-scim-group-to-role-mapping}
 
@@ -56,7 +56,7 @@ For more information, see [Grafana](/observability/self-managed/grafana/) and th
 
 ### Agent Skills {#v26.44-agent-skills}
 - **`materialize` plugin**: You can now install every Materialize agent skill at once with `/plugin install materialize@materialize` in Claude Code or `codex plugin add materialize@materialize` in Codex, and update them all in one step.
-- **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt` and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
+- **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt`, `materialize-docs` is now `mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
 - **`mz-health-check`**: The health check now reports materialized views on clusters with no replicas, which stop advancing and hold back compaction of every input they read, so their storage keeps growing.
 
 ### Bug Fixes {#v26.44-bug-fixes}
