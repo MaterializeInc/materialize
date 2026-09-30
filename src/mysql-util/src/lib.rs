@@ -142,6 +142,10 @@ pub enum MySqlError {
     MySql(#[from] mysql_async::Error),
     #[error("connection attempt timed out after {0:?}")]
     ConnectionTimeout(Duration),
+    /// The MySQL client panicked while connecting, for example on an
+    /// authentication exchange it does not support.
+    #[error("connection attempt failed, the MySQL client panicked: {0}")]
+    ConnectionPanicked(String),
     /// Error retrieving AWS authorization token
     #[error(transparent)]
     AwsTokenError(#[from] RdsTokenError),

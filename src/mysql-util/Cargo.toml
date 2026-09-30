@@ -19,7 +19,7 @@ chrono.workspace = true
 itertools.workspace = true
 maplit.workspace = true
 mz-cloud-resources = { path = "../cloud-resources" }
-mz-ore = { path = "../ore", features = ["async"] }
+mz-ore = { path = "../ore", features = ["async", "panic"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
@@ -48,4 +48,5 @@ proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]
 mz-mysql-util = { path = ".", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
+scopeguard.workspace = true
 tokio.workspace = true
