@@ -1,21 +1,30 @@
 # Persist 101
-Persist is a data store backed by immutable blobs.
+
 ## Semantics
-**First, _what_ is Persist?**
+Persist is a durable store of time-varying collections.
 
-It's a durable store of time-varying collections.
+Each time-varying collection is called a "shard".
 
-Data is organized into collections called "shards".
-Individual records within a collection are _(key, value, multiplicity)_.
-
-For the time window between a shard's **"since"** (lower bound) and its **"frontier"** (upper bound), we know the history of the collection and can query its contents.
+For the time window between a shard's **"since"** (lower bound) and its **"upper"** (upper bound), we know the history of the collection and can query its contents.
 - Before the lower bound, we no longer remember the history of the collection.
-- At or beyond the frontier, the collection's state is still being decided.
+- At or beyond the upper, the collection's state is still being decided.
 
-We can only write (append) to a collection _at or beyond_ the frontier. We cannot alter history before that point.
+We can only write (append) to a collection _at or beyond_ the upper. We cannot alter history before that point.
+
+Individual records within a shard (as recorded at a given point in history) are _(key, value, multiplicity)_.
+
+## Architecture
+
+**Blob Storage:** Each shard's contents are written to (immutable) blobs.
+
+**Consensus:** All coordination and bookkeeping happens in the consensus database. For each shard:
+- _Trace:_ The since, the upper, and all the blobs with our data.
+- _Readers:_ What each reader is looking at, so we don't delete it before they're done.
+- _Writers:_ Each writer's last write, for idempotent retries.
+
+**Clients:** There is no Persist "server". All clients interact directly with blob storage and consensus.
 
 ## Data Layout in Blob Storage
-**What does it actually look like?**
 ### Layout: Shard > Batch > Run > Part
 Within a shard, records are organized into:
 - Batches. Together, they cover the entire `[Since, Frontier)` time range without overlapping. Each timestamp within the range belongs to a single batch.
@@ -59,7 +68,6 @@ Steps to doing better:
 - Enable `Chunk` or `Page` statistics, which gives us a page index (in the parquet footer) with stats (e.g. column min/max/nulls) for those segmentations of the part file.
 - Add "Range Read" to our Blob Store interface to read from specific offsets within a file. Then, only read the row groups or pages whose stats fit the predicate.
 ## Writers
-**What uses Persist?**
 ### Materialized View sink
 Multiple replicas can write to the same shard, including replicas running different versions of the code.
 - We can't assume all writers agree on the collection's contents.
@@ -109,12 +117,12 @@ On promotion, the new generation restarts, no longer in read-only mode:
 - The new storage controller takes over `txn-wal` and registers the new table shards there.
 - The coordinator reads system tables from their shards and, via `txn-wal`, replaces their rows with the current state from the catalog.
 
+_Note:_ Docs say the new generation's behavior is a hack, and it should be unified with the `txn-wal` approach.
+
 ### More Writers
-TODO
 
 These other components write to Persist but are not drivers of its design:
 - Sinks: only record progress
-- Builtin tables during 0dt upgrade: because the new generation can't modify `txn-wal`. (doc says it's a temporary hack?)
 - COPY FROM: uses the table path
 - Webhook sources
 - Storage-controller collections
@@ -141,6 +149,29 @@ TODO
 TODO
 
 _Claude says: Shard state is stored as a log of diffs plus periodic rollups, updated by compare-and-set. Every operation on a shard (appends, heartbeats, compaction, GC) goes through that one compare-and-set, per PER-38._
+
+### Shard State
+
+Claude's diagram of shard state:
+```
+State
+├── shard_id, seqno, walltime_ms, hostname
+└── collections: StateCollections
+    ├── version                      state format version (0dt compatibility)
+    ├── trace: Trace                 the batch list: since, upper, spine
+    │   └── HollowBatch              desc (lower, upper, since), len, run_splits, run_meta
+    │       └── RunPart
+    │           ├── Single(BatchPart)
+    │           │   ├── Hollow       blob key, size, key_lower, stats, schema_id
+    │           │   └── Inline       the updates themselves, stored in state
+    │           └── Many(HollowRunRef)   pointer to a blob that lists more parts
+    ├── leased_readers   id → since, seqno, last heartbeat, lease duration
+    ├── critical_readers id → since, opaque token
+    ├── writers          id → last heartbeat, last write token, last write upper
+    ├── schemas          schema id → encoded key/val schemas
+    ├── rollups          seqno → blob key of that rollup
+    ├── active_rollup, active_gc, last_gc_req
+```
 
 ## Compaction
 TODO
