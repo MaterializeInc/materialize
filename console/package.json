@@ -107,7 +107,7 @@
     "react-oidc-context": "^3.3.1",
     "react-router-dom": "^7.18.4",
     "react-select": "^5.10.2",
-    "react-virtualized-auto-sizer": "^1.0.24",
+    "react-virtualized-auto-sizer": "^2.0.3",
     "react-window": "^1.8.10",
     "scroll-into-view-if-needed": "^3.1.0",
     "semver": "^7.8.5",
