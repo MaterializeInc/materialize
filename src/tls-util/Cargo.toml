@@ -16,11 +16,13 @@ openssl.workspace = true
 postgres-openssl.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
+x509-cert.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["test"] }

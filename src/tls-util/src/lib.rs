@@ -280,8 +280,55 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RustlsTlsStream<S> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin> tokio_postgres::tls::TlsStream for RustlsTlsStream<S> {
     fn channel_binding(&self) -> ChannelBinding {
-        ChannelBinding::none()
+        let (_, session) = self.0.get_ref();
+        match session
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .and_then(tls_server_end_point)
+        {
+            Some(hash) => ChannelBinding::tls_server_end_point(hash),
+            None => ChannelBinding::none(),
+        }
     }
+}
+
+/// Computes the RFC 5929 `tls-server-end-point` channel binding for a DER
+/// server certificate: its hash under the hash function of its signature
+/// algorithm, with MD5 and SHA-1 upgraded to SHA-256.
+///
+/// Returns `None` for unparseable certificates and for signature algorithms
+/// without a single hash function, such as Ed25519 and RSASSA-PSS. The openssl
+/// connector reports no channel binding for those either.
+fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>> {
+    use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
+    use x509_cert::der::Decode;
+    use x509_cert::der::oid::ObjectIdentifier;
+    use x509_cert::der::oid::db::rfc5912::*;
+
+    // Absent from the const-oid database.
+    const ECDSA_WITH_SHA_1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.1");
+
+    let der = cert.as_ref();
+    let oid = x509_cert::Certificate::from_der(der)
+        .ok()?
+        .signature_algorithm
+        .oid;
+    let hash = match oid {
+        MD_5_WITH_RSA_ENCRYPTION
+        | SHA_1_WITH_RSA_ENCRYPTION
+        | ECDSA_WITH_SHA_1
+        | DSA_WITH_SHA_1
+        | SHA_256_WITH_RSA_ENCRYPTION
+        | ECDSA_WITH_SHA_256
+        | DSA_WITH_SHA_256 => Sha256::digest(der).to_vec(),
+        SHA_224_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_224 | DSA_WITH_SHA_224 => {
+            Sha224::digest(der).to_vec()
+        }
+        SHA_384_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_384 => Sha384::digest(der).to_vec(),
+        SHA_512_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_512 => Sha512::digest(der).to_vec(),
+        _ => return None,
+    };
+    Some(hash)
 }
 
 /// Validates the server's certificate chain but not its hostname, as openssl
@@ -454,7 +501,9 @@ mod tests {
 
     use openssl::asn1::{Asn1Integer, Asn1Time};
     use openssl::bn::{BigNum, MsbOption};
+    use openssl::ec::{EcGroup, EcKey};
     use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
     use openssl::pkey::Private;
     use openssl::rsa::Rsa;
     use openssl::ssl::SslAcceptor;
@@ -704,6 +753,84 @@ mod tests {
             }
             Err(e) => assert!(!expect_ok, "{case}: handshake failed: {e}"),
         }
+    }
+
+    fn self_signed_der(key: &PKey<Private>, digest: MessageDigest) -> Vec<u8> {
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "localhost").unwrap();
+        let name = name.build();
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_serial_number(&random_serial()).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        builder.sign(key, digest).unwrap();
+        builder.build().to_der().unwrap()
+    }
+
+    /// Asserts that `tls_server_end_point` of a certificate signed with
+    /// `sign_digest` equals openssl's `X509_digest` under `expected`, which is
+    /// what postgres-openssl computes. `None` expects no channel binding.
+    #[track_caller]
+    fn assert_end_point_matches_openssl(
+        key: &PKey<Private>,
+        sign_digest: MessageDigest,
+        expected: Option<MessageDigest>,
+    ) {
+        let der = self_signed_der(key, sign_digest);
+        let expected =
+            expected.map(|md| X509::from_der(&der).unwrap().digest(md).unwrap().to_vec());
+        assert_eq!(tls_server_end_point(&CertificateDer::from(der)), expected);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // openssl FFI
+    fn tls_server_end_point_digests() {
+        let rsa = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        for md in [
+            MessageDigest::sha224(),
+            MessageDigest::sha256(),
+            MessageDigest::sha384(),
+            MessageDigest::sha512(),
+        ] {
+            assert_end_point_matches_openssl(&rsa, md, Some(md));
+        }
+        // RFC 5929 upgrades SHA-1 to SHA-256.
+        assert_end_point_matches_openssl(
+            &rsa,
+            MessageDigest::sha1(),
+            Some(MessageDigest::sha256()),
+        );
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let ec = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        assert_end_point_matches_openssl(
+            &ec,
+            MessageDigest::sha256(),
+            Some(MessageDigest::sha256()),
+        );
+        assert_end_point_matches_openssl(
+            &ec,
+            MessageDigest::sha384(),
+            Some(MessageDigest::sha384()),
+        );
+
+        // Ed25519 signatures have no separate hash function.
+        let ed = PKey::generate_ed25519().unwrap();
+        assert_end_point_matches_openssl(&ed, MessageDigest::null(), None);
+    }
+
+    #[mz_ore::test]
+    fn tls_server_end_point_rejects_garbage() {
+        let garbage = CertificateDer::from(vec![0x30, 0x00]);
+        assert_eq!(tls_server_end_point(&garbage), None);
     }
 
     #[mz_ore::test]
