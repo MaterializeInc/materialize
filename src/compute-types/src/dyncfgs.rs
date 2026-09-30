@@ -431,11 +431,12 @@ pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
-/// The interval at which the compute server performs maintenance tasks.
+/// The interval at which the compute server performs maintenance tasks, including frontier
+/// reporting for the storage objects it hosts.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
     Duration::from_millis(10),
-    "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
+    "The interval at which the compute server performs maintenance tasks, including storage frontier reporting. Zero enables maintenance on every iteration.",
     ParameterScope::Replica,
 );
 
