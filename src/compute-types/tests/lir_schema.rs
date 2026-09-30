@@ -44,7 +44,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use mz_compute_types::plan::join::JoinPlan;
-use mz_compute_types::plan::pinned::{PinnedDataflow, PinnedSinkKind};
+use mz_compute_types::plan::pinned::{GlobalIdKey, PinnedDataflow, PinnedSinkKind};
 use mz_compute_types::plan::reduce::{BasicPlan, HierarchicalPlan, ReducePlan};
 use mz_compute_types::plan::scalar::{LirScalarExpr, LiteralValue};
 use mz_compute_types::plan::threshold::ThresholdPlan;
@@ -348,6 +348,12 @@ fn run_traces(
         .trace_value(samples, &StableEvalError(EvalError::DivisionByZero))
         .map_err(|err| ("StableEvalError sample".to_string(), err))?;
 
+    // GlobalIdKey parses the string it deserializes, and the synthesized
+    // "UTC" is not an id.
+    tracer
+        .trace_value(samples, &GlobalIdKey(GlobalId::User(1)))
+        .map_err(|err| ("GlobalIdKey sample".to_string(), err))?;
+
     tracer
         .trace_type::<PinnedDataflow>(samples)
         .map_err(|err| ("PinnedDataflow".to_string(), err))?;
@@ -569,6 +575,7 @@ fn lir_schema_contains_expected_types() {
         "Id",
         "LocalId",
         "GlobalId",
+        "GlobalIdKey",
         // Data and types.
         "StableRow",
         "ReprScalarType",

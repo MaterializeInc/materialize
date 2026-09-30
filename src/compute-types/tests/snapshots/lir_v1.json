@@ -2350,6 +2350,9 @@
       }
     }
   },
+  "GlobalIdKey": {
+    "NEWTYPESTRUCT": "STR"
+  },
   "Greatest": "UNITSTRUCT",
   "Gt": "UNITSTRUCT",
   "Gte": "UNITSTRUCT",
@@ -3104,7 +3107,7 @@
       "index_exports": {
         "MAP": {
           "KEY": {
-            "TYPENAME": "GlobalId"
+            "TYPENAME": "GlobalIdKey"
           },
           "VALUE": {
             "TYPENAME": "GlobalId"
@@ -3114,7 +3117,7 @@
       "index_imports": {
         "MAP": {
           "KEY": {
-            "TYPENAME": "GlobalId"
+            "TYPENAME": "GlobalIdKey"
           },
           "VALUE": {
             "TYPENAME": "PinnedIndexImport"
@@ -3129,7 +3132,7 @@
       "sink_exports": {
         "MAP": {
           "KEY": {
-            "TYPENAME": "GlobalId"
+            "TYPENAME": "GlobalIdKey"
           },
           "VALUE": {
             "TYPENAME": "PinnedSink"
@@ -3139,7 +3142,7 @@
       "source_imports": {
         "MAP": {
           "KEY": {
-            "TYPENAME": "GlobalId"
+            "TYPENAME": "GlobalIdKey"
           },
           "VALUE": {
             "TYPENAME": "PinnedSourceImport"

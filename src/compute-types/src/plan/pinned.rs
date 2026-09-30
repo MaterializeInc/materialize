@@ -32,14 +32,19 @@
 //! temporal filter pushed into a source read is an `mz_now()` predicate in
 //! MIR, which LIR cannot express, and `MfpPlan` keeps those as separate,
 //! `mz_now()`-free bounds.
+//!
+//! The stored form is JSON, whose map keys must be strings. Maps keyed by
+//! `GlobalId` serialize their keys through [`GlobalIdKey`], the id's string
+//! form.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use mz_expr::{MfpPlan, MirScalarExpr};
+use mz_expr::{Id, MfpPlan, MirScalarExpr};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, SqlRelationType};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::progress::Antichain;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport};
@@ -54,16 +59,79 @@ use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinnedDataflow {
     /// Sources the plan reads, with the operators pushed down onto each.
+    #[serde(with = "global_id_keys")]
     pub source_imports: BTreeMap<GlobalId, PinnedSourceImport>,
     /// Indexes the plan reads, keyed by index id.
+    #[serde(with = "global_id_keys")]
     pub index_imports: BTreeMap<GlobalId, PinnedIndexImport>,
     /// Objects to build, in dependency order.
     pub objects_to_build: Vec<BuildDesc<LirRelationExpr>>,
     /// Indexes the plan exports, mapping each index id to the id of the
     /// object it arranges.
+    #[serde(with = "global_id_keys")]
     pub index_exports: BTreeMap<GlobalId, GlobalId>,
     /// Sinks the plan exports, keyed by sink id.
+    #[serde(with = "global_id_keys")]
     pub sink_exports: BTreeMap<GlobalId, PinnedSink>,
+}
+
+/// A `GlobalId` in its string form (`u1`, `s2`, `t3`), for use as a map key.
+///
+/// `GlobalId` itself serializes as an enum, which JSON cannot use as a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GlobalIdKey(pub GlobalId);
+
+impl Serialize for GlobalIdKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_newtype_struct("GlobalIdKey", &self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for GlobalIdKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct KeyVisitor;
+
+        impl<'de> Visitor<'de> for KeyVisitor {
+            type Value = GlobalIdKey;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a global id such as u1")
+            }
+
+            fn visit_newtype_struct<D: Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                let id = String::deserialize(deserializer)?;
+                id.parse().map(GlobalIdKey).map_err(de::Error::custom)
+            }
+
+            fn visit_str<E: de::Error>(self, id: &str) -> Result<Self::Value, E> {
+                id.parse().map(GlobalIdKey).map_err(de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_newtype_struct("GlobalIdKey", KeyVisitor)
+    }
+}
+
+/// Serializes a `GlobalId`-keyed map with [`GlobalIdKey`] keys.
+mod global_id_keys {
+    use super::*;
+
+    pub fn serialize<V: Serialize, S: Serializer>(
+        map: &BTreeMap<GlobalId, V>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(map.iter().map(|(id, value)| (GlobalIdKey(*id), value)))
+    }
+
+    pub fn deserialize<'de, V: Deserialize<'de>, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<GlobalId, V>, D::Error> {
+        let map = BTreeMap::<GlobalIdKey, V>::deserialize(deserializer)?;
+        Ok(map.into_iter().map(|(key, value)| (key.0, value)).collect())
+    }
 }
 
 /// The plan's assumptions about an imported source.
@@ -252,8 +320,9 @@ impl TryFrom<DataflowDescription<LirRelationExpr>> for PinnedDataflow {
 // INSTANTIATION
 ///////////////////////////////////////////////////////////////////////////////
 
-/// The catalog facts [`PinnedDataflow::instantiate`] needs, looked up by
-/// export id. Each lookup returns `None` when no item of that kind exists.
+/// What [`PinnedDataflow::instantiate`] needs from its environment: catalog
+/// facts looked up by export id, and fresh transient ids. Each lookup returns
+/// `None` when no item of that kind exists.
 pub trait InstantiationContext {
     /// The index exported under `id`.
     fn index(&self, id: GlobalId) -> Option<IndexInfo>;
@@ -261,6 +330,8 @@ pub trait InstantiationContext {
     fn materialized_view(&self, id: GlobalId) -> Option<MaterializedViewInfo>;
     /// The metric sink exported under `id`.
     fn metric_sink(&self, id: GlobalId) -> Option<MetricSinkInfo>;
+    /// A transient id no other dataflow in this process uses.
+    fn allocate_transient_id(&self) -> GlobalId;
 }
 
 /// The catalog facts an exported index descriptor is rebuilt from.
@@ -277,7 +348,9 @@ pub struct IndexInfo {
 /// The catalog facts an exported materialized view sink is rebuilt from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterializedViewInfo {
-    /// The view's description, before non-null assertions are applied.
+    /// The view's description. Instantiation makes the asserted columns
+    /// non-nullable itself, so a description that already reflects the
+    /// assertions, as the catalog's does, is fine.
     pub desc: RelationDesc,
     /// Columns asserted non-null.
     pub non_null_assertions: Vec<usize>,
@@ -338,6 +411,11 @@ impl PinnedDataflow {
     /// freshly optimized dataflow. The dataflow-level refresh schedule is the
     /// exported materialized view's, if there is one.
     ///
+    /// The result equals the description that was pinned, up to transient
+    /// build ids, which are reallocated from `ctx`, and source operators,
+    /// which come back in the planned-and-folded form lowering leaves them
+    /// in. A description straight from lowering round-trips exactly.
+    ///
     /// Fails if a catalog item an export was compiled for is gone, or if the
     /// catalog disagrees with the plan about what the export is.
     pub fn instantiate(
@@ -348,10 +426,27 @@ impl PinnedDataflow {
         let PinnedDataflow {
             source_imports,
             index_imports,
-            objects_to_build,
+            mut objects_to_build,
             index_exports,
             sink_exports,
         } = self;
+
+        // Transient ids come from a per-process counter, so the internal
+        // build ids of a plan pinned elsewhere can collide with a dataflow
+        // built in this process. Compute keys its LIR introspection by build
+        // id, and a collision merges two dataflows' operators there.
+        let mut renamed = BTreeMap::new();
+        for object in &mut objects_to_build {
+            if object.id.is_transient() {
+                let fresh = ctx.allocate_transient_id();
+                renamed.insert(object.id, fresh);
+                object.id = fresh;
+            }
+        }
+        let rename = |id: GlobalId| renamed.get(&id).copied().unwrap_or(id);
+        for object in &mut objects_to_build {
+            replace_global_ids(&mut object.plan, &rename);
+        }
 
         let source_imports = source_imports
             .into_iter()
@@ -462,6 +557,7 @@ impl PinnedDataflow {
         let mut refresh_schedule = None;
         let mut rebuilt_sink_exports = BTreeMap::new();
         for (id, PinnedSink { from, kind }) in sink_exports {
+            let from = rename(from);
             if !is_built(from) {
                 return Err(InstantiateError::ExportDrift {
                     id,
@@ -539,9 +635,26 @@ impl PinnedDataflow {
     }
 }
 
+fn replace_global_ids(expr: &mut LirRelationExpr, rename: &impl Fn(GlobalId) -> GlobalId) {
+    let mut todo = vec![expr];
+    while let Some(expr) = todo.pop() {
+        if let LirRelationNode::Get {
+            id: Id::Global(id), ..
+        } = &mut expr.node
+        {
+            *id = rename(*id);
+        }
+        todo.extend(expr.node.children_mut());
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use mz_expr::{Id, MapFilterProject, UnmaterializableFunc, func};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    use mz_expr::{MapFilterProject, UnmaterializableFunc, func};
+    use mz_repr::refresh_schedule::RefreshEvery;
     use mz_repr::{Datum, ReprScalarType, SqlScalarType, Timestamp};
 
     use super::*;
@@ -600,8 +713,8 @@ mod tests {
     /// A dataflow reading `SOURCE` (with a pushed-down filter, including a
     /// temporal bound) and `IMPORTED_INDEX`, building `VIEW`, with no exports.
     ///
-    /// The source MFP is in the form lowering leaves it: the `MfpPlan` folded
-    /// back into a `MapFilterProject`, so a round trip reproduces it exactly.
+    /// The source MFP is in the planned-and-folded form lowering leaves it
+    /// in, so a round trip reproduces it exactly.
     fn imports_only() -> DataflowDescription<LirRelationExpr> {
         let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
         let bound = MirScalarExpr::literal_ok(
@@ -654,9 +767,61 @@ mod tests {
         RelationDesc::new(sql_typ(), ["c"])
     }
 
+    fn schedule() -> RefreshSchedule {
+        RefreshSchedule {
+            everies: vec![RefreshEvery {
+                interval: Duration::from_secs(60),
+                aligned_to: Timestamp::from(0u64),
+            }],
+            ats: vec![Timestamp::from(10u64)],
+        }
+    }
+
+    fn mv_info() -> MaterializedViewInfo {
+        MaterializedViewInfo {
+            desc: mv_desc(),
+            non_null_assertions: vec![0],
+            refresh_schedule: Some(schedule()),
+        }
+    }
+
+    /// The sink the materialized view optimizer emits for `mv_info()`.
+    fn mv_sink(from: GlobalId) -> ComputeSinkDesc {
+        let asserted = RelationDesc::new(
+            SqlRelationType::new(vec![SqlScalarType::Int64.nullable(false)]),
+            mv_desc().iter_names().cloned(),
+        );
+        ComputeSinkDesc {
+            from,
+            from_desc: asserted.clone(),
+            connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
+                value_desc: asserted,
+                storage_metadata: (),
+            }),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: vec![0],
+            refresh_schedule: Some(schedule()),
+        }
+    }
+
+    /// Transient ids are handed out from `next_transient` upward. The
+    /// fixtures number their builds from 1, so a context starting at 1
+    /// reproduces them.
     struct Ctx {
         index: Option<IndexInfo>,
         mv: Option<MaterializedViewInfo>,
+        next_transient: Cell<u64>,
+    }
+
+    impl Ctx {
+        fn new(index: Option<IndexInfo>, mv: Option<MaterializedViewInfo>) -> Self {
+            Ctx {
+                index,
+                mv,
+                next_transient: Cell::new(1),
+            }
+        }
     }
 
     impl InstantiationContext for Ctx {
@@ -669,6 +834,21 @@ mod tests {
         fn metric_sink(&self, _id: GlobalId) -> Option<MetricSinkInfo> {
             None
         }
+        fn allocate_transient_id(&self) -> GlobalId {
+            let id = self.next_transient.get();
+            self.next_transient.set(id + 1);
+            GlobalId::Transient(id)
+        }
+    }
+
+    fn instantiate(
+        df: &DataflowDescription<LirRelationExpr>,
+        ctx: &Ctx,
+    ) -> DataflowDescription<LirRelationExpr> {
+        PinnedDataflow::try_from(df.clone())
+            .expect("pinnable")
+            .instantiate(ctx, df.debug_name.clone())
+            .expect("instantiates")
     }
 
     #[mz_ore::test]
@@ -694,31 +874,16 @@ mod tests {
         );
     }
 
+    fn materialized_view_dataflow() -> DataflowDescription<LirRelationExpr> {
+        let mut df = imports_only();
+        df.sink_exports.insert(MV_SINK, mv_sink(VIEW));
+        df.refresh_schedule = Some(schedule());
+        df
+    }
+
     #[mz_ore::test]
     fn materialized_view_round_trips() {
-        let mut df = imports_only();
-        let mut asserted = mv_desc();
-        asserted = RelationDesc::new(
-            SqlRelationType::new(vec![SqlScalarType::Int64.nullable(false)]),
-            asserted.iter_names().cloned(),
-        );
-        df.sink_exports.insert(
-            MV_SINK,
-            ComputeSinkDesc {
-                from: VIEW,
-                from_desc: asserted.clone(),
-                connection: ComputeSinkConnection::MaterializedView(
-                    MaterializedViewSinkConnection {
-                        value_desc: asserted,
-                        storage_metadata: (),
-                    },
-                ),
-                with_snapshot: true,
-                up_to: Antichain::new(),
-                non_null_assertions: vec![0],
-                refresh_schedule: None,
-            },
-        );
+        let df = materialized_view_dataflow();
 
         let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
         let (_, lower, upper) = pinned.source_imports[&SOURCE]
@@ -731,16 +896,103 @@ mod tests {
             (1, 0),
             "temporal bound is pinned as a bound"
         );
-        let ctx = Ctx {
-            index: None,
-            mv: Some(MaterializedViewInfo {
-                desc: mv_desc(),
-                non_null_assertions: vec![0],
-                refresh_schedule: None,
-            }),
-        };
+        let ctx = Ctx::new(None, Some(mv_info()));
         let rebuilt = pinned.instantiate(&ctx, "test".to_string()).unwrap();
         assert_eq!(rebuilt, df);
+    }
+
+    #[mz_ore::test]
+    fn pinned_dataflow_round_trips_through_json() {
+        let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+        let json = serde_json::to_string(&pinned).expect("serializes as JSON");
+        assert!(json.contains("\"u1\":"), "map keys are id strings: {json}");
+        let parsed: PinnedDataflow = serde_json::from_str(&json).expect("parses back");
+        assert_eq!(parsed, pinned);
+    }
+
+    #[mz_ore::test]
+    fn instantiate_reallocates_transient_build_ids() {
+        let mut df = materialized_view_dataflow();
+        // A second build reading the first, and the sink reading the second,
+        // so both a `Get` and a sink `from` must follow the renaming.
+        let inner = GlobalId::Transient(2);
+        df.objects_to_build.push(BuildDesc {
+            id: inner,
+            plan: get(2, VIEW),
+        });
+        df.sink_exports.insert(MV_SINK, mv_sink(inner));
+
+        let ctx = Ctx::new(None, Some(mv_info()));
+        ctx.next_transient.set(7);
+        let rebuilt = instantiate(&df, &ctx);
+
+        let ids: Vec<_> = rebuilt.objects_to_build.iter().map(|o| o.id).collect();
+        assert_eq!(ids, [GlobalId::Transient(7), GlobalId::Transient(8)]);
+        assert!(
+            matches!(
+                &rebuilt.objects_to_build[1].plan.node,
+                LirRelationNode::Get {
+                    id: Id::Global(GlobalId::Transient(7)),
+                    ..
+                }
+            ),
+            "the Get follows the renamed build"
+        );
+        assert_eq!(rebuilt.sink_exports[&MV_SINK].from, GlobalId::Transient(8));
+        assert_eq!(
+            rebuilt.source_imports.keys().copied().collect::<Vec<_>>(),
+            [SOURCE]
+        );
+    }
+
+    /// A description not produced by lowering may carry a source MFP in
+    /// unplanned form, here the `mz_now() <= e` and
+    /// `mz_now() < step_mz_timestamp(e)` pair the MIR optimizer emits. Pinning
+    /// plans it, so instantiation returns the planned form, and that form
+    /// round-trips exactly from then on.
+    #[mz_ore::test]
+    fn instantiate_plans_unplanned_source_operators() {
+        let mut df = materialized_view_dataflow();
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || {
+            MirScalarExpr::column(0).call_unary(mz_expr::UnaryFunc::CastInt64ToMzTimestamp(
+                func::CastInt64ToMzTimestamp,
+            ))
+        };
+        let lte = MapFilterProject::new(1).filter([
+            mz_now().call_binary(cast(), func::Lte),
+            mz_now().call_binary(
+                cast().call_unary(mz_expr::UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                func::Lt,
+            ),
+            MirScalarExpr::column(0).call_is_null().not(),
+        ]);
+        df.source_imports
+            .get_mut(&SOURCE)
+            .unwrap()
+            .desc
+            .arguments
+            .operators = Some(lte);
+
+        let once = instantiate(&df, &Ctx::new(None, Some(mv_info())));
+        assert_ne!(once.source_imports, df.source_imports, "<= is rewritten");
+        let once_operators = once.source_imports[&SOURCE]
+            .desc
+            .arguments
+            .operators
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            once_operators
+                .predicates
+                .iter()
+                .filter(|(_, p)| p.contains_temporal())
+                .count(),
+            1,
+            "the two inclusive-equivalent bounds collapse to one: {once_operators:?}"
+        );
+        let twice = instantiate(&once, &Ctx::new(None, Some(mv_info())));
+        assert_eq!(twice, once);
     }
 
     fn index_dataflow() -> DataflowDescription<LirRelationExpr> {
@@ -780,14 +1032,14 @@ mod tests {
         let df = index_dataflow();
         let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
         assert_eq!(pinned.index_exports, BTreeMap::from([(INDEX, ON)]));
-        let ctx = Ctx {
-            index: Some(IndexInfo {
+        let ctx = Ctx::new(
+            Some(IndexInfo {
                 on: ON,
                 keys: key(),
                 typ: repr_typ(),
             }),
-            mv: None,
-        };
+            None,
+        );
         let rebuilt = pinned.instantiate(&ctx, "test".to_string()).unwrap();
         assert_eq!(rebuilt, df);
     }
@@ -795,14 +1047,14 @@ mod tests {
     #[mz_ore::test]
     fn index_key_drift_is_detected() {
         let pinned = PinnedDataflow::try_from(index_dataflow()).unwrap();
-        let ctx = Ctx {
-            index: Some(IndexInfo {
+        let ctx = Ctx::new(
+            Some(IndexInfo {
                 on: ON,
                 keys: vec![MirScalarExpr::column(0).call_is_null()],
                 typ: repr_typ(),
             }),
-            mv: None,
-        };
+            None,
+        );
         assert!(matches!(
             pinned.instantiate(&ctx, "test".to_string()),
             Err(InstantiateError::ExportDrift { id: INDEX, .. })
@@ -812,10 +1064,7 @@ mod tests {
     #[mz_ore::test]
     fn missing_catalog_item_is_detected() {
         let pinned = PinnedDataflow::try_from(index_dataflow()).unwrap();
-        let ctx = Ctx {
-            index: None,
-            mv: None,
-        };
+        let ctx = Ctx::new(None, None);
         assert_eq!(
             pinned.instantiate(&ctx, "test".to_string()),
             Err(InstantiateError::MissingCatalogItem {
