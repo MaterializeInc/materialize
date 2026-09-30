@@ -147,7 +147,6 @@ impl GeneratorKind {
             StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
         >,
         StreamVec<'scope, MzOffset, Infallible>,
-        StreamVec<'scope, MzOffset, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
@@ -226,7 +225,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             self.as_of,
             self.up_to,
         );
-        let (updates, progress, health, button) =
+        let (updates, progress, button) =
             generator_kind.render(scope, config, committed_uppers, start_signal);
 
         let probe_stream = synthesize_probes(
@@ -235,8 +234,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
             config.timestamp_interval,
             config.now_fn.clone(),
         );
-
-        config.health.report_stream(health);
 
         (updates, probe_stream, button)
     }
@@ -254,7 +251,6 @@ fn render_simple_generator<'scope>(
 ) -> (
     BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, MzOffset, Infallible>,
-    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -287,18 +283,17 @@ fn render_simple_generator<'scope>(
     }
 
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
     let is_active_worker = config.responsible_for(());
     let source_statistics = config.statistics.clone();
+    let health = config.health.clone();
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
+            let [mut cap, mut progress_cap] = caps.try_into().unwrap();
 
-            // We only need this until we reported ourselves as Running.
-            let mut health_cap = Some(health_cap);
+            let mut reported_running = false;
 
             if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -397,18 +392,15 @@ fn render_simple_generator<'scope>(
                         }
                     }
                     Event::Progress(Some(offset)) => {
-                        if resume_offset <= offset && health_cap.is_some() {
-                            let health_cap = health_cap.take().expect("known to exist");
+                        if resume_offset <= offset && !reported_running {
+                            reported_running = true;
                             let export_ids = export_ids.iter().copied();
                             for id in export_ids.map(Some).chain(std::iter::once(None)) {
-                                health_output.give(
-                                    &health_cap,
-                                    HealthStatusMessage {
-                                        id,
-                                        namespace: StatusNamespace::Generator,
-                                        update: HealthStatusUpdate::running(),
-                                    },
-                                );
+                                health.report(HealthStatusMessage {
+                                    id,
+                                    namespace: StatusNamespace::Generator,
+                                    update: HealthStatusUpdate::running(),
+                                });
                             }
                         }
 
@@ -471,7 +463,6 @@ fn render_simple_generator<'scope>(
     (
         data_collections,
         progress_stream,
-        health_stream,
         vec![button.press_on_drop()],
     )
 }
