@@ -144,6 +144,27 @@ impl Client {
         command
     }
 
+    /// Returns a psql command for running scripts whose output a program
+    /// reads, connected to `database`, or to the default database if `None`.
+    ///
+    /// Startup files are skipped (`-X`), so neither `.psqlrc-mz`'s `\timing`
+    /// nor a user's `.psqlrc` can add to or reformat the output.
+    pub fn script(&self, region_info: &RegionInfo, user: &str, database: Option<&str>) -> Command {
+        let mut url = self.build_psql_url(region_info, user, None);
+        if let Some(database) = database {
+            // A query parameter overrides the path, and is percent-encoded
+            // here and decoded by libpq, so any database name arrives as is.
+            url.query_pairs_mut().append_pair("dbname", database);
+        }
+        let mut command = Command::new("psql");
+        command
+            .arg("-X")
+            .arg(url.as_str())
+            .env("PGPASSWORD", &self.app_password.to_string())
+            .env("PGAPPNAME", PG_APPLICATION_NAME);
+        command
+    }
+
     fn find<P>(&self, exe_name: P) -> Option<PathBuf>
     where
         P: AsRef<Path>,

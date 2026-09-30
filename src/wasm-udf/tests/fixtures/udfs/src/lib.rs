@@ -167,6 +167,15 @@ fn distinct_chars(s: &str) -> i32 {
     i32::try_from(seen.len()).unwrap_or(i32::MAX)
 }
 
+/// Returns the distinct characters of `s` in `HashSet` iteration order. That
+/// order depends on how many hash maps the instance has built before, so the
+/// result for a row depends on its position in the batch.
+#[function("letters(string) -> string")]
+fn letters(s: &str) -> String {
+    let set: std::collections::HashSet<char> = s.chars().collect();
+    set.into_iter().collect()
+}
+
 /// Reads the wall clock, which the host freezes at the Unix epoch.
 #[function("now_secs() -> bigint")]
 fn now_secs() -> i64 {
