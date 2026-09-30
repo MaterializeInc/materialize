@@ -9095,6 +9095,7 @@ dependencies = [
  "anyhow",
  "mz-ore",
  "openssl",
+ "openssl-probe",
  "postgres-openssl",
  "rustls",
  "rustls-native-certs",

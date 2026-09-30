@@ -24,6 +24,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["test"] }
+openssl-probe.workspace = true
 tempfile.workspace = true
 
 [features]

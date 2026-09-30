@@ -95,8 +95,14 @@ def pull_image(image: str) -> None:
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-full", action="store_true")
     parser.add_argument("--miri-fast", action="store_true")
+    parser.add_argument("--tls-external", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
+
+    # Needs no services, only external network access.
+    if args.tls_external:
+        run_tls_external()
+        return
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
 
@@ -216,6 +222,25 @@ def run_miri_slow(env: dict[str, str]):
             "ci/test/cargo-test-miri.sh",
         ],
         env=env,
+    )
+
+
+def run_tls_external() -> None:
+    """Validate the TLS connectors against an endpoint whose certificate
+    chains to a public CA. Requires external network access, so this runs in
+    Nightly rather than the PR pipeline."""
+    spawn.runv(
+        [
+            "cargo",
+            "nextest",
+            "run",
+            "--profile=ci",
+            "--package=mz-tls-util",
+            "-E",
+            "test(external_public_ca_endpoint)",
+        ],
+        env=dict(os.environ, MZ_TLS_UTIL_TEST_EXTERNAL_CAS="1"),
+        cwd=MZ_ROOT,
     )
 
 
