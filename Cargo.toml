@@ -478,6 +478,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.38"
+rustls-native-certs = "0.8.3"
 rpassword = "7.5.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu = "1.0.23"
@@ -531,6 +532,7 @@ tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
 tokio-openssl = "0.6.5"
 tokio-postgres = "0.7.15"
+tokio-rustls = { version = "0.26.2", default-features = false }
 tokio-stream = "0.1.18"
 tokio-test = "0.4.6"
 tokio-util = "0.7.18"
