@@ -541,11 +541,21 @@ impl SessionVars {
     /// does not depend on a later transaction commit. Used by `DISCARD ALL`,
     /// which ends the transaction before resetting, so there is no commit left
     /// to promote a staged value. System/role/startup defaults are preserved.
-    pub fn reset_all(&mut self) {
+    ///
+    /// Returns the parameters whose value changed, with their new values.
+    pub fn reset_all(&mut self) -> BTreeMap<&'static str, String> {
+        let mut changed = BTreeMap::new();
         let names: Vec<_> = self.vars.keys().copied().collect();
         for name in names {
-            self.vars[name].reset_durable();
+            let var = &mut self.vars[name];
+            let before = var.value();
+            var.reset_durable();
+            let after = var.value();
+            if before != after {
+                changed.insert(var.name(), after);
+            }
         }
+        changed
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -2708,7 +2718,11 @@ mod reset_all_tests {
             Some("custom".to_string())
         );
 
-        vars.reset_all();
+        let changed = vars.reset_all();
+        assert_eq!(
+            changed,
+            BTreeMap::from([("application_name", default.clone())])
+        );
 
         // The value falls back to the default, the var is unset, and it will
         // not mutate at a later transaction end.
@@ -2738,7 +2752,11 @@ mod reset_all_tests {
         vars.end_transaction(EndTransactionAction::Commit);
         assert_eq!(vars.application_name(), "custom");
 
-        vars.reset_all();
+        let changed = vars.reset_all();
+        assert_eq!(
+            changed,
+            BTreeMap::from([("application_name", "startup_default".to_string())])
+        );
 
         assert_eq!(vars.application_name(), "startup_default");
         assert_eq!(
