@@ -5848,18 +5848,18 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
-version = "0.12.1"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98c23545df7ecf1b16c303910a69b079e8e251d60f7dd2cc9b4177f2afaf1746"
+checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
 dependencies = [
  "twox-hash",
 ]
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash",
 ]
@@ -7771,7 +7771,7 @@ dependencies = [
  "itertools 0.15.0",
  "lgalloc",
  "libc",
- "lz4_flex 0.12.1",
+ "lz4_flex 0.14.0",
  "mz-ore",
  "mz-ore-proc",
  "native-tls",
@@ -9050,7 +9050,7 @@ dependencies = [
  "differential-dataflow",
  "futures-util",
  "itertools 0.15.0",
- "lz4_flex 0.12.1",
+ "lz4_flex 0.14.0",
  "mz-ore",
  "num-traits",
  "proptest",
