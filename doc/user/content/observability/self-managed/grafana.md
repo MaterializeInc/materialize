@@ -289,6 +289,7 @@ installing the stack without the Materialize Terraform modules, see:
 
 ## Alerting
 
-The stack includes Alertmanager for recording and routing alerts.
-For guidance on the initial set of metrics and suggested thresholds,
-see [Alerting](/observability/self-managed/alerting/).
+The stack includes Alertmanager and a default set of alert rules. Grafana
+provisions Alertmanager as a data source, so firing alerts and silences are
+visible under **Alerting**. No one is notified until you configure a receiver.
+See [Alerting](/observability/self-managed/alerting/).
