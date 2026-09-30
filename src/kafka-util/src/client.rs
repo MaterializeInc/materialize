@@ -30,7 +30,9 @@ use mz_ore::future::InTask;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{Client, NativeClient, OAuthToken};
-use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
+use rdkafka::config::{
+    ClientConfig, FromClientConfig, FromClientConfigAndContext, RDKafkaLogLevel,
+};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
@@ -1087,9 +1089,84 @@ pub fn create_new_client_config(
     config
 }
 
+/// Creates a client from `config` using [`ClientConfig::create`].
+///
+/// Leaves the calling thread's OpenSSL error queue empty, see
+/// [`create_with_context`].
+pub fn create<T: FromClientConfig>(config: &ClientConfig) -> KafkaResult<T> {
+    #[allow(clippy::disallowed_methods)]
+    let client = config.create();
+    drop(openssl::error::ErrorStack::get());
+    client
+}
+
+/// Creates a client from `config` using [`ClientConfig::create_with_context`].
+///
+/// Leaves the calling thread's OpenSSL error queue empty.
+pub fn create_with_context<C, T>(config: &ClientConfig, context: C) -> KafkaResult<T>
+where
+    C: ClientContext,
+    T: FromClientConfigAndContext<C>,
+{
+    #[allow(clippy::disallowed_methods)]
+    let client = config.create_with_context(context);
+    // NOTE: librdkafka loads `ssl.ca.pem` by reading certificates until
+    // `PEM_read_bio_X509` fails, and leaves that final `PEM routines:get_name:no
+    // start line` error on the calling thread's OpenSSL error queue. OpenSSL's
+    // `SSL_get_error` reports any queued error as `SSL_ERROR_SSL`, so a later
+    // TLS read that would merely block on this thread fails with the stale
+    // error instead. On a tokio worker this breaks unrelated connections, for
+    // example HTTPS requests to a schema registry. librdkafka v2.15.1 clears
+    // the queue itself (confluentinc/librdkafka#5561).
+    drop(openssl::error::ErrorStack::get());
+    client
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use openssl::asn1::Asn1Time;
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::x509::{X509, X509NameBuilder};
+    use rdkafka::consumer::BaseConsumer;
+
+    fn self_signed_cert_pem() -> String {
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "test").unwrap();
+        let name = name.build();
+        let mut cert = X509::builder().unwrap();
+        cert.set_version(2).unwrap();
+        cert.set_subject_name(&name).unwrap();
+        cert.set_issuer_name(&name).unwrap();
+        cert.set_pubkey(&key).unwrap();
+        cert.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        cert.sign(&key, MessageDigest::sha256()).unwrap();
+        String::from_utf8(cert.build().to_pem().unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn test_create_with_context_clears_openssl_error_queue() {
+        let mut config = create_new_client_config_simple();
+        // Client creation does not connect, so the broker need not exist.
+        config.set("bootstrap.servers", "localhost:1");
+        config.set("security.protocol", "ssl");
+        config.set("ssl.ca.pem", self_signed_cert_pem());
+        let _consumer: BaseConsumer =
+            create_with_context(&config, rdkafka::consumer::DefaultConsumerContext).unwrap();
+        let errors = openssl::error::ErrorStack::get();
+        assert!(
+            errors.errors().is_empty(),
+            "stale OpenSSL errors after client creation: {errors}"
+        );
+    }
 
     #[mz_ore::test]
     fn test_connection_rule_pattern_matches() {

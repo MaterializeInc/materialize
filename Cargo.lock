@@ -7524,6 +7524,7 @@ dependencies = [
  "mz-ore",
  "mz-ssh-util",
  "num_cpus",
+ "openssl",
  "prost-build",
  "rand 0.10.3",
  "rdkafka",

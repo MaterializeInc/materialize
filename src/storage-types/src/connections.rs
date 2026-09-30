@@ -1871,7 +1871,9 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok(mz_kafka_util::client::create_with_context(
+            &config, context,
+        )?)
     }
 
     async fn validate(

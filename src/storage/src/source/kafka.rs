@@ -1570,7 +1570,7 @@ mod tests {
         kafka_config.set("enable.auto.commit", "false");
         kafka_config.set("group.id", Uuid::new_v4().to_string());
         kafka_config.set("fetch.message.max.bytes", "100");
-        let consumer: BaseConsumer<_> = kafka_config.create()?;
+        let consumer: BaseConsumer<_> = mz_kafka_util::client::create(&kafka_config)?;
 
         let consumer = Arc::new(consumer);
 

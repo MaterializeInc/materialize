@@ -28,7 +28,9 @@ use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_ccsr::SubjectVersion;
-use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
+use mz_kafka_util::client::{
+    MzClientContext, create_new_client_config_simple, create_with_context,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -1215,15 +1217,15 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
-        let admin: AdminClient<_> = kafka_config
-            .create_with_context(MzClientContext::default())
+        let admin: AdminClient<_> = create_with_context(&kafka_config, MzClientContext::default())
             .with_context(|| format!("opening Kafka connection: {}", config.kafka_addr))?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
-        let producer: FutureProducer<_> = kafka_config
-            .create_with_context(MzClientContext::default())
-            .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
+        let producer: FutureProducer<_> =
+            create_with_context(&kafka_config, MzClientContext::default()).with_context(|| {
+                format!("opening Kafka producer connection: {}", config.kafka_addr)
+            })?;
 
         let topics = BTreeMap::new();
 
