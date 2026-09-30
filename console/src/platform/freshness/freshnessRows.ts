@@ -35,6 +35,8 @@ export interface FreshnessRow {
   /** The statistic the active predicate judges this row by. */
   breachValue: number | null;
   breaching: boolean;
+  /** The object reported an unreadable lag; its numbers are not comparable. */
+  notQueryable: boolean;
   /** The color its line is drawn in, or undefined when it is not drawn. */
   color: string | undefined;
 }
@@ -43,6 +45,11 @@ export interface ObjectStats {
   current: number | null;
   peak: number | null;
   p90: number | null;
+  /**
+   * The object reported an unreadable lag at some point in the window.
+   * Counts as a breach at any threshold.
+   */
+  notQueryable: boolean;
 }
 
 /**
@@ -58,26 +65,37 @@ export interface ObjectStats {
  * Each reading is also already a maximum over its bin, so these are
  * percentiles of maxima rather than of the underlying lag.
  */
-export function computeStats(
-  yAccessor: (d: DataPoint) => number | null,
-  data: DataPoint[],
-): ObjectStats {
+export function computeStats(key: string, data: DataPoint[]): ObjectStats {
   const values: number[] = [];
+  let notQueryable = false;
+
   for (const d of data) {
-    const v = yAccessor(d);
-    if (v !== null) values.push(v);
+    const reading = d.lag[key];
+    // No reading for this object in this bin says nothing about it.
+    if (reading === undefined) continue;
+    // A reading whose lag is NULL is a measurement, and its answer is that the
+    // object could not be read. Reading it through the graph's accessor would
+    // hand back 0, which scores the worst state as the best one.
+    if (!reading.queryable) {
+      notQueryable = true;
+      continue;
+    }
+    values.push(reading.totalMs);
   }
+
   if (values.length === 0) {
-    return { current: null, peak: null, p90: null };
+    return { current: null, peak: null, p90: null, notQueryable };
   }
 
   const sorted = [...values].sort((a, b) => a - b);
   const rank = Math.max(0, Math.ceil(0.9 * sorted.length) - 1);
+  const last = data.at(-1)?.lag[key];
 
   return {
-    current: yAccessor(data[data.length - 1]),
+    current: last?.queryable ? last.totalMs : null,
     peak: sorted[sorted.length - 1],
     p90: sorted[rank],
+    notQueryable,
   };
 }
 
@@ -107,24 +125,24 @@ export function judgeLines(
   statsByKey: Map<string, ObjectStats>,
 ): ThresholdLineSeries<DataPoint>[] {
   return lines.map((line) => {
-    const stats =
-      statsByKey.get(line.key) ?? computeStats(line.yAccessor, data);
+    const stats = statsByKey.get(line.key) ?? computeStats(line.key, data);
     return {
       key: line.key,
       label: line.label,
       yAccessor: line.yAccessor,
-      breachValue: statFor(stats, predicate),
+      // `Infinity` exceeds every threshold and sorts ahead of every measured
+      // lag, which is what an unreadable object deserves. It never reaches the
+      // screen: `FreshnessRow.notQueryable` is what the table renders from.
+      breachValue: stats.notQueryable ? Infinity : statFor(stats, predicate),
     };
   });
 }
 
 export function buildStats(
-  lines: { key: string; yAccessor: (d: DataPoint) => number | null }[],
+  lines: { key: string }[],
   data: DataPoint[],
 ): Map<string, ObjectStats> {
-  return new Map(
-    lines.map((line) => [line.key, computeStats(line.yAccessor, data)]),
-  );
+  return new Map(lines.map((line) => [line.key, computeStats(line.key, data)]));
 }
 
 /**
@@ -150,6 +168,7 @@ export function buildFreshnessRows(
         current: null,
         peak: null,
         p90: null,
+        notQueryable: false,
       };
       const object = objectsById.get(line.key);
       const breaching =
@@ -170,6 +189,7 @@ export function buildFreshnessRows(
         p90: stats.p90,
         breachValue: line.breachValue,
         breaching,
+        notQueryable: stats.notQueryable,
         color: drawn ? colors.get(line.key) : undefined,
       };
     })

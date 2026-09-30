@@ -20,6 +20,7 @@ import {
 } from "@chakra-ui/react";
 import React from "react";
 
+import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
 import StatusPill from "~/components/StatusPill";
 import {
   bucketForHydration,
@@ -104,6 +105,20 @@ export const FreshnessTable = ({
     </Td>
   );
 
+  /**
+   * The Now cell, which is where an unreadable object is called out. Its
+   * `breachValue` is `Infinity` so that it sorts and highlights as the worst
+   * row, and naming the state here is what keeps that number off the screen.
+   */
+  const nowCell = (row: FreshnessRow) =>
+    row.notQueryable ? (
+      <Td isNumeric color={colors.accent.red} fontWeight="500">
+        {NULL_LAG_TEXT}
+      </Td>
+    ) : (
+      cell(row.current, row.breaching && row.breachValue === row.current)
+    );
+
   return (
     <Table variant="standalone">
       <Thead>
@@ -184,10 +199,7 @@ export const FreshnessTable = ({
                 {row.objectType}
               </Text>
             </Td>
-            {cell(
-              row.current,
-              row.breaching && row.breachValue === row.current,
-            )}
+            {nowCell(row)}
             {cell(row.peak, row.breaching && row.breachValue === row.peak)}
             {cell(row.p90, row.breaching && row.breachValue === row.p90)}
             <Td>
