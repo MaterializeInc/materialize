@@ -1,0 +1,20 @@
+[package]
+name = "mz-wasm-udf-fixtures"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arrow-udf = "0.10"
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+strip = "debuginfo"
+lto = true
+codegen-units = 1
+
+[workspace]
