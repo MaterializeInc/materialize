@@ -18,7 +18,6 @@ pub mod decode;
 pub mod internal_control;
 pub mod metrics;
 pub mod render;
-pub mod server;
 pub mod sink;
 pub mod source;
 pub mod statistics;
@@ -42,5 +41,3 @@ pub mod fuzz_exports {
 }
 
 pub(crate) mod healthcheck;
-
-pub use server::serve;

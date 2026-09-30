@@ -3,21 +3,21 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-//! Worker-local state for storage timely instances.
+//! Worker-local state for storage objects.
 //!
-//! One instance of a [`Worker`], along with its contained [`StorageState`], is
-//! part of an ensemble of storage workers that all run inside the same timely
-//! cluster. We call this worker a _storage worker_ to disambiguate it from
-//! other kinds of workers, potentially other components that might be sharing
-//! the same timely cluster.
+//! Each Timely worker of a replica hosts one [`StorageState`]. The hosting
+//! worker loop, which lives in the compute layer, drives it: it delivers
+//! storage controller commands, sequences internal commands, and runs the
+//! periodic reporting duties. A [`Worker`] bundles the Timely worker with the
+//! state for the operations that need both.
 //!
 //! ## Controller and internal communication
 //!
 //! A worker receives _external_ [`StorageCommands`](StorageCommand) from the
 //! storage controller, via a channel. Storage workers also share an _internal_
-//! control/command fabric ([`internal_control`]). Internal commands go through
-//! a sequencer dataflow that ensures that all workers receive all commands in
-//! the same consistent order.
+//! control/command fabric ([`internal_control`]). The host sequences internal
+//! commands so that all workers receive all commands in the same consistent
+//! order.
 //!
 //! We need to make sure that commands that cause dataflows to be rendered are
 //! processed in the same consistent order across all workers because timely
@@ -109,107 +109,40 @@ use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, watch};
-use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::internal_control::{
-    self, DataflowParameters, InternalCommandReceiver, InternalCommandSender,
-    InternalStorageCommand,
-};
+use crate::internal_control::{DataflowParameters, InternalCommandSender, InternalStorageCommand};
 use crate::metrics::StorageMetrics;
 use crate::statistics::{AggregatedStatistics, SinkStatistics, SourceStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
 pub mod async_storage_worker;
 
-type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
-/// State maintained for each worker thread.
+/// A Timely worker together with the storage state it hosts.
 ///
-/// Much of this state can be viewed as local variables for the worker thread,
-/// holding state that persists across function calls.
+/// The host assembles one around its own worker to render storage dataflows and
+/// report storage responses.
 pub struct Worker<'w> {
     /// The underlying Timely worker.
-    ///
-    /// NOTE: This is `pub` for testing.
     pub timely_worker: &'w mut TimelyWorker,
-    /// The channel over which communication handles for newly connected clients
-    /// are delivered.
-    pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
-    pub storage_state: StorageState,
-}
-
-impl<'w> Worker<'w> {
-    /// Creates new `Worker` state from the given components.
-    pub fn new(
-        timely_worker: &'w mut TimelyWorker,
-        client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
-        metrics: StorageMetrics,
-        now: NowFn,
-        connection_context: ConnectionContext,
-        instance_context: StorageInstanceContext,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
-        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
-    ) -> Self {
-        // It is very important that we only create the internal control
-        // flow/command sequencer once because a) the worker state is re-used
-        // when a new client connects and b) dataflows that have already been
-        // rendered into the timely worker are reused as well.
-        //
-        // If we created a new sequencer every time we get a new client (likely
-        // because the controller re-started and re-connected), dataflows that
-        // were rendered before would still hold a handle to the old sequencer
-        // but we would not read their commands anymore.
-        let (internal_cmd_tx, internal_cmd_rx) =
-            internal_control::setup_command_sequencer(timely_worker);
-
-        let storage_state = StorageState::new_guest(
-            timely_worker.index(),
-            timely_worker.peers(),
-            internal_cmd_tx,
-            Some(internal_cmd_rx),
-            metrics,
-            now,
-            connection_context,
-            instance_context,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
-            shared_rocksdb_write_buffer_manager,
-        );
-
-        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
-        // be fields of `Worker` instead of `StorageState`, but at least for the
-        // command flow sources and sinks need access to that. We can refactor
-        // this once we have a clearer boundary between what sources/sinks need
-        // and the full "power" of the internal command flow, which should stay
-        // internal to the worker/not be exposed to source/sink implementations.
-        Self {
-            timely_worker,
-            client_rx,
-            storage_state,
-        }
-    }
+    pub storage_state: &'w mut StorageState,
 }
 
 impl StorageState {
-    /// Creates per-worker storage state, for hosting on any Timely worker.
+    /// Creates per-worker storage state, for hosting on a Timely worker.
     ///
-    /// The caller provides the internal command channel endpoints: the native storage worker wires
-    /// them to the sequencer dataflow, a foreign host wires the sender to its own sequencing
-    /// channel and passes no receiver, since it dispatches internal commands itself.
+    /// The host sequences the commands sent through `internal_cmd_tx` and dispatches them to
+    /// [`Worker::handle_internal_storage_command`] on all workers.
     /// Must be called on the hosting worker's thread, because the async worker unparks the
     /// creating thread.
-    pub fn new_guest(
+    pub fn new(
         timely_worker_index: usize,
         timely_worker_peers: usize,
         internal_cmd_tx: InternalCommandSender,
-        internal_cmd_rx: Option<InternalCommandReceiver>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -226,11 +159,11 @@ impl StorageState {
         // allowed do we switch to doing writes.
         let (read_only_tx, read_only_rx) = watch::channel(true);
 
-        // Similar to the internal command sequencer, it is very important that
-        // we only create the async worker once because a) the worker state is
-        // re-used when a new client connects and b) commands that have already
-        // been sent and might yield a response will be lost if a new iteration
-        // of `run_client` creates a new async worker.
+        // Like the host's command channel, it is very important that we only
+        // create the async worker once because a) the worker state is re-used
+        // when a new client connects and b) commands that have already been
+        // sent and might yield a response will be lost if a new client
+        // connection creates a new async worker.
         //
         // If we created a new async worker every time we get a new client
         // (likely because the controller re-started and re-connected), we can
@@ -240,9 +173,9 @@ impl StorageState {
         // happens because the dataflow only gets rendered once we get a
         // response from the async worker and send off an internal command.
         //
-        // The core idea is that both the sequencer and the async worker are
-        // part of the per-worker state, and must be treated as such, meaning
-        // they must survive between invocations of `run_client`.
+        // The core idea is that both the command channel and the async worker
+        // are part of the per-worker state, and must be treated as such,
+        // meaning they must survive client reconnections.
 
         // TODO(aljoscha): This thread unparking business seems brittle, but that's
         // also how the command channel works currently. We can wrap it inside a
@@ -279,7 +212,6 @@ impl StorageState {
             latest_status_updates: Default::default(),
             initial_status_reported: Default::default(),
             internal_cmd_tx,
-            internal_cmd_rx,
             read_only_tx,
             read_only_rx,
             async_worker,
@@ -364,10 +296,13 @@ pub struct StorageState {
     /// within workers/operators and will be distributed to all workers. For
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
+    // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
+    // be fields of `Worker` instead of `StorageState`, but at least for the
+    // command flow sources and sinks need access to that. We can refactor
+    // this once we have a clearer boundary between what sources/sinks need
+    // and the full "power" of the internal command flow, which should stay
+    // internal to the worker/not be exposed to source/sink implementations.
     pub internal_cmd_tx: InternalCommandSender,
-    /// Receiver for cluster-internal storage commands. `None` when the state is hosted outside
-    /// the storage server, whose host dispatches internal commands itself.
-    pub internal_cmd_rx: Option<InternalCommandReceiver>,
 
     /// When this replica/cluster is in read-only mode it must not affect any
     /// changes to external state. This flag can only be changed by a
@@ -457,120 +392,6 @@ impl StorageInstanceContext {
 }
 
 impl<'w> Worker<'w> {
-    /// Waits for client connections and runs them to completion.
-    pub fn run(&mut self) {
-        while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {
-            self.run_client(rx, tx);
-        }
-    }
-
-    /// Runs this (timely) storage worker until the given `command_rx` is
-    /// disconnected.
-    ///
-    /// See the [module documentation](crate::storage_state) for this
-    /// workers responsibilities, how it communicates with the other workers and
-    /// how commands flow from the controller and through the workers.
-    fn run_client(&mut self, mut command_rx: CommandReceiver, response_tx: ResponseSender) {
-        // At this point, all workers are still reading from the command flow.
-        if self.reconcile(&mut command_rx).is_err() {
-            return;
-        }
-
-        // The last time we reported statistics.
-        let mut last_stats_time = Instant::now();
-
-        // The last time we did periodic maintenance.
-        let mut last_maintenance = std::time::Instant::now();
-
-        let mut disconnected = false;
-        while !disconnected {
-            let config = &self.storage_state.storage_configuration;
-            let stats_interval = config.parameters.statistics_collection_interval;
-
-            let maintenance_interval = self.storage_state.server_maintenance_interval;
-
-            let now = std::time::Instant::now();
-            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
-            // time has passed since the last maintenance.
-            let sleep_duration;
-            if now >= last_maintenance + maintenance_interval {
-                last_maintenance = now;
-                sleep_duration = None;
-
-                self.report_frontier_progress(&response_tx);
-            } else {
-                // We didn't perform maintenance, sleep until the next maintenance interval.
-                let next_maintenance = last_maintenance + maintenance_interval;
-                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
-            }
-
-            // Ask Timely to execute a unit of work.
-            //
-            // If there are no pending commands or responses from the async
-            // worker, we ask Timely to park the thread if there's nothing to
-            // do. We rely on another thread unparking us when there's new work
-            // to be done, e.g., when sending a command or when new Kafka
-            // messages have arrived.
-            //
-            // It is critical that we allow Timely to park iff there are no
-            // pending commands or responses. The command may have already been
-            // consumed by the call to `client_rx.recv`. See:
-            // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
-            if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
-                // Make sure we wake up again to report any pending statistics updates.
-                let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
-                if let Some(sleep_duration) = sleep_duration {
-                    park_duration = std::cmp::min(sleep_duration, park_duration);
-                }
-                self.timely_worker.step_or_park(Some(park_duration));
-            } else {
-                self.timely_worker.step();
-            }
-
-            // Rerport any dropped ids
-            for id in std::mem::take(&mut self.storage_state.dropped_ids) {
-                self.send_storage_response(&response_tx, StorageResponse::DroppedId(id));
-            }
-
-            self.process_oneshot_ingestions(&response_tx);
-
-            self.report_status_updates(&response_tx);
-
-            if last_stats_time.elapsed() >= stats_interval {
-                self.report_storage_statistics(&response_tx);
-                last_stats_time = Instant::now();
-            }
-
-            // Handle any received commands.
-            loop {
-                match command_rx.try_recv() {
-                    Ok(cmd) => self.storage_state.handle_storage_command(cmd),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-
-            // Handle responses from the async worker.
-            while let Ok(response) = self.storage_state.async_worker.try_recv() {
-                self.handle_async_worker_response(response);
-            }
-
-            // Handle any received commands.
-            while let Some(command) = self
-                .storage_state
-                .internal_cmd_rx
-                .as_ref()
-                .expect("storage server always wires a receiver")
-                .try_recv()
-            {
-                self.handle_internal_storage_command(command);
-            }
-        }
-    }
-
     /// Entry point for applying a response from the async storage worker.
     pub fn handle_async_worker_response(
         &self,
@@ -799,7 +620,7 @@ impl<'w> Worker<'w> {
 
                 crate::render::build_ingestion_dataflow(
                     self.timely_worker,
-                    &mut self.storage_state,
+                    self.storage_state,
                     ingestion_id,
                     ingestion_description,
                     as_of,
@@ -815,7 +636,7 @@ impl<'w> Worker<'w> {
             } => {
                 crate::render::build_oneshot_ingestion_dataflow(
                     self.timely_worker,
-                    &mut self.storage_state,
+                    self.storage_state,
                     ingestion_id,
                     collection_id,
                     collection_meta,
@@ -855,7 +676,7 @@ impl<'w> Worker<'w> {
 
                 crate::render::build_export_dataflow(
                     self.timely_worker,
-                    &mut self.storage_state,
+                    self.storage_state,
                     sink_id,
                     sink_description,
                 );
@@ -1055,25 +876,6 @@ impl<'w> Worker<'w> {
                 }
             }
         }
-    }
-
-    /// Extract commands until `InitializationComplete`, and make the worker
-    /// reflect those commands. If the worker can not be made to reflect the
-    /// commands, return an error.
-    fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
-        // To initialize the connection, we want to drain all commands until we
-        // receive a `StorageCommand::InitializationComplete` command to form a
-        // target command state.
-        let mut commands = vec![];
-        loop {
-            match command_rx.blocking_recv().ok_or(())? {
-                StorageCommand::InitializationComplete => break,
-                command => commands.push(command),
-            }
-        }
-
-        self.reconcile_commands(commands);
-        Ok(())
     }
 
     /// Reconciles the worker state with the given target command state,
