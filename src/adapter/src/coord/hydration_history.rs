@@ -275,6 +275,7 @@ impl Coordinator {
                 tx: self.internal_cmd_tx.clone(),
                 metrics: self.metrics.clone(),
             },
+            Arc::clone(&self.frontend_peeks),
             &catalog,
             Arc::clone(&self.controller.storage_collections),
             Arc::clone(&self.transient_id_gen),
