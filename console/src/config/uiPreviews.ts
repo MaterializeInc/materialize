@@ -20,6 +20,10 @@ export const UI_PREVIEWS = {
     ldFlag: "usage-metrics-in-cluster-list-CNS121",
     label: "Cluster list usage metrics",
   },
+  clusterDetailsRedesign: {
+    ldFlag: "cluster-details-redesign",
+    label: "Cluster details redesign",
+  },
 } as const satisfies Record<string, { ldFlag: string; label: string }>;
 
 export type UiPreviewKey = keyof typeof UI_PREVIEWS;
