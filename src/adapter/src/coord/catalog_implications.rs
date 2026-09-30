@@ -912,6 +912,8 @@ impl Coordinator {
         }
 
         // Clean up any pending peeks that rely on dropped relations or clusters.
+        self.peek_registry
+            .invalidate(&dropped_item_names, &dropped_cluster_names);
         for (uuid, pending_peek) in &self.pending_peeks {
             if let Some(id) = pending_peek
                 .depends_on
