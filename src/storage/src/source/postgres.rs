@@ -44,12 +44,11 @@
 //! itself. This could be authentication failures, connection failures, etc. The only operators
 //! that can emit such errors are the `TableReader` and the `ReplicationReader` operators, which
 //! are the ones that talk to the external world. Both of these operators are built with the
-//! `AsyncOperatorBuilder::build_fallible` method which allows transient errors to be propagated
-//! upwards with the standard `?` operator without risking downgrading the capability and producing
-//! bogus frontiers.
+//! `AsyncOperatorBuilder::build_fallible_with` method which allows transient errors to be
+//! propagated upwards with the standard `?` operator without risking downgrading the capability
+//! and producing bogus frontiers.
 //!
-//! The error streams from both of those operators are published to the source status and also
-//! trigger a restart of the dataflow.
+//! Both operators report their errors to the source status, which also restarts the dataflow.
 //!
 //! ```text
 //!    ┏━━━━━━━━━━━━━━┓
@@ -102,15 +101,15 @@ use mz_storage_types::sources::{
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    HealthReporter, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::source::types::{Probe, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -178,16 +177,15 @@ impl SourceRender for PostgresSourceConnection {
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, slot_ready, snapshot_err, snapshot_token) =
-            snapshot::render(
-                scope.clone(),
-                config.clone(),
-                self.clone(),
-                table_info.clone(),
-                metrics.snapshot_metrics.clone(),
-            );
+        let (snapshot_updates, rewinds, slot_ready, snapshot_token) = snapshot::render(
+            scope.clone(),
+            config.clone(),
+            self.clone(),
+            table_info.clone(),
+            metrics.snapshot_metrics.clone(),
+        );
 
-        let (repl_updates, probe_stream, repl_err, repl_token) = replication::render(
+        let (repl_updates, probe_stream, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self,
@@ -227,46 +225,44 @@ impl SourceRender for PostgresSourceConnection {
             });
         }
 
-        // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
-        // restart we are going to set the status to an ssh error correctly, so we don't do this
-        // extra work.
-        let errs = snapshot_err.concat(repl_err).map(move |err| {
-            // This update will cause the dataflow to restart
-            let err_string = err.display_with_causes().to_string();
-            let hint = match &err {
-                ReplicationError::Definite(err) => err.hint(),
-                ReplicationError::Transient(_) => None,
-            };
-            let update = HealthStatusUpdate::halting(err_string.clone(), hint);
-
-            let namespace = match err {
-                ReplicationError::Transient(err)
-                    if matches!(
-                        &*err,
-                        TransientError::PostgresError(PostgresError::Ssh(_))
-                            | TransientError::PostgresError(PostgresError::SshIo(_))
-                    ) =>
-                {
-                    StatusNamespace::Ssh
-                }
-                _ => Self::STATUS_NAMESPACE,
-            };
-
-            HealthStatusMessage {
-                id: None,
-                namespace: namespace.clone(),
-                update,
-            }
-        });
-
-        config.health.report_stream(errs);
-
         (
             data_collections,
             probe_stream,
             vec![snapshot_token, repl_token],
         )
     }
+}
+
+/// Reports an ingestion error as a halting status, which restarts the dataflow.
+fn report_error(health: &HealthReporter, err: ReplicationError) {
+    // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
+    // restart we are going to set the status to an ssh error correctly, so we don't do this
+    // extra work.
+    let err_string = err.display_with_causes().to_string();
+    let hint = match &err {
+        ReplicationError::Definite(err) => err.hint(),
+        ReplicationError::Transient(_) => None,
+    };
+    let update = HealthStatusUpdate::halting(err_string, hint);
+
+    let namespace = match err {
+        ReplicationError::Transient(err)
+            if matches!(
+                &*err,
+                TransientError::PostgresError(PostgresError::Ssh(_))
+                    | TransientError::PostgresError(PostgresError::SshIo(_))
+            ) =>
+        {
+            StatusNamespace::Ssh
+        }
+        _ => PostgresSourceConnection::STATUS_NAMESPACE,
+    };
+
+    health.report(HealthStatusMessage {
+        id: None,
+        namespace,
+        update,
+    });
 }
 
 #[derive(Clone, Debug)]
