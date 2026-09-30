@@ -765,3 +765,222 @@ where
 
     WatchStream::from_changes(rx)
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt;
+    use futures::stream::LocalBoxStream;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::Timestamp;
+    use mz_storage_types::sources::MzOffset;
+    use timely::dataflow::operators::Input;
+    use timely::dataflow::operators::vec::input::Handle;
+    use timely::worker::Worker;
+
+    use super::*;
+    use crate::metrics::source::GeneralSourceMetricDefs;
+
+    const A: GlobalId = GlobalId::User(1);
+    const B: GlobalId = GlobalId::User(2);
+
+    /// Drives `reclock_committed_upper` with an as_of of `{0}`. [`Harness::bind`] makes the source
+    /// frontier `10 * t` at each `IntoTime` `t`, so a committed upper of `{t}` reclocks to
+    /// `{10 * (t - 1)}`.
+    struct Harness {
+        bindings: Handle<Timestamp, (MzOffset, Timestamp, Diff)>,
+        committed_uppers: BTreeMap<GlobalId, Handle<Timestamp, ()>>,
+        resume_uppers: LocalBoxStream<'static, ResumeUppers<MzOffset>>,
+        metrics: Arc<SourceMetrics>,
+    }
+
+    impl Harness {
+        fn new(worker: &mut Worker, exports: &[GlobalId]) -> Self {
+            let defs = GeneralSourceMetricDefs::register_with(&MetricsRegistry::new());
+            let metrics = Arc::new(SourceMetrics::new(&defs, GlobalId::User(0), 0));
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (bindings, bindings_stream) = scope.new_input();
+                let mut committed_uppers = BTreeMap::new();
+                let mut streams = BTreeMap::new();
+                for id in exports {
+                    let (handle, stream) = scope.new_input();
+                    committed_uppers.insert(*id, handle);
+                    streams.insert(*id, stream);
+                }
+                let resume_uppers = reclock_committed_upper(
+                    bindings_stream.as_collection(),
+                    Antichain::from_elem(Timestamp::MIN),
+                    streams,
+                    GlobalId::User(0),
+                    Arc::clone(&metrics),
+                )
+                .boxed_local();
+                Harness {
+                    bindings,
+                    committed_uppers,
+                    resume_uppers,
+                    metrics,
+                }
+            })
+        }
+
+        /// Binds `IntoTime` `t` to the source frontier `{10 * t}` and closes the bindings through
+        /// `t`.
+        fn bind(&mut self, t: u64) {
+            if t > 0 {
+                self.bindings.send((
+                    MzOffset::from(10 * (t - 1)),
+                    Timestamp::from(t),
+                    Diff::MINUS_ONE,
+                ));
+            }
+            self.bindings
+                .send((MzOffset::from(10 * t), Timestamp::from(t), Diff::ONE));
+            self.bindings.advance_to(Timestamp::from(t + 1));
+        }
+
+        fn commit(&mut self, id: GlobalId, t: u64) {
+            self.committed_uppers
+                .get_mut(&id)
+                .expect("export is open")
+                .advance_to(Timestamp::from(t));
+        }
+
+        fn close(&mut self, id: GlobalId) {
+            self.committed_uppers.remove(&id);
+        }
+
+        /// Steps the dataflow until it is quiescent and returns the last value it published, if
+        /// it published any.
+        fn step(&mut self, worker: &mut Worker) -> Option<ResumeUppers<MzOffset>> {
+            // A single worker reaches quiescence within a few steps. Extra steps are no-ops.
+            for _ in 0..10 {
+                worker.step();
+            }
+            let mut latest = None;
+            while let Some(Some(uppers)) = self.resume_uppers.next().now_or_never() {
+                latest = Some(uppers);
+            }
+            latest
+        }
+
+        fn ready_times(&self) -> u64 {
+            self.metrics.commit_upper_ready_times.get()
+        }
+    }
+
+    fn uppers(
+        source: Option<Antichain<MzOffset>>,
+        exports: impl IntoIterator<Item = (GlobalId, Antichain<MzOffset>)>,
+    ) -> Option<ResumeUppers<MzOffset>> {
+        Some(ResumeUppers {
+            source,
+            exports: exports.into_iter().collect(),
+        })
+    }
+
+    fn offset(offset: u64) -> Antichain<MzOffset> {
+        Antichain::from_elem(MzOffset::from(offset))
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_reports_each_export() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A, B]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            assert_eq!(h.step(worker), None, "no export is beyond the as_of");
+
+            h.commit(A, 3);
+            assert_eq!(
+                h.step(worker),
+                uppers(None, [(A, offset(20))]),
+                "B holds back the source upper until it is beyond the as_of",
+            );
+
+            h.commit(B, 2);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, offset(20)), (B, offset(10))]),
+                "the source upper is B's, the least",
+            );
+
+            h.commit(B, 4);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(20)), [(A, offset(20)), (B, offset(30))]),
+                "the source upper is A's once B passes it",
+            );
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_retains_bindings_for_slowest_export() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A, B]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            h.commit(A, 4);
+            h.commit(B, 2);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, offset(30)), (B, offset(10))]),
+            );
+            // Seven updates bind times 0 through 3. B has applied the three below time 2.
+            assert_eq!(h.ready_times(), 4);
+
+            h.bind(4);
+            h.commit(A, 5);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, offset(40)), (B, offset(10))]),
+            );
+            assert_eq!(h.ready_times(), 6, "B has not applied the new bindings");
+
+            h.commit(B, 3);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(20)), [(A, offset(40)), (B, offset(20))]),
+            );
+            assert_eq!(h.ready_times(), 4);
+
+            h.commit(B, 5);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(40)), [(A, offset(40)), (B, offset(40))]),
+            );
+            assert_eq!(h.ready_times(), 0, "every export has applied every binding");
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_closed_exports() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A, B]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            h.commit(B, 2);
+            h.close(A);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, Antichain::new()), (B, offset(10))]),
+                "a closed export does not constrain the source upper",
+            );
+
+            h.close(B);
+            assert_eq!(
+                h.step(worker),
+                uppers(
+                    Some(Antichain::new()),
+                    [(A, Antichain::new()), (B, Antichain::new())],
+                ),
+            );
+            assert_eq!(h.ready_times(), 0);
+        });
+    }
+}
