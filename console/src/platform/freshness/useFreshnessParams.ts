@@ -38,15 +38,31 @@ export function parsePositiveNumber(raw: string | null): number | null {
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-/** A time period the selector actually offers, or null. */
+/**
+ * A time period the selector actually offers, or null.
+ *
+ * NOTE: `Object.hasOwn` rather than `in`, which also answers true for
+ * inherited keys. `?timePeriod=constructor` passed an `in` check, and
+ * `Number` of it is NaN, which reached the query as
+ * `INTERVAL 'NaN MILLISECONDS'`.
+ */
 export function parseTimePeriod(raw: string | null): number | null {
-  if (raw === null || !(raw in TIME_PERIOD_OPTIONS)) return null;
+  if (raw === null || !Object.hasOwn(TIME_PERIOD_OPTIONS, raw)) return null;
   return Number(raw);
 }
 
-/** A predicate the menu offers, or null. */
+/**
+ * A predicate the menu offers, or null.
+ *
+ * NOTE: `Object.hasOwn` for the same reason as `parseTimePeriod`, and the
+ * failure here is quieter. `?exceeded=toString` passed an `in` check and then
+ * fell through `statFor` to p90, so the page judged by one statistic while the
+ * menu named another.
+ */
 export function parsePredicate(raw: string | null): Predicate | null {
-  return raw !== null && raw in PREDICATE_LABELS ? (raw as Predicate) : null;
+  return raw !== null && Object.hasOwn(PREDICATE_LABELS, raw)
+    ? (raw as Predicate)
+    : null;
 }
 
 /**

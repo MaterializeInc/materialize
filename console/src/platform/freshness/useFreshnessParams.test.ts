@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseObjectTypes,
   parsePositiveNumber,
+  parsePredicate,
   parseTimePeriod,
 } from "./useFreshnessParams";
 
@@ -37,6 +38,16 @@ describe("parsePositiveNumber", () => {
   });
 });
 
+describe("parseTimePeriod prototype keys", () => {
+  it("rejects inherited keys", () => {
+    // These used to parse to NaN and reach the query as
+    // `INTERVAL 'NaN MILLISECONDS'`.
+    for (const key of PROTOTYPE_KEYS) {
+      expect(parseTimePeriod(key)).toBeNull();
+    }
+  });
+});
+
 describe("parseTimePeriod", () => {
   it("accepts a period the selector offers", () => {
     expect(parseTimePeriod("60")).toBe(60);
@@ -49,6 +60,23 @@ describe("parseTimePeriod", () => {
     expect(parseTimePeriod("999")).toBeNull();
     expect(parseTimePeriod("abc")).toBeNull();
     expect(parseTimePeriod(null)).toBeNull();
+  });
+});
+
+// Every object inherits these, so an `in` check accepts them as menu values.
+const PROTOTYPE_KEYS = ["constructor", "toString", "valueOf", "__proto__"];
+
+describe("parsePredicate", () => {
+  it("accepts a predicate the menu offers", () => {
+    expect(parsePredicate("peak")).toBe("peak");
+  });
+
+  it("rejects inherited keys", () => {
+    // `toString` used to pass and then fall through `statFor` to p90, so the
+    // page judged by a statistic the menu was not showing.
+    for (const key of PROTOTYPE_KEYS) {
+      expect(parsePredicate(key)).toBeNull();
+    }
   });
 });
 
