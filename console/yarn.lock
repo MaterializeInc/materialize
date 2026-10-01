@@ -5874,7 +5874,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/curve@npm:3.12.0, @visx/curve@npm:^3.12.0":
+"@visx/curve@npm:3.12.0":
   version: 3.12.0
   resolution: "@visx/curve@npm:3.12.0"
   dependencies:
@@ -5884,7 +5884,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/curve@npm:4.0.0":
+"@visx/curve@npm:4.0.0, @visx/curve@npm:^4.0.0":
   version: 4.0.0
   resolution: "@visx/curve@npm:4.0.0"
   dependencies:
@@ -11823,7 +11823,7 @@ __metadata:
     "@types/react-window": "npm:^1.8.8"
     "@types/semver": "npm:^7.8.0"
     "@visx/axis": "npm:^3.12.0"
-    "@visx/curve": "npm:^3.12.0"
+    "@visx/curve": "npm:^4.0.0"
     "@visx/event": "npm:^3.12.0"
     "@visx/grid": "npm:^4.0.0"
     "@visx/group": "npm:^3.12.0"
