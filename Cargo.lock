@@ -6291,6 +6291,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -7327,7 +7328,6 @@ dependencies = [
  "lru 0.18.5",
  "mz-auth",
  "mz-ore",
- "mz-repr",
  "prometheus",
  "reqwest 0.13.5",
  "reqwest-middleware",

@@ -76,6 +76,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use imbl::OrdMap;
+use mz_auth::user::ExternalUserMetadata;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal, ParameterScope};
 use mz_persist_client::cfg::{
@@ -86,7 +87,7 @@ use mz_pgrepr::TextEncodeSettings;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
-use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
+use mz_repr::user::InternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use thiserror::Error;
