@@ -1,0 +1,39 @@
+{{- /*
+  Renders sidebar menu entries as <li> elements, recursing into children.
+
+  Arguments (dict):
+    entries  the menu entries to render
+    level    nesting depth of entries, from 1; levels past 5 are not rendered
+    path     data-nav path of the parent entry, "" at the top level
+    page     the current page, or nil to render the full tree with no entry
+             marked active
+
+  With a page, only the branch leading to it is rendered in full. Other
+  entries keep their has-children class and expander but omit their <ul>,
+  which keeps the navigation from dominating the page for agents and other
+  non-browser readers. The sidebar script fills the omitted lists in from
+  sidebar.html (layouts/index.sidebar.html), matching entries by data-nav.
+*/ -}}
+{{- $page := .page -}}
+{{- $level := .level -}}
+{{- range .entries }}
+  {{- $path := printf "%s/%s" $.path .KeyName -}}
+  {{- $current := and $page ($page.IsMenuCurrent "main" .) -}}
+  {{- $classes := printf "level-%d" $level -}}
+  {{- if lt $level 5 -}}
+    {{- $classes = printf "%s %s" $classes (cond .HasChildren "has-children" "no-children") -}}
+  {{- end }}
+<li class="{{ $classes }}" data-nav="{{ $path }}">
+  <a {{ with .URL }}href="{{ . }}"{{ end }} class="{{ if $current }}active{{ end }}">
+    {{ .Name | markdownify }}
+    {{- if and .HasChildren (lt $level 5) }}
+      {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+    {{ end }}
+  </a>
+  {{- if and .HasChildren (lt $level 5) (or (not $page) $current ($page.HasMenuCurrent "main" .)) }}
+  <ul>
+    {{- partial "sidebar-items.html" (dict "entries" .Children "level" (add $level 1) "path" $path "page" $page) }}
+  </ul>
+  {{- end }}
+</li>
+{{- end }}

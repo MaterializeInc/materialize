@@ -152,22 +152,45 @@ Apache License, Version 2.0. */}}
         });
       });
 
-      // Add click handlers for all top-level items with children.
-      const menus = $("nav[role=navigation] li.has-children");
-      menus.find("a:not([href])").click((e) => {
-        $(e.target).parents("li").first().toggleClass("open");
-        e.preventDefault();
-        return false;
-      });
-      // When an item is already active, and it's clicked, just collapse it
-      menus.find("a.active").click((e) => {
-        $(e.target).parents("li").first().toggleClass("open");
-        e.preventDefault();
-        return false;
-      });
+      // Toggle a submenu when its header is clicked. When an item is already
+      // active, and it's clicked, just collapse it. The handler is delegated
+      // because the branches merged in below arrive after this runs.
+      const sidebarNav = $("nav.sidebar");
+      sidebarNav.on(
+        "click",
+        "li.has-children a:not([href]), li.has-children a.active",
+        (e) => {
+          $(e.currentTarget).parents("li").first().toggleClass("open");
+          e.preventDefault();
+          return false;
+        }
+      );
 
       // Open the submenu containing the current page by default.
-      menus.has(".active").addClass("open");
+      sidebarNav.find("li.has-children").has(".active").addClass("open");
+
+      // The page renders only the sidebar branch leading to itself (see
+      // partials/sidebar-items.html). Fill in the other branches from the
+      // full tree in sidebar.html.
+      fetch("{{ "sidebar.html" | relURL }}")
+        .then((response) =>
+          response.ok ? response.text() : Promise.reject(response.status)
+        )
+        .then((html) => {
+          const full = new DOMParser().parseFromString(html, "text/html");
+          const lists = new Map();
+          for (const item of full.querySelectorAll("li[data-nav]")) {
+            const list = item.querySelector(":scope > ul");
+            if (list) lists.set(item.dataset.nav, list);
+          }
+          for (const item of sidebarNav[0].querySelectorAll("li[data-nav]")) {
+            const list = lists.get(item.dataset.nav);
+            if (list && !item.querySelector(":scope > ul")) {
+              item.appendChild(document.importNode(list, true));
+            }
+          }
+        })
+        .catch((error) => console.error("Failed to load the full sidebar: " + error));
 
       //Scroll the sidebar to the active element
       $(".sidebar").scrollTop(

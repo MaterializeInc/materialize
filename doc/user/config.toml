@@ -110,8 +110,17 @@ weight = 55
   isPlainText = true
   notAlternative = true
 
+#
+# The full sidebar tree, fetched by the sidebar script (baseof.html).
+#
+[outputFormats.sidebar]
+  mediaType = "text/html"
+  baseName = "sidebar"
+  isHTML = true
+  notAlternative = true
+
 [outputs]
-  home = ["HTML", "RSS", "llmstxt"]
+  home = ["HTML", "RSS", "llmstxt", "sidebar"]
 
 # Each top-level section publishes its own llms.txt, which the root llms.txt
 # links to.
