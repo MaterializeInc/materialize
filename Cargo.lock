@@ -6596,15 +6596,15 @@ dependencies = [
  "hyper-util",
  "mz-build-tools",
  "mz-ore",
- "mz-tls-util",
- "native-tls",
  "openssl",
  "proptest",
  "proptest-derive",
  "prost-build",
  "reqwest 0.13.5",
+ "rustls",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "url",
@@ -8927,8 +8927,6 @@ dependencies = [
  "mz-timely-util",
  "mz-tls-util",
  "mz-tracing",
- "native-tls",
- "openssl",
  "proptest",
  "proptest-derive",
  "prost",
@@ -9012,6 +9010,7 @@ dependencies = [
  "mz-sql-server-util",
  "mz-storage-types",
  "mz-tls-util",
+ "openssl",
  "parquet",
  "postgres_array",
  "prost",
@@ -11674,12 +11673,10 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-rustls",
- "hyper-tls",
  "hyper-util",
  "js-sys",
  "log",
  "mime",
- "native-tls",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -11691,7 +11688,6 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-native-tls",
  "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
@@ -12295,8 +12291,8 @@ checksum = "9fa951f4e644464ebfd2347a7ab03b0828c512d2448a76262cad2607b343dff4"
 dependencies = [
  "cfg_aliases",
  "httpdate",
- "native-tls",
  "reqwest 0.13.5",
+ "rustls",
  "sentry-backtrace",
  "sentry-contexts",
  "sentry-core",
@@ -14420,14 +14416,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d39cb1dbab692d82a977c0392ffac19e188bd9186a9f32806f0aaa859d75585a"
 dependencies = [
  "base64 0.22.1",
- "der",
  "log",
- "native-tls",
  "percent-encoding",
+ "rustls",
  "rustls-pki-types",
  "ureq-proto",
  "utf-8",
- "webpki-root-certs",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -14702,6 +14697,15 @@ name = "webpki-root-certs"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36a29fc0408b113f68cf32637857ab740edfafdf460c326cd2afaa2d84cc05dc"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
 ]
