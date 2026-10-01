@@ -36,7 +36,7 @@ Self-Managed deployments can now use advanced single sign-on (SSO), in public pr
 
 Advanced SSO is deployed with the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), either as part of a new installation or added to an existing one, and requires a license key with the advanced SSO entitlement. For more information, see [Advanced SSO (OIDC, SAML and SCIM)](/self-managed-deployments/sso/advanced/).
 
-### SCIM group-to-role mapping is generally available {#v26.44.1-scim-group-to-role-mapping}
+### SCIM group-to-role mapping is generally available on Materialize Cloud {#v26.44.1-scim-group-to-role-mapping}
 
 <red>*Materialize Cloud only*</red>
 
