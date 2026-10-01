@@ -13,7 +13,7 @@
 
 use std::fmt::Debug;
 use std::ops::AddAssign;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::anyhow;
 use arrow::array::{
@@ -161,6 +161,72 @@ impl DatumEncoder {
     fn finish(self) -> ArrayRef {
         self.encoder.finish()
     }
+}
+
+/// Smallest exponent covered by [`POW10`].
+const POW10_MIN_EXP: i32 = -128;
+
+/// `10^exp` for `exp` in `POW10_MIN_EXP..POW10_MIN_EXP + 256`, as computed by
+/// [`Context::try_into_f64`].
+static POW10: LazyLock<[f64; 256]> = LazyLock::new(|| {
+    let mut cx = crate::adt::numeric::cx_datum();
+    std::array::from_fn(|i| {
+        let mut one = Numeric::from(1i32);
+        one.set_exponent(POW10_MIN_EXP + i32::try_from(i).expect("table index fits in i32"));
+        // `try_into_f64` sums `unit * powf(10, exp)` over the coefficient units. For a coefficient
+        // of 1 that sum is the `powf` term itself. Taking it from the library, instead of calling
+        // `f64::powf` here, keeps the values identical even if the two calls compile to
+        // different libm routines.
+        cx.try_into_f64(one)
+            .expect("10^exp fits in f64 for all table entries")
+    })
+});
+
+/// Returns the float64 approximation of `n` stored in the `approx` field of encoded numeric
+/// columns, with values that do not fit an `f64` mapped to the infinity of `n`'s sign.
+///
+/// Structured ordering compares this approximation before the packed value. The result must
+/// stay bit-identical to [`Context::try_into_f64`], which earlier versions used, so that parts
+/// written by different versions sort the same values identically.
+fn numeric_approx_f64(cx: &mut Context<Numeric>, n: Numeric) -> f64 {
+    let slow = |cx: &mut Context<Numeric>| {
+        cx.try_into_f64(n).unwrap_or_else(|_| {
+            cx.clear_status();
+            if n.is_negative() {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            }
+        })
+    };
+    if n.is_special() {
+        return slow(cx);
+    }
+    // Each coefficient unit holds `DECDPUN` decimal digits, least significant unit first.
+    const DECDPUN: usize = 3;
+    let units = n.coefficient_units();
+    let Some(first) = n
+        .exponent()
+        .checked_sub(POW10_MIN_EXP)
+        .and_then(|i| usize::try_from(i).ok())
+    else {
+        return slow(cx);
+    };
+    if first + DECDPUN * (units.len() - 1) >= POW10.len() {
+        return slow(cx);
+    }
+    // The same operations in the same order as `try_into_f64`, with `powf` replaced by a lookup.
+    let mut f = 0.0;
+    for (i, unit) in units.iter().enumerate() {
+        f += f64::from(*unit) * POW10[first + DECDPUN * i];
+    }
+    if n.is_negative() {
+        f = -f;
+    }
+    if f.is_infinite() || f.is_nan() || (!n.is_zero() && f == 0.0) {
+        return slow(cx);
+    }
+    f
 }
 
 /// An encoder for a single column of [`Datum`]s. To encode an entire row see
@@ -328,14 +394,7 @@ impl DatumColumnEncoder {
                 },
                 Datum::Numeric(val),
             ) => {
-                let float_approx = numeric_context.try_into_f64(val.0).unwrap_or_else(|_| {
-                    numeric_context.clear_status();
-                    if val.0.is_negative() {
-                        f64::NEG_INFINITY
-                    } else {
-                        f64::INFINITY
-                    }
-                });
+                let float_approx = numeric_approx_f64(numeric_context, val.0);
                 let packed = PackedNumeric::from_value(val.0);
 
                 approx_values.append_value(float_approx);
@@ -2299,6 +2358,69 @@ mod tests {
     use crate::relation::arb_relation_desc;
     use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, SqlScalarType};
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn numeric_approx_f64_matches_dec() {
+        let mut cx = crate::adt::numeric::cx_datum();
+        let mut build_cx = crate::adt::numeric::cx_datum();
+        let mut check = |n: Numeric| {
+            let expected = cx.try_into_f64(n).unwrap_or_else(|_| {
+                cx.clear_status();
+                if n.is_negative() {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            });
+            let actual = numeric_approx_f64(&mut cx, n);
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "approximation of {n} differs: {actual} vs {expected}"
+            );
+        };
+
+        for special in [
+            Numeric::nan(),
+            Numeric::infinity(),
+            -Numeric::infinity(),
+            Numeric::zero(),
+            -Numeric::zero(),
+        ] {
+            check(special);
+        }
+
+        // Exponents inside, at the edges of, and beyond the lookup table, with coefficients
+        // of one to all 13 units.
+        let coefficients = [
+            "1",
+            "7",
+            "999",
+            "1000",
+            "123456",
+            "4294967295",
+            "18446744073709551615",
+            "123456789012345678901234567890123456789",
+            "999999999999999999999999999999999999999",
+        ];
+        for exp in -400..=400 {
+            for coefficient in coefficients {
+                let mut n: Numeric = build_cx.parse(coefficient).unwrap();
+                n.set_exponent(exp);
+                check(n);
+                check(-n);
+            }
+        }
+
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        for _ in 0..100_000 {
+            let mut n = build_cx.from_i128(rng.random::<i128>() >> rng.random_range(0..127));
+            n.set_exponent(rng.random_range(-80..80));
+            check(n);
+        }
+    }
 
     #[mz_ore::test]
     fn proto_row_invalid_range_is_error() {
