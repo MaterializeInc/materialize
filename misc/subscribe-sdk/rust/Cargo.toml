@@ -1,0 +1,31 @@
+# This crate is its own workspace so it stays isolated from the core
+# Materialize workspace (its dependency set and lockfile are independent) and
+# can be relocated to a standalone repository without churn.
+[workspace]
+
+[package]
+name = "mz-subscribe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+description = "Correct-by-construction client for consuming Materialize SUBSCRIBE."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync"] }
+tokio-postgres = "0.7.15"
+
+[dev-dependencies]
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
