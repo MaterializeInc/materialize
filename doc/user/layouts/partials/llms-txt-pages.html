@@ -1,0 +1,28 @@
+{{- /*
+  Returns the pages an llms.txt index lists for a scope, sorted by URL.
+
+  The scope is a top-level section, which lists every page in that section
+  including itself, or the home page, which lists the root-level pages outside
+  any section.
+
+  Usage:
+    {{ $pages := partial "llms-txt-pages.html" $section }}
+*/ -}}
+{{- $scope := . -}}
+{{- $pages := slice -}}
+{{- range site.Pages -}}
+  {{- $keep := not .IsHome -}}
+  {{- /* build.render=never leaves a page with no permalink to link to. */ -}}
+  {{- if not .RelPermalink -}}{{- $keep = false -}}{{- end -}}
+  {{- if .Params.headless -}}{{- $keep = false -}}{{- end -}}
+  {{- with .Params.robots -}}
+    {{- if in (lower .) "noindex" -}}{{- $keep = false -}}{{- end -}}
+  {{- end -}}
+  {{- if $scope.IsHome -}}
+    {{- if .Section -}}{{- $keep = false -}}{{- end -}}
+  {{- else if ne .Section $scope.Section -}}
+    {{- $keep = false -}}
+  {{- end -}}
+  {{- if $keep -}}{{- $pages = $pages | append . -}}{{- end -}}
+{{- end -}}
+{{- return sort $pages "RelPermalink" -}}

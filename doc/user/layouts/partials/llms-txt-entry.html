@@ -1,0 +1,14 @@
+{{- /*
+  Returns one llms.txt list entry, "- [Title](url): description".
+
+  It returns a string rather than rendering one: rendered partial output is
+  HTML-escaped, which would turn an apostrophe into &#39; in the plain-text
+  index.
+*/ -}}
+{{- $entry := printf "- [%s](%s)" .title .url -}}
+{{- with .description -}}
+  {{- with trim (replaceRE `\s+` " " .) " " -}}
+    {{- $entry = printf "%s: %s" $entry . -}}
+  {{- end -}}
+{{- end -}}
+{{- return $entry -}}

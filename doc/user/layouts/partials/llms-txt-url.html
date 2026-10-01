@@ -1,2 +1,7 @@
-{{- /* Returns the absolute URL of the llms.txt index that covers the page. */ -}}
-{{- return printf "%s%s" (partial "site-origin.html" .) ("llms.txt" | relURL) -}}
+{{- /*
+  Returns the absolute URL of the llms.txt index that covers a page: its
+  top-level section's index, or the root index for pages outside a section.
+*/ -}}
+{{- $index := site.Home.OutputFormats.Get "llmstxt" -}}
+{{- with .FirstSection.OutputFormats.Get "llmstxt" -}}{{- $index = . -}}{{- end -}}
+{{- return printf "%s%s" (partial "site-origin.html" .) $index.RelPermalink -}}

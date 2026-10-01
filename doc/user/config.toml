@@ -113,6 +113,14 @@ weight = 55
 [outputs]
   home = ["HTML", "RSS", "llmstxt"]
 
+# Each top-level section publishes its own llms.txt, which the root llms.txt
+# links to.
+[[cascade]]
+  outputs = ["HTML", "RSS", "llmstxt"]
+  [cascade.target]
+    kind = "section"
+    path = "/*"
+
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true

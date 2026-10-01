@@ -9,37 +9,18 @@
   by the Apache License, Version 2.0.
 */ -}}
 {{- /*
-  Renders /llms.txt, an index of every docs page for LLM and agent consumers.
-  Format per https://llmstxt.org/: an H1, a `>` summary blockquote, a short
-  orienting note, then one H2 per top-level docs section listing
-  "- [Title](url): description" entries.
+  Renders /llms.txt, the root docs index for LLM and agent consumers. Format
+  per https://llmstxt.org/: an H1, a `>` summary blockquote, a short orienting
+  note, then H2 sections of "- [Title](url): description" entries.
 
-  Links point at each page's Markdown rendition rather than its HTML page, so a
-  consumer fetches prose instead of site chrome.
+  Each top-level docs section is a single entry linking to that section's own
+  llms.txt (layouts/_default/section.llmstxt.txt), which lists its pages. The
+  full page list does not fit in one file that an agent can read in a single
+  fetch. Root-level pages outside any section are listed here directly.
 
   The output must be byte-stable: no dates, no build metadata, and no ranging
   over maps. Every collection below is explicitly ordered.
 */ -}}
-{{- $eligible := slice -}}
-{{- range site.Pages -}}
-  {{- $keep := true -}}
-  {{- /* The home page is this file. */ -}}
-  {{- if .IsHome -}}{{- $keep = false -}}{{- end -}}
-  {{- /* build.render=never leaves a page with no permalink to link to. */ -}}
-  {{- if not .RelPermalink -}}{{- $keep = false -}}{{- end -}}
-  {{- if .Params.headless -}}{{- $keep = false -}}{{- end -}}
-  {{- /*
-    Per-version release notes, filtered by path rather than permalink: the
-    older ones predate the render:never convention and still render, so the
-    permalink check above catches only part of the set. The /releases/ landing
-    page stays.
-  */ -}}
-  {{- if strings.HasPrefix .Path "/releases/v" -}}{{- $keep = false -}}{{- end -}}
-  {{- with .Params.robots -}}
-    {{- if in (lower .) "noindex" -}}{{- $keep = false -}}{{- end -}}
-  {{- end -}}
-  {{- if $keep -}}{{- $eligible = $eligible | append . -}}{{- end -}}
-{{- end -}}
 {{- /*
   Group order follows the sidebar. A top-level menu entry names a group only
   when it canonically stands for a top-level content section: either its page IS
@@ -104,15 +85,28 @@
 {{- with site.GetPage "/headless/materialize-intro/intro" -}}
   {{- $intro = trim (replaceRE `\s+` " " .RawContent) " " -}}
 {{- end -}}
+{{- $origin := partial "site-origin.html" . -}}
 # {{ site.Title }}
 
 > {{ $intro }}
 
-Every link below points at the Markdown rendition of a documentation page. For
-the HTML page instead, drop the trailing `index.md`. Per-version release notes
-are not listed individually; see the Releases section.
-{{ range $groups }}{{ $items := sort (where $eligible "Section" .key) "RelPermalink" }}{{ if $items }}
-## {{ .title }}
+Each section below links to its own llms.txt, which lists every page in that
+section with a link to the page's Markdown rendition. Any page is available as
+Markdown at its URL followed by `index.md`.
 
-{{ range $items }}- [{{ .Title }}]({{ partial "markdown-url.html" (dict "page" . "absolute" true) }}){{ with .Description }}{{ $d := trim (replaceRE `\s+` " " .) " " }}{{ if $d }}: {{ $d }}{{ end }}{{ end }}
-{{ end }}{{ end }}{{ end -}}
+## Sections
+
+{{ range $groups -}}
+  {{- $title := .title -}}
+  {{- with and .key (site.GetPage (printf "/%s" .key)) -}}
+    {{- $section := . -}}
+    {{- with .OutputFormats.Get "llmstxt" -}}
+      {{- partial "llms-txt-entry.html" (dict "title" $title "url" (printf "%s%s" $origin .RelPermalink) "description" $section.Description) }}
+{{ end -}}
+  {{- end -}}
+{{- end -}}
+{{- with partial "llms-txt-pages.html" site.Home }}
+## Other pages
+
+{{ range . }}{{ partial "llms-txt-entry.html" (dict "title" .Title "url" (partial "markdown-url.html" (dict "page" . "absolute" true)) "description" .Description) }}
+{{ end }}{{ end -}}

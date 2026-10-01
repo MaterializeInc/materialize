@@ -1,0 +1,60 @@
+{{- /*
+  Copyright Materialize, Inc. and contributors. All rights reserved.
+
+  Use of this software is governed by the Business Source License
+  included in the LICENSE file at the root of this repository.
+
+  As of the Change Date specified in that file, in accordance with
+  the Business Source License, use of this software will be governed
+  by the Apache License, Version 2.0.
+*/ -}}
+{{- /*
+  Renders <section>/llms.txt for each top-level section (see the cascade in
+  config.toml), listing every page in the section. The root /llms.txt links to
+  these files, which keeps each one small enough for an agent to read in a
+  single fetch.
+
+  Pages are grouped under one H2 per child section, in sidebar order, so the
+  index mirrors the section's structure. Pages directly in the section form
+  the first group.
+
+  The output must be byte-stable: no dates, no build metadata, and no ranging
+  over maps. Every collection below is explicitly ordered.
+*/ -}}
+{{- $top := . -}}
+{{- $pages := partial "llms-txt-pages.html" $top -}}
+{{- $groups := slice $top | append $top.Sections.ByWeight -}}
+{{- $grouped := slice -}}
+{{- range $groups -}}
+  {{- $group := . -}}
+  {{- $items := slice -}}
+  {{- range $pages -}}
+    {{- /* Ancestors, root first: home, $top, then the child section if any. */ -}}
+    {{- $ancestors := .Ancestors.Reverse -}}
+    {{- $owner := $top -}}
+    {{- if gt (len $ancestors) 2 -}}
+      {{- $owner = index $ancestors 2 -}}
+    {{- else if and .IsSection (ne .RelPermalink $top.RelPermalink) -}}
+      {{- $owner = . -}}
+    {{- end -}}
+    {{- if eq $owner.RelPermalink $group.RelPermalink -}}
+      {{- $items = $items | append . -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $items -}}
+    {{- $grouped = $grouped | append (dict "title" $group.Title "items" $items) -}}
+  {{- end -}}
+{{- end -}}
+{{- $root := site.Home.OutputFormats.Get "llmstxt" -}}
+# {{ $top.Title }}
+
+> {{ with $top.Description }}{{ trim (replaceRE `\s+` " " .) " " }}{{ else }}The {{ $top.Title }} section of the Materialize documentation.{{ end }}
+
+Every link below points at the Markdown rendition of a page in this section.
+For the HTML page instead, drop the trailing `index.md`. For other sections, see
+the documentation index at {{ partial "site-origin.html" . }}{{ $root.RelPermalink }}.
+{{ range $grouped }}
+## {{ .title }}
+
+{{ range .items }}{{ partial "llms-txt-entry.html" (dict "title" .Title "url" (partial "markdown-url.html" (dict "page" . "absolute" true)) "description" .Description) }}
+{{ end }}{{ end -}}
