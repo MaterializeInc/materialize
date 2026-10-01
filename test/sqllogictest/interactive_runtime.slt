@@ -32,8 +32,8 @@ CREATE TABLE t (k int, v int)
 statement ok
 INSERT INTO t VALUES (1, 10), (2, 20), (3, 0)
 
-# Two indexes on one key. The second re-exports the first's arrangement and shares its publication
-# point under its own id.
+# Two indexes on one key. The second re-exports the first's arrangement and publishes its trace
+# under a publication point of its own.
 statement ok
 CREATE INDEX t_k1 ON t (k)
 
@@ -50,7 +50,7 @@ SELECT count(*) FROM t
 ----
 3
 
-# Dropping the original leaves the alias serving.
+# Dropping the original leaves the re-export serving.
 statement ok
 DROP INDEX t_k1
 
@@ -59,7 +59,7 @@ SELECT k, v FROM t WHERE k = 2
 ----
 2  20
 
-# A third index on the same key re-exports the alias.
+# A third index on the same key re-exports the re-export.
 statement ok
 CREATE INDEX t_k3 ON t (k)
 
@@ -160,7 +160,7 @@ DROP CLUSTER ir CASCADE
 
 # Introspection served across the runtime boundary. The logging dataflow arranges one shared,
 # permanently empty error collection and publishes it under every log index's id, so the
-# publication points alias one trace. A reader waits on both halves of an index, and an errs half
+# publication points share one trace. A reader waits on both halves of an index, and an errs half
 # left at the minimum frontier never satisfies the read, so these queries hang rather than fail.
 statement ok
 CREATE CLUSTER ir REPLICAS (r1 (SIZE 'scale=1,workers=2'))
