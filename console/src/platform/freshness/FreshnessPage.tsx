@@ -429,7 +429,15 @@ const FreshnessPage = () => {
       </PageHeader>
       <VStack alignItems="stretch" width="100%" spacing="4">
         {selected ? (
-          <AppErrorBoundary message="An error occurred fetching freshness data.">
+          // The key is on the boundary, not on the content: once a boundary
+          // has caught an error it renders its fallback instead of its
+          // children, so re-keying a child it is no longer rendering does
+          // nothing. A failed query would otherwise survive a change of
+          // cluster or range until a reload.
+          <AppErrorBoundary
+            key={`${selected.id}:${timePeriodMinutes}`}
+            message="An error occurred fetching freshness data."
+          >
             <React.Suspense
               fallback={
                 <Box height="320px" width="100%">
@@ -438,7 +446,6 @@ const FreshnessPage = () => {
               }
             >
               <FreshnessContent
-                key={selected.id}
                 clusterId={selected.id}
                 lookbackMs={timePeriodMinutes * 60_000}
                 rangeLabel={rangeLabel}

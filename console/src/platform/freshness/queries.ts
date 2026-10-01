@@ -58,5 +58,9 @@ export function useFreshnessHydration(objectIds: string[]) {
         ]),
       );
     },
+    // Matched to the lag query's cadence: refreshing the pills on a different
+    // clock to the numbers beside them would show the two disagreeing.
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 }

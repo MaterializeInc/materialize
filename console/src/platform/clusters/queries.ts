@@ -1098,6 +1098,11 @@ export function useClusterFreshness({
       });
       return { readings: series.rows, latest: latest.rows };
     },
+    // A reading lands once a minute, so a refetch inside that window re-asks a
+    // question whose answer cannot have changed, and an interval any longer
+    // than it leaves an open page behind the data it is describing.
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 
   // Only `data` is returned. Spreading the query object would make every
