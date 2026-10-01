@@ -466,6 +466,14 @@ pub const PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Enables two fresh timestamp-oracle read batches in flight per timeline.
+pub const ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS: Config<bool> = Config::new(
+    "enable_timestamp_oracle_pipelined_reads",
+    false,
+    "Allow two fresh timestamp-oracle backing-read batches in flight per timeline instead of one.",
+    ParameterScope::Environment,
+);
+
 /// Cadence of the cluster controller's reconcile tick.
 pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     "cluster_controller_tick_interval",
@@ -610,5 +618,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
+        .add(&ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS)
         .add(&FRONTEND_READ_THEN_WRITE)
 }
