@@ -13,6 +13,7 @@ Tests the mz command line tool against a real Cloud instance
 import argparse
 import datetime
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -1330,7 +1331,166 @@ def workflow_aws_persistent_destroy(
     aws.destroy()
 
 
-def _terraform_apply_gcp(path: Path, vars: list[str]) -> None:
+GCP_SHARED_PROJECT = "materialize-ci"
+
+# The APIs the gcp-temporary root needs in a fresh project.
+GCP_RUN_PROJECT_APIS = [
+    "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "servicenetworking.googleapis.com",
+    "sqladmin.googleapis.com",
+    "storage.googleapis.com",
+]
+
+
+def gcp_run_project() -> str | None:
+    """This job attempt's own GCP project, or None for the shared project.
+
+    A job that authenticates through Buildkite OIDC (with
+    GCP_WORKLOAD_IDENTITY_PROVIDER set) deploys into a project of
+    its own and deletes it at the end, so whatever a wedged `terraform
+    destroy` leaves behind goes with it. The ID is derived from the job ID,
+    which is unique across pipelines and retries. A random ID would not do:
+    the mzcompose plugin's cleanup pass runs as a separate invocation in the
+    same job and must find the same project.
+    """
+    if not os.getenv("GCP_WORKLOAD_IDENTITY_PROVIDER"):
+        return None
+    build = os.environ["BUILDKITE_BUILD_NUMBER"]
+    job = hashlib.sha256(os.environ["BUILDKITE_JOB_ID"].encode()).hexdigest()[:8]
+    return f"mz-ci-{build}-{job}"
+
+
+class BuildkiteOidcToken:
+    """Keeps a Buildkite OIDC token for `audience` fresh in a file.
+
+    GCP reads the token from the file whenever it exchanges it for an access
+    token, and it exchanges again each time an access token expires (after
+    1 h). The job runs longer than that, so a daemon thread rewrites the file
+    well before each token expires.
+    """
+
+    LIFETIME_SECONDS = 900
+    REFRESH_SECONDS = 240
+
+    def __init__(self, audience: str, path: Path):
+        self.audience = audience
+        self.path = path
+
+    def start(self) -> None:
+        # The first request fails loudly: without a token nothing works.
+        self._refresh()
+        threading.Thread(target=self._refresh_forever, daemon=True).start()
+
+    def _refresh(self) -> None:
+        token = spawn.capture(
+            [
+                "buildkite-agent",
+                "oidc",
+                "request-token",
+                "--audience",
+                self.audience,
+                "--lifetime",
+                str(self.LIFETIME_SECONDS),
+            ]
+        ).strip()
+        # Readers must never see a partially written token.
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(token)
+        tmp.replace(self.path)
+
+    def _refresh_forever(self) -> None:
+        while True:
+            time.sleep(self.REFRESH_SECONDS)
+            try:
+                self._refresh()
+            except subprocess.CalledProcessError as e:
+                print(f"Could not refresh the Buildkite OIDC token: {e}")
+
+
+def gcp_authenticate_oidc() -> None:
+    """Authenticates gcloud and Terraform as GCP_SERVICE_ACCOUNT_EMAIL
+    through Buildkite OIDC and workload identity federation."""
+    provider = os.environ["GCP_WORKLOAD_IDENTITY_PROVIDER"]
+    service_account = os.environ["GCP_SERVICE_ACCOUNT_EMAIL"]
+    audience = f"//iam.googleapis.com/{provider}"
+    directory = Path(tempfile.mkdtemp(prefix="gcp-oidc-"))
+    token_path = directory / "token"
+    BuildkiteOidcToken(audience, token_path).start()
+    config_path = directory / "credentials.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "type": "external_account",
+                "audience": audience,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "token_url": "https://sts.googleapis.com/v1/token",
+                "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+                + f"{service_account}:generateAccessToken",
+                "credential_source": {
+                    "file": str(token_path),
+                    "format": {"type": "text"},
+                },
+            }
+        )
+    )
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(config_path)
+    spawn.runv(["gcloud", "auth", "login", f"--cred-file={config_path}", "--quiet"])
+
+
+def gcp_create_run_project(project: str) -> None:
+    spawn.runv(
+        [
+            "gcloud",
+            "projects",
+            "create",
+            project,
+            f"--folder={os.environ['GCP_CI_FOLDER_ID']}",
+            "--labels=purpose=integration-test,managed-by=buildkite",
+            "--no-enable-cloud-apis",
+        ]
+    )
+    spawn.runv(
+        [
+            "gcloud",
+            "billing",
+            "projects",
+            "link",
+            project,
+            f"--billing-account={os.environ['GCP_BILLING_ACCOUNT']}",
+        ]
+    )
+    spawn.runv(
+        ["gcloud", "services", "enable", *GCP_RUN_PROJECT_APIS, f"--project={project}"]
+    )
+
+
+def gcp_delete_run_project(project: str) -> None:
+    """Deletes the job attempt's project, including anything that
+    `terraform destroy` left behind. A project that was never created or is
+    already being deleted is fine."""
+    try:
+        lifecycle = spawn.capture(
+            [
+                "gcloud",
+                "projects",
+                "describe",
+                project,
+                "--format=value(lifecycleState)",
+            ]
+        ).strip()
+    except subprocess.CalledProcessError as e:
+        print(f"Project {project} not found, nothing to delete: {e}")
+        return
+    if lifecycle == "ACTIVE":
+        print(f"--- Deleting project {project}")
+        spawn.runv(["gcloud", "projects", "delete", project, "--quiet"])
+
+
+def _terraform_apply_gcp(path: Path, vars: list[str], project: str) -> None:
     """Run `terraform apply` for the GCP setup, recovering from a known flake.
 
     Cloud SQL instance creation occasionally fails on the Terraform side while
@@ -1376,7 +1536,7 @@ def _terraform_apply_gcp(path: Path, vars: list[str]) -> None:
                         "import",
                         *vars,
                         "module.database.module.postgresql.google_sql_database_instance.default",
-                        f"materialize-ci/{instance_name}",
+                        f"{project}/{instance_name}",
                     ],
                     cwd=path,
                 )
@@ -1394,30 +1554,44 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
     state = State(path)
+    run_project = gcp_run_project()
+    project = run_project or GCP_SHARED_PROJECT
 
-    gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
-    assert (
-        gcp_service_account_json
-    ), "GCP_SERVICE_ACCOUNT_JSON environment variable has to be set"
-    gcloud_creds_path = path / "gcp.json"
-    with open(gcloud_creds_path, "w") as f:
-        f.write(gcp_service_account_json)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
+    if not run_project:
+        gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+        assert (
+            gcp_service_account_json
+        ), "GCP_SERVICE_ACCOUNT_JSON environment variable has to be set"
+        gcloud_creds_path = path / "gcp.json"
+        with open(gcloud_creds_path, "w") as f:
+            f.write(gcp_service_account_json)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
 
     mz_debug_build_thread: threading.Thread | None = None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        spawn.runv(["gcloud", "config", "set", "project", "materialize-ci"])
 
-        spawn.runv(
-            [
-                "gcloud",
-                "auth",
-                "activate-service-account",
-                f"--key-file={gcloud_creds_path}",
-            ],
-        )
+        if run_project:
+            gcp_authenticate_oidc()
+            # Without an explicit billing project, the google provider bills
+            # some API calls (e.g. Service Networking operation polling) to
+            # the service account's home project, which lacks these APIs.
+            os.environ["USER_PROJECT_OVERRIDE"] = "true"
+            os.environ["GOOGLE_BILLING_PROJECT"] = run_project
+            os.environ["TF_VAR_project_id"] = run_project
+            if args.setup:
+                gcp_create_run_project(run_project)
+        else:
+            spawn.runv(
+                [
+                    "gcloud",
+                    "auth",
+                    "activate-service-account",
+                    f"--key-file={gcloud_creds_path}",
+                ],
+            )
+        spawn.runv(["gcloud", "config", "set", "project", project])
 
         vars = [
             "-var",
@@ -1450,7 +1624,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
             spawn.runv(["terraform", "plan", *vars], cwd=path)
-            _terraform_apply_gcp(path, vars)
+            _terraform_apply_gcp(path, vars, project)
 
         gke_cluster = json.loads(
             spawn.capture(
@@ -1473,7 +1647,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 "--region",
                 gke_cluster["location"],
                 "--project",
-                "materialize-ci",
+                project,
             ]
         )
 
@@ -1523,7 +1697,11 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             run_mz_debug()
 
         if args.cleanup:
-            state.destroy()
+            try:
+                state.destroy()
+            finally:
+                if run_project:
+                    gcp_delete_run_project(run_project)
 
 
 def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
