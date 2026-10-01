@@ -542,12 +542,21 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
 /// incarnation, and only until the frontier moves off the time its snapshot occupies. Zero disables
 /// committing ahead, leaving descriptions derived from the frontier alone and every timestamp
 /// writing its own batch.
+///
+/// A nonzero value also switches the Postgres snapshot operator to emitting its rewind requests
+/// as soon as the snapshot bound is known instead of after the copy completes, so the replication
+/// stream is read while the snapshot runs. Replication data received during the snapshot is staged
+/// in the dataflow until the snapshot completes, which is the many-timestamp shape the lookahead
+/// groups. The two are one setting because reading the stream concurrently without the grouping
+/// keeps one batch builder per timestamp resident until each reaches the blob target size.
 pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
     "storage_persist_sink_description_lookahead",
     Duration::ZERO,
     "Determines how far past the remap upper the source persist sink will commit to a ceiling \
-    in order to group data into one batch and one description. Zero leaves every timestamp \
-    writing its own batch. Other values below the tick interval are clamped to the tick interval.",
+    in order to group data into one batch and one description, and whether the Postgres \
+    replication stream is read while a snapshot runs. Zero disables both, leaving every \
+    timestamp writing its own batch. Other values below the tick interval are clamped to the \
+    tick interval.",
     ParameterScope::Environment,
 );
 
