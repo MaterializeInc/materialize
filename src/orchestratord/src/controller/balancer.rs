@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
-use k8s_controller::TraceMetadata;
+use k8s_controller::{Outcome, TraceMetadata};
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment},
@@ -45,6 +45,10 @@ use mz_cloud_resources::crd::{
 };
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
+
+/// The name identifying this controller in its reconciliation metrics and in
+/// the reporter of the events it publishes.
+pub const CONTROLLER_NAME: &str = "balancer";
 
 #[derive(Clone)]
 pub struct Config {
@@ -587,9 +591,10 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         balancer: &Self::Resource,
-        _metadata: &mut TraceMetadata,
+        metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if balancer.status.is_none() {
+            let step = metadata.step("initialize_status");
             let balancer_api: Api<Balancer> =
                 Api::namespaced(client.clone(), &balancer.meta().namespace.clone().unwrap());
             let mut new_balancer = balancer.clone();
@@ -601,6 +606,7 @@ impl k8s_controller::Context for Context {
                     &new_balancer,
                 )
                 .await?;
+            step.finish(Outcome::Completed);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
@@ -611,21 +617,31 @@ impl k8s_controller::Context for Context {
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
 
+        let step = metadata.step("certificate");
         if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
             trace!("creating new balancerd external certificate");
             apply_resource(&certificate_api, &external_certificate).await?;
+            step.finish(Outcome::Completed);
+        } else {
+            step.finish(Outcome::Skipped);
         }
 
+        let step = metadata.step("deployment");
         let deployment = self.create_deployment_object(balancer)?;
         self.fix_deployment(&deployment_api, &deployment).await?;
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("service");
         let service = self.create_service_object(balancer);
         trace!("creating new balancerd service");
         apply_resource(&service_api, &service).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("sync_status");
         self.sync_deployment_status(&client, balancer).await?;
+        step.finish(Outcome::Completed);
 
         Ok(None)
     }
