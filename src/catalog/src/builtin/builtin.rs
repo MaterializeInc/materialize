@@ -22,10 +22,7 @@ use mz_sql::catalog::{NameReference, ObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-use crate::builtin::{
-    Builtin, BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable,
-    BuiltinView, PUBLIC_SELECT, assert_safe_builtin_name,
-};
+use crate::builtin::{Builtin, BuiltinView, PUBLIC_SELECT, assert_safe_builtin_name};
 
 /// Generate builtin views reporting the given builtins.
 ///
@@ -33,43 +30,19 @@ use crate::builtin::{
 pub(super) fn builtins(
     builtin_items: &[Builtin<NameReference>],
 ) -> impl Iterator<Item = Builtin<NameReference>> {
-    let source_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Source(x) => Some(*x),
-        _ => None,
-    });
-    let log_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Log(x) => Some(*x),
-        _ => None,
-    });
-    let mv_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::MaterializedView(x) => Some(*x),
-        _ => None,
-    });
-    let table_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Table(x) => Some(*x),
-        _ => None,
-    });
-    let index_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Index(x) => Some(*x),
-        _ => None,
-    });
-
-    let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(source_iter)));
+    let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(builtin_items)));
     let materialized_views: &'static BuiltinView =
-        Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
-    let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
-    let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(index_iter)));
-    let log_indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_log_indexes(log_iter)));
+        Box::leak(Box::new(make_builtin_materialized_views(builtin_items)));
+    let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(builtin_items)));
+    let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(builtin_items)));
+    let log_indexes: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_log_indexes(builtin_items)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
     // definitions. See `make_builtin_views`.
-    let view_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::View(x) => Some(*x),
-        _ => None,
-    });
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
-        view_iter,
+        builtin_items,
         [log_indexes, sources, materialized_views, tables, indexes],
     )));
 
@@ -87,7 +60,11 @@ pub(super) fn builtins(
     .map(Builtin::View)
 }
 
-fn make_builtin_sources(source_iter: impl Iterator<Item = &'static BuiltinSource>) -> BuiltinView {
+fn make_builtin_sources(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let source_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Source(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
     let source_values = source_iter
         .map(|src| {
@@ -128,9 +105,11 @@ FROM mz_internal.mz_builtin_log_indexes"
     }
 }
 
-fn make_builtin_materialized_views<'a>(
-    iter: impl Iterator<Item = &'a BuiltinMaterializedView>,
-) -> BuiltinView {
+fn make_builtin_materialized_views(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::MaterializedView(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::MaterializedView, MZ_SYSTEM_ROLE_ID);
     let values = iter
         .map(|mv| {
@@ -192,7 +171,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
     }
 }
 
-fn make_builtin_tables(iter: impl Iterator<Item = &'static BuiltinTable>) -> BuiltinView {
+fn make_builtin_tables(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Table(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID);
     let values = iter
         .map(|table| {
@@ -238,7 +221,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
 
 /// Generates `mz_internal.mz_builtin_indexes`, which `mz_catalog.mz_indexes`
 /// reads to report builtin indexes.
-fn make_builtin_indexes(iter: impl Iterator<Item = &'static BuiltinIndex>) -> BuiltinView {
+fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Index(x) => Some(*x),
+        _ => None,
+    });
     let values = iter
         .map(|index| {
             assert_safe_builtin_name(index.name, "index");
@@ -314,7 +301,14 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
 
 /// Generates `mz_internal.mz_builtin_log_indexes`: per builtin log, the key of
 /// the introspection index each cluster maintains on it, and its privileges.
-fn make_builtin_log_indexes(iter: impl Iterator<Item = &'static BuiltinLog>) -> BuiltinView {
+/// `mz_catalog.mz_indexes` reads the keys to report those indexes, and
+/// `mz_builtin_sources` reads the privileges for its log rows. See
+/// `MZ_INDEXES` for what that means for migrations.
+fn make_builtin_log_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Log(x) => Some(*x),
+        _ => None,
+    });
     // A log is a source for RBAC purposes; this is the owner privilege the
     // catalog grants when it applies builtin logs.
     let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
@@ -390,10 +384,14 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, col_list, privileges)"
 /// view. The placeholder also embeds the view's qualified name so that the
 /// `definition` and `create_sql` columns stay unique across rows, which the
 /// declared keys rely on.
-fn make_builtin_views<'a>(
-    iter: impl Iterator<Item = &'a BuiltinView>,
+fn make_builtin_views(
+    builtin_items: &[Builtin<NameReference>],
     generated: [&BuiltinView; 5],
 ) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::View(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 
     let make_row = |oid: u32, schema: &str, name: &str, access: &[MzAclItem], create_sql: &str| {
