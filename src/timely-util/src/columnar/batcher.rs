@@ -1225,6 +1225,16 @@ mod proptests {
         col
     }
 
+    /// The body in `ColumnBody::Words` form when `words` is set, as a store hands it back.
+    fn in_form(col: ColumnBody<Tuple>, words: bool) -> ColumnBody<Tuple> {
+        if !words {
+            return col;
+        }
+        let mut bytes = Vec::new();
+        col.write_into(&mut bytes).expect("vec writes");
+        ColumnBody::Words(bytemuck::allocation::pod_collect_to_vec(&bytes))
+    }
+
     fn collect_column(col: &ColumnBody<Tuple>) -> Vec<Tuple> {
         col.borrow()
             .into_index_iter()
@@ -1271,8 +1281,13 @@ mod proptests {
         fn merge_from_equals_consolidated_union(
             a in arb_consolidated(),
             b in arb_consolidated(),
+            a_words in any::<bool>(),
+            b_words in any::<bool>(),
         ) {
-            let merged = drive_merge(build_column(&a), build_column(&b));
+            let merged = drive_merge(
+                in_form(build_column(&a), a_words),
+                in_form(build_column(&b), b_words),
+            );
 
             let mut union = a.clone();
             Extend::extend(&mut union, b.iter().copied());
@@ -1288,6 +1303,8 @@ mod proptests {
         fn merge_from_one_input_drains_tail(
             data in arb_consolidated(),
             pos_frac in 0u32..=100,
+            self_words in any::<bool>(),
+            other_words in any::<bool>(),
         ) {
             // Cap at len so we always have a valid position.
             let len = data.len();
@@ -1300,8 +1317,10 @@ mod proptests {
             let mut self_col: ColumnBody<Tuple> = Default::default();
             let sentinel: Tuple = ((u64::MAX, u64::MAX), 0, 1);
             self_col.push_into(sentinel);
+            // A serialized target is materialized before the copy appends to it.
+            let mut self_col = in_form(self_col, self_words);
 
-            let mut others = [build_column(&data)];
+            let mut others = [in_form(build_column(&data), other_words)];
             let mut positions = [start_pos];
             let _ = self_col.merge_from(&mut others, &mut positions);
 
@@ -1316,9 +1335,9 @@ mod proptests {
         /// produce a column equal to the input.
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn merge_from_empty_self_swap(data in arb_consolidated()) {
+        fn merge_from_empty_self_swap(data in arb_consolidated(), words in any::<bool>()) {
             let mut self_col: ColumnBody<Tuple> = Default::default();
-            let mut others = [build_column(&data)];
+            let mut others = [in_form(build_column(&data), words)];
             let mut positions = [0usize];
             let _ = self_col.merge_from(&mut others, &mut positions);
 
@@ -1335,8 +1354,9 @@ mod proptests {
         fn extract_partitions_by_frontier(
             data in arb_consolidated(),
             upper_time in 0u64..=4,
+            words in any::<bool>(),
         ) {
-            let mut self_col = build_column(&data);
+            let mut self_col = in_form(build_column(&data), words);
             let upper = Antichain::from_elem(upper_time);
             let mut frontier: Antichain<u64> = Antichain::new();
             let mut keep: ColumnBody<Tuple> = Default::default();
