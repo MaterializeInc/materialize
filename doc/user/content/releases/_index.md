@@ -24,6 +24,18 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-09-30* <br>
 *Released to Materialize Self-Managed: 2026-10-01* <br>
 
+### Advanced SSO for Self-Managed (Public Preview) {#v26.44.1-advanced-sso}
+
+<red>*Materialize Self-Managed only*</red>
+
+Self-Managed deployments can now use advanced single sign-on (SSO), in public preview. Users sign in to Materialize with your identity provider (IdP), such as Okta, instead of a separate Materialize password:
+
+- **Sign in with SAML or OIDC**, whichever protocol your IdP already uses.
+- **Provision users and groups with SCIM**, so users are created and deactivated in Materialize as they change in your IdP.
+- **Map IdP groups to Materialize roles**: roles follow a user's IdP groups every time they sign in, with no manual `GRANT` or `REVOKE` statements required.
+
+Advanced SSO is deployed with the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), either as part of a new installation or added to an existing one, and requires a license key with the advanced SSO entitlement. For more information, see [Advanced SSO (OIDC, SAML and SCIM)](/self-managed-deployments/sso/advanced/).
+
 ### SCIM group-to-role mapping is generally available {#v26.44.1-scim-group-to-role-mapping}
 
 <red>*Materialize Cloud only*</red>
