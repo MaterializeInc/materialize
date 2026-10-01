@@ -40,11 +40,15 @@ use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, 
 
 /// Flag to run PostgreSQL consensus connections under READ COMMITTED isolation instead of SERIALIZABLE.
 ///
-/// The query family used on vanilla Postgres is designed to be linearizable under READ COMMITTED
-/// isolation, and therefore is also linearizable under SERIALIZABLE, so this flag can be flipped
-/// freely. The flag only exists to make the upgrade path from older versions safe since multiple
-/// query versions co-exist during a 0dt upgrade. See the note on the default value for more
-/// information.
+/// The query family used on vanilla Postgres is linearizable under READ COMMITTED isolation and
+/// under SERIALIZABLE isolation, and remains linearizable when some connections run under each,
+/// so this flag can be flipped freely once every process runs this query family. Every operation
+/// of the family is a single statement, and a single-statement transaction takes its snapshot at
+/// the same instant under either isolation level, so the only difference between the levels is
+/// that SERIALIZABLE may additionally abort a statement with a serialization failure, which the
+/// caller retries. The flag only exists to make the upgrade path from older versions safe since
+/// multiple query versions co-exist during a 0dt upgrade. See the note on the default value for
+/// more information.
 ///
 /// This flag should stay off on CockroachDB. The system will refuse to issue consensus queries if
 /// the flag is enabled on CockroachDB.
@@ -118,24 +122,6 @@ async fn pg_execute_prepared(
 ) -> Result<u64, tokio_postgres::Error> {
     #[allow(clippy::disallowed_methods)]
     client.execute(statement, params).await
-}
-
-async fn pg_txn_execute_prepared(
-    txn: &deadpool_postgres::Transaction<'_>,
-    statement: &Statement,
-    params: &[&(dyn ToSql + Sync)],
-) -> Result<u64, tokio_postgres::Error> {
-    #[allow(clippy::disallowed_methods)]
-    txn.execute(statement, params).await
-}
-
-async fn pg_txn_query_one_prepared(
-    txn: &deadpool_postgres::Transaction<'_>,
-    statement: &Statement,
-    params: &[&(dyn ToSql + Sync)],
-) -> Result<Row, tokio_postgres::Error> {
-    #[allow(clippy::disallowed_methods)]
-    txn.query_one(statement, params).await
 }
 
 impl ToSql for SeqNo {
@@ -621,107 +607,86 @@ impl Consensus for PostgresConsensus {
                 match self.mode {
                     PostgresMode::Postgres => {
                         // SUBTLE: This query is designed to be linearizable with respect to:
-                        // * the other POSTGRES queries (cas/truncate) present in this file under
-                        //   READ COMMITTED isolation
-                        // * the CRDB and POSTGRES queries existed in Materialize versions <=v26.30
-                        //   that run under SERIALIZABLE isolation
+                        // * the other POSTGRES queries (cas/truncate) present in this file, under
+                        //   READ COMMITTED isolation, under SERIALIZABLE isolation, and under a
+                        //   mixture of the two
+                        // * the CRDB and POSTGRES queries that existed in Materialize versions
+                        //   <=v26.30 and run under SERIALIZABLE isolation
                         // * the POSTGRES queries that were introduced in
                         //   d6dff42fd69d1a87edc4ae99e7ea1364201830dc, exist in versions v26.31 and
                         //   v26.32, and run under READ COMMITTED isolation
                         //
-                        // # Correctness with respect to current version
+                        // The statement inserts two rows, a marker at seqno -1 with no data and
+                        // the first record at seqno 0, guarded by `NOT EXISTS` over the shard.
+                        // The guard is evaluated against the statement's snapshot. The primary key
+                        // check of the INSERT runs against the live index. Truncation never
+                        // deletes the marker (see `truncate`), so a shard created by this query
+                        // keeps its marker for as long as it exists.
                         //
-                        // The POSTGRES queries in the current version are designed to be
-                        // linearizable under READ COMMITTED, therefore the correctness argument is
-                        // identical under SERIALIZABLE which is a strictly stronger isolation
-                        // level.
+                        // # Correctness with respect to the current version
                         //
-                        // ## Concurrent initialization
+                        // The specification is that the first write succeeds iff the shard is
+                        // empty. There are three cases at the instant the INSERT runs:
                         //
-                        // The first query to insert seqno 0 into the shard will take the primary
-                        // key lock for that row. Any concurrent clients that attempt to also
-                        // insert seqno 0 will have their INSERT statement block on the PK lock
-                        // until the first query commits, forcing them to seriale after the winning
-                        // query commits at which point they will receive a PK violation error and
-                        // only the first client will win.
+                        // * The guard saw the shard non-empty. Non-emptiness is monotone (no
+                        //   truncation deletes the head), so the shard is still non-empty and the
+                        //   INSERT correctly affects zero rows.
+                        // * The guard saw the shard empty and the shard is still empty. Both rows
+                        //   are inserted and the shard is created. Concurrent first writers block
+                        //   on the uncommitted marker row and then fail on the primary key, so
+                        //   exactly one of them commits.
+                        // * The guard saw the shard empty but the shard was created in between.
+                        //   Every creator running this query family writes the marker, no
+                        //   truncation removes it, and this INSERT targets the marker's key, so it
+                        //   fails on the primary key regardless of what happened to seqno 0. This
+                        //   is why the marker is load-bearing: without it a delayed first writer
+                        //   could re-insert seqno 0 into a shard whose seqno 0 had been truncated.
                         //
-                        // ## Stale initlization
+                        // None of this depends on the isolation level. The guard is stale in the
+                        // same way under READ COMMITTED and under SERIALIZABLE (a single-statement
+                        // transaction takes its snapshot when the statement starts in both), and
+                        // the marker collision closes the window in both. In particular the
+                        // argument does not rely on SSI, which matters while the
+                        // `persist_pg_consensus_read_committed` flag propagates and some
+                        // connections run under each level: SSI only tracks conflicts among
+                        // SERIALIZABLE transactions and would not see a READ COMMITTED creator.
                         //
-                        // If stale client attempts to insert seqno 0 in an
-                        // already initialized shard then:
-                        // * if seqno 0 has not been truncated the insert fails with a PK violation
-                        // * if seqno 0 has been truncated the insert succeeds but the subsequent
-                        // read of the max seqno will return the current head and the tx will rollback.
+                        // # Correctness with respect to <=v26.30 (SERIALIZABLE only)
                         //
-                        // Note that the sentinel seqno of -1 does not participate and is not
-                        // needed for this correctness argument. It only exists to cover the
-                        // co-existence with v26.31 queries (see below).
+                        // The <=v26.30 first write is `INSERT ... WHERE NOT EXISTS` without a
+                        // marker, and the <=v26.30 truncate deletes the marker. Mixed with those
+                        // queries this query is correct only when every transaction in the system
+                        // is SERIALIZABLE, which is why `persist_pg_consensus_read_committed` must
+                        // default to off (see the note on the flag). Under SERIALIZABLE every
+                        // interleaving is equivalent to a serial one, and in a serial execution
+                        // this statement inserts iff the shard is empty, which agrees with the old
+                        // guard. The guard is also a read, so SSI tracks the statement; a blind
+                        // insert of the two rows would be serializable even when it resurrects a
+                        // truncated seqno 0 on a marker-less shard, and so would not be safe here.
                         //
-                        // # Correctness with respect to v26.30 (CRDB/POSTGRES family,
-                        //   SERIALIZABLE) and v26.31/v26.32 (CRDB family, SERIALIZABLE)
+                        // # Correctness with respect to v26.31/v26.32 (READ COMMITTED)
                         //
-                        // This query linearizes correctly with queries from v26.30 only in
-                        // SERIALIZABLE mode. This is why the `persist_pg_consensus_read_committed`
-                        // must default to off (see note in flag definition) so that during the
-                        // co-existence period of 0dt upgrades both systems participate in the
-                        // SERIALIZABLE conflict resolution.
-                        //
-                        // The correctness argument is that in the absence of concurrent mutations
-                        // (i.e in SERIALIZABLE) this query only succeeds if the shard is
-                        // uninitialized. Therefore only one client will succeed.
-                        //
-                        // # Correctness with respect to v26.31/v26.32 (POSTGRES family, READ COMMITTED)
-                        //
-                        // Versions v26.31 and v26.32 run in READ COMMITTED isolation and
-                        // initialize a shard by blindly inserting seqno -1 and seqno 0 into the
-                        // shard. By never truncating seqno -1 it ensures that stale initialiations
-                        // hit PK violations on seqno -1 even though seqno 0 has been removed.
-                        //
-                        // For this reason this version must also insert the sentinel seqno -1 in
-                        // as part of its initialization and avoid truncating it during truncation.
-                        // Without this treatment a stale shard initialization from a version
-                        // v26.31 client against a shard that had been initialized, written to, and
-                        // truncated by a v26.33 client would succeed, and the shard state would be
-                        // corrupted since the seqnos would not be contiguous anymore.
-                        //
-                        // When versions v26.31/v26.32 have become old enough that we believe no
-                        // one will run them again we can remove the sentinel seqno handling from
-                        // the initialization and truncation queries to simplify them.
-                        static POSTGRES_INIT_INSERT: &str =
-                            "INSERT INTO consensus (shard, sequence_number, data)
-                        VALUES ($1, -1, ''), ($1, $2, $3)";
-                        static POSTGRES_INIT_MAX: &str =
-                            "SELECT max(sequence_number) FROM consensus WHERE shard = $1";
-                        let mut client = self.get_connection().await?;
-                        let txn = client.transaction().await?;
-                        let insert = txn.prepare_cached(POSTGRES_INIT_INSERT).await?;
-                        match pg_txn_execute_prepared(
-                            &txn,
-                            &insert,
+                        // Those versions initialize a shard by blindly inserting seqno -1 and
+                        // seqno 0 and rely on colliding with the marker of any existing shard.
+                        // This query writes the same marker and `truncate` preserves it, so a stale
+                        // v26.31 first write against a shard created here fails on the marker, and
+                        // a stale first write from here against a shard created by v26.31 fails
+                        // the same way.
+                        static POSTGRES_INIT_QUERY: &str = "
+                        INSERT INTO consensus (shard, sequence_number, data)
+                        SELECT v.shard, v.sequence_number, v.data
+                        FROM (VALUES ($1::text, -1::bigint, ''::bytea), ($1::text, $2::bigint, $3::bytea))
+                            AS v (shard, sequence_number, data)
+                        WHERE NOT EXISTS (SELECT * FROM consensus WHERE shard = $1)
+                        ";
+                        let client = self.get_connection().await?;
+                        let statement = client.prepare_cached(POSTGRES_INIT_QUERY).await?;
+                        pg_execute_prepared(
+                            &client,
+                            &statement,
                             &[&key, &new.seqno, &new.data.as_ref()],
                         )
                         .await
-                        {
-                            Ok(_) => {
-                                let max_stmt = txn.prepare_cached(POSTGRES_INIT_MAX).await?;
-                                let row =
-                                    pg_txn_query_one_prepared(&txn, &max_stmt, &[&key]).await?;
-                                let max: SeqNo = row.try_get(0)?;
-                                if max == SeqNo::minimum() {
-                                    txn.commit().await?;
-                                    Ok(1)
-                                } else {
-                                    txn.rollback().await?;
-                                    Ok(0)
-                                }
-                            }
-                            // The insert failed (e.g. `unique_violation` because seqno 0 already
-                            // exists). Roll back and let the caller map the error below.
-                            Err(e) => {
-                                let _ = txn.rollback().await;
-                                Err(e)
-                            }
-                        }
                     }
                     PostgresMode::CockroachDB => {
                         static CRDB_INIT_QUERY: &str =
@@ -786,11 +751,11 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        // The `sequence_number >= 0` clause preserves the seqno `-1` sentinel that the
-        // initialization from v26.31/v26.32 clients writes. The sentinel is a truncation-proof
-        // "already initialized" marker (relied on by v26.31/v26.32 and preserved for it during a
-        // rolling deploy). The clause is a no-op for shards that have no sentinel, since all of
-        // their seqnos are already >= 0.
+        // The `sequence_number >= 0` clause preserves the seqno `-1` marker that the first write
+        // inserts. The marker is a truncation-proof "already initialized" row that a delayed first
+        // write collides with (see `compare_and_set`), so it must outlive every truncation. The
+        // clause is a no-op for shards that have no marker, since all of their seqnos are already
+        // >= 0.
         static TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
         WHERE shard = $1 AND sequence_number >= 0 AND sequence_number < $2 AND
