@@ -1776,7 +1776,6 @@ steps:
             ci-builder: stable
             run-timeout: 60m
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#157"
 
     - id: terraform-azure
       topics: [self-managed]
