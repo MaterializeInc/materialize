@@ -485,33 +485,8 @@ fn make_privileges_sql(privs: &[MzAclItem], owner_priv: &MzAclItem) -> String {
     format!("ARRAY[{}]", parts.join(","))
 }
 
-/// Generate the `mz_catalog.mz_sources` builtin materialized view with builtin
-/// source entries inlined as a VALUES clause.
-///
-/// Inlining the values means the MV's SQL fingerprint changes whenever a builtin
-/// source or log is added or removed, which forces a `MigrationStep::replacement`
-/// for `mz_sources` and guarantees stale data is never silently served.
-pub(super) fn make_mz_sources(
-    source_iter: impl Iterator<Item = &'static BuiltinSource>,
-    log_iter: impl Iterator<Item = &'static BuiltinLog>,
-) -> BuiltinMaterializedView {
-    let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
-    let source_values = source_iter.map(|src| {
-        let privileges = make_privileges_sql(&src.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'source', {})",
-            src.oid, src.schema, src.name, privileges
-        )
-    });
-    let log_values = log_iter.map(|log| {
-        let privileges = make_privileges_sql(&log.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'log', {})",
-            log.oid, log.schema, log.name, privileges
-        )
-    });
-    let builtin_values = source_values.chain(log_values).join(",");
-
+/// Generate the `mz_catalog.mz_sources` builtin materialized view.
+pub(super) fn make_mz_sources() -> BuiltinMaterializedView {
     let sql = format!("
 IN CLUSTER mz_catalog_server
 WITH (
@@ -586,7 +561,7 @@ WITH
             src.privileges,
             NULL AS create_sql,
             NULL AS redacted_create_sql
-        FROM (VALUES {builtin_values}) AS src(oid, schema_name, name, type, privileges)
+        FROM mz_internal.mz_builtin_sources AS src
         JOIN builtin_mappings m USING (schema_name, name)
         JOIN mz_schemas s ON s.name = src.schema_name
         WHERE s.database_id IS NULL
