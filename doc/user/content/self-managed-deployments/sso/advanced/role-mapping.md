@@ -15,9 +15,18 @@ running manual `GRANT` statements.
 
 ## Before you begin
 
-Your IdP must send group memberships in the `groups` claim. For SAML through
-Polis, add a `groups` attribute statement to the SAML app, as described in
-[Sync groups](/self-managed-deployments/sso/advanced/identity-providers/#step-4-optional-sync-groups).
+Your IdP must send group memberships in the `groups` claim:
+
+- **SAML through Polis:** add a `groups` attribute statement to the SAML app,
+  as described in
+  [Sync groups](/self-managed-deployments/sso/advanced/identity-providers/#step-4-optional-sync-groups).
+- **Okta over OIDC:** with Okta's org authorization server, open the app's
+  **Sign On** tab and set a **Groups claim filter** in the OpenID Connect ID
+  Token section (name `groups`, for example **Matches regex** `.*`). With a
+  custom authorization server, add a claim named `groups` on its **Claims**
+  tab instead (value type **Groups**, included in the ID token).
+
+Without the claim, users can still sign in, but no roles are synced.
 
 ## Enable the sync
 
@@ -64,6 +73,20 @@ GRANT SELECT ON ALL TABLES IN SCHEMA materialize.public TO "mz-admins";
 
 Any user whose JWT `groups` claim contains `mz-admins` is now automatically
 granted the role on their next login.
+
+## Make a user a superuser
+
+Superuser is an attribute on a user's own role, not a role they can be granted,
+so it can't come from group sync. Set it with SQL as `mz_system` (or another
+superuser):
+
+```mzsql
+ALTER ROLE "alex@example.com" SUPERUSER;
+```
+
+The role must exist first: have the user sign in once, or create it with
+`CREATE ROLE "alex@example.com"`. The change applies from the user's next
+session. To remove it, run `ALTER ROLE "alex@example.com" NOSUPERUSER`.
 
 ## Verify the sync
 

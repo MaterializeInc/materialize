@@ -62,6 +62,9 @@ tab. The issuer URL is not shown on the app. For Okta, use one of:
 Either works here, because Materialize trusts the tokens Hydra issues,
 not Okta's.
 
+To map Okta groups to Materialize roles, Okta also needs to send a `groups`
+claim. See [Enable role mapping](/self-managed-deployments/sso/advanced/role-mapping/#before-you-begin).
+
 ### Step 2. Add the provider to tfvars
 
 Add an entry to `upstream_identity_providers` in your `terraform.tfvars`:
@@ -108,8 +111,14 @@ In your IdP, create a SAML 2.0 application with:
   `https://<your-polis-hostname>/api/oauth/saml`
 - **Audience URI / Entity ID**: `https://saml.boxyhq.com`
 - **NameID format**: EmailAddress
-- **Attribute statements**: at minimum, `firstName`, `lastName`, `email`
-  mapped from the IdP user profile fields.
+- **Attribute statements**: at minimum, `email`, `firstName` and `lastName`,
+  mapped from the IdP user profile. In Okta:
+
+  | Name | Value |
+  |------|-------|
+  | `email` | `user.profile.email` |
+  | `firstName` | `user.profile.firstName` |
+  | `lastName` | `user.profile.lastName` |
 - **Group attribute statement** (optional but required for `groups` in
   the JWT): name `groups`, filter `Matches regex .*` (or a narrower
   filter to scope which groups flow through).
