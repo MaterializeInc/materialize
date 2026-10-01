@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types for the adapter.
+//! Dynamic configuration and lightweight types for the adapter.
+//!
+//! This crate depends only on `mz-dyncfg` and `mz-ore`, so consumers that need
+//! adapter configuration do not pull in `mz-repr`, `mz-storage-types` or
+//! `mz-compute-types`.
 
-pub mod cluster_state;
-pub mod compaction;
-
-pub use mz_adapter_dyncfgs::{
-    bootstrap_builtin_cluster_config, connection, dyncfgs, timestamp_oracle,
-};
+pub mod bootstrap_builtin_cluster_config;
+pub mod connection;
+pub mod dyncfgs;
+pub mod timestamp_oracle;
