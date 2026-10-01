@@ -55,10 +55,25 @@ export const THRESHOLD_STEP_MS = 100;
 export const THRESHOLD_SETTLE_MS = 120;
 
 /**
- * Type filter chips.
+ * How long the threshold field waits after a keystroke before committing.
  *
- * Tables are absent on purpose: a table has no cluster, so a cluster-scoped
- * page can never list one. `mz_relations` gives `'table'` a NULL `cluster_id`.
+ * Longer than `THRESHOLD_SETTLE_MS`, which paces a drag: a pointer emits
+ * continuously and 120ms of stillness means the reader has stopped, while
+ * typing has gaps that long between digits. Committing inside one would read
+ * "2" on the way to "25".
+ */
+export const THRESHOLD_INPUT_SETTLE_MS = 400;
+
+/**
+ * The object types this page offers to filter by.
+ *
+ * Tables are not among them. A table carries a NULL `cluster_id`, so the
+ * cluster-scoped lookup this page does never reaches one, including a table
+ * created `FROM SOURCE`, which is ingested on its source's cluster and does
+ * report lag. Such a table is missing from this page today.
+ *
+ * TODO: Reach those tables through their source rather than through
+ * `cluster_id`. Cluster Overview has the same gap.
  */
 export const OBJECT_TYPE_FILTERS: { label: string; value: string }[] = [
   { label: "Sources", value: "source" },

@@ -173,9 +173,8 @@ const FreshnessTableInner = ({
             <Td py="2" pr="0">
               {row.color && (
                 <Box
-                  width="10px"
-                  height="10px"
-                  borderRadius="2px"
+                  boxSize="2.5"
+                  borderRadius="sm"
                   background={row.color}
                   role="img"
                   aria-label="Shown on the graph"

@@ -21,6 +21,7 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import debounce from "lodash.debounce";
 import React from "react";
 
 import { isSystemCluster } from "~/api/materialize";
@@ -48,6 +49,7 @@ import { formatDurationForAxis } from "~/utils/format";
 
 import {
   OBJECT_TYPE_FILTERS,
+  THRESHOLD_INPUT_SETTLE_MS,
   THRESHOLD_STEP_MS,
   TIME_PERIOD_OPTIONS,
 } from "./constants";
@@ -87,6 +89,58 @@ const SectionHeader = ({
         </Text>
       )}
     </AccordionButton>
+  );
+};
+
+/**
+ * The threshold in seconds, as a text field.
+ *
+ * Holds what is being typed separately from the committed threshold, and
+ * commits once typing stops. Committing per keystroke means passing through
+ * every intermediate state on the way to the intended one, and the worst of
+ * those is the empty field: `Number("")` is `0`, which marks every object as
+ * exceeding.
+ *
+ * Whatever has settled is then taken at face value, including an empty or
+ * unparseable field, which commits 0. A reader who clears this and stops has
+ * asked for no threshold, and the page is readable in that state.
+ */
+export interface ThresholdInputProps {
+  valueMs: number;
+  onChange: (ms: number) => void;
+}
+
+export const ThresholdInput = ({ valueMs, onChange }: ThresholdInputProps) => {
+  const [draft, setDraft] = React.useState<string | undefined>(undefined);
+
+  const commit = React.useMemo(
+    () =>
+      debounce((raw: string) => {
+        const seconds = Number(raw);
+        onChange(Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 0);
+        // Cleared alongside the commit so both land in one render, and the
+        // field goes back to following `valueMs`.
+        setDraft(undefined);
+      }, THRESHOLD_INPUT_SETTLE_MS),
+    [onChange],
+  );
+
+  React.useEffect(() => commit.cancel, [commit]);
+
+  return (
+    <Input
+      type="number"
+      size="sm"
+      width="20"
+      min={0}
+      step={THRESHOLD_STEP_MS / 1000}
+      aria-label="Freshness threshold in seconds"
+      value={draft ?? (valueMs / 1000).toString()}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        commit(e.target.value);
+      }}
+    />
   );
 };
 
@@ -223,8 +277,7 @@ const FreshnessContent = ({
     <VStack alignItems="stretch" width="100%" spacing="4">
       <HStack spacing="2" alignItems="center">
         <Box
-          width="9px"
-          height="9px"
+          boxSize="2.5"
           borderRadius="full"
           background={ok ? colors.accent.green : colors.accent.red}
         />
@@ -349,20 +402,9 @@ const FreshnessPage = () => {
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
               Highlight objects that exceeded
             </Text>
-            <Input
-              type="number"
-              size="sm"
-              width="20"
-              min={0}
-              step={THRESHOLD_STEP_MS / 1000}
-              aria-label="Freshness threshold in seconds"
-              value={(liveThreshold / 1000).toString()}
-              onChange={(e) => {
-                const seconds = Number(e.target.value);
-                if (Number.isFinite(seconds) && seconds >= 0) {
-                  onThresholdChange(seconds * 1000);
-                }
-              }}
+            <ThresholdInput
+              valueMs={liveThreshold}
+              onChange={onThresholdChange}
             />
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
               seconds
