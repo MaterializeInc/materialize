@@ -11,10 +11,12 @@ menu:
 
 [Hydration](/fundamentals/concepts/hydration/) rebuilds the in-memory state of
 the objects on a cluster by reading from Materialize's storage layer. A cluster
-is hydrated once every object on it is. Queries against an object that is still
-hydrating block until it completes, so a cluster that never finishes hydrating
-looks like a query that never returns, and a blue/green deployment that waits
-on it never cuts over.
+is hydrated once every object on it is. A query served by an index that is
+still hydrating blocks until that index is ready, so a cluster that never
+finishes hydrating looks like a query that never returns, and a blue/green
+deployment that waits on it never cuts over. Reading a materialized view
+without an index goes to its persist shard instead, and waits only when the
+shard has not yet reached the query's timestamp.
 
 This guide helps you diagnose a cluster that never reaches a hydrated state.
 For a hydration that completes but spikes memory, see [Memory
@@ -55,14 +57,20 @@ ORDER BY c.name, o.name;
 An empty result means every object is hydrated. Otherwise, `replica_id` tells
 you which case you are in:
 
-- **Empty**, as in the output above: the cluster has no replicas, so nothing
-  is hydrating the object. Give it one with [`ALTER CLUSTER ... SET
-  (REPLICATION FACTOR = <int>)`](/sql/alter-cluster/). A cluster left at `0`
-  also holds its inputs' history back, so read [Step
-  3](#step-3-check-whether-an-inputs-history-is-pinned) before leaving it
-  that way.
-- **Set**: a replica is hydrating the object, or failing to. Continue to
+- **`NULL`**, as in the output above: no replica has reported on the object.
+  Usually the cluster has no replicas, so nothing is hydrating it. Give it one
+  with [`ALTER CLUSTER ... SET (REPLICATION FACTOR =
+  <int>)`](/sql/alter-cluster/). A replica that has only just started also
+  reports `NULL` until it reports in, so re-run the query before acting on a
+  cluster that does have replicas. A cluster left at `0` additionally pins the
+  history of its inputs, so read [Step
+  3](#step-3-check-whether-an-inputs-history-is-pinned) before leaving it that
+  way.
+- **Set**: that replica is hydrating the object, or failing to. Continue to
   [Step 2](#step-2-check-for-a-rehydration-loop).
+
+Rows are per object per replica, so on a cluster with more than one replica an
+object appears here while another replica may already be serving it.
 
 ## Step 2: Check for a rehydration loop
 
@@ -72,24 +80,22 @@ start. If the workload no longer fits the replica's size, every restart
 repeats the same out-of-memory kill and the cluster never reaches a hydrated
 state.
 
-Hydration peaks well above steady state, because a dataflow holds both the
-state it is rebuilding and the state it is reading. Steady-state memory is
-therefore a poor guide to what the next restart will need, and a cluster sized
-against it can stop fitting as data grows, with no change to the objects on
-it.
+Hydration peaks well above steady state. Steady-state memory is therefore a
+poor guide to what the next restart will need, and a cluster sized against it
+can stop fitting as data grows, with no change to the objects on it.
 
 ```mzsql
 SELECT
     rh.cluster_name,
     rh.replica_name,
     rh.size,
-    count(*) FILTER (WHERE h.status = 'offline') AS offline_events,
+    count(DISTINCT h.occurred_at) FILTER (WHERE h.status = 'offline') AS offline_events,
     max(h.occurred_at) FILTER (WHERE h.reason = 'oom-killed') AS last_oom
 FROM mz_internal.mz_cluster_replica_status_history AS h
 JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
 WHERE h.occurred_at > now() - INTERVAL '1 day'
 GROUP BY rh.cluster_name, rh.replica_name, rh.size
-HAVING count(*) FILTER (WHERE h.status = 'offline') > 0
+HAVING count(DISTINCT h.occurred_at) FILTER (WHERE h.status = 'offline') > 0
 ORDER BY offline_events DESC;
 ```
 
@@ -112,7 +118,9 @@ which reports only the current status and misses a restart that happens
 between polls. Join to
 [`mz_internal.mz_cluster_replica_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_history)
 rather than `mz_catalog.mz_cluster_replicas`, so that replicas dropped by a
-resize still resolve to a name.
+resize still resolve to a name. A multi-process replica records one row per
+process per restart, which is why the count is over distinct `occurred_at`
+rather than over rows.
 {{< /note >}}
 
 **Resolution**: size the cluster up with [`ALTER CLUSTER ... SET (SIZE =
@@ -124,8 +132,9 @@ requirements](/clusters/optimize-hydration-requirements/).
 
 ## Step 3: Check whether an input's history is pinned
 
-A new object starts reading data at the most recent time at which all of its
-upstream inputs are readable.
+A new object starts reading at an `as_of` equal to the latest of its inputs'
+read frontiers, which is the earliest time at which all of them are readable
+at once.
 
 Materialize compacts historical data whenever possible, to reduce resource
 consumption. Under normal circumstances, this means that about 1 second of
@@ -133,6 +142,11 @@ history is available, and so a new object will have to replay only about 1
 second of upstream history on top of the current snapshot. However, if
 compaction has been held back, the new object will need to replay more
 upstream history. This can take longer, and require more memory.
+
+One pinned input is not enough on its own to cause that. Because the `as_of`
+takes the *latest* of the read frontiers, a single current input pulls it
+forward and the pinned one costs nothing. An object starts far in the past
+only when **every** one of its inputs is pinned.
 
 To determine if the input history is pinned, compare each object's "read
 frontier" against its "write frontier", using
@@ -162,9 +176,20 @@ LIMIT 5;
 (3 rows)
 ```
 
-A healthy object retains about a second of history. Hours or days mean
-something is holding its compaction back, and anything hydrating from it pays
-for that history.
+A healthy object retains about a second of history. Hours or days mean its
+compaction is being held back.
+
+A single row here is not a diagnosis. By the `as_of` rule above, pinned inputs
+only slow an object down when *all* of its inputs are pinned, so check the
+whole input set of the object that will not hydrate rather than acting on the
+worst row.
+[`mz_internal.mz_compute_dependencies`](/sql/system-catalog/mz_internal/#mz_compute_dependencies)
+lists an object's inputs.
+
+An explicit `RETAIN HISTORY` window is an expected reason for hours or days of
+retained history, not a fault. Check
+[`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies)
+before treating a large `retained_history` as a problem.
 
 ### Find what is holding compaction back
 
@@ -181,9 +206,10 @@ described in [Step 2](#step-2-check-for-a-rehydration-loop).
 
 #### Possible cause: a cluster has a replication factor of `0`
 
-If a cluster has `REPLICATION FACTOR` set to 0, the materialized views and
-sinks on the cluster will have their history pinned. List which such objects a
-cluster still carries:
+A cluster with `REPLICATION FACTOR` set to `0` never advances the write
+frontiers of the objects on it, so those objects go on pinning the history of
+their inputs for as long as they exist. Indexes, materialized views and sinks
+all do this. List what such a cluster still carries:
 
 ```mzsql
 SELECT
@@ -202,19 +228,30 @@ ORDER BY c.name, o.name;
 ```nofmt
  input  | object_name |       type        | cluster_name
 --------+-------------+-------------------+--------------
+ orders | orders_idx  | index             | batch_jobs
  orders | orders_mv   | materialized-view | batch_jobs
-(1 row)
+(2 rows)
 ```
+
+[`mz_internal.mz_compute_dependencies`](/sql/system-catalog/mz_internal/#mz_compute_dependencies)
+covers indexes and materialized views but not sinks, so a sink on the cluster
+pins its inputs without appearing here.
 
 **Resolution**: drop the objects the query lists. The read holds belong to the
 objects rather than to the cluster, so dropping the cluster works only because
 it takes its objects with it. Setting a cluster's replication factor to `0` is
 usually what caused the problem, and never fixes it.
 
-Compaction is not scheduled, so `retained_history` does not shrink the instant
-the objects are gone. That does not hold up a retry: anything created
-afterwards starts from a current time, so you can redeploy within seconds of
-dropping them.
+Dropping is destructive. Dropping a materialized view discards its persisted
+output, so recreating it hydrates it again from its inputs. One with dependents
+needs [`DROP MATERIALIZED VIEW ... CASCADE`](/sql/drop-materialized-view/),
+which drops those dependents too and leaves you to recreate them. Capture the
+definitions with [`SHOW CREATE MATERIALIZED
+VIEW`](/sql/show-create-materialized-view/) or [`SHOW CREATE
+INDEX`](/sql/show-create-index/) first.
+
+Once the objects are gone, the read frontiers of their inputs advance again and
+a new deployment can follow within seconds.
 
 Do not restore a replica to a cluster that has sat at `0` for days instead of
 dropping its objects. The replica rehydrates through the whole retained
