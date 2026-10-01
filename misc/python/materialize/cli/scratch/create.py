@@ -239,7 +239,7 @@ def run(args: argparse.Namespace) -> None:
         security_group_name=args.security_group_name,
         instance_profile=args.instance_profile,
         extra_tags=extra_tags,
-        delete_after=datetime.datetime.now(datetime.timezone.utc) + max_age,
+        delete_after=datetime.datetime.now(datetime.UTC) + max_age,
         git_rev=args.git_rev,
         extra_env={},
     )
