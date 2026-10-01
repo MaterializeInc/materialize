@@ -16,7 +16,7 @@ use timely::progress::frontier::AntichainRef;
 
 use crate::arrangement::manager::{PaddedTrace, TraceBundle};
 use crate::compute_state::error_scan::ErrsHandle;
-use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
+use crate::shared_trace::{SharedErrsSnapshot, SharedOksSnapshot};
 use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrSpine, RowRowAgent, RowRowSpine};
 
@@ -40,6 +40,8 @@ impl IndexTraces {
     ///
     /// Both variants hand out owned handles so the scan can carry them off the worker. A local
     /// handle is a clone of the pinned one, which registers a hold the pinned one already keeps.
+    /// A shared one is a capture that registers no hold. A reader handle would wake the publishing
+    /// worker on every drop, so every attempt would schedule work on the maintenance runtime.
     pub(super) fn resolve(&mut self) -> Option<(PeekOks, PeekErrs)> {
         match self {
             IndexTraces::Local(bundle) => {
@@ -51,7 +53,7 @@ impl IndexTraces {
                 worker_index,
                 published,
             } => registry
-                .handles(published, *worker_index)
+                .snapshots(published, *worker_index)
                 .map(|(oks, errs)| (PeekOks::Shared(oks), PeekErrs::Shared(errs))),
         }
     }
@@ -60,13 +62,13 @@ impl IndexTraces {
 /// The ok trace an index peek reads.
 pub(super) enum PeekOks {
     Local(PaddedTrace<RowRowAgent<Timestamp, Diff>>),
-    Shared(SharedOksHandle),
+    Shared(SharedOksSnapshot),
 }
 
 /// The error trace an index peek reads.
 pub(super) enum PeekErrs {
     Local(ErrsHandle),
-    Shared(SharedErrsHandle),
+    Shared(SharedErrsSnapshot),
 }
 
 /// Both variants read the same batch type, so the enum is a `TraceReader` by delegation.
