@@ -159,6 +159,16 @@ export function useFreshnessParams(): FreshnessParams {
     [set, clear],
   );
 
+  // Memoized on the raw param, which is a string and so compares by value.
+  // Rebuilding it per render would hand every consuming `useMemo` a new array
+  // identity, which silently disables their caches: the whole stats and rows
+  // chain would then recompute on each pointer move of a threshold drag.
+  const rawObjectTypes = searchParams.get(OBJECT_TYPE_SEARCH_PARAM);
+  const objectTypes = React.useMemo(
+    () => parseObjectTypes(rawObjectTypes),
+    [rawObjectTypes],
+  );
+
   return {
     clusterId: searchParams.get(CLUSTER_SEARCH_PARAM),
     threshold:
@@ -169,7 +179,7 @@ export function useFreshnessParams(): FreshnessParams {
       DEFAULT_TIME_PERIOD_MINUTES,
     predicate:
       parsePredicate(searchParams.get(PREDICATE_SEARCH_PARAM)) ?? "peak",
-    objectTypes: parseObjectTypes(searchParams.get(OBJECT_TYPE_SEARCH_PARAM)),
+    objectTypes,
     setClusterId,
     setThreshold,
     setTimePeriodMinutes,

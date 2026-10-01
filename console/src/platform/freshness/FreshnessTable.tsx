@@ -71,7 +71,7 @@ export interface FreshnessTableProps {
  * well, because the swatch says "this is on the graph" and not which reading
  * put it there.
  */
-export const FreshnessTable = ({
+const FreshnessTableInner = ({
   rows,
   emptyMessage,
   onToggleRow,
@@ -211,3 +211,11 @@ export const FreshnessTable = ({
     </Table>
   );
 };
+
+/**
+ * Memoized because a threshold drag re-renders the page on every pointer move,
+ * and re-rendering a row per object at that rate is what makes the drag
+ * stutter. The props it receives are memoized upstream for the same reason: a
+ * single rebuilt array or element here would make this memo a no-op.
+ */
+export const FreshnessTable = React.memo(FreshnessTableInner);

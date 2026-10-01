@@ -185,11 +185,39 @@ const FreshnessContent = ({
     ],
   );
 
-  const breaching = rows.filter((row) => row.breaching);
+  // Memoized for the same reason as `rows`: a fresh array per render reaches
+  // `FreshnessTable` as a changed prop, so the memo on the table cannot hold
+  // during a drag.
+  const breaching = React.useMemo(
+    () => rows.filter((row) => row.breaching),
+    [rows],
+  );
   const ok = breaching.length === 0;
   const predicateLabel = PREDICATE_LABELS[predicate];
   const window =
     predicate === "current" ? "" : ` in the ${rangeLabel.toLowerCase()}`;
+
+  // A JSX element is an object, so building it inline would change identity on
+  // every render and defeat the memo on `FreshnessTable`.
+  const breachingEmptyMessage = React.useMemo(
+    () => (
+      <>
+        <Text as="span" color={colors.accent.green}>
+          No objects exceeded {formatDurationForAxis(settledThreshold)}{" "}
+          {predicateLabel}
+          {window}.
+        </Text>{" "}
+        All {rows.length} objects are within target.
+      </>
+    ),
+    [
+      colors.accent.green,
+      settledThreshold,
+      predicateLabel,
+      window,
+      rows.length,
+    ],
+  );
 
   return (
     <VStack alignItems="stretch" width="100%" spacing="4">
@@ -242,16 +270,7 @@ const FreshnessContent = ({
           <AccordionPanel px="0">
             <FreshnessTable
               rows={breaching}
-              emptyMessage={
-                <>
-                  <Text as="span" color={colors.accent.green}>
-                    No objects exceeded{" "}
-                    {formatDurationForAxis(settledThreshold)} {predicateLabel}
-                    {window}.
-                  </Text>{" "}
-                  All {rows.length} objects are within target.
-                </>
-              }
+              emptyMessage={breachingEmptyMessage}
             />
           </AccordionPanel>
         </AccordionItem>

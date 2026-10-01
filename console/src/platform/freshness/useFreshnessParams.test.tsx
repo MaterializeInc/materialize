@@ -7,13 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { describe, expect, it } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { RouterWrapper } from "~/test/utils";
 
 import {
   parseObjectTypes,
   parsePositiveNumber,
   parsePredicate,
   parseTimePeriod,
+  useFreshnessParams,
 } from "./useFreshnessParams";
 
 describe("parsePositiveNumber", () => {
@@ -96,5 +100,31 @@ describe("parseObjectTypes", () => {
     // everything rather than an empty page.
     expect(parseObjectTypes("source,table,nonsense")).toEqual(["source"]);
     expect(parseObjectTypes("table")).toEqual([]);
+  });
+});
+
+describe("useFreshnessParams identity", () => {
+  beforeEach(() => {
+    history.pushState(undefined, "", "/?type=index,materialized-view");
+  });
+
+  /**
+   * `objectTypes` feeds a chain of `useMemo`s that rebuild a row per object.
+   * Those caches key on reference equality, so returning a freshly parsed
+   * array each render would disable all of them, and a threshold drag renders
+   * on every pointer move.
+   */
+  it("keeps objectTypes referentially stable across renders", () => {
+    const { result, rerender } = renderHook(() => useFreshnessParams(), {
+      wrapper: RouterWrapper,
+    });
+
+    const first = result.current.objectTypes;
+    expect(first).toEqual(["index", "materialized-view"]);
+
+    rerender();
+    rerender();
+
+    expect(result.current.objectTypes).toBe(first);
   });
 });

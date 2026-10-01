@@ -34,23 +34,29 @@ export interface SettledThreshold {
  * The cost is that swatches in the table trail the colored lines for one settle
  * window mid-drag; they converge as soon as the handle stops.
  *
- * `committed` seeds the hook and overrides it whenever it changes from
- * elsewhere, so a pasted link or the back button still moves the handle.
+ * The only state here is the value of a drag still in flight. Everything else
+ * derives from `committed`, so a pasted link or the back button moves the
+ * handle with no effect to copy one into the other, and no render that shows
+ * the stale value first.
  */
 export function useSettledThreshold(
   committed: number,
   commit: (value: number) => void,
 ): SettledThreshold {
-  const [live, setLive] = React.useState(committed);
-
-  // A change to `committed` that did not come from this hook, for example a
-  // pasted URL, is the source of truth and takes the handle with it.
-  React.useEffect(() => {
-    setLive(committed);
-  }, [committed]);
+  const [dragValue, setDragValue] = React.useState<number | undefined>(
+    undefined,
+  );
 
   const debouncedCommit = React.useMemo(
-    () => debounce(commit, THRESHOLD_SETTLE_MS),
+    () =>
+      debounce((value: number) => {
+        // Both updates come from the same callback, so React batches them into
+        // one render. Clearing the drag value in a later render would briefly
+        // show `committed` before it caught up, which reads as the handle
+        // springing back.
+        commit(value);
+        setDragValue(undefined);
+      }, THRESHOLD_SETTLE_MS),
     [commit],
   );
 
@@ -60,11 +66,13 @@ export function useSettledThreshold(
 
   const onChange = React.useCallback(
     (value: number) => {
-      setLive(value);
+      setDragValue(value);
       debouncedCommit(value);
     },
     [debouncedCommit],
   );
 
-  return { live, settled: committed, onChange };
+  // A drag in flight outranks `committed`, which is still the pre-drag value
+  // until the debounce fires.
+  return { live: dragValue ?? committed, settled: committed, onChange };
 }
