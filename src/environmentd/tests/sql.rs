@@ -1995,14 +1995,13 @@ async fn test_timestamp_oracle_pipelining_reads_follow_acknowledged_writes() {
             .start()
             .await;
         let writer = server.connect().await.unwrap();
-        writer
-            .batch_execute(
-                "CREATE TABLE oracle_pipeline (id INT PRIMARY KEY, value BIGINT);
-                 CREATE DEFAULT INDEX ON oracle_pipeline;
-                 INSERT INTO oracle_pipeline VALUES (1, 0)",
-            )
-            .await
-            .unwrap();
+        for statement in [
+            "CREATE TABLE oracle_pipeline (id INT, value BIGINT)",
+            "CREATE DEFAULT INDEX ON oracle_pipeline",
+            "INSERT INTO oracle_pipeline VALUES (1, 0)",
+        ] {
+            writer.batch_execute(statement).await.unwrap();
+        }
         let left = server.connect().await.unwrap();
         let right = server.connect().await.unwrap();
         for client in [&left, &right] {
