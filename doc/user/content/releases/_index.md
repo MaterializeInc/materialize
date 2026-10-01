@@ -24,7 +24,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-09-30* <br>
 *Released to Materialize Self-Managed: 2026-10-01* <br>
 
-### Advanced SSO for Self-Managed (Public Preview) {#v26.44.1-advanced-sso}
+### Advanced SSO (OIDC, SAML and SCIM) for Self-Managed (Public Preview) {#v26.44.1-advanced-sso}
 
 <red>*Materialize Self-Managed only*</red>
 
