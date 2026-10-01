@@ -1,5 +1,5 @@
 ---
-title: "DO NOT MERGE - Metrics in Materialize Cloud"
+title: "Exporting Metrics from Materialize Cloud"
 description: "Query or scrape your Materialize Cloud metrics from Grafana, Prometheus, or Datadog."
 menu:
   main:
