@@ -133,10 +133,15 @@ def _black_cmd(*, check: bool) -> list[str]:
 
 
 def _ruff_cmd(*, check: bool) -> list[str]:
-    # Ruff discovers files itself, which also covers notebooks and stubs. The
-    # root config excludes `misc/dbt-materialize`, which `_ruff_dbt_cmd` covers.
-    cmd = ["bin/pyactivate", "-m", "ruff", "check", "."]
-    return cmd if check else cmd + ["--fix"]
+    # Lint tracked files only. `ruff check .` would also walk untracked nested
+    # checkouts, such as worktrees under the repository root, and `--fix` would
+    # rewrite their files.
+    fix = "" if check else " --fix"
+    return [
+        "bash",
+        "-c",
+        f'. misc/shlib/shlib.bash && git_files "*.py" "*.pyi" "*.ipynb" | grep -v "^misc/dbt-materialize/" | xargs bin/pyactivate -m ruff check{fix}',
+    ]
 
 
 def _ruff_dbt_cmd(*, check: bool) -> list[str]:

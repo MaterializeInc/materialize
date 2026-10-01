@@ -22,16 +22,16 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
 
     python_files_list=$(mktemp)
     dbt_files_list=$(mktemp)
-    trap 'rm -f "$python_files_list" "$dbt_files_list"' EXIT
+    ruff_files_list=$(mktemp)
+    trap 'rm -f "$python_files_list" "$dbt_files_list" "$ruff_files_list"' EXIT
     { git_files 'ci/*.py' 'misc/python/*.py' 'test/*.py'; git_files '**/mzcompose.py' | grep -v -e 'test/' -e 'misc/dbt-materialize/'; } > "$python_files_list"
     git_files 'misc/dbt-materialize/*.py' > "$dbt_files_list"
 
     try xargs npx --yes "pyright@$pyright_version" --warnings --threads 4 < "$python_files_list"
 
-    # Ruff discovers files itself, so every Python file and notebook is linted
-    # under its nearest `[tool.ruff]` config. The root config excludes
-    # `misc/dbt-materialize`, which the next invocation covers.
-    try bin/pyactivate -m ruff check .
+    # Lint tracked files only, see `_ruff_cmd` in `misc/python/materialize/cli/fmt.py`.
+    git_files '*.py' '*.pyi' '*.ipynb' | grep -v '^misc/dbt-materialize/' > "$ruff_files_list"
+    try xargs bin/pyactivate -m ruff check < "$ruff_files_list"
     # We need to maintain compatibility with older Python versions for this
     try xargs bin/pyactivate -m ruff check --target-version=py38 < "$dbt_files_list"
 fi
