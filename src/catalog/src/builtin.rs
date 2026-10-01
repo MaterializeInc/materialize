@@ -1541,25 +1541,21 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_sources_ref));
     }
 
-    // Generate mz_indexes with builtin index/log entries inlined as VALUES so
-    // that its SQL fingerprint changes whenever a builtin index or log is added or
-    // removed, forcing an explicit MigrationStep::replacement.
+    // Generate mz_indexes with builtin log entries inlined as VALUES so that
+    // its SQL fingerprint changes whenever a builtin log is added or removed,
+    // forcing an explicit MigrationStep::replacement.
     //
-    // Must happen AFTER all builtin indexes and logs have been pushed into
-    // builtin_items, so that make_mz_indexes sees the complete set. Must happen
-    // BEFORE ontology::generate_views so the ontology generator sees mz_indexes
-    // as a materialized view participating in catalog ontology, rather than
-    // being absent from builtin_items.
+    // Must happen AFTER all builtin logs have been pushed into builtin_items,
+    // so that make_mz_indexes sees the complete set. Must happen BEFORE
+    // ontology::generate_views so the ontology generator sees mz_indexes as a
+    // materialized view participating in catalog ontology, rather than being
+    // absent from builtin_items.
     {
-        let index_iter = builtin_items.iter().filter_map(|b| match b {
-            Builtin::Index(x) => Some(*x),
-            _ => None,
-        });
         let log_iter = builtin_items.iter().filter_map(|b| match b {
             Builtin::Log(x) => Some(*x),
             _ => None,
         });
-        let mz_indexes = mz_catalog::make_mz_indexes(index_iter, log_iter);
+        let mz_indexes = mz_catalog::make_mz_indexes(log_iter);
         let mz_indexes_ref: &'static BuiltinMaterializedView = Box::leak(Box::new(mz_indexes));
         let insert_pos = builtin_items
             .iter()
@@ -2404,25 +2400,11 @@ mod tests {
         );
     }
 
-    /// Verifies that the `mz_indexes` materialized view fingerprint changes
-    /// whenever a new builtin index or log is added.
-    ///
-    /// This is the correctness property that `make_mz_indexes` provides: by
-    /// inlining the full set of builtin indexes/logs as VALUES in its SQL,
-    /// any change to those sets is reflected in `fingerprint()`. A stale
-    /// fingerprint would prevent the catalog migration from replacing
-    /// `mz_indexes`, leaving it with out-of-date data, silently serving
-    /// stale builtin index rows.
+    /// Builtin logs are inlined as VALUES in `make_mz_indexes`, so adding one
+    /// must change the `mz_indexes` fingerprint and force a replacement.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn test_mz_indexes_fingerprint_changes_with_new_builtin_index() {
-        let indexes: Vec<&'static BuiltinIndex> = BUILTINS_STATIC
-            .iter()
-            .filter_map(|b| match b {
-                Builtin::Index(x) => Some(*x),
-                _ => None,
-            })
-            .collect();
+    fn test_mz_indexes_fingerprint_changes_with_new_builtin_log() {
         let logs: Vec<&'static BuiltinLog> = BUILTINS_STATIC
             .iter()
             .filter_map(|b| match b {
@@ -2431,8 +2413,7 @@ mod tests {
             })
             .collect();
 
-        // The fingerprint from make_mz_indexes must match the live BUILTINS_STATIC entry.
-        let mv_base = mz_catalog::make_mz_indexes(indexes.iter().copied(), logs.iter().copied());
+        let mv_base = mz_catalog::make_mz_indexes(logs.iter().copied());
         let fp_base = Fingerprint::fingerprint(&&mv_base);
 
         let mz_indexes_static = BUILTINS_STATIC
@@ -2448,26 +2429,9 @@ mod tests {
             "make_mz_indexes fingerprint must match the BUILTINS_STATIC mz_indexes fingerprint"
         );
 
-        // Adding an extra index must change the fingerprint, proving that
-        // make_mz_indexes inlines the index list into its SQL.
-        let extra_index = indexes[0];
-        let mv_extra_index = mz_catalog::make_mz_indexes(
-            indexes.iter().copied().chain(std::iter::once(extra_index)),
-            logs.iter().copied(),
-        );
-        assert_ne!(
-            fp_base,
-            Fingerprint::fingerprint(&&mv_extra_index),
-            "mz_indexes fingerprint must change when a builtin index is added"
-        );
-
-        // Adding an extra log must also change the fingerprint, because the
-        // log set feeds the introspection-source-indexes CTE.
         let extra_log = logs[0];
-        let mv_extra_log = mz_catalog::make_mz_indexes(
-            indexes.iter().copied(),
-            logs.iter().copied().chain(std::iter::once(extra_log)),
-        );
+        let mv_extra_log =
+            mz_catalog::make_mz_indexes(logs.iter().copied().chain(std::iter::once(extra_log)));
         assert_ne!(
             fp_base,
             Fingerprint::fingerprint(&&mv_extra_log),
