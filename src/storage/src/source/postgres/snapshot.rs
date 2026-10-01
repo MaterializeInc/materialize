@@ -175,6 +175,7 @@ use mz_postgres_util::schemas::get_pg_major_version;
 use mz_postgres_util::{Client, Config, PostgresError, Sql, simple_query, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -421,6 +422,12 @@ pub(crate) fn render<'scope>(
                 definite_error_cap_set,
             ]: &mut [_; 4] = caps.try_into().unwrap();
             let mut raw_handles = SharedFuel::new(raw_handles);
+            // Read once, so that every decision below that depends on it agrees for the lifetime
+            // of this operator. A nonzero lookahead is the switch, see
+            // `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+            let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+                .get(config.config.config_set())
+                .is_zero();
 
             let connection_config = connection
                 .connection
@@ -670,6 +677,33 @@ pub(crate) fn render<'scope>(
                 use_snapshot(&client, &snapshot_id).await?;
             }
 
+            // Since all workers snapshot all tables (each with different ctid ranges), we only
+            // emit rewind requests from the worker responsible for each output to avoid
+            // duplicates.
+            let emit_rewinds = |rewind_cap_set: &mut CapabilitySet<MzOffset>| {
+                for (&oid, outputs) in tables_to_snapshot.iter() {
+                    for (output_index, info) in outputs {
+                        if !config.responsible_for((oid, *output_index)) {
+                            continue;
+                        }
+                        trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
+                        let req = RewindRequest { output_index: *output_index, snapshot_lsn };
+                        rewinds_handle.give(&rewind_cap_set[0], req);
+                    }
+                }
+                *rewind_cap_set = CapabilitySet::new();
+            };
+
+            // The rewind requests are what unblock the replication operator. With concurrent
+            // replication they are emitted now, before any data is copied, since the snapshot
+            // LSN is already known. The replication operator then reads the replication stream
+            // while the snapshot runs, staging its data in the dataflow until the snapshot
+            // completes. Otherwise they are emitted after the snapshot, which keeps the two
+            // phases serial and avoids that staging cost.
+            if concurrent_replication {
+                emit_rewinds(rewind_cap_set);
+            }
+
             for (&oid, outputs) in tables_to_snapshot.iter() {
                 for (&output_index, info) in outputs.iter() {
                     if let Err(err) = verify_schema(oid, info, &upstream_info) {
@@ -748,27 +782,9 @@ pub(crate) fn render<'scope>(
                 }
             }
 
-            // We are done with the snapshot so now we will emit rewind requests. It is important
-            // that this happens after the snapshot has finished because this is what unblocks the
-            // replication operator and we want this to happen serially. It might seem like a good
-            // idea to read the replication stream concurrently with the snapshot but it actually
-            // leads to a lot of data being staged for the future, which needlessly consumed memory
-            // in the cluster.
-            //
-            // Since all workers now snapshot all tables (each with different ctid ranges), we only
-            // emit rewind requests from the worker responsible for each output to avoid duplicates.
-            for (&oid, output) in tables_to_snapshot.iter() {
-                for (output_index, info) in output {
-                    // Only emit rewind request from one worker per output
-                    if !config.responsible_for((oid, *output_index)) {
-                        continue;
-                    }
-                    trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
-                    let req = RewindRequest { output_index: *output_index, snapshot_lsn };
-                    rewinds_handle.give(&rewind_cap_set[0], req);
-                }
+            if !concurrent_replication {
+                emit_rewinds(rewind_cap_set);
             }
-            *rewind_cap_set = CapabilitySet::new();
 
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
             fail::fail_point!("pg_snapshot_failure", |_| Err(

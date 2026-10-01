@@ -129,7 +129,7 @@ use timely::dataflow::operators::{Capability, CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::statistics::SourceStatistics;
@@ -360,6 +360,13 @@ pub(crate) fn render<'scope>(
     let lookahead = description_lookahead(
         dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD.get(config_set),
         timestamp_interval,
+    );
+    // Once per dataflow build, so a hydration's logs show whether this sink groups a snapshot's
+    // updates into one batch or writes one batch per timestamp.
+    info!(
+        %collection_id,
+        lookahead_ms = lookahead.unwrap_or(0),
+        "persist_sink description lookahead"
     );
 
     let (batch_descriptions, commitments, passthrough_desired_stream, mint_token) =
