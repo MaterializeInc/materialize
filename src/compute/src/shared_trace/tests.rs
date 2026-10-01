@@ -469,6 +469,77 @@ fn publish_without_readers_does_not_pin_compaction() {
     });
 }
 
+#[mz_ore::test]
+fn snapshot_holds_nothing_and_outlives_compaction() {
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged = collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("snapshot oks");
+            let writer = arranged.trace.clone();
+            let published = adopt_fresh(&arranged);
+            (writer, published, input)
+        });
+        for t in 0..3 {
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        let holds = (published.logical_holds(), published.physical_holds());
+        let mut snapshot = published.snapshot();
+        assert_eq!(
+            (published.logical_holds(), published.physical_holds()),
+            holds,
+            "a snapshot must register no hold"
+        );
+        let captured_since = snapshot.get_logical_compaction().to_owned();
+        let mut captured_upper = Antichain::new();
+        snapshot.read_upper(&mut captured_upper);
+        assert!(captured_upper.less_equal(&Timestamp::from(3_u64)));
+
+        let target = Antichain::from_elem(Timestamp::from(10_u64));
+        published.note_standing_hold(&target);
+        writer.set_logical_compaction(target.borrow());
+        writer.set_physical_compaction(target.borrow());
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(10_u64),
+            Timestamp::from(11_u64),
+        );
+        assert!(
+            !published
+                .snapshot()
+                .get_logical_compaction()
+                .less_equal(&Timestamp::from(2_u64)),
+            "the trace compacts past the snapshot's `since`, since the snapshot does not hold it"
+        );
+
+        // The capture still reads at its own frontiers.
+        assert_eq!(snapshot.get_logical_compaction().to_owned(), captured_since);
+        let rows = snapshot
+            .cursor_through(captured_upper.borrow())
+            .map(|(mut cursor, storage)| {
+                let mut rows = 0;
+                while cursor.key_valid(&storage) {
+                    rows += 1;
+                    cursor.step_key(&storage);
+                }
+                rows
+            })
+            .expect("the captured chain covers its upper");
+        assert_eq!(rows, 1, "the three ticks share one key");
+    });
+}
+
 /// I1c: a compaction the importing runtime has not applied does not advance the published `since`.
 ///
 /// This is the invariant the two-runtime split loses without a standing hold. The controller's

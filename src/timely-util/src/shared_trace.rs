@@ -26,7 +26,8 @@
 //! holds accumulate in the point as differential's `TraceBox` accumulates its agents' holds, and the
 //! writer applies the meet of its local `TraceBox` frontier and the readers' to the inner trace. A
 //! reader that moves a hold wakes the writer so the inner trace learns of it without waiting for
-//! the arrangement's next input.
+//! the arrangement's next input. A [`SharedSnapshot`] is the hold-free alternative for a reader
+//! that only reads the chain it captured, and so neither registers a hold nor wakes the writer.
 //!
 //! Logical compaction decides which times stay distinguishable, physical compaction which batches
 //! may merge. A reader needs distinguishability at the times it reads, and a batch boundary at each
@@ -134,6 +135,17 @@ impl<B: BatchReader + Clone> Shared<B> {
     pub fn chain(&self) -> Vec<B> {
         self.lock().chain.clone()
     }
+
+    /// The published chain and frontiers, captured under one lock acquisition, as a reader that
+    /// registers no hold.
+    pub fn snapshot(&self) -> SharedSnapshot<B> {
+        let state = self.lock();
+        SharedSnapshot {
+            chain: state.chain.clone(),
+            logical: state.logical.clone(),
+            physical: state.upper.clone(),
+        }
+    }
 }
 
 impl<B: BatchReader> Shared<B> {
@@ -229,6 +241,26 @@ impl<B: BatchReader> Shared<B> {
             let _ = activator.activate();
         }
     }
+}
+
+/// The non-empty batches of the totally ordered `chain` before the cut `upper`.
+///
+/// Panics if a batch straddles the cut, which means a merge ate a boundary the reader needed.
+fn chain_through<B: BatchReader + Clone>(chain: &[B], upper: AntichainRef<B::Time>) -> Vec<B> {
+    let mut out = Vec::new();
+    for batch in chain {
+        if PartialOrder::less_equal(&upper, &batch.lower().borrow()) {
+            break;
+        }
+        if !batch.is_empty() {
+            assert!(
+                PartialOrder::less_equal(&batch.upper().borrow(), &upper),
+                "batches_through: upper straddles batch"
+            );
+            out.push(batch.clone());
+        }
+    }
+    out
 }
 
 /// Replaces the elements of `lower` with those of `upper` in `accumulated`.
@@ -615,20 +647,7 @@ where
         // writer applied while it drains a seed. The straddle check is the guard instead: a batch
         // straddling the cut means a merge ate a boundary this reader still needed, and returning it
         // would hand back updates at times not before `upper`.
-        let mut out = Vec::new();
-        for batch in state.chain.iter() {
-            if PartialOrder::less_equal(&upper, &batch.lower().borrow()) {
-                break;
-            }
-            if !batch.is_empty() {
-                assert!(
-                    PartialOrder::less_equal(&batch.upper().borrow(), &upper),
-                    "batches_through: upper straddles batch"
-                );
-                out.push(batch.clone());
-            }
-        }
-        Some(out)
+        Some(chain_through(&state.chain, upper))
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
@@ -665,6 +684,54 @@ where
         for batch in state.chain.iter() {
             f(batch);
         }
+    }
+}
+
+/// A chain and frontiers captured from a [`Shared`] point, readable without a hold.
+///
+/// The captured batches are immutable, so the capture stays readable however far the writer
+/// compacts or merges afterwards, and it reads accurately at every time at or beyond its logical
+/// compaction frontier, the published `since` at capture. It never moves the point's holds, so
+/// it never wakes the writer.
+pub struct SharedSnapshot<B: BatchReader> {
+    chain: Vec<B>,
+    logical: Antichain<B::Time>,
+    physical: Antichain<B::Time>,
+}
+
+impl<B> TraceReader for SharedSnapshot<B>
+where
+    B: BatchReader + Clone + 'static,
+    // See the `SharedReader` impl.
+    B::Time: TotalOrder,
+{
+    type Time = B::Time;
+    type Batch = B;
+
+    fn batches_through(&mut self, upper: AntichainRef<B::Time>) -> Option<Vec<B>> {
+        Some(chain_through(&self.chain, upper))
+    }
+
+    // The capture holds nothing the writer could learn of, so compaction requests only move what
+    // the getters report, joined as `SharedReader` joins them.
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
+        self.logical = self.logical.join(&frontier.to_owned());
+    }
+
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, B::Time> {
+        self.logical.borrow()
+    }
+
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, B::Time>) {
+        self.physical = self.physical.join(&frontier.to_owned());
+    }
+
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, B::Time> {
+        self.physical.borrow()
+    }
+
+    fn map_batches<F: FnMut(&B)>(&self, f: F) {
+        self.chain.iter().for_each(f);
     }
 }
 
