@@ -32,6 +32,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)Cargo\.lock$' \
     -e '(^|/)types\.lock$' \
     -e '(^|/)\.mzprofile$' \
+    -e '(^|/)lean-toolchain$' \
     -e '^src/mz-deploy/src/cli/scaffold/gitignore$' \
     -e '^test/mz-deploy/projects/multi-profile/v1/models/app/core/ambiguous\.sql$' \
     -e '^about\.toml$' \
