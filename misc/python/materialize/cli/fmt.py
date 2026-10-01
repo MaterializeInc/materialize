@@ -133,11 +133,14 @@ def _black_cmd(*, check: bool) -> list[str]:
 
 
 def _ruff_cmd(*, check: bool) -> list[str]:
+    # Lint tracked files only. `ruff check .` would also walk untracked nested
+    # checkouts, such as worktrees under the repository root, and `--fix` would
+    # rewrite their files.
     fix = "" if check else " --fix"
     return [
         "bash",
         "-c",
-        f'. misc/shlib/shlib.bash && git_files "*.py" | grep -v "^misc/dbt-materialize/" | xargs bin/pyactivate -m ruff check{fix}',
+        f'. misc/shlib/shlib.bash && git_files "*.py" "*.pyi" "*.ipynb" | grep -v "^misc/dbt-materialize/" | xargs bin/pyactivate -m ruff check{fix}',
     ]
 
 
