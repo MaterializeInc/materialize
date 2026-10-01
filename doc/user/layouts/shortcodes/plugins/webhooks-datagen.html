@@ -6,7 +6,7 @@
   </div>
   <div class="input_container">
     <div class="input_container-text">
-      <input type="password" placeholder="Secret (Step 1.)" id="authPassword" class="text-input" />
+      <input type="text" placeholder="Secret (Step 1.)" id="authPassword" class="text-input" />
     </div>
   </div>
   <div class="input_container">
@@ -49,6 +49,9 @@
 
   const webhookURLInput = document.getElementById("webhookURL");
   const authPasswordInput = document.getElementById("authPassword");
+  // Masked here rather than in the markup: agents read a type="password"
+  // input in server-rendered HTML as a login wall and treat the page as gated.
+  authPasswordInput.type = "password";
   const jsonSchemaTextarea = document.getElementById("jsonSchema");
   const startButton = document.getElementById("startButton");
   const stopButton = document.getElementById("stopButton");
