@@ -26,8 +26,8 @@ use crate::arrangement::manager::{ErrsTrace, OksTrace};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::context::ArrangementFlavor;
 use crate::render::errors::DataflowErrorSer;
-use crate::shared_trace::adopt_trace;
 use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
+use crate::shared_trace::{SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 use super::*;
