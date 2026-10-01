@@ -5979,7 +5979,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/scale@npm:3.12.0, @visx/scale@npm:^3.12.0":
+"@visx/scale@npm:3.12.0":
   version: 3.12.0
   resolution: "@visx/scale@npm:3.12.0"
   dependencies:
@@ -5988,7 +5988,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/scale@npm:4.0.0":
+"@visx/scale@npm:4.0.0, @visx/scale@npm:^4.0.0":
   version: 4.0.0
   resolution: "@visx/scale@npm:4.0.0"
   dependencies:
@@ -11828,7 +11828,7 @@ __metadata:
     "@visx/grid": "npm:^4.0.0"
     "@visx/group": "npm:^3.12.0"
     "@visx/responsive": "npm:^3.12.0"
-    "@visx/scale": "npm:^3.12.0"
+    "@visx/scale": "npm:^4.0.0"
     "@visx/shape": "npm:^4.0.0"
     "@visx/tooltip": "npm:^3.12.0"
     "@vitejs/plugin-react": "npm:^6.1.1"
