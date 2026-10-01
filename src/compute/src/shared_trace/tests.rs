@@ -470,6 +470,48 @@ fn publish_without_readers_does_not_pin_compaction() {
 }
 
 #[mz_ore::test]
+fn a_point_nothing_references_is_detached() {
+    timely::execute_directly(move |worker| {
+        let (kept, dropped, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged = collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("detach oks");
+            let kept = adopt_fresh(&arranged);
+            let dropped = adopt_fresh(&arranged);
+            (kept, dropped, input, arranged.trace.clone())
+        });
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(0_u64),
+            Timestamp::from(1_u64),
+        );
+
+        let dropped_shared = Arc::downgrade(&dropped.shared);
+        drop(dropped);
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(1_u64),
+            Timestamp::from(2_u64),
+        );
+        assert!(
+            dropped_shared.upgrade().is_none(),
+            "the trace must release a point nothing else references"
+        );
+        assert_eq!(
+            kept.upper(),
+            Antichain::from_elem(Timestamp::from(2_u64)),
+            "a referenced point keeps receiving the trace"
+        );
+    });
+}
+
+#[mz_ore::test]
 fn snapshot_holds_nothing_and_outlives_compaction() {
     timely::execute_directly(move |worker| {
         let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {

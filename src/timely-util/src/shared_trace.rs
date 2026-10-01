@@ -382,6 +382,7 @@ impl<Tr: Trace> SharedSpine<Tr> {
     /// the same lock as the chain, so a reader registering concurrently either seeds a chain
     /// containing that batch or receives it through its queue, never neither.
     fn publish_chain(&mut self, arrived: Option<Tr::Batch>) {
+        self.detach_unreachable();
         let attachments = self.attachment.borrow();
         if attachments.is_empty() {
             return;
@@ -427,6 +428,18 @@ impl<Tr: Trace> SharedSpine<Tr> {
             }
         }
         chain.clear();
+    }
+
+    /// Detaches every point that only this trace still references.
+    ///
+    /// Such a point has no reader and no owner left, and minting a reader needs a reference to the
+    /// point, so no other thread can revive it while this runs. Publishing into it would cost a
+    /// chain clone, a lock, and an `on_seal` per mutation for as long as this trace lives, which
+    /// for a point published over another collection's trace outlasts the point's own collection.
+    fn detach_unreachable(&self) {
+        self.attachment
+            .borrow_mut()
+            .retain(|attached| Arc::strong_count(&attached.shared) > 1);
     }
 
     /// Applies the meet of the local and the readers' holds to the inner trace.

@@ -36,8 +36,8 @@ pub(crate) struct Diagnostics<T> {
 
 /// A publication point for one arrangement plus the standing hold on it.
 ///
-/// Holding it keeps the point registered; dropping it does not detach the writer, which lives with
-/// its dataflow, but no further handles can be minted from it.
+/// Holding it keeps the point registered. Once it and every reader minted from it are dropped, the
+/// writer detaches the point at its next mutation, see `SharedSpine::detach_unreachable`.
 pub(crate) struct Published<Tr: TraceReader> {
     pub(super) shared: Arc<Shared<Tr::Batch>>,
     /// A logical hold with no reader behind it, tracking the frontier the runtime that may import
