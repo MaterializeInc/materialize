@@ -293,7 +293,7 @@ def test_upgrade_from_version(
                 other_mz_service = (
                     "materialized2" if mz_service == "materialized" else "materialized"
                 )
-                c.promote_mz(mz_service, retire=other_mz_service)
+                c.promote_mz(mz_service, retire_mz_service=other_mz_service)
                 mz_service = other_mz_service
                 deploy_generation += 1
 
@@ -320,7 +320,9 @@ def test_upgrade_from_version(
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
         c.promote_mz(
             mz_service,
-            retire="materialized2" if mz_service == "materialized" else "materialized",
+            retire_mz_service=(
+                "materialized2" if mz_service == "materialized" else "materialized"
+            ),
         )
 
     with c.override(

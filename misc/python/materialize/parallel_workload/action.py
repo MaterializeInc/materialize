@@ -5088,7 +5088,7 @@ class ZeroDowntimeDeployAction(Action):
             )
             self.composition.promote_mz(
                 mz_service,
-                retire=(
+                retire_mz_service=(
                     "materialized2" if mz_service == "materialized" else "materialized"
                 ),
             )
