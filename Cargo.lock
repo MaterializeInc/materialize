@@ -9061,6 +9061,7 @@ dependencies = [
  "proptest",
  "rand 0.10.3",
  "serde",
+ "sha2 0.11.0",
  "smallvec",
  "tempfile",
  "timely",
