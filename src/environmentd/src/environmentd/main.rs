@@ -65,9 +65,9 @@ use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
 use mz_secrets::SecretsController;
+use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
-use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;

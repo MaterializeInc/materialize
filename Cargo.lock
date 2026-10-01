@@ -6539,7 +6539,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
- "mz-service",
+ "mz-secrets-cli",
  "mz-sql",
  "mz-storage-types",
  "serde",
@@ -6731,6 +6731,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-prof-http",
+ "mz-secrets-cli",
  "mz-service",
  "mz-storage",
  "mz-storage-types",
@@ -6908,7 +6909,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-repr",
- "mz-service",
+ "mz-secrets-cli",
  "mz-storage-client",
  "mz-storage-controller",
  "mz-storage-types",
@@ -7162,6 +7163,7 @@ dependencies = [
  "mz-prometheus-protobuf",
  "mz-repr",
  "mz-secrets",
+ "mz-secrets-cli",
  "mz-segment",
  "mz-server-core",
  "mz-service",
@@ -8353,6 +8355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-secrets-cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mz-aws-secrets-controller",
+ "mz-orchestrator-kubernetes",
+ "mz-orchestrator-process",
+ "mz-secrets",
+]
+
+[[package]]
 name = "mz-segment"
 version = "0.0.0"
 dependencies = [
@@ -8401,12 +8415,8 @@ dependencies = [
  "clap",
  "futures",
  "itertools 0.15.0",
- "mz-aws-secrets-controller",
  "mz-build-info",
- "mz-orchestrator-kubernetes",
- "mz-orchestrator-process",
  "mz-ore",
- "mz-secrets",
  "os_info",
  "pin-project",
  "prometheus",
@@ -8620,8 +8630,8 @@ dependencies = [
  "mz-pgrepr",
  "mz-repr",
  "mz-secrets",
+ "mz-secrets-cli",
  "mz-server-core",
- "mz-service",
  "mz-sql",
  "mz-sql-parser",
  "mz-storage-types",
