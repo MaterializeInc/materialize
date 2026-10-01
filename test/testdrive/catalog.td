@@ -621,6 +621,8 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_indexes                       ""
+mz_builtin_log_indexes                   ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
