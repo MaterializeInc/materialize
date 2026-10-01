@@ -32,7 +32,6 @@ sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
-sentry-tracing.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["test", "turmoil"] }

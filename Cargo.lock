@@ -7698,10 +7698,11 @@ dependencies = [
  "mz-orchestrator",
  "mz-ore",
  "mz-repr",
- "mz-service",
  "mz-tracing",
  "opentelemetry",
  "opentelemetry_sdk",
+ "sentry-tracing",
+ "tracing",
  "tracing-capture",
 ]
 
@@ -8411,7 +8412,6 @@ dependencies = [
  "prometheus",
  "rand 0.10.3",
  "semver",
- "sentry-tracing",
  "serde",
  "sysinfo",
  "tokio",
