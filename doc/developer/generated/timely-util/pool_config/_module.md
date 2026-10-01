@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/pool_config/metrics.rs
-revision: 93dcb0ef5a
+revision: de580d5215
 ---
 
 # timely-util::pool_config (module)

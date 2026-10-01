@@ -1,6 +1,6 @@
 ---
 source: src/pgwire/src/protocol.rs
-revision: 2daa609ac4
+revision: dd5350d2ae
 ---
 
 # pgwire::protocol
@@ -21,5 +21,6 @@ When decoding bind parameters, NUL characters in a decoded string value produce 
 In the extended query protocol, after each `Execute` message is processed the handler checks whether the current implicit transaction `may_span_pipeline`. Transactions that can span the pipeline stay open, allowing the whole pipeline to commit or roll back as a unit. Transactions that cannot span the pipeline are marked for commit (`txn_needs_commit = true`) so that `ensure_transaction` commits them before the next statement begins; this keeps single-statement optimizations available. The `Sync` message commits any open implicit transaction. The flag `extended_protocol_implicit_transaction_enabled` gates this pipeline-spanning behavior; when the flag is off, every implicit transaction is marked for commit after each Execute.
 
 When an implicit transaction ends (via `end_transaction`), any session parameters that changed during the transaction are announced to the client as `ParameterStatus` messages, restricted to the notify set established at startup. This mirrors the behavior of explicit `COMMIT`/`ROLLBACK`. Without this announcement, a `SET LOCAL` issued outside an explicit transaction would send its new value at SET time but never announce the revert when the implicit transaction closes, leaving clients that cache parameters with a stale value.
+`ExecuteResponse::DiscardedAll { params }` is handled alongside `TransactionCommitted { params }` and `TransactionRolledBack { params }`: changed session parameters are announced as `ParameterStatus` messages after `DISCARD ALL`, so clients that cache parameter values receive up-to-date state after a session reset.
 
 When `enable_statement_arrival_logging` is on, `maybe_log_message_arrival` logs each arriving frontend message at info level before it is processed, so a message that crashes the process still appears in the log. SQL text is redacted with the same policy as the statement log. Bind parameter values are data that redaction cannot reach, so only their count is logged. Authentication payloads are never logged. COPY data payloads are logged as their byte length only.

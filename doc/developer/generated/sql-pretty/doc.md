@@ -1,6 +1,6 @@
 ---
 source: src/sql-pretty/src/doc.rs
-revision: 447da2b53e
+revision: 950797294c
 ---
 
 # mz-sql-pretty::doc
@@ -19,6 +19,6 @@ Each `doc_*` method corresponds to a specific statement or clause kind (e.g., `d
 
 `doc_select_statement` wraps the query in parentheses when `query.body.starts_with_show()` is true, mirroring the `AstDisplay for SelectStatement` behavior.
 
-`doc_expr` for `Expr::Op` (prefix form) mirrors the `prefix_operand_needs_parens` logic from `AstDisplay`: it peels tight postfix forms (`Cast`, `Subscript`) and wraps the operand in a `bracket("(", …, ")")` call when the chain bottoms out at a numeric literal or a non-self-delimiting expression.
+`doc_expr` for `Expr::Op` (prefix form) delegates to the public `prefix_operand_needs_parens` from `mz-sql-parser`, wrapping the operand in a `bracket("(", …, ")")` call when it returns true. This ensures the pretty-printer and `AstDisplay` agree on parenthesization for both bare `-`/`+` and namespaced `OPERATOR(...)` prefix operators.
 
-`doc_function` mirrors the function-name quoting logic from `AstDisplay for Function`: names that clash with special-grammar keywords (`array`, `coalesce`, `exists`, `extract`, `greatest`, `least`, `list`, `map`, `normalize`, `nullif`, `position`, `row`, `substring`, `trim`) are emitted in the always-quoted stable form. The `extract` and `position` special forms delegate to `doc_display` rather than being pretty-printed inline.
+`doc_function` mirrors the function-name quoting logic from `AstDisplay for Function`: names that clash with special-grammar keywords (`array`, `coalesce`, `exists`, `extract`, `greatest`, `least`, `list`, `map`, `normalize`, `nullif`, `operator`, `position`, `row`, `substring`, `trim`) are emitted in the always-quoted stable form. The `extract` and `position` special forms delegate to `doc_display` rather than being pretty-printed inline.
