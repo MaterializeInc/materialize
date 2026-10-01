@@ -2527,6 +2527,7 @@ pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
         || name == CRDB_KEEPALIVES_INTERVAL.name()
         || name == CRDB_KEEPALIVES_RETRIES.name()
         || name == mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
+        || name == mz_adapter_types::dyncfgs::ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config
@@ -2715,6 +2716,16 @@ mod isolation_feature_flag_tests {
 mod reset_all_tests {
     use super::*;
     use crate::session::user::SYSTEM_USER;
+
+    #[mz_ore::test]
+    fn oracle_pipelining_changes_notify_timestamp_oracle() {
+        let name = mz_adapter_types::dyncfgs::ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name();
+        assert!(is_timestamp_oracle_config_var(name));
+        assert!(is_timestamp_oracle_config_var(
+            mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
+        ));
+        assert!(!is_timestamp_oracle_config_var("application_name"));
+    }
 
     fn test_vars() -> SessionVars {
         SessionVars::new_unchecked(&mz_build_info::DUMMY_BUILD_INFO, SYSTEM_USER.clone(), None)
