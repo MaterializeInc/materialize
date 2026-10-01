@@ -451,6 +451,13 @@ case "$cmd" in
             if command -v buildkite-agent > /dev/null 2>&1; then
                 args+=(--volume "$(command -v buildkite-agent)":/usr/local/bin/buildkite-agent)
             fi
+            # Forward the agent's Job API socket at the same path, so the
+            # forwarded BUILDKITE_AGENT_JOB_API_SOCKET stays valid. Without it,
+            # `buildkite-agent oidc request-token` refuses to run, because it
+            # cannot register the token for log redaction.
+            if [[ "${BUILDKITE_AGENT_JOB_API_SOCKET:-}" ]]; then
+                args+=(--volume "$BUILDKITE_AGENT_JOB_API_SOCKET:$BUILDKITE_AGENT_JOB_API_SOCKET")
+            fi
 
             # Install a persistent volume to hold Cargo metadata. We can't
             # forward the host's `~/.cargo` directly to the container, since
