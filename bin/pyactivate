@@ -27,7 +27,7 @@ logger = logging.getLogger("bootstrap")
 # `ci/test/lint-main/checks/check-python-version.sh` and with the version named
 # in `doc/developer/guide.md`.
 MIN_HEXVERSION = 0x030D0000
-MIN_VERSION = "3.13.0"
+MIN_VERSION = f"{MIN_HEXVERSION >> 24}.{(MIN_HEXVERSION >> 16) & 0xFF}"
 
 
 def main(args: list[str]) -> int:
