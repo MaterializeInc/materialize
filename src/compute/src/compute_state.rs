@@ -187,6 +187,11 @@ pub struct ComputeState {
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
+    /// Indexes whose arrangement is an imported shared arrangement, mapped to the id that
+    /// arrangement is published under.
+    ///
+    /// Such an index has no trace in `traces`, so its frontier is read from the published point.
+    pub shared_reexports: BTreeMap<GlobalId, GlobalId>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
@@ -343,6 +348,8 @@ impl ComputeState {
                 }
                 ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => None,
             },
+            sharing_registry,
+            shared_reexports: Default::default(),
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -995,6 +1002,7 @@ impl<'a> ActiveComputeState<'a> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
+        self.compute_state.shared_reexports.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
@@ -1117,6 +1125,17 @@ impl<'a> ActiveComputeState<'a> {
                 traces.oks_mut().read_upper(&mut new_frontier);
             } else if let Some(frontier) = &collection.sink_write_frontier {
                 new_frontier.clone_from(&frontier.borrow());
+            } else if let Some(upper) =
+                self.compute_state
+                    .shared_reexports
+                    .get(&id)
+                    .and_then(|gid| {
+                        self.compute_state
+                            .sharing_registry
+                            .published_upper(gid, self.timely_worker.index())
+                    })
+            {
+                new_frontier.clone_from(&upper);
             } else {
                 error!(id = ?id, "collection without write frontier");
                 continue;
