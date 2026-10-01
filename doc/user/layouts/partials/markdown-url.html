@@ -1,7 +1,6 @@
 {{- /*
-  Returns the URL of a page's Markdown rendition, the file the `skill` output
-  format writes into <baseURL>/markdown-docs/ on the second Hugo pass (see
-  ci/deploy_website/website.sh).
+  Returns the URL of a page's Markdown rendition, the index.md that
+  bin/docs-markdown writes beside the page's index.html.
 
   Arguments (dict):
     page      (required) the Page to link to
@@ -17,10 +16,7 @@
     {{ partial "markdown-url.html" (dict "page" .) }}
     {{ partial "markdown-url.html" (dict "page" $p "absolute" true) }}
 */ -}}
-{{- $basePath := (urls.Parse site.BaseURL).Path -}}
-{{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
-{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath -}}
-{{- $url := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
+{{- $url := printf "%sindex.md" .page.RelPermalink -}}
 {{- if .absolute -}}
   {{- $parsed := urls.Parse site.BaseURL -}}
   {{- $origin := site.Params.canonicalHost -}}

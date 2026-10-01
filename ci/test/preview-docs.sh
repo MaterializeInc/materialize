@@ -22,6 +22,7 @@ cd doc/user
 
 # Build main docs to public/
 hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
+../../bin/docs-markdown public --base-url "https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/"
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]

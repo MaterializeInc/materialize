@@ -127,6 +127,11 @@ unsafe = true
     startLevel = 2
     endLevel = 4
 
+[[deployment.matchers]]
+# RFC 7763 makes charset a required parameter of text/markdown.
+pattern = "^.+\\.md$"
+contentType = "text/markdown; charset=utf-8"
+
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"

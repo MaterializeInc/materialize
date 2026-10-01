@@ -18,6 +18,22 @@ This directory is the root of Materialize's Hugo user documentation site.
 - `resources/` and `public/` are generated build output. Avoid hand-editing
   them.
 
+### Markdown rendition
+
+Every page also publishes as Markdown at `<page URL>index.md`, for agents and
+other non-browser readers. `bin/docs-markdown` generates it after the Hugo
+build by converting each page's `<article>` element, so shortcodes need no
+Markdown variant. Chrome inside the `<article>` that should stay out of the
+Markdown, such as a copy button, takes the `data-markdown-ignore` attribute.
+
+To inspect the Markdown for a template or shortcode change, run from the
+repository root:
+
+```shell
+hugo --source doc/user --destination /tmp/docs/docs --baseURL /docs
+bin/docs-markdown /tmp/docs/docs --base-url https://materialize.com/docs/
+```
+
 ### Reusing content
 
 Use the existing single-sourcing mechanisms before duplicating prose:

@@ -17,20 +17,9 @@
   Links point at each page's Markdown rendition rather than its HTML page, so a
   consumer fetches prose instead of site chrome.
 
-  Only the HTML pass renders this file. config.skill.toml resets outputs.home to
-  ["skill"], and the rightmost --config file wins, so the Markdown pass emits
-  markdown-docs/index.md instead of a second copy of this index.
-
   The output must be byte-stable: no dates, no build metadata, and no ranging
   over maps. Every collection below is explicitly ordered.
 */ -}}
-{{- $basePath := (urls.Parse site.BaseURL).Path -}}
-{{- /*
-  Only the main docs build produces the markdown-docs tree these links resolve
-  against; self-managed-docs/* branches build HTML alone. Emit nothing there
-  rather than publish an index of dead links.
-*/ -}}
-{{- if not (in $basePath "self-managed") -}}
 {{- $eligible := slice -}}
 {{- range site.Pages -}}
   {{- $keep := true -}}
@@ -119,13 +108,11 @@
 
 > {{ $intro }}
 
-Every link below points at the Markdown source of a documentation page. For the
-HTML page instead, drop `markdown-docs/` from the URL and drop the trailing
-`index.md`. Per-version release notes are not listed individually; see the
-Releases section.
+Every link below points at the Markdown rendition of a documentation page. For
+the HTML page instead, drop the trailing `index.md`. Per-version release notes
+are not listed individually; see the Releases section.
 {{ range $groups }}{{ $items := sort (where $eligible "Section" .key) "RelPermalink" }}{{ if $items }}
 ## {{ .title }}
 
 {{ range $items }}- [{{ .Title }}]({{ partial "markdown-url.html" (dict "page" . "absolute" true) }}){{ with .Description }}{{ $d := trim (replaceRE `\s+` " " .) " " }}{{ if $d }}: {{ $d }}{{ end }}{{ end }}
 {{ end }}{{ end }}{{ end -}}
-{{- end -}}
