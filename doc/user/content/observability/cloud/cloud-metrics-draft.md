@@ -68,6 +68,10 @@ Labels include both IDs and names, so you do not need to join against the
 catalog. (Draft: additional stable metrics, such as memory limits and active
 sessions, are under consideration.)
 
+Coming soon: the goal is to cover everything in
+[Essential metrics](/observability/essential-metrics/). If you need a specific
+metric, reach out to your Materialize representative.
+
 ## Prerequisites
 
 - The **Organization Admin** role, to create metrics tokens. (Draft: which roles
