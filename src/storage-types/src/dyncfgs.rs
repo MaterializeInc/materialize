@@ -531,6 +531,19 @@ pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config:
     ParameterScope::Environment,
 );
 
+/// Whether source snapshot operators emit rewind requests as soon as the snapshot bound is
+/// known instead of after the snapshot completes. This lets the replication operator read
+/// the upstream stream while the snapshot runs. Replication data received during the
+/// snapshot is staged in the dataflow until the snapshot completes, so enabling this
+/// trades cluster memory during hydration for concurrent progress on the stream.
+pub const STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION: Config<bool> = Config::new(
+    "storage_source_snapshot_concurrent_replication",
+    false,
+    "Emit source rewind requests when the snapshot bound is known instead of after the \
+    snapshot completes, so the replication stream is read concurrently with the snapshot.",
+    ParameterScope::Environment,
+);
+
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
@@ -588,6 +601,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)

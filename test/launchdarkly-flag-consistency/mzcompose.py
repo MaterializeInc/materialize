@@ -426,6 +426,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     storage_server_maintenance_interval
     storage_sink_ensure_topic_config
     storage_sink_progress_search
+    storage_source_snapshot_concurrent_replication
     storage_statistics_retention_duration
     storage_suspend_and_restart_delay
     storage_upsert_max_snapshot_batch_buffering
