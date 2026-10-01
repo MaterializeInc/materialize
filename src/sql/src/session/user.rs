@@ -11,8 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use mz_auth::AuthenticatorKind;
+use mz_auth::user::ExternalUserMetadata;
 use mz_repr::role_id::RoleId;
-use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
+use mz_repr::user::InternalUserMetadata;
 use serde::Serialize;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";

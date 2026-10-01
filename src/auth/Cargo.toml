@@ -20,6 +20,7 @@ static_assertions.workspace = true
 aws-lc-rs.workspace = true
 itertools.workspace = true
 tracing.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 
 [features]
 default = []
