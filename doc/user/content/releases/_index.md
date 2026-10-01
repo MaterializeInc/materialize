@@ -44,6 +44,8 @@ Starting with v13.1.2 of the [Materialize Terraform modules](/self-managed-deplo
 - **Environment dashboards**: Follow an upgrade as it rolls out with **Materialize Upgrade**, which shows Kubernetes events, blue/green generation progress, and the operator's reconciliation loop. It requires Materialize v26.41.0 or later for full coverage. View logs and Kubernetes events from your Materialize workloads with **Materialize Logs and Events**.
 - **Infrastructure dashboards**: View logs and events from the monitoring stack, Kubernetes system components, and the node journal with **Infrastructure Logs and Events**. Inspect a single node's CPU, memory, network, storage, pods, and conditions with **Infrastructure Node Detail**.
 
+![Materialize Upgrade dashboard during a blue/green upgrade, showing the old and new generations' hydration progress, worst-case lag, pods, and versions](/images/releases/v2644_upgrade_dashboard.png)
+
 For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
 
 ### Improved query latency under load {#v26.44.1-improved-query-latency-under-load}
