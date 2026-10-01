@@ -59,7 +59,12 @@ Apache License, Version 2.0. */}}
         </button>
         <div>
           {{ partial "breadcrumbs.html" . }}
-          {{ block "main" . }}{{ end }}
+          {{- /*
+            The <article> is the page body that the Markdown rendition is
+            generated from (bin/docs-markdown). Mark chrome inside it with
+            data-markdown-ignore to keep it out of the Markdown.
+          */}}
+          <article>{{ block "main" . }}{{ end }}</article>
         </div>
 
         <a href="#top" class="back-to-top">Back to top &uarr;</a>

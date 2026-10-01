@@ -3,18 +3,20 @@
 {{ if not (.Params.disable_h1) }}
   <div class="title-row">
     <h1>{{.Title}}</h1>
-    <a class="btn-ghost" href="{{ partial "markdown-url.html" (dict "page" .) }}">View as Markdown</a>
+    <a class="btn-ghost" data-markdown-ignore href="{{ partial "markdown-url.html" (dict "page" .) }}">View as Markdown</a>
   </div>
 {{ end }}
 
 {{ .Content }}
 
 {{ if not (.Params.disable_list) }}
+<ul>
 {{ range .Pages.ByWeight }}
 <li>
   <a href="{{.Permalink}}">{{.Title}}</a>
 </li>
 {{ end }}{{/*  {{ range .Pages.ByWeight }} */}}
+</ul>
 {{ end }}{{/*  {{ if not (.Params.disable_list) }} */}}
 
 {{ end }}{{/*  {{ define "main"}} */}}
