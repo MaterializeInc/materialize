@@ -12,10 +12,10 @@
 #
 # The dataflow imports a maintenance index and exports it under a transient id
 # with the same key, so the export finds the imported shared arrangement rather
-# than a freshly rendered one. On the interactive runtime that export becomes an
-# alias of the index's publication point, with no arrangement of its own. The
-# peek names only the transient id, so a correct result proves the alias reaches
-# the shared arrangement.
+# than a freshly rendered one. On the interactive runtime that export has no
+# arrangement of its own and resolves to the index's publication point. The
+# peek names only the transient id, so a correct result proves the transient id
+# reaches the shared arrangement.
 create-instance
 ----
 ok
