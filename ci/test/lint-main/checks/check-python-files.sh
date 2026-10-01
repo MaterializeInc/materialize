@@ -28,7 +28,10 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
 
     try xargs npx --yes "pyright@$pyright_version" --warnings --threads 4 < "$python_files_list"
 
-    try xargs bin/pyactivate -m ruff check < "$python_files_list"
+    # Ruff discovers files itself, so every Python file and notebook is linted
+    # under its nearest `[tool.ruff]` config. The root config excludes
+    # `misc/dbt-materialize`, which the next invocation covers.
+    try bin/pyactivate -m ruff check .
     # We need to maintain compatibility with older Python versions for this
     try xargs bin/pyactivate -m ruff check --target-version=py38 < "$dbt_files_list"
 fi
