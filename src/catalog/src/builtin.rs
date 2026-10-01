@@ -1158,7 +1158,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_INDEXES),
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::MaterializedView(&MZ_TABLES),
-        // mz_sources is generated dynamically below with inlined builtin VALUES.
+        Builtin::MaterializedView(&MZ_SOURCES),
         Builtin::MaterializedView(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCE_TABLES),
@@ -1512,21 +1512,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
     ];
 
     builtin_items.extend(notice::builtins());
-
-    // Must happen BEFORE ontology::generate_views so that mz_sources's ontology
-    // annotation (entity_name = "source") is visible to the ontology index views.
-    {
-        let mz_sources = builtin::make_mz_sources();
-        let mz_sources_ref: &'static BuiltinMaterializedView = Box::leak(Box::new(mz_sources));
-        // Insert at the original position of the old static MZ_SOURCES —
-        // right before mz_source_references — to preserve stable IDs for
-        // all items that follow it in the list.
-        let insert_pos = builtin_items
-            .iter()
-            .position(|b| b.name() == "mz_source_references")
-            .expect("mz_source_references must be present in builtin_items");
-        builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_sources_ref));
-    }
 
     // Generate mz_object_dependencies_raw, which inlines every builtin's
     // dependency edges as VALUES.
