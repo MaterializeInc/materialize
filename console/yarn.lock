@@ -5923,7 +5923,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/group@npm:3.12.0, @visx/group@npm:^3.12.0":
+"@visx/group@npm:3.12.0":
   version: 3.12.0
   resolution: "@visx/group@npm:3.12.0"
   dependencies:
@@ -5936,7 +5936,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/group@npm:4.0.0":
+"@visx/group@npm:4.0.0, @visx/group@npm:^4.0.0":
   version: 4.0.0
   resolution: "@visx/group@npm:4.0.0"
   dependencies:
@@ -11826,7 +11826,7 @@ __metadata:
     "@visx/curve": "npm:^3.12.0"
     "@visx/event": "npm:^3.12.0"
     "@visx/grid": "npm:^4.0.0"
-    "@visx/group": "npm:^3.12.0"
+    "@visx/group": "npm:^4.0.0"
     "@visx/responsive": "npm:^3.12.0"
     "@visx/scale": "npm:^3.12.0"
     "@visx/shape": "npm:^4.0.0"
