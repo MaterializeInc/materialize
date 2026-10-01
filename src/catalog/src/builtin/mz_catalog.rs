@@ -13,12 +13,9 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use itertools::Itertools;
-use mz_ore::collections::CollectionExt;
 use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
-use mz_sql::ast::Statement;
-use mz_sql::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql::catalog::{
     CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference, ObjectType,
 };
@@ -731,63 +728,14 @@ const GID_MAPPING_CTES: &str = "\
     )";
 
 /// Generate the `mz_catalog.mz_indexes` builtin materialized view with builtin
-/// index entries inlined as VALUES clauses.
-///
-/// Inlining the values means the MV's SQL fingerprint changes whenever a builtin
-/// index or log is added or removed, which forces a `MigrationStep::replacement`
-/// for `mz_indexes` and guarantees stale data is never silently served.
+/// log entries inlined as VALUES clauses.
 ///
 /// Includes user-created indexes (from `mz_catalog_raw` `Item` entries),
-/// system builtin indexes (from `GidMapping` with object_type=6), and
-/// introspection source indexes (from `IntrospectionSourceIndex` entries).
+/// system builtin indexes (from `mz_builtin_indexes`), and introspection
+/// source indexes (from `IntrospectionSourceIndex` entries).
 pub(super) fn make_mz_indexes(
-    builtin_index_iter: impl Iterator<Item = &'static BuiltinIndex>,
     builtin_log_iter: impl Iterator<Item = &'static BuiltinLog>,
 ) -> BuiltinMaterializedView {
-    let builtin_index_values = builtin_index_iter
-        .map(|index| {
-            assert_safe_builtin_name(index.name, "index");
-            let create_sql_str = index.create_sql();
-            let stmt = mz_sql::parse::parse(&create_sql_str)
-                .unwrap_or_else(|e| panic!("invalid sql for builtin index {}: {e}", index.name))
-                .into_element()
-                .ast;
-            let Statement::CreateIndex(idx_stmt) = stmt else {
-                panic!("expected CreateIndex for builtin index {}", index.name);
-            };
-            let mz_sql::ast::RawItemName::Name(on_name) = idx_stmt.on_name else {
-                panic!("expected Name for on_name in builtin index {}", index.name);
-            };
-            assert_eq!(
-                on_name.0.len(),
-                2,
-                "expected schema.name format for on_name in builtin index {}",
-                index.name
-            );
-            let on_schema = on_name.0[0].as_str();
-            let on_name_str = on_name.0[1].as_str();
-            assert_safe_builtin_name(on_schema, "index `on` schema");
-            assert_safe_builtin_name(on_name_str, "index `on` object");
-            let key_exprs = idx_stmt
-                .key_parts
-                .unwrap_or_else(|| {
-                    panic!("builtin index {} must have explicit key parts", index.name)
-                })
-                .iter()
-                .map(|e| e.to_ast_string_stable())
-                .join(", ");
-            // Unlike the identifier names above, key expressions are arbitrary
-            // SQL (column refs, casts, string literals) that can legitimately
-            // contain single quotes — so escape them rather than asserting
-            // them away with `assert_safe_builtin_name`.
-            let key_exprs_escaped = escaped_string_literal(&key_exprs);
-            format!(
-                "({}::oid, '{}', '{}', '{}', {key_exprs_escaped})",
-                index.oid, index.name, on_schema, on_name_str
-            )
-        })
-        .join(",");
-
     let log_col_values = builtin_log_iter
         .map(|log| {
             assert_safe_builtin_name(log.name, "log");
@@ -808,8 +756,8 @@ pub(super) fn make_mz_indexes(
         .join(",");
 
     // Reconstructs `CREATE INDEX ... IN CLUSTER [<id>] ON [<id> AS "schema"."name"] (<keys>)`
-    // from the (oid, name, on_schema, on_name, key_exprs) VALUES rows joined to
-    // `GidMapping` lookups and the `mz_catalog_server` cluster id.
+    // from `mz_builtin_indexes` joined to `GidMapping` lookups and the
+    // `mz_catalog_server` cluster id.
     let builtin_indexes_cte = format!("\
     builtin_indexes AS (
         SELECT *, mz_internal.redact_sql(create_sql) AS redacted_create_sql
@@ -821,10 +769,10 @@ pub(super) fn make_mz_indexes(
                 om.id AS on_id,
                 csc.id AS cluster_id,
                 '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
-                'CREATE INDEX \"' || biv.name || '\" IN CLUSTER [' || csc.id || '] ON [' || om.id || ' AS \"' || biv.on_schema || '\".\"' || biv.on_name || '\"] (' || biv.key_exprs || ')' AS create_sql
-            FROM (VALUES {builtin_index_values}) AS biv(oid, name, on_schema, on_name, key_exprs)
+                'CREATE INDEX \"' || biv.name || '\" IN CLUSTER [' || csc.id || '] ON [' || om.id || ' AS \"' || biv.on_schema_name || '\".\"' || biv.on_name || '\"] (' || biv.key_exprs || ')' AS create_sql
+            FROM mz_internal.mz_builtin_indexes biv
             JOIN builtin_index_gid_mappings bigm ON bigm.name = biv.name
-            JOIN on_gid_mappings om ON om.schema_name = biv.on_schema AND om.object_name = biv.on_name
+            JOIN on_gid_mappings om ON om.schema_name = biv.on_schema_name AND om.object_name = biv.on_name
             CROSS JOIN catalog_server_cluster csc
         ) AS t
     )");
