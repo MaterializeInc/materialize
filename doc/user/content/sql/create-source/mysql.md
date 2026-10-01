@@ -80,7 +80,8 @@ binlog replication for your MySQL service, see the integration guides.
 {{< warning >}}
 If Materialize tries to resume replication and finds GTID gaps due to missing
 binlog files, the source enters an errored state and you have to drop and
-recreate it.
+recreate it. See [Binlog files removed before the resume
+point](#binlog-files-removed-before-the-resume-point).
 {{< /warning >}}
 
 By default, MySQL retains binlog files for **30 days** (i.e., 2592000 seconds)
@@ -187,6 +188,10 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 ## Handling upstream operations
 
 {{% upstream-schema-change-behavior connector="mysql" %}}
+
+## Source failure states and recovery
+
+{{% include-headless "/headless/mysql-failure-states" %}}
 
 ## Examples
 
