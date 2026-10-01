@@ -113,7 +113,7 @@
     "semver": "^7.8.5",
     "stream": "^0.0.3",
     "string-width": "^7.2.0",
-    "stripe": "^20.4.1",
+    "stripe": "^22.6.2",
     "style-mod": "^4.1.4",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
