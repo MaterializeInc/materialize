@@ -144,9 +144,11 @@ compaction has been held back, the new object will need to replay more
 upstream history. This can take longer, and require more memory.
 
 One pinned input is not enough on its own to cause that. Because the `as_of`
-takes the *latest* of the read frontiers, a single current input pulls it
-forward and the pinned one costs nothing. An object starts far in the past
-only when **every** one of its inputs is pinned.
+takes the *latest* of the read frontiers, a single current input keeps it from
+being dragged back. An object starts far in the past only when **every** one of
+its inputs is pinned. A pinned input still retains more unconsolidated updates,
+which can make reading it more expensive, but it no longer sets where the
+object starts.
 
 To determine if the input history is pinned, compare each object's "read
 frontier" against its "write frontier", using
@@ -195,7 +197,8 @@ before treating a large `retained_history` as a problem.
 
 An object holds a read hold on its inputs at a time no greater than its own
 write frontier, so anything whose write frontier has stopped advancing pins the
-history of everything it reads.
+history of everything it reads. Indexes on a cluster with no replicas are the
+exception, covered below.
 
 #### Possible cause: an object cannot finish hydrating
 
@@ -207,9 +210,16 @@ described in [Step 2](#step-2-check-for-a-rehydration-loop).
 #### Possible cause: a cluster has a replication factor of `0`
 
 A cluster with `REPLICATION FACTOR` set to `0` never advances the write
-frontiers of the objects on it, so those objects go on pinning the history of
-their inputs for as long as they exist. Indexes, materialized views and sinks
-all do this. List what such a cluster still carries:
+frontiers of the objects on it. Materialized views and sinks there go on
+pinning the history of their inputs for as long as they exist.
+
+An index on such a cluster does not pin its inputs by itself: with no replica
+to serve reads from it, the controller advances its read hold anyway, and the
+holds it places on its own inputs follow. An index only pins when something
+else holds its since back, such as a materialized view or sink on the same
+cluster that reads from it.
+
+List what such a cluster still carries:
 
 ```mzsql
 SELECT
@@ -228,19 +238,22 @@ ORDER BY c.name, o.name;
 ```nofmt
  input  | object_name |       type        | cluster_name
 --------+-------------+-------------------+--------------
- orders | orders_idx  | index             | batch_jobs
  orders | orders_mv   | materialized-view | batch_jobs
-(2 rows)
+(1 row)
 ```
 
 [`mz_internal.mz_compute_dependencies`](/sql/system-catalog/mz_internal/#mz_compute_dependencies)
 covers indexes and materialized views but not sinks, so a sink on the cluster
-pins its inputs without appearing here.
+pins its inputs without appearing here. Index rows are worth reading against
+the rule above: an index listed here is pinning only if a materialized view or
+sink on the same cluster reads from it.
 
-**Resolution**: drop the objects the query lists. The read holds belong to the
+**Resolution**: drop the materialized views and sinks the cluster carries,
+along with any index one of them reads from. The read holds belong to the
 objects rather than to the cluster, so dropping the cluster works only because
 it takes its objects with it. Setting a cluster's replication factor to `0` is
-usually what caused the problem, and never fixes it.
+usually what caused the problem, and never fixes it. An index the cluster
+carries on its own is not holding anything back and does not need dropping.
 
 Dropping is destructive. Dropping a materialized view discards its persisted
 output, so recreating it hydrates it again from its inputs. One with dependents
@@ -253,11 +266,14 @@ INDEX`](/sql/show-create-index/) first.
 Once the objects are gone, the read frontiers of their inputs advance again and
 a new deployment can follow within seconds.
 
-Do not restore a replica to a cluster that has sat at `0` for days instead of
-dropping its objects. The replica rehydrates through the whole retained
-backlog, which is the out-of-memory case in [Step
-2](#step-2-check-for-a-rehydration-loop). Drop the objects and recreate them
-instead.
+Do not restore a replica to a cluster that has sat at `0` for days while it
+still carries a materialized view or sink. The replica rehydrates that object,
+and any index it reads from, through the whole retained backlog, which is the
+out-of-memory case in [Step
+2](#step-2-check-for-a-rehydration-loop). Drop those objects and recreate them
+instead. A cluster carrying only indexes does not have this problem, because
+their read holds were forwarded while it was paused and a new replica starts
+them near the present.
 
 ## Related pages
 
