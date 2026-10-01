@@ -6790,7 +6790,6 @@ dependencies = [
  "futures",
  "itertools 0.15.0",
  "lgalloc",
- "libc",
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",

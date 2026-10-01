@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -222,6 +220,22 @@ fn prepare_interactive_compute_config(
         "interactive and maintenance compute runtimes must span an equal number of Timely peers",
     );
     Some(interactive)
+}
+
+/// Fronts each controller connection's client of the maintenance runtime with a [`Multiplexer`]
+/// over a client of the interactive runtime, if one runs.
+fn multiplex_compute(
+    maintenance: impl Fn() -> Box<dyn ComputeClient> + Send + 'static,
+    interactive: Option<impl Fn() -> Box<dyn ComputeClient> + Send + 'static>,
+) -> Box<dyn Fn() -> Box<dyn ComputeClient> + Send> {
+    match interactive {
+        Some(interactive) => Box::new(move || {
+            let client: Box<dyn ComputeClient> =
+                Box::new(Multiplexer::new(maintenance(), interactive()));
+            client
+        }),
+        None => Box::new(maintenance),
+    }
 }
 
 pub fn main() {
@@ -474,139 +488,154 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // the slot a publisher on another runtime filled, so both must hold the same registry.
     let sharing_registry = ArrangementSharingRegistry::new();
 
-    // Derive the interactive runtime's config before the maintenance config is moved into `serve`,
-    // since the equal-peers check needs both.
     let interactive_compute_timely_config = prepare_interactive_compute_config(
         args.interactive_compute_timely_config,
         args.process,
         &compute_timely_config,
     );
-
     let maintenance_role = if interactive_compute_timely_config.is_some() {
         ComputeRuntimeRole::Maintenance
     } else {
         ComputeRuntimeRole::Solo
     };
 
-    let compute_context = ComputeInstanceContext {
-        scratch_directory: args.scratch_directory.clone(),
-        worker_core_affinity: args.worker_core_affinity,
-        connection_context: connection_context.clone(),
-    };
-
-    // Build the storage server and the maintenance compute runtime. The unified cluster hosts
-    // storage objects on the maintenance runtime's workers, which leaves what an interactive
-    // runtime reads unchanged: it imports the arrangements maintenance publishes either way.
-    let (compute_client_builder, storage_server): (
-        Box<dyn Fn() -> Box<dyn ComputeClient> + Send>,
-        Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>,
-    ) = if args.unified_cluster {
-        info!("running with a unified timely cluster");
-
-        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
-            compute_timely_config,
-            maintenance_role,
-            &metrics_registry,
-            Arc::clone(&persist_clients),
-            sharing_registry.clone(),
-            txns_ctx.clone(),
-            Arc::clone(&tracing_handle),
-            compute_context.clone(),
-            SYSTEM_TIME.clone(),
-            connection_context,
-            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
-        )
-        .await?;
-        let storage_server = transport::serve(
-            args.storage_controller_listen_addr.clone(),
-            BUILD_INFO.semver_version(),
-            grpc_host.clone(),
-            Duration::MAX,
-            storage_client_builder,
-            cluster_server_metrics.for_server("storage"),
-        )
-        .instrument(info_span!("ctp", name = "storage"));
-
-        (Box::new(compute_client_builder), Box::pin(storage_server))
-    } else {
-        // TODO: retire this two-cluster topology once the unified cluster has production
-        // mileage.
-
-        let storage_client_builder = mz_storage::serve(
-            storage_timely_config,
-            &metrics_registry,
-            Arc::clone(&persist_clients),
-            txns_ctx.clone(),
-            Arc::clone(&tracing_handle),
-            SYSTEM_TIME.clone(),
-            connection_context,
-            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
-        )
-        .await?;
-        let storage_server = transport::serve(
-            args.storage_controller_listen_addr.clone(),
-            BUILD_INFO.semver_version(),
-            grpc_host.clone(),
-            Duration::MAX,
-            storage_client_builder,
-            cluster_server_metrics.for_server("storage"),
-        )
-        .instrument(info_span!("ctp", name = "storage"));
-
-        let compute_client_builder = mz_compute::server::serve(
-            compute_timely_config,
-            maintenance_role,
-            &metrics_registry,
-            Arc::clone(&persist_clients),
-            sharing_registry.clone(),
-            txns_ctx.clone(),
-            Arc::clone(&tracing_handle),
-            compute_context.clone(),
-        )
-        .await?;
-        (Box::new(compute_client_builder), Box::pin(storage_server))
-    };
-
-    // With an interactive runtime, a `Multiplexer` fronts both runtimes on the single controller
-    // endpoint. Without one, the maintenance client builder serves it directly.
+    // NOTE: The interactive runtime starts before either branch below opens a listener. On a
+    // unified cluster the storage objects render on the maintenance runtime, whose compute logging
+    // the compute controller's `CreateInstance` installs, and a dataflow rendered before that
+    // never appears in compute introspection. A storage listener opened while the interactive
+    // runtime was still starting gave a storage controller that whole startup to render first.
     //
     // Shared fate: the panic hook `main` installs covers both runtimes' threads, so a panic on
     // either aborts the process. That bounds an interactive import's read hold to the life of the
     // replica without a lease.
-    let compute_client_builder: Box<dyn Fn() -> Box<dyn ComputeClient> + Send> =
-        if let Some(interactive_config) = interactive_compute_timely_config {
-            let interactive_compute_client_builder = mz_compute::server::serve(
-                interactive_config,
+    let interactive_compute_client_builder = match interactive_compute_timely_config {
+        Some(config) => {
+            let builder = mz_compute::server::serve(
+                config,
                 ComputeRuntimeRole::Interactive,
                 &metrics_registry,
                 Arc::clone(&persist_clients),
                 sharing_registry.clone(),
                 txns_ctx.clone(),
                 Arc::clone(&tracing_handle),
-                compute_context.clone(),
+                ComputeInstanceContext {
+                    scratch_directory: args.scratch_directory.clone(),
+                    worker_core_affinity: args.worker_core_affinity,
+                    connection_context: connection_context.clone(),
+                },
             )
             .await?;
             info!("started interactive compute runtime");
+            Some(builder)
+        }
+        None => None,
+    };
 
-            // Per controller connection, build a fresh multiplexer over one client from each
-            // runtime.
-            Box::new(move || {
-                let client: Box<dyn ComputeClient> = Box::new(Multiplexer::new(
-                    compute_client_builder(),
-                    interactive_compute_client_builder(),
-                ));
-                client
-            })
-        } else {
-            compute_client_builder
-        };
+    if args.unified_cluster {
+        info!("running with a unified timely cluster");
 
-    // NOTE: Neither server listens before every runtime is built. On a unified cluster the
-    // storage objects render on the maintenance runtime, whose compute logging is installed by the
-    // compute controller's `CreateInstance`, and a dataflow rendered before that never appears in
-    // compute introspection. Opening the storage listener while the interactive runtime was still
-    // starting gave a storage controller that whole startup to render first. This does not order
-    // the two controllers' connections, so the race of a single-runtime unified cluster remains.
+        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+            compute_timely_config,
+            maintenance_role,
+            &metrics_registry,
+            persist_clients,
+            sharing_registry,
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory.clone(),
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context: connection_context.clone(),
+            },
+            SYSTEM_TIME.clone(),
+            connection_context,
+            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        )
+        .await?;
+
+        info!(
+            "listening for storage controller connections on {}",
+            args.storage_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "storage_server",
+            transport::serve(
+                args.storage_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                storage_client_builder,
+                cluster_server_metrics.for_server("storage"),
+            )
+            .instrument(info_span!("ctp", name = "storage")),
+        );
+
+        info!(
+            "listening for compute controller connections on {}",
+            args.compute_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "compute_server",
+            transport::serve(
+                args.compute_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host,
+                Duration::MAX,
+                multiplex_compute(compute_client_builder, interactive_compute_client_builder),
+                cluster_server_metrics.for_server("compute"),
+            )
+            .instrument(info_span!("ctp", name = "compute")),
+        );
+
+        // Block forever.
+        return future::pending().await;
+    }
+
+    // Start storage server.
+    let storage_client_builder = mz_storage::serve(
+        storage_timely_config,
+        &metrics_registry,
+        Arc::clone(&persist_clients),
+        txns_ctx.clone(),
+        Arc::clone(&tracing_handle),
+        SYSTEM_TIME.clone(),
+        connection_context.clone(),
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+    )
+    .await?;
+    info!(
+        "listening for storage controller connections on {}",
+        args.storage_controller_listen_addr
+    );
+    mz_ore::task::spawn(
+        || "storage_server",
+        transport::serve(
+            args.storage_controller_listen_addr,
+            BUILD_INFO.semver_version(),
+            grpc_host.clone(),
+            Duration::MAX,
+            storage_client_builder,
+            cluster_server_metrics.for_server("storage"),
+        )
+        .instrument(info_span!("ctp", name = "storage")),
+    );
+
+    // Start compute server.
+    let compute_client_builder = mz_compute::server::serve(
+        compute_timely_config,
+        maintenance_role,
+        &metrics_registry,
+        persist_clients,
+        sharing_registry,
+        txns_ctx,
+        tracing_handle,
+        ComputeInstanceContext {
+            scratch_directory: args.scratch_directory,
+            worker_core_affinity: args.worker_core_affinity,
+            connection_context,
+        },
+    )
+    .await?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
@@ -616,18 +645,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host,
+            grpc_host.clone(),
             Duration::MAX,
-            compute_client_builder,
+            multiplex_compute(compute_client_builder, interactive_compute_client_builder),
             cluster_server_metrics.for_server("compute"),
         )
         .instrument(info_span!("ctp", name = "compute")),
     );
-    info!(
-        "listening for storage controller connections on {}",
-        args.storage_controller_listen_addr
-    );
-    mz_ore::task::spawn(|| "storage_server", storage_server);
+
+    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
 
     // Block forever.
     future::pending().await
