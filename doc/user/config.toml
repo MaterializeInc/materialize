@@ -102,15 +102,6 @@ url = "https://materialize.com/securitydisclosure"
 weight = 55
 
 #
-# Custom output format for Claude skill generation
-#
-[outputFormats.skill]
-  mediaType = "text/markdown"
-  baseName = "index"
-  isPlainText = true
-  notAlternative = true
-
-#
 # Custom output format for the llms.txt docs index
 #
 [outputFormats.llmstxt]

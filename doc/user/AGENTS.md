@@ -18,19 +18,6 @@ This directory is the root of Materialize's Hugo user documentation site.
 - `resources/` and `public/` are generated build output. Avoid hand-editing
   them.
 
-### Output formats
-
-Every page renders as both the HTML site and a plain-Markdown `skill` output.
-The `config.skill.toml` overlay writes the Markdown output to
-`public/markdown-docs/` for use as agent-readable documentation. Templates
-therefore come in pairs, such as `layouts/_default/single.html` and
-`layouts/_default/single.skill.md`.
-
-When adding or changing a shortcode that emits HTML, add or update its
-`.skill.md` variant too. Without one, Hugo falls back to the `.html` template
-and can leak raw HTML into the Markdown output. Existing shortcodes without a
-variant are a known gap, not a pattern to copy.
-
 ### Reusing content
 
 Use the existing single-sourcing mechanisms before duplicating prose:
@@ -71,12 +58,10 @@ Run commands from `doc/user` unless noted otherwise:
 - `../../bin/format-docs` trims trailing whitespace and ensures Markdown files
   end with a newline.
 - `sql-grammar/generate.sh` regenerates railroad diagrams after BNF changes.
-- `hugo --config config.toml,config.skill.toml --disableKinds
-  sitemap,robotsTXT,taxonomy` builds the agent-readable Markdown output.
 - `./docs-pre-pr-review-claude.sh --worktree`, `--staged`, `--range A..B`, or a
   list of files runs the pre-PR content review.
 
-The full docs lint builds both output formats before running `htmltest` and the
+The full docs lint builds the site before running `htmltest` and the
 catalog and metrics checks. Install `htmltest` with `brew install htmltest` if
 it is unavailable locally.
 
@@ -199,10 +184,6 @@ There is no unit-test suite for prose. Preview changed pages with Hugo, then
 run `../../ci/test/lint-docs.sh` to catch broken links, HTML errors, and
 catalog inconsistencies. Review generated diagrams and rendered examples when
 changing shortcodes, layouts, or SQL grammar.
-
-When changing templates or shortcodes, inspect both the HTML and Markdown
-outputs. A successful HTML render does not prove that the `skill` output is
-valid.
 
 ## Test syntax as you write the documentation
 
