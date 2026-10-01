@@ -36,13 +36,31 @@ Create a new application with these settings:
   where `<id>` matches the entry you'll add to tfvars (e.g. `okta`,
   `entra`, `google`).
 - **Grant types**: Authorization Code
-- **Scopes**: `openid`, `email`, `profile`
+
+You don't set scopes on the application. Kratos requests them at sign-in
+from the entry's `scope` list in tfvars, which defaults to `openid`,
+`email`, `profile`.
 
 For Okta specifically: Applications → Create App Integration → OIDC →
-Web Application → set the redirect URI as above.
+Web Application → set the redirect URI as above, and assign the users or
+groups who should sign in.
 
-Grab the **Issuer URL**, **Client ID**, and **Client Secret** from the
-app's settings.
+Copy the **Client ID** and **Client Secret** from the app's **General**
+tab. The issuer URL is not shown on the app. For Okta, use one of:
+
+- `https://<your-okta-domain>`, Okta's built-in org authorization
+  server. Available on every Okta org. To find your Okta domain, click
+  your username in the upper-right corner of the Admin Console.
+- `https://<your-okta-domain>/oauth2/default`, or another custom
+  authorization server. Requires Okta's API Access Management. The
+  **Issuer URI** is listed under **Security** → **API** →
+  **Authorization Servers**. A custom authorization server has its own
+  access policy, separate from the app's sign-on policy: on its
+  **Access Policies** tab, make sure a policy is assigned to your app
+  and has a rule that allows the Authorization Code grant.
+
+Either works here, because Materialize trusts the tokens Hydra issues,
+not Okta's.
 
 ### Step 2. Add the provider to tfvars
 
@@ -55,7 +73,7 @@ upstream_identity_providers = [
     provider      = "generic"
     client_id     = "<from Okta>"
     client_secret = "<from Okta>"
-    issuer_url    = "https://your-org.okta.com/oauth2/default"
+    issuer_url    = "https://your-org.okta.com" # or .../oauth2/default, see Step 1
     scope         = ["openid", "email", "profile"]
     label         = "Sign in with Okta"
   },

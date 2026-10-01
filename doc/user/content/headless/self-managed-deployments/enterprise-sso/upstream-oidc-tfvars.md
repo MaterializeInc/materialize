@@ -10,7 +10,7 @@ upstream_identity_providers = [
     provider      = "generic"
     client_id     = "<from your IdP>"
     client_secret = "<from your IdP>"
-    issuer_url    = "https://your-org.okta.com/oauth2/default"
+    issuer_url    = "https://your-org.okta.com"
     scope         = ["openid", "email", "profile"]
     label         = "Sign in with Okta"
   },
