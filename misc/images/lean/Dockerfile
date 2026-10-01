@@ -56,11 +56,12 @@ COPY lakefile.toml lake-manifest.json /workspace/
 # clones the dependencies, because Lake compiles just the modules a target
 # imports, so each package's default targets are built by name. NOTE: a
 # package that declares no default targets builds nothing here and compiles
-# on every run instead.
+# on every run instead. One `lake build` for all packages fails if any of them
+# fails. With no dependencies it builds the placeholder.
 RUN mkdir Mz \
     && touch Mz.lean \
-    && lake build \
-    && for pkg in $(jq -r '.packages[].name' lake-manifest.json); do lake build "@$pkg"; done \
+    && targets="$(jq -r '.packages[] | "@" + .name' lake-manifest.json)" \
+    && lake build $targets \
     && rm -rf Mz Mz.lean .lake/build \
     && chmod -R a+rwX /workspace
 
