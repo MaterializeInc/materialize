@@ -84,6 +84,10 @@ We've done this by offloading heavy `SELECT` queries onto separate threads. Prev
 ### Guides {#v26.44.1-guides}
 - [Protect sensitive columns](/security/patterns/protect-sensitive-columns/)
 - [PostgreSQL: Troubleshoot a stuck snapshot](/ingest-data/postgres/stuck-snapshot/)
+- [MySQL: Supported database operations](/ingest-data/mysql/#supported-database-operations)
+- [Troubleshoot slow queries](/serve-results/troubleshooting/slow-queries/)
+- [Troubleshoot unresponsive queries](/serve-results/troubleshooting/unresponsive-queries/)
+- [Troubleshoot expensive queries](/serve-results/troubleshooting/expensive-queries/)
 
 ### Bug Fixes {#v26.44.1-bug-fixes}
 - Fixed a panic in PostgreSQL sources when the replication stream carried messages committed before Materialize read a table's schema, which may have described an incompatible shape; each table now records the upstream LSN its schema was read at and ignores replication messages from before it.
