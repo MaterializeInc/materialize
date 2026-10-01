@@ -30,11 +30,10 @@ RUN apt-get update \
 
 COPY lean-toolchain /workspace/
 
-# Checking proofs needs the `.olean*`, `.ir` and shared libraries. The static
-# libraries, LLVM, `.ilean` files and sources are deleted, which saves 0.7 GB.
-# NOTE: without them nothing can link an executable, so `lean_exe`, `lake exe`
-# (including Mathlib's `lake exe cache get`) and `precompileModules` fail.
-# Keep them if a dependency needs any of these.
+# NOTE: the toolchain is kept whole although checking proofs needs only part of
+# it. The static libraries and LLVM link executables, and Batteries, which
+# Aesop and Mathlib require, lists the `runLinter` executable in its default
+# targets, so the dependency build below fails without them.
 RUN case "$(uname -m)" in \
         x86_64) triple=x86_64-unknown-linux-gnu; sha256=42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63 ;; \
         aarch64) triple=aarch64-unknown-linux-gnu; sha256=05febd124d84ebf994b2e7479922a5650b1e950c17ae3bd1ddd776b65bb72bf9 ;; \
@@ -46,10 +45,6 @@ RUN case "$(uname -m)" in \
     && tar -C /tmp -xzf /tmp/elan.tar.gz \
     && /tmp/elan-init -y --no-modify-path --default-toolchain "$(cat /workspace/lean-toolchain)" \
     && rm /tmp/elan.tar.gz /tmp/elan-init \
-    && elan toolchain install "$(cat /workspace/lean-toolchain)" \
-    && toolchain="$(echo "$ELAN_HOME"/toolchains/*)" \
-    && find "$toolchain" \( -name '*.a' -o -name '*.ilean' \) -delete \
-    && rm -rf "$toolchain/src" "$toolchain"/lib/libLLVM.so.* "$toolchain"/lib/libclang-cpp.so.* \
     && chmod -R a+rX "$ELAN_HOME" \
     && lean --version
 
