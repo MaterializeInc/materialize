@@ -24,6 +24,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
+        jq \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -51,10 +52,15 @@ WORKDIR /workspace
 
 COPY lakefile.toml lake-manifest.json /workspace/
 
-# Builds the dependency closure against an empty placeholder library.
+# Builds the dependency closure. Building the placeholder library alone only
+# clones the dependencies, because Lake compiles just the modules a target
+# imports, so each package's default targets are built by name. NOTE: a
+# package that declares no default targets builds nothing here and compiles
+# on every run instead.
 RUN mkdir Mz \
     && touch Mz.lean \
     && lake build \
+    && for pkg in $(jq -r '.packages[].name' lake-manifest.json); do lake build "@$pkg"; done \
     && rm -rf Mz Mz.lean .lake/build \
     && chmod -R a+rwX /workspace
 

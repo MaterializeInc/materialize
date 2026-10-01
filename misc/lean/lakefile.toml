@@ -15,3 +15,6 @@ leanOptions = { warningAsError = true }
 
 [[lean_lib]]
 name = "Mz"
+# Builds every module under `Mz/`, not only those `Mz.lean` imports, so an
+# unimported model cannot skip the check.
+globs = ["Mz.*"]
