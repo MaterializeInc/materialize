@@ -12,11 +12,11 @@
 //! Consult [ThresholdPlan] documentation for details.
 
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::cursor::BatchCursor;
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row};
 use mz_row_spine::{DatumSeq, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
 
@@ -24,59 +24,25 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::shared_trace::SharedOksEnter;
-use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowSpine};
 
-/// Thresholds a dataflow-local ok arrangement, keeping rows with a positive count.
-///
-/// The reduce goes through a concrete-spine helper because `reduce_abelian`'s higher-ranked
-/// output-key bound only normalizes when the input and output trace types are concrete through a
-/// function signature.
-fn threshold_local<'scope, T: RenderTimestamp>(
-    arrangement: Arranged<'scope, RowRowAgent<T, Diff>>,
+/// Thresholds an ok arrangement of any flavor, keeping rows with a positive count.
+fn threshold_arrangement<'scope, T, Tr>(
+    arrangement: Arranged<'scope, Tr>,
     name: &str,
-) -> Arranged<'scope, RowRowAgent<T, Diff>> {
-    arrangement.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
-        name,
-        move |_key, s, t| {
-            for (record, count) in s.iter() {
-                if count.is_positive() {
-                    t.push((
-                        <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
-                        *count,
-                    ));
-                }
-            }
-        },
-    )
-}
-
-/// Like [`threshold_local`] but over an imported trace's ok arrangement.
-fn threshold_trace<'scope, T: RenderTimestamp>(
-    arrangement: Arranged<'scope, RowRowEnter<Timestamp, Diff, T>>,
-    name: &str,
-) -> Arranged<'scope, RowRowAgent<T, Diff>> {
-    let logic = move |_key: DatumSeq<'_>, s: &[(DatumSeq<'_>, Diff)], t: &mut Vec<(Row, Diff)>| {
-        for (record, count) in s.iter() {
-            if count.is_positive() {
-                t.push((
-                    <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
-                    *count,
-                ));
-            }
-        }
-    };
-    arrangement.mz_reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic)
-}
-
-/// Thresholds a shared-trace ok arrangement, keeping rows with a positive count.
-///
-/// Concrete-spine counterpart to [`threshold_trace`] for the shared-trace input the interactive
-/// runtime imports. See [`threshold_local`] for why the input trace type must be concrete here.
-fn threshold_shared_trace<'scope, T: RenderTimestamp>(
-    arrangement: Arranged<'scope, SharedOksEnter<T>>,
-    name: &str,
-) -> Arranged<'scope, RowRowAgent<T, Diff>> {
+) -> Arranged<'scope, RowRowAgent<T, Diff>>
+where
+    T: RenderTimestamp,
+    Tr: TraceReader<Time = T, Batch: Navigable> + Clone + 'static,
+    // `KeyContainer` is pinned to the output spine's, so that `mz_reduce_abelian` can equate the
+    // input and output keys.
+    BatchCursor<Tr>: Cursor<
+            Time = T,
+            Diff = Diff,
+            KeyContainer = <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::KeyContainer,
+        >,
+    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = DatumSeq<'a>, Val<'a> = DatumSeq<'a>>,
+{
     let logic = move |_key: DatumSeq<'_>, s: &[(DatumSeq<'_>, Diff)], t: &mut Vec<(Row, Diff)>| {
         for (record, count) in s.iter() {
             if count.is_positive() {
@@ -103,11 +69,11 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks = threshold_local(oks, "Threshold local");
+            let oks = threshold_arrangement(oks, "Threshold local");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks = threshold_trace(oks, "Threshold trace");
+            let oks = threshold_arrangement(oks, "Threshold trace");
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs
                 .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
@@ -116,7 +82,7 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::SharedTrace(_, oks, errs) => {
-            let oks = threshold_shared_trace(oks, "Threshold shared trace");
+            let oks = threshold_arrangement(oks, "Threshold shared trace");
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs
                 .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
