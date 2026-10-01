@@ -1704,6 +1704,67 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                     gcp_delete_run_project(run_project)
 
 
+def azure_run_names() -> tuple[str, str]:
+    """Resource group and name prefix of this azure-temporary run.
+
+    In CI both are derived from the job ID, which is unique across pipelines
+    and retries, so a run cannot collide with what a failed run left behind,
+    and its forced cleanup cannot delete another run's resources. A random
+    suffix would not do: the mzcompose plugin's cleanup pass runs as a
+    separate invocation in the same job and must derive the same names.
+
+    NOTE: the storage module names its account from the prefix without
+    hyphens plus 9 characters, and Azure caps storage account names at 24,
+    so the prefix has at most 15 characters besides its hyphens."""
+    build = os.getenv("BUILDKITE_BUILD_NUMBER")
+    if not build:
+        return "mz-tf-test-rg", "mz-tf-test"
+    job = hashlib.sha256(os.environ["BUILDKITE_JOB_ID"].encode()).hexdigest()[:5]
+    prefix = f"mzci-{build}-{job}"
+    return f"{prefix}-rg", prefix
+
+
+def delete_azure_resource_groups(resource_group: str, env: dict[str, str]) -> None:
+    """Requests deletion of the run's resource group and its AKS node resource
+    groups, whatever `terraform destroy` left behind.
+
+    Everything a run creates lives in these groups, so this cleans up even
+    when resources fell out of Terraform state. The AKS node groups
+    (MC_<group>_*) go first: deleting the parent does not always cascade to
+    them, and their NICs can block the parent's subnet deletion. Deletions are
+    submitted with --no-wait, because Azure finishes an accepted deletion
+    server-side even if this job is killed before it completes.
+    """
+    groups = spawn.capture(
+        [
+            "az",
+            "group",
+            "list",
+            "--query",
+            f"[?starts_with(name, 'MC_{resource_group}_')].name",
+            "--output",
+            "tsv",
+        ],
+        env=env,
+    ).split()
+    failed = []
+    for group in [*groups, resource_group]:
+        try:
+            exists = spawn.capture(
+                ["az", "group", "exists", "--name", group], env=env
+            ).strip()
+            if exists != "true":
+                continue
+            print(f"--- Requesting deletion of resource group {group}")
+            spawn.runv(
+                ["az", "group", "delete", "--name", group, "--yes", "--no-wait"],
+                env=env,
+            )
+        except subprocess.CalledProcessError:
+            failed.append(group)
+    assert not failed, f"Could not request deletion of resource groups {failed}"
+
+
 def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
@@ -1711,6 +1772,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "azure-temporary"
     state = State(path)
+    resource_group, name_prefix = azure_run_names()
 
     spawn.runv(
         [
@@ -1726,6 +1788,10 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     venv_env = os.environ.copy()
     venv_env["PATH"] = f"{path/'venv'/'bin'}:{os.getenv('PATH')}"
     venv_env["VIRTUAL_ENV"] = str(path / "venv")
+    # Every terraform invocation, including the cleanup pass's destroy, must
+    # see the same names.
+    venv_env["TF_VAR_resource_group_name"] = resource_group
+    venv_env["TF_VAR_name_prefix"] = name_prefix
     spawn.runv(
         ["uv", "pip", "install", "-r", "requirements.txt", "--prerelease=allow"],
         cwd=path,
@@ -1879,4 +1945,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             run_mz_debug(env=venv_env)
 
         if args.cleanup:
-            state.destroy(env=venv_env)
+            try:
+                state.destroy(env=venv_env)
+            finally:
+                delete_azure_resource_groups(resource_group, venv_env)

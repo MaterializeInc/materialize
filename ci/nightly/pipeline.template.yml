@@ -1797,7 +1797,6 @@ steps:
             ci-builder: stable
             run-timeout: 60m
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
       retry:
         automatic:
