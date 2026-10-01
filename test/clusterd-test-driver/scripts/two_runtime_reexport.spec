@@ -12,10 +12,10 @@
 #
 # The second index's dataflow imports the first and exports the imported
 # arrangement under its own id, so on the maintenance runtime it renders no
-# operators of its own and registers its id as an alias of the first index's
+# operators of its own and publishes the first index's trace under a second
 # publication point. The peeks and the query dataflow below name only the
-# alias, so a correct result proves the interactive runtime reached the shared
-# arrangement through it.
+# re-export, so a correct result proves the interactive runtime reached the
+# shared arrangement through its point.
 create-instance
 ----
 ok
@@ -60,7 +60,7 @@ schedule id=2002
 ----
 ok
 
-# A fast-path peek through the alias.
+# A fast-path peek through the re-export.
 peek id=2002 ts=0
 ----
 1 "alpha"
@@ -72,7 +72,7 @@ define-schema name=count_out
 ----
 ok
 
-# A query dataflow importing the alias, routed to the interactive runtime by
+# A query dataflow importing the re-export, routed to the interactive runtime by
 # `until = as_of + 1`.
 create-dataflow name=interactive-count as-of=0 until=1
   import index=2002

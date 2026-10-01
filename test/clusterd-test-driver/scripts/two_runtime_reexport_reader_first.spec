@@ -10,11 +10,10 @@
 # two_runtime_reexport_reader_first scenario: a query dataflow on the
 # interactive runtime binds to a re-exporting index before that index renders.
 #
-# The reader creates the alias id's publication point first, unbacked. When the
-# re-export renders on the maintenance runtime it cannot alias the original's
-# point, since the reader already holds a different one, so it re-imports the
-# shared traces and publishes them under the alias id, backing the reader's
-# point in place. The result peek then returns the correct count.
+# The reader creates the re-export's publication point first, unbacked. When the
+# re-export renders on the maintenance runtime it publishes the original's trace
+# into that point, backing it in place. The result peek then returns the correct
+# count.
 create-instance
 ----
 ok
@@ -69,7 +68,7 @@ create-dataflow name=interactive-count as-of=0 until=1
 ----
 ok
 
-# Scheduled before the re-export exists, so its import holds the alias id's
+# Scheduled before the re-export exists, so its import holds the re-export's
 # unbacked point.
 schedule id=t4000
 ----
