@@ -9,13 +9,13 @@
 
 //! Tests for the `parse_catalog_*` SQL functions defined in `mz-expr`.
 //!
-//! These tests live here rather than in `mz-expr` because they need access to the types in
-//! `mz-catalog-protos`, which depends on `mz-expr`.
+//! These tests live here rather than in `mz-expr` because they need the conversions between
+//! the types in `mz-catalog-protos` and their Rust counterparts, which live in `mz-catalog`.
 
+use mz_catalog::durable::objects::serialization::ProtoType;
 use mz_catalog_protos::objects;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::func::{EagerUnaryFunc, ParseCatalogId, ParseCatalogPrivileges};
-use mz_proto::ProtoType;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;

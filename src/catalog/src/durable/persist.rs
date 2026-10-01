@@ -37,7 +37,7 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_repr::Diff;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
@@ -54,6 +54,7 @@ use crate::durable::initialize::{
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
+use crate::durable::objects::serialization::RustType;
 use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,

@@ -10,7 +10,7 @@
 //! This module is responsible for serializing catalog objects into Protobuf.
 
 use mz_ore::cast::CastFrom;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
@@ -33,6 +33,12 @@ use crate::durable::{
 };
 
 use super::{RoleAuthKey, RoleAuthValue};
+
+mod audit_log;
+mod foreign;
+mod rust_type;
+
+pub use rust_type::{ProtoMapEntry, ProtoType, RustType};
 
 pub mod proto {
     pub use mz_catalog_protos::objects::*;
@@ -1083,8 +1089,8 @@ impl RustType<proto::IntrospectionSourceIndexGlobalId> for IntrospectionSourceIn
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::objects::serialization::RustType;
     use mz_audit_log::VersionedEvent;
-    use mz_proto::RustType;
     use proptest::prelude::*;
 
     proptest! {
