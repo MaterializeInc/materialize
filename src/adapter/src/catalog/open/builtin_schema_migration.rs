@@ -514,6 +514,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_indexes",
         ),
+        // mz_sources reads builtin sources from mz_builtin_sources
+        // and builtin logs from mz_builtin_log_indexes
+        // instead of inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.45.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
     ]
 });
 
