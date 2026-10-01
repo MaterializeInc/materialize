@@ -299,6 +299,10 @@ impl Listener<SqlListenerConfig> {
                 authenticator_kind: self.config.authenticator_kind,
                 frontegg,
                 oidc,
+                // TODO(ory-talos): construct a TalosAuthenticator from CLI/config
+                // once the derive-credential custody decision is settled; until
+                // then Talos pgwire listeners are plumbed but unconfigured.
+                talos: None,
                 metrics,
                 active_connection_counter,
                 helm_chart_version,
