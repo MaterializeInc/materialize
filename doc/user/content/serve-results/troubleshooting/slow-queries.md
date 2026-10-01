@@ -62,7 +62,8 @@ The `execution_strategy` column shows how Materialize executed the query:
 
 | Strategy | Meaning |
 |----------|---------|
-| `fast-path` | The cluster read the result directly from an existing index, or from storage for [small `LIMIT` queries](#return-less-data), without building a dataflow. |
+| `fast-path` | The cluster read the result directly from an existing index, without building a dataflow. |
+| `persist-fast-path` | The cluster read the result directly from storage, without building a dataflow. Materialize uses this for [small `LIMIT` queries](#return-less-data). |
 | `standard` | The cluster built a temporary dataflow to compute the result, then dropped it. |
 | `constant` | Materialize computed the result without a cluster. |
 
@@ -90,6 +91,7 @@ WITH events AS (
     max(occurred_at) FILTER (WHERE event_type = 'compute-dependencies-finished') AS compute_ready,
     max(occurred_at) FILTER (WHERE event_type = 'execution-finished') AS finished
   FROM mz_internal.mz_statement_lifecycle_history
+  WHERE occurred_at > now() - INTERVAL '1 hour'
   GROUP BY statement_id
 )
 SELECT
@@ -139,7 +141,7 @@ SELECT o.name, o.type, l.lag
 FROM mz_internal.mz_wallclock_global_lag AS l
 JOIN mz_catalog.mz_objects AS o ON o.id = l.object_id
 WHERE o.id LIKE 'u%'
-ORDER BY l.lag DESC
+ORDER BY l.lag DESC NULLS LAST
 LIMIT 10;
 ```
 
@@ -243,8 +245,9 @@ console.
   filters](/transform-data/patterns/temporal-filters/). Materialize can skip
   over old data in storage that doesn't match the filter.
 - Add a `LIMIT` clause to exploratory queries. A query that selects from a
-  single source, table, or materialized view with no filters, no ordering, and
-  a `LIMIT` plus `OFFSET` below 25 reads directly from storage. `EXPLAIN` shows
+  single source, table, or materialized view with only simple filters and
+  projections, no ordering, and a `LIMIT` plus `OFFSET` below 25 reads directly
+  from storage. `EXPLAIN` shows
   `Explained Query (fast path)` for these queries.
 - Select only the columns you need. A large `result_size` in
   `mz_recent_activity_log` adds time to transmit the result.
@@ -297,7 +300,7 @@ time goes.
 |-------------|--------|
 | Latency reported by your client | The full round trip: client, network, `balancerd`, `environmentd`, and the cluster. |
 | `finished_at - began_at` in `mz_recent_activity_log` | `environmentd` and the cluster. |
-| [`mz_compute_peek_duration_seconds`](/observability/essential-metrics/) | From when `environmentd` sends the query to the cluster until the result arrives. This includes waiting for dependencies and, for `standard` queries, building the temporary dataflow. |
+| [`mz_compute_peek_duration_seconds`](/observability/essential-metrics/#compute-metrics) | From when `environmentd` sends the query to the cluster until the result arrives. This includes waiting for dependencies and, for `standard` queries, building the temporary dataflow. |
 
 To compute the average statement log latency over the last minute:
 
@@ -342,7 +345,10 @@ while cluster CPU is low, give `environmentd` more CPU with
 `environmentdResourceRequirements` in the Materialize custom resource. See
 [Materialize CRD field
 descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
-Changing this field rolls out a new `environmentd`.
+Applying the change rolls out a new `environmentd`. With the `v1alpha1` CRD,
+also set `requestRollout` to a new UUID, or the operator does not roll out the
+change. See [Modifying the custom
+resource](/self-managed-deployments/#modifying-the-custom-resource).
 
 ### Check `balancerd`
 

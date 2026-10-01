@@ -74,9 +74,10 @@ failed, filter on `finished_status IN ('canceled', 'error')` instead.
 
 ### Find expensive queries that are running now
 
-Dataflows for queries that are running are named `oneshot-select-<id>`. To
-see how much CPU time each one has used, run the following on the cluster
-that runs the queries:
+Dataflows for queries that are running are currently named
+`oneshot-select-<id>`. This name is not a stable interface and can change
+between releases. To see how much CPU time each one has used, run the
+following on the cluster that runs the queries:
 
 ```mzsql
 SET cluster = quickstart;

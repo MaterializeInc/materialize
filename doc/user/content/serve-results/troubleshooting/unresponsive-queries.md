@@ -59,7 +59,8 @@ ORDER BY a.began_at;
 Note the `connection_id`. You need it to [cancel the
 query](#cancel-the-query).
 
-The statement log is sampled, so a running query may not appear here.
+The statement log is sampled and written in batches, so a running query may
+not appear here, especially if it started only a few seconds ago.
 
 ### Check for snapshotting sources
 
@@ -92,7 +93,7 @@ SELECT o.name, o.type, r.name AS replica
 FROM mz_internal.mz_hydration_statuses AS h
 JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
 JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
-WHERE NOT h.hydrated;
+WHERE h.hydrated IS NOT TRUE;
 ```
 
 Any object in the result is still hydrating on that replica. You can also see
@@ -135,6 +136,8 @@ SELECT pg_cancel_backend(1518224533);
 ```
 
 The statement log then records the query with `finished_status = 'canceled'`.
+The cluster can take a while to tear down the query's dataflow, so its CPU and
+memory usage may stay high for some time after you cancel it.
 
 ### Wait for the snapshot or hydration
 
