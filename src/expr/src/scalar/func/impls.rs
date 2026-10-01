@@ -77,4 +77,5 @@ pub use crate::scalar::func::impls::uint32::*;
 pub use crate::scalar::func::impls::uint64::*;
 pub use crate::scalar::func::impls::uuid::*;
 pub use crate::scalar::func::impls::varchar::*;
+pub(crate) use crate::scalar::func::impls::wasm::replay;
 pub use crate::scalar::func::impls::wasm::*;

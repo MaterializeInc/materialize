@@ -192,6 +192,9 @@ impl LazyVariadicFunc for WasmFunc {
         temp_storage: &'a RowArena,
         exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
+        if let Some(outcome) = replay::replayed(self) {
+            return outcome.map(|row| temp_storage.push_unary_row(row));
+        }
         let args = exprs
             .iter()
             .map(|e| e.eval(datums, temp_storage))
@@ -215,6 +218,110 @@ impl LazyVariadicFunc for WasmFunc {
 
     fn could_error(&self) -> bool {
         true
+    }
+}
+
+/// Outcomes of WebAssembly calls precomputed for a batch of rows, which
+/// [`WasmFunc`] evaluation replays instead of calling the guest.
+///
+/// Batched MFP evaluation calls each function once for a batch, records each
+/// row's outcome here, and then evaluates expressions row by row as usual.
+/// Every call site then sees exactly the outcome per-row evaluation would
+/// have produced, wherever it sits in its expression, which keeps error
+/// precedence and short-circuiting identical to the per-row path.
+pub(crate) mod replay {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    use mz_repr::Row;
+
+    use super::WasmFunc;
+    use crate::EvalError;
+
+    /// One batch's recorded outcomes: by call site, then by row.
+    #[derive(Default)]
+    struct Frame {
+        row: usize,
+        outcomes: BTreeMap<usize, Vec<Option<Result<Row, EvalError>>>>,
+    }
+
+    thread_local! {
+        static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Identifies a call site by the address of its function. Plans are not
+    /// moved or mutated while they are evaluated, so the address is stable
+    /// for the life of a frame.
+    fn call_site(func: &WasmFunc) -> usize {
+        std::ptr::from_ref(func).addr()
+    }
+
+    /// A replay frame for the current thread, removed when dropped.
+    pub(crate) struct FrameGuard(());
+
+    impl FrameGuard {
+        pub(crate) fn install() -> Self {
+            FRAMES.with(|frames| frames.borrow_mut().push(Frame::default()));
+            FrameGuard(())
+        }
+
+        /// Sets the row whose outcomes evaluation replays.
+        pub(crate) fn set_row(&self, row: usize) {
+            FRAMES.with(|frames| {
+                frames.borrow_mut().last_mut().expect("frame installed").row = row;
+            });
+        }
+
+        /// Records `func`'s outcome for each listed row of a batch of `rows`.
+        pub(crate) fn record(
+            &self,
+            func: &WasmFunc,
+            rows: usize,
+            outcomes: impl IntoIterator<Item = (usize, Result<Row, EvalError>)>,
+        ) {
+            FRAMES.with(|frames| {
+                let mut frames = frames.borrow_mut();
+                let frame = frames.last_mut().expect("frame installed");
+                let slots = frame
+                    .outcomes
+                    .entry(call_site(func))
+                    .or_insert_with(|| vec![None; rows]);
+                for (row, outcome) in outcomes {
+                    slots[row] = Some(outcome);
+                }
+            });
+        }
+
+        /// Forgets every recorded outcome.
+        pub(crate) fn clear(&self) {
+            FRAMES.with(|frames| {
+                frames
+                    .borrow_mut()
+                    .last_mut()
+                    .expect("frame installed")
+                    .outcomes
+                    .clear();
+            });
+        }
+    }
+
+    impl Drop for FrameGuard {
+        fn drop(&mut self) {
+            FRAMES.with(|frames| frames.borrow_mut().pop());
+        }
+    }
+
+    /// The recorded outcome of `func` for the current row, if any.
+    pub(crate) fn replayed(func: &WasmFunc) -> Option<Result<Row, EvalError>> {
+        FRAMES.with(|frames| {
+            let frames = frames.borrow();
+            let frame = frames.last()?;
+            frame
+                .outcomes
+                .get(&call_site(func))?
+                .get(frame.row)?
+                .clone()
+        })
     }
 }
 

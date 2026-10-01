@@ -20,7 +20,10 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use itertools::Itertools;
+use mz_expr::{
+    BatchedMfpPlan, ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::redact;
@@ -576,6 +579,7 @@ where
     let name = name.to_owned();
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    let batched_mfp = map_filter_project.as_ref().and_then(|mfp| mfp.batched());
 
     builder.build(move |_caps| {
         // Acquire an activator to reschedule the operator when it has unfinished work.
@@ -612,22 +616,38 @@ where
                 // container never mixes records from parts held at different capabilities.
                 let mut ok_session = ok_output.session_with_builder(&front.capabilities[0]);
                 let mut err_session = err_output.session_with_builder(&front.capabilities[1]);
-                let done = decode_part(
-                    &mut front.part,
-                    front.panic_on_audit_failure,
-                    cap_time,
-                    &name,
-                    &until,
-                    map_filter_project.as_ref(),
-                    &mut datum_vec,
-                    &mut row_builder,
-                    &mut work,
-                    yield_fuel,
-                    |record, time, diff| match record {
-                        Ok(row) => ok_session.give((row.into_owned(), record_time(time), diff)),
-                        Err(err) => err_session.give((err, record_time(time), diff)),
-                    },
-                );
+                let give = |record: Result<Cow<'_, Row>, E>, time, diff| match record {
+                    Ok(row) => ok_session.give((row.into_owned(), record_time(time), diff)),
+                    Err(err) => err_session.give((err, record_time(time), diff)),
+                };
+                let done = match (map_filter_project.as_ref(), batched_mfp.as_ref()) {
+                    (Some(mfp), Some(batched)) => decode_part_batched(
+                        &mut front.part,
+                        front.panic_on_audit_failure,
+                        cap_time,
+                        &name,
+                        &until,
+                        mfp,
+                        batched,
+                        &mut row_builder,
+                        &mut work,
+                        yield_fuel,
+                        give,
+                    ),
+                    (mfp, _) => decode_part(
+                        &mut front.part,
+                        front.panic_on_audit_failure,
+                        cap_time,
+                        &name,
+                        &until,
+                        mfp,
+                        &mut datum_vec,
+                        &mut row_builder,
+                        &mut work,
+                        yield_fuel,
+                        give,
+                    ),
+                };
                 drop(ok_session);
                 drop(err_session);
                 if done {
@@ -730,54 +750,16 @@ where
                         |time| !until.less_equal(time),
                         row_builder,
                     ) {
-                        // Earlier we decided this Part doesn't need to be fetched, but to
-                        // audit our logic we fetched it any way. If the MFP returned data it
-                        // means our earlier decision to not fetch this part was incorrect.
                         if let Some(stats) = &is_filter_pushdown_audit {
-                            // NB: The tag added by this scope is used for alerting. The panic
-                            // message may be changed arbitrarily, but the tag key and val must
-                            // stay the same.
-                            sentry::with_scope(
-                                |scope| {
-                                    scope.set_tag("alert_id", "persist_pushdown_audit_violation")
-                                },
-                                || {
-                                    error!(
-                                        ?stats,
-                                        name,
-                                        mfp = ?redact(&mfp),
-                                        result = ?redact(&result),
-                                        "persist filter pushdown correctness violation!"
-                                    );
-                                    if panic_on_audit_failure {
-                                        panic!(
-                                            "persist filter pushdown correctness violation! {}",
-                                            name
-                                        );
-                                    }
-                                },
+                            report_mfp_audit_violation(
+                                stats,
+                                name,
+                                mfp,
+                                &result,
+                                panic_on_audit_failure,
                             );
                         }
-                        match result {
-                            Ok((row, time, diff)) => {
-                                // Additional `until` filtering due to temporal filters.
-                                if !until.less_equal(&time) {
-                                    let mut emit_time = cap_time;
-                                    emit_time.0 = time;
-                                    give(Ok(Cow::Owned(row)), emit_time, diff);
-                                    *work += 1;
-                                }
-                            }
-                            Err((err, time, diff)) => {
-                                // Additional `until` filtering due to temporal filters.
-                                if !until.less_equal(&time) {
-                                    let mut emit_time = cap_time;
-                                    emit_time.0 = time;
-                                    give(Err(err), emit_time, diff);
-                                    *work += 1;
-                                }
-                            }
-                        }
+                        give_mfp_result(result, cap_time, until, work, &mut give);
                     }
                     // The MFP built its output into `row_builder`, so the decoded row's
                     // allocation is free to go back to `row_buf`.
@@ -799,25 +781,7 @@ where
                 // Without this arm the audit was blind to exactly the
                 // undercounted-err-stats violation class.
                 if let Some(stats) = &is_filter_pushdown_audit {
-                    sentry::with_scope(
-                        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
-                        || {
-                            // `err` is redacted for the same reason the
-                            // `Ok`-row arm redacts its MFP output: these
-                            // events go to Sentry, and a `DecodeError`
-                            // carries the raw source record bytes while
-                            // several `EvalError`s embed user input.
-                            error!(
-                                ?stats,
-                                name,
-                                err = ?redact(&err),
-                                "persist filter pushdown correctness violation!"
-                            );
-                            if panic_on_audit_failure {
-                                panic!("persist filter pushdown correctness violation! {}", name);
-                            }
-                        },
-                    );
+                    report_err_audit_violation(stats, name, &err, panic_on_audit_failure);
                 }
                 let mut emit_time = cap_time;
                 emit_time.0 = time;
@@ -830,6 +794,170 @@ where
         }
     }
     true
+}
+
+/// The most rows [`decode_part_batched`] evaluates at once.
+const MFP_BATCH_ROWS: usize = 16 * 1024;
+
+/// [`decode_part`] for an MFP that calls WebAssembly functions, which evaluates it over batches
+/// of up to [`MFP_BATCH_ROWS`] rows, with the same results.
+fn decode_part_batched<E, F>(
+    part: &mut PendingPart,
+    panic_on_audit_failure: bool,
+    cap_time: RefinedTime,
+    name: &str,
+    until: &Antichain<Timestamp>,
+    mfp: &MfpPlan,
+    batched: &BatchedMfpPlan,
+    row_builder: &mut Row,
+    work: &mut usize,
+    yield_fuel: usize,
+    mut give: F,
+) -> bool
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
+{
+    let fetched_part = part.part_mut();
+    let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+    let mut pending: Vec<(Row, Timestamp, Diff)> = Vec::new();
+    let mut outcomes = Vec::new();
+    loop {
+        // Each pending row costs at least one unit of work, so the batch stops growing once
+        // evaluating it would exhaust the fuel.
+        let limit = MFP_BATCH_ROWS.min(yield_fuel.saturating_sub(*work)).max(1);
+        let mut exhausted = true;
+        pending.clear();
+        while let Some(((key, val), time, diff)) = fetched_part.next() {
+            if until.less_equal(&time) {
+                continue;
+            }
+            match (key, val) {
+                (SourceData(Ok(row)), ()) => pending.push((row, time, diff.into())),
+                (SourceData(Err(err)), ()) => {
+                    if let Some(stats) = &is_filter_pushdown_audit {
+                        report_err_audit_violation(stats, name, &err, panic_on_audit_failure);
+                    }
+                    let mut emit_time = cap_time;
+                    emit_time.0 = time;
+                    give(Err(E::from(err)), emit_time, diff.into());
+                    *work += 1;
+                }
+            }
+            if pending.len() >= limit || *work + pending.len() >= yield_fuel {
+                exhausted = false;
+                break;
+            }
+        }
+
+        let arena = mz_repr::RowArena::new();
+        let mut rows: Vec<Vec<_>> = pending.iter().map(|(row, _, _)| row.unpack()).collect();
+        batched.evaluate_batch(&mut rows, &arena, &mut outcomes);
+        for ((_, time, diff), (datums, outcome)) in pending
+            .iter()
+            .zip_eq(rows.iter().zip_eq(outcomes.drain(..)))
+        {
+            // As in `decode_part`, every evaluation counts against the fuel.
+            *work += 1;
+            for result in batched.finish(
+                outcome,
+                datums,
+                &arena,
+                *time,
+                *diff,
+                |time| !until.less_equal(time),
+                row_builder,
+            ) {
+                if let Some(stats) = &is_filter_pushdown_audit {
+                    report_mfp_audit_violation(stats, name, mfp, &result, panic_on_audit_failure);
+                }
+                give_mfp_result(result, cap_time, until, work, &mut give);
+            }
+        }
+
+        if exhausted {
+            return true;
+        }
+        if *work >= yield_fuel {
+            return false;
+        }
+    }
+}
+
+/// Hands an MFP result to `give` unless a temporal filter moved it to or past `until`.
+fn give_mfp_result<E, F>(
+    result: Result<(Row, Timestamp, Diff), (E, Timestamp, Diff)>,
+    cap_time: RefinedTime,
+    until: &Antichain<Timestamp>,
+    work: &mut usize,
+    give: &mut F,
+) where
+    F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
+{
+    let (record, time, diff) = match result {
+        Ok((row, time, diff)) => (Ok(Cow::Owned(row)), time, diff),
+        Err((err, time, diff)) => (Err(err), time, diff),
+    };
+    if !until.less_equal(&time) {
+        let mut emit_time = cap_time;
+        emit_time.0 = time;
+        give(record, emit_time, diff);
+        *work += 1;
+    }
+}
+
+/// Reports that the MFP produced `result` from a part that filter pushdown decided not to
+/// fetch, and was fetched anyway to audit that decision.
+fn report_mfp_audit_violation(
+    stats: &dyn Debug,
+    name: &str,
+    mfp: &MfpPlan,
+    result: &dyn Debug,
+    panic_on_audit_failure: bool,
+) {
+    // NB: The tag added by this scope is used for alerting. The panic message may be changed
+    // arbitrarily, but the tag key and val must stay the same.
+    sentry::with_scope(
+        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+        || {
+            error!(
+                ?stats,
+                name,
+                mfp = ?redact(mfp),
+                result = ?redact(result),
+                "persist filter pushdown correctness violation!"
+            );
+            if panic_on_audit_failure {
+                panic!("persist filter pushdown correctness violation! {}", name);
+            }
+        },
+    );
+}
+
+/// Reports an error row in a part that filter pushdown decided not to fetch. Errors must
+/// surface regardless of any filter, so this is as much a violation as MFP output.
+fn report_err_audit_violation(
+    stats: &dyn Debug,
+    name: &str,
+    err: &DataflowError,
+    panic_on_audit_failure: bool,
+) {
+    sentry::with_scope(
+        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+        || {
+            // `err` is redacted because these events go to Sentry, and a `DecodeError` carries
+            // the raw source record bytes while several `EvalError`s embed user input.
+            error!(
+                ?stats,
+                name,
+                err = ?redact(err),
+                "persist filter pushdown correctness violation!"
+            );
+            if panic_on_audit_failure {
+                panic!("persist filter pushdown correctness violation! {}", name);
+            }
+        },
+    );
 }
 
 /// A trait representing a type that can be used in `backpressure`.

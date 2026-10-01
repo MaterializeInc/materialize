@@ -61,17 +61,6 @@ pub trait OptimizableExpr:
     /// If this is a call to a WebAssembly function, the function and its
     /// arguments.
     fn as_wasm_call(&self) -> Option<(&WasmFunc, &[Self])>;
-
-    /// The children that are evaluated whenever `self` is, and whose errors
-    /// always become `self`'s error.
-    ///
-    /// Stricter than [`OptimizableExpr::eager_children`]: children of
-    /// operators that can absorb an error (`AND`, `OR`) and all but the
-    /// first child of operators that select among their inputs (`COALESCE`,
-    /// case lookups) are excluded. Moving a strict child's evaluation earlier
-    /// can change which of several errors a row reports, but never whether it
-    /// reports one.
-    fn strict_children_mut(&mut self) -> Vec<&mut Self>;
 }
 
 impl OptimizableExpr for MirScalarExpr {
@@ -183,24 +172,6 @@ impl OptimizableExpr for MirScalarExpr {
                 exprs,
             } => Some((func, exprs)),
             _ => None,
-        }
-    }
-
-    fn strict_children_mut(&mut self) -> Vec<&mut Self> {
-        match self {
-            MirScalarExpr::Column(..)
-            | MirScalarExpr::Literal(..)
-            | MirScalarExpr::CallUnmaterializable(_) => vec![],
-            MirScalarExpr::CallUnary { expr, .. } => vec![expr],
-            MirScalarExpr::CallBinary { expr1, expr2, .. } => vec![expr1, expr2],
-            MirScalarExpr::CallVariadic { func, exprs } => match func {
-                VariadicFunc::And(_) | VariadicFunc::Or(_) => vec![],
-                VariadicFunc::Coalesce(_) | VariadicFunc::CaseLiteral(_) => {
-                    exprs.iter_mut().take(1).collect()
-                }
-                _ => exprs.iter_mut().collect(),
-            },
-            MirScalarExpr::If { cond, .. } => vec![cond],
         }
     }
 }

@@ -11,91 +11,62 @@
 //!
 //! A call into a guest has a fixed cost (instantiation, encoding, the call
 //! itself) that only amortizes over many rows. [`BatchedSafeMfpPlan`]
-//! restructures an MFP into a sequence of per-row steps separated by batched
-//! WebAssembly calls: it evaluates every row up to a call, makes one call for
-//! all rows still live, and continues.
+//! evaluates an MFP over a batch of rows in the order
+//! [`SafeMfpPlan::evaluate_inner`] uses, one step (a mapped expression or a
+//! predicate) at a time. Before each step it precomputes every WebAssembly
+//! call the step contains, innermost first, with one guest call per call site
+//! for all rows still live. It then evaluates the step row by row, and each
+//! call replays its row's precomputed outcome instead of calling the guest.
 //!
-//! Only calls in *strict* positions are lifted into batched steps (see
-//! [`OptimizableExpr::strict_children_mut`]): positions that are evaluated
-//! whenever their enclosing expression is, and whose errors always surface.
-//! Lifting such a call cannot change whether a row errors, only which of
-//! several errors it reports, which is the same latitude MFP memoization
-//! already takes. Calls in other positions stay inline and are evaluated one
-//! row at a time.
-//!
-//! Each row sees the same predicates in the same order as
-//! [`SafeMfpPlan::evaluate_inner`], so a filter placed before a call still
-//! keeps rows it rejects away from the guest.
+//! The results are exactly those of per-row evaluation. A call replays the
+//! outcome it would have computed, at the point where per-row evaluation
+//! reaches it, so error precedence among sibling expressions and
+//! short-circuiting in `If`, `COALESCE`, `AND` and `OR` behave the same.
+//! Calls in positions that a row never reaches are computed and discarded:
+//! that costs guest work but never changes an outcome. Rows that an earlier
+//! predicate rejected, or that already failed, are not sent to the guest.
 
 use itertools::Itertools;
 use mz_repr::{Datum, Diff, Row, RowArena};
 
 use crate::linear::plan::{MfpPlan, SafeMfpPlan, evaluate_temporal};
 use crate::scalar::func::WasmFunc;
+use crate::scalar::func::impls::replay::FrameGuard;
 use crate::scalar::optimizable::OptimizableExpr;
-use crate::{Eval, EvalError, MapFilterProject};
+use crate::visit::Visit;
+use crate::{Eval, EvalError, MapFilterProject, MirScalarExpr};
 
+/// A [`SafeMfpPlan`] that calls WebAssembly functions, prepared for batched
+/// evaluation.
 #[derive(Clone, Debug)]
-enum Step<E> {
-    /// Evaluate an expression per row and append it as a column.
-    Map(E),
-    /// Evaluate a predicate per row and drop rows for which it is not true.
-    Filter(E),
-    /// Evaluate the arguments per row, call the function once for all live
-    /// rows, and append the results as a column.
-    Wasm { func: WasmFunc, args: Vec<E> },
+pub struct BatchedSafeMfpPlan<E: OptimizableExpr = MirScalarExpr> {
+    mfp: MapFilterProject<E>,
 }
 
-/// A [`SafeMfpPlan`] restructured for batched evaluation.
-#[derive(Clone, Debug)]
-pub struct BatchedSafeMfpPlan<E> {
-    steps: Vec<Step<E>>,
-    projection: Vec<usize>,
+/// The WebAssembly calls in `expr`, innermost first, so that a call's
+/// arguments only contain calls that come before it.
+fn wasm_calls<E: OptimizableExpr>(expr: &E) -> Vec<(&WasmFunc, &[E])> {
+    let mut calls = Vec::new();
+    expr.visit_post(&mut |e: &E| {
+        if let Some(call) = e.as_wasm_call() {
+            calls.push(call);
+        }
+    });
+    calls
 }
 
 impl<E: OptimizableExpr + Eval> BatchedSafeMfpPlan<E> {
-    /// Restructures `mfp`, or returns `None` if it has no WebAssembly call in
-    /// a position that can be batched.
-    ///
-    /// The returned permutation maps each column of `mfp` (inputs followed
-    /// by mapped expressions) to its position in the batched plan's datums.
-    fn from_mfp(mfp: &MapFilterProject<E>) -> Option<(Self, Vec<usize>)> {
-        let mut builder = Builder {
-            steps: Vec::new(),
-            next_column: mfp.input_arity,
-            lifted: false,
-        };
-        let mut permutation: Vec<usize> = (0..mfp.input_arity).collect();
-
-        let mut expression = 0;
-        for (support, predicate) in mfp.predicates.iter() {
-            while mfp.input_arity + expression < *support {
-                let column = builder.map(&mfp.expressions[expression], &permutation);
-                permutation.push(column);
-                expression += 1;
-            }
-            builder.filter(predicate, &permutation);
-        }
-        while expression < mfp.expressions.len() {
-            let column = builder.map(&mfp.expressions[expression], &permutation);
-            permutation.push(column);
-            expression += 1;
-        }
-
-        if !builder.lifted {
-            return None;
-        }
-        let projection = mfp.projection.iter().map(|c| permutation[*c]).collect();
-        Some((
-            BatchedSafeMfpPlan {
-                steps: builder.steps,
-                projection,
-            },
-            permutation,
-        ))
+    /// Returns `None` if `mfp` calls no WebAssembly function.
+    fn from_mfp(mfp: &MapFilterProject<E>) -> Option<Self> {
+        let calls_wasm = mfp
+            .expressions
+            .iter()
+            .chain(mfp.predicates.iter().map(|(_, p)| p))
+            .any(|e| !wasm_calls(e).is_empty());
+        calls_wasm.then(|| BatchedSafeMfpPlan { mfp: mfp.clone() })
     }
 
-    /// Evaluates the plan's steps on a batch of rows.
+    /// Evaluates the plan on a batch of rows.
     ///
     /// `rows[i]` holds the input datums of row `i`. On return, `outcomes[i]`
     /// is `Ok(true)` if the row passed every predicate, in which case
@@ -111,154 +82,128 @@ impl<E: OptimizableExpr + Eval> BatchedSafeMfpPlan<E> {
         outcomes.clear();
         outcomes.resize(rows.len(), Ok(true));
         let mut live: Vec<usize> = (0..rows.len()).collect();
-        let mut args = Vec::new();
-        let mut callers = Vec::new();
-        let mut results = Vec::new();
+        let frame = FrameGuard::install();
+        let mfp = &self.mfp;
 
-        for step in &self.steps {
-            match step {
-                Step::Map(expr) => {
-                    for &i in &live {
-                        match expr.eval(&rows[i], arena) {
-                            Ok(datum) => rows[i].push(datum),
-                            Err(e) => outcomes[i] = Err(e),
-                        }
+        let mut expression = 0;
+        for (support, predicate) in mfp.predicates.iter() {
+            while mfp.input_arity + expression < *support {
+                let expr = &mfp.expressions[expression];
+                precompute(expr, rows, &live, arena, &frame);
+                for &i in &live {
+                    frame.set_row(i);
+                    match expr.eval(&rows[i], arena) {
+                        Ok(datum) => rows[i].push(datum),
+                        Err(e) => outcomes[i] = Err(e),
                     }
                 }
-                Step::Filter(predicate) => {
-                    for &i in &live {
-                        match predicate.eval(&rows[i], arena) {
-                            Ok(Datum::True) => {}
-                            Ok(_) => outcomes[i] = Ok(false),
-                            Err(e) => outcomes[i] = Err(e),
-                        }
-                    }
-                }
-                Step::Wasm { func, args: exprs } => {
-                    args.clear();
-                    callers.clear();
-                    for &i in &live {
-                        let row_args: Result<Vec<_>, _> =
-                            exprs.iter().map(|e| e.eval(&rows[i], arena)).collect();
-                        match row_args {
-                            Ok(row_args) => {
-                                args.push(row_args);
-                                callers.push(i);
-                            }
-                            Err(e) => outcomes[i] = Err(e),
-                        }
-                    }
-                    let slices: Vec<&[Datum<'a>]> = args.iter().map(Vec::as_slice).collect();
-                    results.clear();
-                    func.call_batch(&slices, arena, &mut results);
-                    for (&i, result) in callers.iter().zip_eq(results.drain(..)) {
-                        match result {
-                            Ok(datum) => rows[i].push(datum),
-                            Err(e) => outcomes[i] = Err(e),
-                        }
-                    }
+                live.retain(|&i| outcomes[i].is_ok());
+                expression += 1;
+            }
+            precompute(predicate, rows, &live, arena, &frame);
+            for &i in &live {
+                frame.set_row(i);
+                match predicate.eval(&rows[i], arena) {
+                    Ok(Datum::True) => {}
+                    Ok(_) => outcomes[i] = Ok(false),
+                    Err(e) => outcomes[i] = Err(e),
                 }
             }
             live.retain(|&i| matches!(outcomes[i], Ok(true)));
-            if live.is_empty() {
-                break;
+        }
+        while expression < mfp.expressions.len() {
+            let expr = &mfp.expressions[expression];
+            precompute(expr, rows, &live, arena, &frame);
+            for &i in &live {
+                frame.set_row(i);
+                match expr.eval(&rows[i], arena) {
+                    Ok(datum) => rows[i].push(datum),
+                    Err(e) => outcomes[i] = Err(e),
+                }
             }
+            live.retain(|&i| outcomes[i].is_ok());
+            expression += 1;
         }
     }
 
     /// The columns of a row's datums that form its output.
     pub fn projection(&self) -> &[usize] {
-        &self.projection
+        &self.mfp.projection
     }
 }
 
-struct Builder<E> {
-    steps: Vec<Step<E>>,
-    next_column: usize,
-    lifted: bool,
-}
-
-impl<E: OptimizableExpr> Builder<E> {
-    /// Appends steps that compute `expr`, and returns its column.
-    fn map(&mut self, expr: &E, permutation: &[usize]) -> usize {
-        let mut expr = expr.clone();
-        expr.permute(permutation);
-        self.lift(&mut expr);
-        self.steps.push(Step::Map(expr));
-        self.push_column()
-    }
-
-    /// Appends steps that apply `predicate`.
-    fn filter(&mut self, predicate: &E, permutation: &[usize]) {
-        let mut predicate = predicate.clone();
-        predicate.permute(permutation);
-        self.lift(&mut predicate);
-        self.steps.push(Step::Filter(predicate));
-    }
-
-    /// Replaces each WebAssembly call in a strict position of `expr` with a
-    /// reference to a column computed by a preceding batched step. Calls are
-    /// lifted innermost first, so a call's arguments never contain a
-    /// liftable call.
-    fn lift(&mut self, expr: &mut E) {
-        for child in expr.strict_children_mut() {
-            self.lift(child);
+/// Records, in `frame`, the outcome of every WebAssembly call in `expr` for
+/// each live row, with one guest call per call site.
+///
+/// A call's outcome includes its arguments: a row whose arguments fail to
+/// evaluate records that error and is not sent to the guest. Arguments are
+/// evaluated with `frame` replaying the calls already recorded, which are
+/// the calls nested inside them.
+fn precompute<'a, E: OptimizableExpr + Eval>(
+    expr: &'a E,
+    rows: &[Vec<Datum<'a>>],
+    live: &[usize],
+    arena: &'a RowArena,
+    frame: &FrameGuard,
+) {
+    frame.clear();
+    let mut args = Vec::new();
+    let mut callers = Vec::new();
+    let mut results = Vec::new();
+    for (func, exprs) in wasm_calls(expr) {
+        args.clear();
+        callers.clear();
+        let mut failed = Vec::new();
+        for &i in live {
+            frame.set_row(i);
+            let row_args: Result<Vec<_>, _> =
+                exprs.iter().map(|e| e.eval(&rows[i], arena)).collect();
+            match row_args {
+                Ok(row_args) => {
+                    args.push(row_args);
+                    callers.push(i);
+                }
+                Err(e) => failed.push((i, Err(e))),
+            }
         }
-        if let Some((func, args)) = expr.as_wasm_call() {
-            self.steps.push(Step::Wasm {
-                func: func.clone(),
-                args: args.to_vec(),
-            });
-            self.lifted = true;
-            *expr = E::column(self.push_column());
-        }
-    }
-
-    fn push_column(&mut self) -> usize {
-        let column = self.next_column;
-        self.next_column += 1;
-        column
+        let slices: Vec<&[Datum<'a>]> = args.iter().map(Vec::as_slice).collect();
+        results.clear();
+        func.call_batch(&slices, arena, &mut results);
+        let called = callers
+            .iter()
+            .zip_eq(results.drain(..))
+            .map(|(&i, result)| (i, result.map(|d| Row::pack_slice(&[d]))));
+        frame.record(func, rows.len(), failed.into_iter().chain(called));
     }
 }
 
 impl<E: OptimizableExpr + Eval> SafeMfpPlan<E> {
-    /// Returns a batched form of this plan, or `None` if it has no
-    /// WebAssembly call that batching would help.
+    /// Returns a batched form of this plan, or `None` if it calls no
+    /// WebAssembly function.
     pub fn batched(&self) -> Option<BatchedSafeMfpPlan<E>> {
-        BatchedSafeMfpPlan::from_mfp(&self.mfp).map(|(plan, _)| plan)
+        BatchedSafeMfpPlan::from_mfp(&self.mfp)
     }
 }
 
-/// An [`MfpPlan`] restructured for batched evaluation.
+/// An [`MfpPlan`] prepared for batched evaluation.
 #[derive(Clone, Debug)]
-pub struct BatchedMfpPlan<E> {
+pub struct BatchedMfpPlan<E: OptimizableExpr = MirScalarExpr> {
     mfp: BatchedSafeMfpPlan<E>,
     lower_bounds: Vec<E>,
     upper_bounds: Vec<E>,
 }
 
 impl<E: OptimizableExpr + Eval> MfpPlan<E> {
-    /// Returns a batched form of this plan, or `None` if it has no
-    /// WebAssembly call that batching would help.
+    /// Returns a batched form of this plan, or `None` if it calls no
+    /// WebAssembly function.
     ///
-    /// Calls inside temporal bounds are not batched.
+    /// Calls inside temporal bounds are evaluated per row.
     pub fn batched(&self) -> Option<BatchedMfpPlan<E>> {
         let (safe, lower, upper) = self.as_parts();
-        let (mfp, permutation) = BatchedSafeMfpPlan::from_mfp(&safe.mfp)?;
-        let permute = |bounds: &[E]| {
-            bounds
-                .iter()
-                .map(|b| {
-                    let mut b = b.clone();
-                    b.permute(&permutation);
-                    b
-                })
-                .collect()
-        };
         Some(BatchedMfpPlan {
-            mfp,
-            lower_bounds: permute(lower),
-            upper_bounds: permute(upper),
+            mfp: BatchedSafeMfpPlan::from_mfp(&safe.mfp)?,
+            lower_bounds: lower.to_vec(),
+            upper_bounds: upper.to_vec(),
         })
     }
 }
@@ -295,7 +240,7 @@ impl<E: OptimizableExpr + Eval> BatchedMfpPlan<E> {
             Ok(true) => evaluate_temporal(
                 &self.lower_bounds,
                 &self.upper_bounds,
-                &self.mfp.projection,
+                self.mfp.projection(),
                 datums,
                 arena,
                 time,
@@ -410,7 +355,7 @@ mod tests {
             })
             .collect();
 
-        let batched_plan = plan.batched().expect("plan has a batchable call");
+        let batched_plan = plan.batched().expect("plan calls a WebAssembly function");
         let mut rows: Vec<Vec<Datum>> = inputs.iter().map(|d| vec![*d]).collect();
         let mut outcomes = Vec::new();
         batched_plan.evaluate_batch(&mut rows, &arena, &mut outcomes);
@@ -483,8 +428,8 @@ mod tests {
             results[2],
             Ok(Some(vec![Datum::Int64(3), Datum::Int64(12)]))
         );
-        // Three single-row calls from the per-row evaluator's nested call,
-        // twice, then one three-row call per lifted call site.
+        // Three rows of two nested per-row calls, then one three-row call for
+        // each call site.
         assert_eq!(calls(export), vec![1, 1, 1, 1, 1, 1, 3, 3]);
     }
 
@@ -509,15 +454,38 @@ mod tests {
         assert_eq!(calls(export), vec![2]);
     }
 
+    /// `(#0 + 1) / (#0 + 1) + double(#0)` fails twice at `#0 = -1`. Per-row
+    /// evaluation reports the division's error, the earlier argument.
     #[mz_ore::test]
-    fn calls_in_lazy_positions_are_not_batched() {
-        let export = "calls_in_lazy_positions_are_not_batched";
+    fn sibling_error_precedence_is_preserved() {
+        let export = "sibling_error_precedence_is_preserved";
+        let succ = MirScalarExpr::column(0).call_binary(int(1), func::AddInt64);
+        let quotient = succ.clone().call_binary(succ, func::DivInt64);
+        let expr = quotient.call_binary(double(export, MirScalarExpr::column(0)), func::AddInt64);
+        let mfp = MapFilterProject::new(1).map([expr]);
+        let results = evaluate_both(&safe_plan(mfp), &[Datum::Int64(-1), Datum::Int64(2)]);
+        assert_eq!(results[0], Err(EvalError::DivisionByZero));
+        assert_eq!(results[1], Ok(Some(vec![Datum::Int64(2), Datum::Int64(5)])));
+    }
+
+    #[mz_ore::test]
+    fn calls_in_lazy_positions_are_batched() {
+        let export = "calls_in_lazy_positions_are_batched";
+        // Negative rows take the else branch, so the guest's error for them
+        // is computed but never reported.
         let guarded = MirScalarExpr::column(0)
             .call_binary(int(0), func::Gt)
             .if_then_else(double(export, MirScalarExpr::column(0)), int(0));
         let mfp = MapFilterProject::new(1).map([guarded]);
-        assert!(safe_plan(mfp).batched().is_none());
+        let inputs = [Datum::Int64(-1), Datum::Int64(4)];
+        let results = evaluate_both(&safe_plan(mfp), &inputs);
+        assert_eq!(
+            results[0],
+            Ok(Some(vec![Datum::Int64(-1), Datum::Int64(0)]))
+        );
+        assert_eq!(calls(export).last(), Some(&2));
 
+        // A false conjunct absorbs the guest's error.
         let absorbed = MirScalarExpr::CallVariadic {
             func: VariadicFunc::And(func::variadic::And),
             exprs: vec![
@@ -526,6 +494,7 @@ mod tests {
             ],
         };
         let mfp = MapFilterProject::new(1).map([absorbed]);
-        assert!(safe_plan(mfp).batched().is_none());
+        let results = evaluate_both(&safe_plan(mfp), &inputs);
+        assert_eq!(results[0], Ok(Some(vec![Datum::Int64(-1), Datum::False])));
     }
 }

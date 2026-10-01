@@ -518,22 +518,6 @@ impl OptimizableExpr for LirScalarExpr {
             _ => None,
         }
     }
-
-    fn strict_children_mut(&mut self) -> Vec<&mut Self> {
-        match self {
-            LirScalarExpr::Column(..) | LirScalarExpr::Literal(..) => vec![],
-            LirScalarExpr::CallUnary { expr, .. } => vec![expr],
-            LirScalarExpr::CallBinary { expr1, expr2, .. } => vec![expr1, expr2],
-            LirScalarExpr::CallVariadic { func, exprs } => match func {
-                VariadicFunc::And(_) | VariadicFunc::Or(_) => vec![],
-                VariadicFunc::Coalesce(_) | VariadicFunc::CaseLiteral(_) => {
-                    exprs.iter_mut().take(1).collect()
-                }
-                _ => exprs.iter_mut().collect(),
-            },
-            LirScalarExpr::If { cond, .. } => vec![cond],
-        }
-    }
 }
 
 // We need a custom Debug because we don't want to show `None` for name information.
