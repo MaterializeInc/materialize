@@ -13,6 +13,7 @@ Tests the mz command line tool against a real Cloud instance
 import argparse
 import datetime
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -1530,14 +1531,20 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 def azure_run_names() -> tuple[str, str]:
     """Resource group and name prefix of this azure-temporary run.
 
-    In CI both are unique per job attempt, so a run cannot collide with what a
-    failed run left behind, and its forced cleanup cannot delete another run's
-    resources. The mzcompose plugin's cleanup pass runs in the same job
-    attempt, so it derives the same names."""
+    In CI both are derived from the job ID, which is unique across pipelines
+    and retries, so a run cannot collide with what a failed run left behind,
+    and its forced cleanup cannot delete another run's resources. A random
+    suffix would not do: the mzcompose plugin's cleanup pass runs as a
+    separate invocation in the same job and must derive the same names.
+
+    NOTE: the storage module names its account from the prefix without
+    hyphens plus 9 characters, and Azure caps storage account names at 24,
+    so the prefix has at most 15 characters besides its hyphens."""
     build = os.getenv("BUILDKITE_BUILD_NUMBER")
     if not build:
         return "mz-tf-test-rg", "mz-tf-test"
-    prefix = f"mzci-{build}-{os.getenv('BUILDKITE_RETRY_COUNT', '0')}"
+    job = hashlib.sha256(os.environ["BUILDKITE_JOB_ID"].encode()).hexdigest()[:5]
+    prefix = f"mzci-{build}-{job}"
     return f"{prefix}-rg", prefix
 
 
