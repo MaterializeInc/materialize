@@ -112,9 +112,10 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use mz_timely_util::columnar::batcher::ColumnChunker;
+use mz_timely_util::columnar::body::ColumnBody;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk};
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
 use mz_timely_util::columnar::unload::UnloadBatch;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
 use mz_timely_util::containers::stack::FueledBuilder;
@@ -474,7 +475,7 @@ where
             let persist_arranged = arrange_core::<
                 _,
                 _,
-                ColumnChunker<((UpsertKey, Row), T, Diff)>,
+                PagedChunker<((UpsertKey, Row), T, Diff)>,
                 UpsertFeedbackBatcher<T>,
                 ValRowColPagedBuilder<UpsertKey, T, Diff>,
                 ValRowSpine<UpsertKey, T, Diff>,
@@ -876,11 +877,11 @@ where
     /// A new stash batcher for one source dataflow.
     fn new_batcher() -> Self::Batcher;
 
-    /// Push one sorted, consolidated `Column` chunk into the batcher, in the
+    /// Push one sorted, consolidated chunk body into the batcher, in the
     /// batcher's chunk representation.
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>);
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>);
 
-    /// Consolidate `updates` through `chunker` into `Column` chunks and push
+    /// Consolidate `updates` through `chunker` into chunk bodies and push
     /// them into `batcher`, emptying `updates` (keeping its capacity). The
     /// chunker readies a fully-consolidated chunk per `push_into`, so the
     /// `extract` loop drains everything it produced.
@@ -945,8 +946,8 @@ where
         Batcher::new(None, 0)
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
-        batcher.push_into(ColumnChunk::from_column(chunk));
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>) {
+        batcher.push_into(ColumnChunk::from_body(chunk));
     }
 
     async fn drain(
@@ -960,7 +961,7 @@ where
         source_id: GlobalId,
     ) -> DrainStats {
         drain_sealed_input_chunked(
-            sealed.into_iter().map(ColumnChunk::into_column),
+            sealed.into_iter().map(ColumnChunk::into_body),
             ineligible,
             output_handle,
             output_cap,
@@ -995,8 +996,9 @@ where
         batcher
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
-        batcher.push_into(chunk);
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>) {
+        // The pager's chains are edge containers, so the body goes back onto one.
+        batcher.push_into(Column::from(chunk));
     }
 
     async fn drain(
@@ -1092,7 +1094,7 @@ struct DrainStats {
 /// probe hits for its keys) is resident regardless of drain size. Only the
 /// re-stashed ineligible set is materialized.
 async fn drain_sealed_input_chunked<T, O>(
-    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = ColumnBody<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
