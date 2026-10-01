@@ -8093,7 +8093,6 @@ name = "mz-postgres-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "deadpool",
  "deadpool-postgres",
  "mz-ore",
