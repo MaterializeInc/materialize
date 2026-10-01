@@ -104,6 +104,38 @@ export function buildObjectLagHistoryQuery({
   );
 }
 
+/**
+ * Each object's most recent reading.
+ *
+ * Separate from the binned series because a bin reports the worst reading in
+ * its span, which at a 24 hour range is the worst of 24 minutes. That is the
+ * wrong answer to "is this bad right now", and the only range where the last
+ * bin happens to be the latest reading is one hour.
+ *
+ * The two minute filter is what keeps this cheap: a reading lands every
+ * minute, so the newest one is always inside that window however wide the
+ * range being graphed.
+ */
+export function buildLatestLagQuery(objectIds: string[]) {
+  return queryBuilder
+    .selectFrom("mz_wallclock_global_lag_recent_history")
+    .distinctOn("object_id")
+    .select(["object_id as objectId", "lag"])
+    .where("object_id", "in", objectIds)
+    .where(
+      (eb) => sql`${eb.ref("occurred_at")} + INTERVAL '2 MINUTES'`,
+      ">=",
+      sql<Date>`mz_now()`,
+    )
+    .orderBy(["object_id", "occurred_at desc"]);
+}
+
+/**
+ * The binned series and the latest readings, in one request.
+ *
+ * Sent together because they are one question asked at two resolutions, and
+ * `executeSqlV2` puts an array of queries in a single round trip.
+ */
 export async function fetchObjectLagHistory({
   objectIds,
   lookbackMs,
@@ -116,7 +148,10 @@ export async function fetchObjectLagHistory({
   requestOptions?: RequestInit;
 }) {
   return executeSqlV2({
-    queries: buildObjectLagHistoryQuery({ objectIds, lookbackMs }).compile(),
+    queries: [
+      buildObjectLagHistoryQuery({ objectIds, lookbackMs }).compile(),
+      buildLatestLagQuery(objectIds).compile(),
+    ] as const,
     queryKey,
     requestOptions,
     sessionVariables: {

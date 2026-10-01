@@ -946,17 +946,16 @@ export interface FreshnessObject {
   objectType: string;
 }
 
-/**
- * Lag readings for a known set of objects, shaped for the freshness graph.
- *
- * The caller supplies the objects rather than naming a cluster, because the
- * `useAllObjects` subscribe already holds every name, schema, database and
- * type. Resolving those in SQL cost three joins and three full scans per
- * request; here they are a map lookup.
- */
-type LagReading = Awaited<
-  ReturnType<typeof fetchObjectLagHistory>
->["rows"][number];
+type LagQueryResults = Awaited<ReturnType<typeof fetchObjectLagHistory>>;
+type LagReading = LagQueryResults[0]["rows"][number];
+type LatestReading = LagQueryResults[1]["rows"][number];
+
+export interface LagQueryRows {
+  /** One binned point per object per bin, each the worst reading in its span. */
+  readings: LagReading[];
+  /** One row per object, its most recent reading. */
+  latest: LatestReading[];
+}
 
 /**
  * Shapes lag readings for the freshness graph, naming each object from the
@@ -967,11 +966,20 @@ type LagReading = Awaited<
  * rename would otherwise survive in the cache until the set changed.
  */
 export function buildFreshnessData(
-  rows: LagReading[],
+  { readings: rows, latest }: LagQueryRows,
   objects: FreshnessObject[],
 ) {
   const objectsById = new Map(
     objects.map((object) => [object.objectId, object]),
+  );
+
+  // Null where the newest reading reports the object as unreadable, which is
+  // not the same as the object having no reading at all.
+  const latestByObjectId = new Map<string, number | null>(
+    latest.map((row) => [
+      row.objectId,
+      row.lag === null ? null : sumPostgresIntervalMs(row.lag),
+    ]),
   );
 
   const currentData = flatGroup(rows, (d) => d.objectId)
@@ -1045,12 +1053,21 @@ export function buildFreshnessData(
     historicalData,
     currentData,
     objectsById,
+    latestByObjectId,
     lines: Array.from(lines.values()),
     startTime: historicalData.at(0)?.timestamp ?? 0,
     endTime: historicalData.at(-1)?.timestamp ?? 0,
   };
 }
 
+/**
+ * Lag readings for a known set of objects, shaped for the freshness graph.
+ *
+ * The caller supplies the objects rather than naming a cluster, because the
+ * `useAllObjects` subscribe already holds every name, schema, database and
+ * type. Resolving those in SQL cost three joins and three full scans per
+ * request; here they are a map lookup.
+ */
 /**
  * Lag readings for a known set of objects, shaped for the freshness graph.
  *
@@ -1070,16 +1087,16 @@ export function useClusterFreshness({
 
   const query = useSuspenseQuery({
     queryKey: clusterQueryKeys.clusterFreshness({ lookbackMs, objectIds }),
-    queryFn: async ({ queryKey, signal }): Promise<LagReading[]> => {
-      if (objectIds.length === 0) return [];
+    queryFn: async ({ queryKey, signal }): Promise<LagQueryRows> => {
+      if (objectIds.length === 0) return { readings: [], latest: [] };
 
-      const { rows } = await fetchObjectLagHistory({
+      const [series, latest] = await fetchObjectLagHistory({
         objectIds,
         lookbackMs,
         requestOptions: { signal },
         queryKey,
       });
-      return rows;
+      return { readings: series.rows, latest: latest.rows };
     },
   });
 

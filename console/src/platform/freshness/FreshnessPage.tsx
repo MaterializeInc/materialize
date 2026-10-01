@@ -112,7 +112,14 @@ const FreshnessContent = ({
   const { colors } = useTheme<MaterializeTheme>();
   const objects = useFreshnessObjects(clusterId);
   const {
-    data: { historicalData, startTime, endTime, lines, objectsById },
+    data: {
+      historicalData,
+      startTime,
+      endTime,
+      lines,
+      objectsById,
+      latestByObjectId,
+    },
   } = useClusterFreshness({ lookbackMs, objects });
 
   // Hydration is its own query: `buildLagHistoryQuery` is shared with pages
@@ -148,8 +155,8 @@ const FreshnessContent = ({
   );
 
   const statsByKey = React.useMemo(
-    () => buildStats(visibleLines, historicalData),
-    [visibleLines, historicalData],
+    () => buildStats(visibleLines, historicalData, latestByObjectId),
+    [visibleLines, historicalData, latestByObjectId],
   );
   const judged = React.useMemo(
     () => judgeLines(visibleLines, historicalData, predicate, statsByKey),
@@ -432,16 +439,12 @@ const FreshnessPage = () => {
 
         <Text textStyle="text-small" color={colors.foreground.secondary}>
           Freshness is wallclock lag: how far behind wall clock time an
-          object&rsquo;s results are. Series from{" "}
-          <Text as="span" fontFamily="mono">
-            mz_wallclock_global_lag_recent_history
-          </Text>
-          , hydration from{" "}
-          <Text as="span" fontFamily="mono">
-            mz_hydration_statuses
-          </Text>
-          . Readings are binned to 60 points per range and each point is the
-          worst lag in its span, so p90 is a percentile of those maxima.
+          object&rsquo;s results are. Readings are binned to 60 points per
+          range, and each point is the worst lag in its span, so p90 is a
+          percentile of those maxima. The &ldquo;Now&rdquo; column is the most
+          recent single reading rather than a binned point, so at wider ranges a
+          point on the graph can sit above the &ldquo;Now&rdquo; value in its
+          row.
         </Text>
       </VStack>
     </MainContentContainer>

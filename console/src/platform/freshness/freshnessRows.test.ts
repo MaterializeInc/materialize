@@ -91,6 +91,17 @@ const objectsById = new Map<string, FreshnessObject>(
   ]),
 );
 
+/**
+ * What the latest-reading query returns: each object's newest reading, which
+ * the binned series cannot supply once a bin spans more than a minute.
+ */
+const latestByObjectId = new Map<string, number | null>(
+  Object.entries(SERIES).map(([key, readings]) => {
+    const last = readings.at(-1);
+    return [key, typeof last === "number" ? last : null];
+  }),
+);
+
 const hydrationByObjectId = new Map<string, HydrationCounts>(
   Object.keys(SERIES).map((key) => [
     key,
@@ -103,7 +114,7 @@ const rowsFor = (
   threshold: number,
   selected: ReadonlySet<string> = new Set(),
 ) => {
-  const stats = buildStats(lines, data);
+  const stats = buildStats(lines, data, latestByObjectId);
   const judged = judgeLines(lines, data, predicate, stats);
   return buildFreshnessRows({
     judged,
@@ -117,14 +128,18 @@ const rowsFor = (
 
 describe("computeStats", () => {
   it("separates the latest reading from the worst", () => {
-    expect(computeStats("spiky", data)).toMatchObject({
+    expect(
+      computeStats("spiky", data, latestByObjectId.get("spiky")),
+    ).toMatchObject({
       current: 430,
       peak: 9_000,
     });
   });
 
   it("is all null for a line that never reported", () => {
-    expect(computeStats("absent", data)).toEqual({
+    expect(
+      computeStats("absent", data, latestByObjectId.get("absent")),
+    ).toEqual({
       current: null,
       peak: null,
       p90: null,
@@ -133,13 +148,30 @@ describe("computeStats", () => {
   });
 
   it("does not let an unreadable reading score as zero lag", () => {
-    const stats = computeStats("unreadable", data);
+    const stats = computeStats(
+      "unreadable",
+      data,
+      latestByObjectId.get("unreadable"),
+    );
     // The graph's accessor returns 0 for these readings so the line draws at
     // the bottom. Inheriting that would score the worst state as the best.
     expect(accessorFor("unreadable")(data[4]!)).toBe(0);
     expect(stats.notQueryable).toBe(true);
     expect(stats.peak).toBe(420);
     expect(stats.current).toBeNull();
+  });
+
+  it('takes "Now" from the latest reading, not the worst in the last bin', () => {
+    // The reviewer's case: at a wide range the final bin is a maximum over
+    // many minutes, so it reads high for an object that has already recovered.
+    const lastBinMax = Math.max(
+      ...(SERIES.spiky as number[]).map((r) => r as number),
+    );
+    expect(lastBinMax).toBe(9_000);
+
+    const stats = computeStats("spiky", data, 430);
+    expect(stats.current).toBe(430);
+    expect(stats.peak).toBe(9_000);
   });
 
   it("discards a short spike that the peak keeps", () => {
@@ -150,7 +182,7 @@ describe("computeStats", () => {
       { spike: Array.from({ length: 60 }, (_, i) => (i < 3 ? 9_000 : 400)) },
       60,
     );
-    const stats = computeStats("spike", sixty);
+    const stats = computeStats("spike", sixty, undefined);
     expect(stats.peak).toBe(9_000);
     expect(stats.p90).toBe(400);
   });
@@ -161,7 +193,7 @@ describe("computeStats", () => {
       { spike: Array.from({ length: 60 }, (_, i) => (i < 7 ? 9_000 : 400)) },
       60,
     );
-    expect(computeStats("spike", sixty).p90).toBe(9_000);
+    expect(computeStats("spike", sixty, undefined).p90).toBe(9_000);
   });
 });
 

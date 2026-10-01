@@ -67,7 +67,11 @@ export interface ObjectStats {
  * Each reading is also already a maximum over its bin, so these are
  * percentiles of maxima rather than of the underlying lag.
  */
-export function computeStats(key: string, data: DataPoint[]): ObjectStats {
+export function computeStats(
+  key: string,
+  data: DataPoint[],
+  latest: number | null | undefined,
+): ObjectStats {
   const values: number[] = [];
   let notQueryable = false;
 
@@ -86,15 +90,17 @@ export function computeStats(key: string, data: DataPoint[]): ObjectStats {
   }
 
   if (values.length === 0) {
-    return { current: null, peak: null, p90: null, notQueryable };
+    return { current: latest ?? null, peak: null, p90: null, notQueryable };
   }
 
   const sorted = [...values].sort((a, b) => a - b);
   const rank = Math.max(0, Math.ceil(0.9 * sorted.length) - 1);
-  const last = data.at(-1)?.lag[key];
 
   return {
-    current: last?.queryable ? last.totalMs : null,
+    // The newest reading, not the newest bin. A bin reports the worst reading
+    // in its span, so at a 24 hour range the last one answers "the worst of
+    // the last 24 minutes" when the question asked was "right now".
+    current: latest ?? null,
     peak: sorted[sorted.length - 1],
     p90: sorted[rank],
     notQueryable,
@@ -127,7 +133,8 @@ export function judgeLines(
   statsByKey: Map<string, ObjectStats>,
 ): ThresholdLineSeries<DataPoint>[] {
   return lines.map((line) => {
-    const stats = statsByKey.get(line.key) ?? computeStats(line.key, data);
+    const stats =
+      statsByKey.get(line.key) ?? computeStats(line.key, data, undefined);
     return {
       key: line.key,
       label: line.label,
@@ -143,8 +150,14 @@ export function judgeLines(
 export function buildStats(
   lines: { key: string }[],
   data: DataPoint[],
+  latestByObjectId: Map<string, number | null>,
 ): Map<string, ObjectStats> {
-  return new Map(lines.map((line) => [line.key, computeStats(line.key, data)]));
+  return new Map(
+    lines.map((line) => [
+      line.key,
+      computeStats(line.key, data, latestByObjectId.get(line.key)),
+    ]),
+  );
 }
 
 /**

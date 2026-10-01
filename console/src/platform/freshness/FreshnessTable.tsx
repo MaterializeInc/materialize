@@ -106,7 +106,7 @@ export const FreshnessTable = ({
   );
 
   /**
-   * The Now cell, which is where an unreadable object is called out. Its
+   * The "Now" cell, which is where an unreadable object is called out. Its
    * `breachValue` is `Infinity` so that it sorts and highlights as the worst
    * row, and naming the state here is what keeps that number off the screen.
    */
