@@ -136,7 +136,7 @@ module "aks" {
   api_server_subnet_id               = module.networking.api_server_subnet_id
 
   # Default node pool with autoscaling (runs all workloads except Materialize)
-  default_node_pool_vm_size             = "Standard_D4ps_v5"
+  default_node_pool_vm_size             = "Standard_D4ps_v6"
   default_node_pool_enable_auto_scaling = true
   default_node_pool_min_count           = 2
   default_node_pool_max_count           = 5
