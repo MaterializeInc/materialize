@@ -531,9 +531,13 @@ impl<D: Data> CorrectionV2<D> {
             }
         }
 
+        // The merged chain becomes `emitted`, which the caller reads next and the next
+        // consolidation merges with the feedback retractions, so the chunks the merge writes are
+        // the youngest generation whatever the depth of their inputs. A lone input chain is
+        // reused as is and keeps its chunks' depths, since re-spilling them would cost a copy.
         let merged = if stale_times == 0 {
             let cursors: Vec<_> = lowers.into_iter().filter_map(Chain::into_cursor).collect();
-            merge_cursors(cursors)
+            merge_cursors(cursors, 0)
         } else if stale_times < MAX_STALE_RUNS {
             let mut runs = Vec::new();
             for chain in lowers {
@@ -541,7 +545,7 @@ impl<D: Data> CorrectionV2<D> {
                     runs.append(&mut cursor.advance_by(since_ts));
                 }
             }
-            merge_cursors(runs)
+            merge_cursors(runs, 0)
         } else {
             let mut updates: Vec<_> = lowers.iter().flat_map(|c| c.iter()).collect();
             for (_, time, _) in &mut updates {
@@ -643,29 +647,29 @@ impl<D: Data> CorrectionV2<D> {
     }
 }
 
-/// Merge the given cursors into one chain.
-fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
+/// Merge the given cursors into one chain, writing new chunks at `depth`.
+fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>, depth: u8) -> Chain<D> {
     match cursors.len() {
         0 => Chain::new(),
         1 => {
             let [cur] = cursors.try_into().unwrap();
-            cur.into_chain()
+            cur.into_chain(depth)
         }
         2 => {
             let [a, b] = cursors.try_into().unwrap();
-            merge_2(a, b)
+            merge_2(a, b, depth)
         }
-        _ => merge_many(cursors),
+        _ => merge_many(cursors, depth),
     }
 }
 
 /// Merge the given two cursors using a 2-way merge.
 ///
 /// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
-fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
+fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>, depth: u8) -> Chain<D> {
     let mut rest1 = Some(cursor1);
     let mut rest2 = Some(cursor2);
-    let mut merged = ChainBuilder::default();
+    let mut merged = ChainBuilder::at_depth(depth);
 
     // One borrow per chunk pair, not per update: `Chunk::view` re-decodes the column header on
     // every call. The inner loop runs until either cursor crosses into its next chunk, at which
@@ -718,9 +722,9 @@ fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
 }
 
 /// Merge the given cursors using a k-way merge with a binary heap.
-fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
+fn merge_many<D: Data>(cursors: Vec<Cursor<D>>, depth: u8) -> Chain<D> {
     let mut cursors: Vec<Option<Cursor<D>>> = cursors.into_iter().map(Some).collect();
-    let mut merged = ChainBuilder::default();
+    let mut merged = ChainBuilder::at_depth(depth);
 
     // One borrow per chunk, not per update, as in `merge_2`. Each round borrows the current chunk
     // of every live cursor, and merges until a cursor crosses into its next chunk, whose updates
@@ -1016,8 +1020,11 @@ impl<D: Data> ChainBucket<D> {
             self.accounting.chain_dropped(&a);
             self.accounting.chain_dropped(&b);
 
+            // A merged chain waits about `chain_proportionality` times longer for its next merge
+            // than its inputs did, so it is one generation deeper.
+            let depth = a.depth.max(b.depth).saturating_add(1);
             let cursors = [a, b].into_iter().filter_map(Chain::into_cursor).collect();
-            let merged = merge_cursors(cursors);
+            let merged = merge_cursors(cursors, depth);
             if !merged.is_empty() {
                 self.accounting.chain_created(&merged);
                 self.chains.push(merged);
@@ -1073,6 +1080,8 @@ struct Chain<D: Data> {
     ///
     /// Maintained as chunks are pushed, so metrics never walk the chunks.
     size: usize,
+    /// The deepest generation among the chunks, see [`Chunk::depth`].
+    depth: u8,
 }
 
 impl<D: Data> Chain<D> {
@@ -1082,6 +1091,7 @@ impl<D: Data> Chain<D> {
             chunks: Default::default(),
             update_count: 0,
             size: 0,
+            depth: 0,
         }
     }
 
@@ -1099,6 +1109,7 @@ impl<D: Data> Chain<D> {
 
         self.update_count += chunk.len();
         self.size += chunk.size();
+        self.depth = self.depth.max(chunk.depth);
         self.chunks.push(chunk);
     }
 
@@ -1222,14 +1233,14 @@ impl<D: Data> Chain<D> {
                     .find_time_greater_than(skip_ts)
                     .expect("straddles time");
                 let view = chunk.view();
-                let mut builder = ChainBuilder::default();
+                let mut builder = ChainBuilder::at_depth(chunk.depth);
                 for i in 0..idx {
                     builder.push_ref(view.get(i));
                 }
                 for part in builder.finish().chunks {
                     lower.push_chunk(part);
                 }
-                let mut builder = ChainBuilder::default();
+                let mut builder = ChainBuilder::at_depth(chunk.depth);
                 for i in idx..chunk.len() {
                     builder.push_ref(view.get(i));
                 }
@@ -1254,14 +1265,19 @@ struct ChainBuilder<D: Data> {
 
 impl<D: Data> Default for ChainBuilder<D> {
     fn default() -> Self {
-        Self {
-            builder: Default::default(),
-            chain: Chain::new(),
-        }
+        Self::at_depth(0)
     }
 }
 
 impl<D: Data> ChainBuilder<D> {
+    /// A builder whose chunks are minted at the given generational depth.
+    fn at_depth(depth: u8) -> Self {
+        Self {
+            builder: ChunkBuilder::at_depth(depth),
+            chain: Chain::new(),
+        }
+    }
+
     /// Push a reference-form update into the builder.
     fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
         if let Some(chunk) = self.builder.push(update) {
@@ -1544,12 +1560,13 @@ impl<D: Data> Cursor<D> {
 
     /// Drain the cursor into a [`Chain`].
     ///
-    /// This reuses the underlying chunks if possible, and writes new ones otherwise.
-    fn into_chain(self) -> Chain<D> {
-        match self.try_unwrap() {
+    /// This reuses the underlying chunks if possible, and writes new ones at `depth` otherwise.
+    /// Reused chunks keep their own depth.
+    fn into_chain(self, depth: u8) -> Chain<D> {
+        match self.try_unwrap(depth) {
             Ok(chain) => chain,
             Err((_, cursor)) => {
-                let mut builder = ChainBuilder::default();
+                let mut builder = ChainBuilder::at_depth(depth);
                 builder.push_cursor(cursor);
                 builder.finish()
             }
@@ -1565,7 +1582,7 @@ impl<D: Data> Cursor<D> {
     /// the cursor has unique references to its chunks. If the unwrap fails, this method returns an
     /// `Err` containing the cursor in an unchanged state, allowing the caller to convert it into a
     /// chain by copying chunks rather than reusing them.
-    fn try_unwrap(self) -> Result<Chain<D>, (&'static str, Self)> {
+    fn try_unwrap(self, depth: u8) -> Result<Chain<D>, (&'static str, Self)> {
         if self.limit.is_some() {
             return Err(("cursor with limit", self));
         }
@@ -1576,7 +1593,7 @@ impl<D: Data> Cursor<D> {
             return Err(("cursor on shared chunks", self));
         }
 
-        let mut builder = ChainBuilder::default();
+        let mut builder = ChainBuilder::at_depth(depth);
         let mut remaining = Some(self);
 
         // We might be partway through the first chunk, in which case we can't reuse it but need to
@@ -1643,6 +1660,11 @@ struct Chunk<D: Data> {
     first_time: Timestamp,
     /// Time of the last update, cached likewise.
     last_time: Timestamp,
+    /// The generational depth: 0 for chunks built from staged updates or written by a read,
+    /// one more than the deepest input for chunks written by a bucket's chain merge. The pool
+    /// treats deeper chunks as colder, and compresses them past the floor set by
+    /// [`chunk::set_compress_min_depth`].
+    depth: u8,
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1664,7 +1686,7 @@ impl<D: Data> Chunk<D> {
     ///
     /// Panics if the body is empty. Chunks are non-empty by construction; [`ChunkBuilder`]
     /// only ever mints from a populated body.
-    fn mint(body: &mut ColumnBody<(D, Timestamp, Diff)>) -> Self {
+    fn mint(body: &mut ColumnBody<(D, Timestamp, Diff)>, depth: u8) -> Self {
         let (len, first_time, last_time) = {
             let borrowed = body.borrow();
             let len = borrowed.len();
@@ -1673,11 +1695,9 @@ impl<D: Data> Chunk<D> {
         };
         let body_words = body.length_in_bytes() / std::mem::size_of::<u64>();
 
-        // Depth 0: a correction chunk is rewritten by the next merge that reaches it, so the
-        // pool stores it uncompressed and in its hottest eviction band.
-        // TODO: chunks resting in the far-future buckets outlive that assumption and want a
-        // depth that reflects how long they have gone untouched.
-        let (pooled, resident) = match chunk::try_spill_ref(body, 0) {
+        // TODO: chunks resting in far-future buckets go untouched for longer than their merge
+        // depth suggests, and could spill deeper still.
+        let (pooled, resident) = match chunk::try_spill_ref(body, depth) {
             Some(handle) => {
                 body.clear();
                 (Mutex::new(Some(handle)), OnceLock::new())
@@ -1703,6 +1723,7 @@ impl<D: Data> Chunk<D> {
             len,
             first_time,
             last_time,
+            depth,
         }
     }
 
@@ -1834,17 +1855,19 @@ impl<D: Data> Chunk<D> {
 struct ChunkBuilder<D: Data> {
     /// The updates pushed since the last mint.
     current: ColumnBody<(D, Timestamp, Diff)>,
-}
-
-impl<D: Data> Default for ChunkBuilder<D> {
-    fn default() -> Self {
-        Self {
-            current: Default::default(),
-        }
-    }
+    /// The generational depth minted chunks carry.
+    depth: u8,
 }
 
 impl<D: Data> ChunkBuilder<D> {
+    /// A builder whose chunks are minted at the given generational depth.
+    fn at_depth(depth: u8) -> Self {
+        Self {
+            current: Default::default(),
+            depth,
+        }
+    }
+
     /// Push an update, returning a chunk if the push completed one.
     ///
     /// Accepts whatever [`ColumnBody`]'s [`PushInto`] impl accepts, both the
@@ -1861,12 +1884,12 @@ impl<D: Data> ChunkBuilder<D> {
         // The ship test walks the body's slice lengths, so it costs per push, not per byte.
         self.current
             .at_capacity()
-            .then(|| Chunk::mint(&mut self.current))
+            .then(|| Chunk::mint(&mut self.current, self.depth))
     }
 
     /// Mint the updates pushed since the last mint, if any.
     fn finish(mut self) -> Option<Chunk<D>> {
-        (!self.current.is_empty()).then(|| Chunk::mint(&mut self.current))
+        (!self.current.is_empty()).then(|| Chunk::mint(&mut self.current, self.depth))
     }
 }
 
@@ -2171,7 +2194,7 @@ mod tests {
                 chain.into_cursor().expect("non-empty")
             })
             .collect();
-        let merged = merge_many(cursors);
+        let merged = merge_many(cursors, 0);
 
         let actual: Vec<_> = merged.iter().map(|(d, _, r)| (d, r)).collect();
         let expected: Vec<_> = expected.into_iter().collect();
@@ -2390,6 +2413,49 @@ mod tests {
         assert_eq!(v2.prev_size.capacity, size);
         assert_eq!(v2.prev_size.allocations, allocations);
         assert_eq!(v2.prev_update_count, records);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow under Miri
+    fn bucket_merges_deepen_and_reads_reset_depth() {
+        let sink_metrics = sink_metrics();
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+
+        // Many stage flushes at one time land in one bucket, whose chain merges deepen.
+        let mut i = 0;
+        let deepest = loop {
+            v2.insert(&mut vec![(
+                format!("{i:08}"),
+                Timestamp::from(0),
+                Diff::ONE,
+            )]);
+            i += 1;
+            let chains: Vec<&Chain<String>> = v2.chain.buckets().flat_map(|b| &b.chains).collect();
+            for chain in &chains {
+                let max = chain.chunks.iter().map(|c| c.depth).max().unwrap_or(0);
+                assert_eq!(chain.depth, max, "a chain's depth is its deepest chunk's");
+            }
+            let deepest = chains.iter().map(|c| c.depth).max().unwrap_or(0);
+            if deepest >= 2 && chains.len() >= 2 {
+                break deepest;
+            }
+            assert!(i < 1_000_000, "bucket merges never deepened");
+        };
+        assert!(deepest >= 2);
+
+        let upper = Antichain::from_elem(Timestamp::from(1));
+        let read = v2.updates_before(&upper).count();
+        assert_eq!(read, i);
+        assert!(
+            v2.emitted.chunks.iter().all(|c| c.depth == 0),
+            "a read writes the youngest generation",
+        );
     }
 
     /// Every chain announced to introspection is retired by the time the buffer drops, the
