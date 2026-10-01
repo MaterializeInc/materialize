@@ -5893,13 +5893,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@visx/event@npm:^3.12.0":
-  version: 3.12.0
-  resolution: "@visx/event@npm:3.12.0"
+"@visx/event@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "@visx/event@npm:4.0.0"
   dependencies:
-    "@types/react": "npm:*"
-    "@visx/point": "npm:3.12.0"
-  checksum: 10c0/7d3b9bafb6311a9d9db47e8a474c73f71a3c7f5fd6780dcc01bf8e809e0a82b89182a3ea53827612474a217aff81bba8ee80569731cfb8d33eb919bba507d54d
+    "@visx/point": "npm:4.0.0"
+  peerDependencies:
+    "@types/react": ^18.0.0 || ^19.0.0
+    react: ^18.0.0 || ^19.0.0
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/cf864f0be5a4dfea2dd2cf4bea9aced9bc400b01c8c09e42a3d38b6d483957253f1006a08e88e3e9ad68d30af4a48aa9d7baf2cc89b6045397e4ac433aa203f2
   languageName: node
   linkType: hard
 
@@ -11824,7 +11829,7 @@ __metadata:
     "@types/semver": "npm:^7.8.0"
     "@visx/axis": "npm:^3.12.0"
     "@visx/curve": "npm:^3.12.0"
-    "@visx/event": "npm:^3.12.0"
+    "@visx/event": "npm:^4.0.0"
     "@visx/grid": "npm:^4.0.0"
     "@visx/group": "npm:^3.12.0"
     "@visx/responsive": "npm:^3.12.0"
