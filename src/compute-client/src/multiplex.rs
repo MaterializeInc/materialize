@@ -25,9 +25,9 @@
 //! has applied. Interactive therefore has the create and the compactions that follow it back on one
 //! ordered stream, and the multiplexer never modifies a frontier.
 //!
-//! The state is which runtime renders each transient collection (`transient_owner`) and which
-//! indexes maintenance publishes (`published`). It is per-connection and discarded by `Hello`, see
-//! `Multiplexer::reset`.
+//! The state is the collections the controller has declared and not yet dropped, with the runtime
+//! that hosts each and whether interactive may import it (`collections`). It is per-connection and
+//! discarded by `Hello`, see `Multiplexer::reset`.
 //!
 //! The multiplexer does not deduplicate peek responses. The exactly-one-`PeekResponse`-per-uuid
 //! contract is already upheld below and above it: the per-worker `PartitionedComputeState` inside
@@ -39,13 +39,13 @@
 //! are sent to process 0 only, reaching other processes' workers through the intra-runtime command
 //! channel), so it cannot gate responses on having seen the command.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
-use crate::protocol::command::ComputeCommand;
+use crate::protocol::command::{ComputeCommand, PeekTarget};
 use crate::protocol::response::ComputeResponse;
 use crate::service::ComputeClient;
 
@@ -58,6 +58,17 @@ enum Runtime {
     Interactive,
 }
 
+/// A collection the controller declared, through a `CreateDataflow` export or a `CreateInstance`
+/// logging index.
+#[derive(Clone, Copy, Debug)]
+struct Collection {
+    /// The runtime that hosts it.
+    runtime: Runtime,
+    /// Whether maintenance publishes it as an index, so that interactive may import it and must see
+    /// its compactions.
+    published: bool,
+}
+
 /// A single [`ComputeClient`] presented to the controller over two compute runtimes.
 ///
 /// See the module documentation for the routing and merge policy.
@@ -67,17 +78,9 @@ pub struct Multiplexer {
     maintenance: Box<dyn ComputeClient>,
     /// The runtime that serves ephemeral, interactive peeks.
     interactive: Box<dyn ComputeClient>,
-    /// The transient collections rendered by the interactive runtime, learned from `CreateDataflow`.
-    ///
-    /// Only interactive-owned transient ids are recorded. Maintenance is the default in `owner_of`,
-    /// so this is a set rather than a map. An entry is evicted when the collection's
-    /// `AllowCompaction` reaches the empty frontier, so the set does not grow without bound.
-    transient_owner: BTreeSet<GlobalId>,
-    /// The indexes maintenance publishes, learned from the index exports of its `CreateDataflow`s
-    /// and the logging indexes of `CreateInstance`. These are the collections interactive can
-    /// import, so only their `AllowCompaction`s reach it. An entry is evicted with its collection's
-    /// drop.
-    published: BTreeSet<GlobalId>,
+    /// The collections declared and not yet dropped. An entry is removed when the collection's
+    /// `AllowCompaction` reaches the empty frontier, after which the protocol mentions it no more.
+    collections: BTreeMap<GlobalId, Collection>,
 }
 
 impl Multiplexer {
@@ -86,8 +89,7 @@ impl Multiplexer {
         Self {
             maintenance,
             interactive,
-            transient_owner: BTreeSet::new(),
-            published: BTreeSet::new(),
+            collections: BTreeMap::new(),
         }
     }
 
@@ -96,17 +98,31 @@ impl Multiplexer {
     /// A `Hello` opens a new protocol epoch: the controller then replays its command history, which
     /// re-establishes the state from the replayed `CreateInstance` and `CreateDataflow`s.
     fn reset(&mut self) {
-        self.transient_owner.clear();
-        self.published.clear();
+        self.collections.clear();
     }
 
-    /// The runtime that owns `id`. A recorded transient owner wins, otherwise maintenance.
-    fn owner_of(&self, id: GlobalId) -> Runtime {
-        if self.transient_owner.contains(&id) {
-            Runtime::Interactive
-        } else {
-            Runtime::Maintenance
-        }
+    /// Records a collection the controller declared.
+    fn declare(&mut self, id: GlobalId, runtime: Runtime, published: bool) {
+        let previous = self
+            .collections
+            .insert(id, Collection { runtime, published });
+        mz_ore::soft_assert_or_log!(previous.is_none(), "collection {id} declared twice");
+    }
+
+    /// The declared collection `id`, which a command other than its declaration names.
+    ///
+    /// An undeclared id is a protocol violation. It is reported and treated as a collection on
+    /// maintenance, where the command fails loudly against a collection the runtime does not know.
+    fn collection(&self, id: GlobalId, command: &str) -> Collection {
+        let collection = self.collections.get(&id).copied();
+        mz_ore::soft_assert_or_log!(
+            collection.is_some(),
+            "{command} names collection {id}, which is undeclared or dropped",
+        );
+        collection.unwrap_or(Collection {
+            runtime: Runtime::Maintenance,
+            published: false,
+        })
     }
 
     /// A mutable handle to the client for `runtime`.
@@ -132,8 +148,9 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 self.interactive.send(cmd).await?;
             }
             CreateInstance(config) => {
-                self.published
-                    .extend(config.logging.index_logs.values().copied());
+                for id in config.logging.index_logs.values() {
+                    self.declare(*id, Runtime::Maintenance, true);
+                }
                 self.maintenance
                     .send(CreateInstance(config.clone()))
                     .await?;
@@ -167,24 +184,27 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                         desc.display_import_ids(),
                     );
                     for id in desc.export_ids() {
-                        self.transient_owner.insert(id);
+                        self.declare(id, Runtime::Interactive, false);
                     }
                     self.interactive.send(CreateDataflow(desc)).await?;
                 } else {
-                    self.published.extend(desc.index_exports.keys().copied());
+                    for id in desc.export_ids() {
+                        let published = desc.index_exports.contains_key(&id);
+                        self.declare(id, Runtime::Maintenance, published);
+                    }
                     self.maintenance.send(CreateDataflow(desc)).await?;
                 }
             }
             Schedule(id) => {
-                let runtime = self.owner_of(id);
+                let runtime = self.collection(id, "Schedule").runtime;
                 self.client_mut(runtime).send(Schedule(id)).await?;
             }
             AllowWrites(id) => {
-                let runtime = self.owner_of(id);
+                let runtime = self.collection(id, "AllowWrites").runtime;
                 self.client_mut(runtime).send(AllowWrites(id)).await?;
             }
             AllowCompaction { id, frontier } => {
-                let runtime = self.owner_of(id);
+                let Collection { runtime, published } = self.collection(id, "AllowCompaction");
                 // The empty frontier drops the collection.
                 let dropping = frontier.is_empty();
 
@@ -208,18 +228,25 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 //
                 // Only for the indexes maintenance publishes, the collections interactive can import.
                 // Materialized views, sinks, subscribes, and copy-tos have no arrangement to import.
-                if self.published.contains(&id) {
+                if published {
+                    mz_ore::soft_assert_or_log!(
+                        runtime == Runtime::Maintenance,
+                        "published collection {id} is hosted on {runtime:?}",
+                    );
                     self.interactive
                         .send(AllowCompaction { id, frontier })
                         .await?;
                 }
 
                 if dropping {
-                    self.transient_owner.remove(&id);
-                    self.published.remove(&id);
+                    self.collections.remove(&id);
                 }
             }
             Peek(peek) => {
+                // A persist peek names a storage collection, which compute does not declare.
+                if let PeekTarget::Index { id } = &peek.target {
+                    self.collection(*id, "Peek");
+                }
                 // Every peek is served by interactive.
                 self.interactive.send(Peek(peek)).await?;
             }

@@ -240,7 +240,23 @@ fn maintained_index(index_id: GlobalId) -> ComputeCommand {
     )
 }
 
-/// Builds a `Peek` command with the given uuid targeting an index.
+/// The maintained index the peeks in these tests read.
+const PEEK_TARGET: GlobalId = GlobalId::User(1);
+
+/// A harness whose controller has declared [`PEEK_TARGET`], with that declaration cleared from the
+/// recorded sends.
+async fn peek_harness() -> Harness {
+    let mut h = harness();
+    h.mux
+        .send(maintained_index(PEEK_TARGET))
+        .await
+        .expect("send");
+    h.maint_sent.lock().expect("lock poisoned").clear();
+    h.timeline.lock().expect("lock poisoned").clear();
+    h
+}
+
+/// Builds a `Peek` command with the given uuid targeting [`PEEK_TARGET`].
 fn peek(uuid: Uuid, literal: Option<Vec<Row>>) -> ComputeCommand {
     let map_filter_project = match MapFilterProject::new(0)
         .into_plan()
@@ -251,9 +267,7 @@ fn peek(uuid: Uuid, literal: Option<Vec<Row>>) -> ComputeCommand {
         Err(_) => unreachable!("empty mfp is non-temporal"),
     };
     ComputeCommand::Peek(Box::new(Peek {
-        target: PeekTarget::Index {
-            id: GlobalId::Transient(1),
-        },
+        target: PeekTarget::Index { id: PEEK_TARGET },
         result_desc: RelationDesc::empty(),
         literal_constraints: literal,
         uuid,
@@ -270,7 +284,7 @@ fn peek_response(uuid: Uuid, resp: PeekResponse) -> ComputeResponse {
 
 #[mz_ore::test(tokio::test)]
 async fn peek_routes_to_interactive() {
-    let mut h = harness();
+    let mut h = peek_harness().await;
     let uuid = Uuid::from_u128(1);
     h.mux.send(peek(uuid, None)).await.expect("send");
 
@@ -437,33 +451,26 @@ async fn create_routes_to_interactive_and_compaction_is_not_capped() {
 #[mz_ore::test(tokio::test)]
 async fn hello_discards_routing_state() {
     let mut h = harness();
-    let source = GlobalId::User(1);
-    let export = GlobalId::Transient(7);
-    let as_of = Antichain::from_elem(Timestamp::from(100u64));
-
-    h.mux
-        .send(interactive_import_of(source, export, &as_of))
-        .await
-        .expect("send create");
+    let id = GlobalId::User(1);
+    h.mux.send(maintained_index(id)).await.expect("send create");
     h.mux
         .send(ComputeCommand::Hello {
             nonce: Uuid::from_u128(2),
         })
         .await
         .expect("send hello");
+
+    // The replayed history declares the collection again, which is no double declaration once the
+    // `Hello` has discarded the state, and the compaction that follows routes by the replay.
+    h.mux.send(maintained_index(id)).await.expect("send replay");
     h.mux
         .send(ComputeCommand::AllowCompaction {
-            id: export,
+            id,
             frontier: Antichain::new(),
         })
         .await
         .expect("send drop");
-
-    assert_eq!(
-        compactions_for(&h, export).len(),
-        1,
-        "with ownership discarded, the drop defaults to maintenance"
-    );
+    assert_eq!(compactions_for(&h, id), vec![Antichain::new()]);
 }
 
 /// A bounded transient dataflow exporting `export` and importing `export`'s source at `as_of`,
@@ -631,17 +638,41 @@ async fn allow_compaction_routes_by_owner_and_evicts_on_empty_frontier() {
         3,
         "empty-frontier compaction to interactive"
     );
+}
 
-    // After eviction, a further command for the id defaults to maintenance.
+#[mz_ore::test(tokio::test)]
+#[should_panic(expected = "undeclared or dropped")]
+async fn a_command_for_a_dropped_collection_is_a_protocol_violation() {
+    let mut h = harness();
+    let id = GlobalId::Transient(5);
+    h.mux.send(create_dataflow(&[id], &[])).await.expect("send");
     h.mux
-        .send(ComputeCommand::Schedule(id))
+        .send(ComputeCommand::AllowCompaction {
+            id,
+            frontier: Antichain::new(),
+        })
         .await
-        .expect("send");
-    assert_eq!(
-        maint_commands(&h).len(),
-        1,
-        "evicted id defaults to maintenance"
-    );
+        .expect("send drop");
+    let _ = h.mux.send(ComputeCommand::Schedule(id)).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[should_panic(expected = "undeclared or dropped")]
+async fn a_command_for_an_undeclared_collection_is_a_protocol_violation() {
+    let mut h = harness();
+    let _ = h
+        .mux
+        .send(ComputeCommand::AllowWrites(GlobalId::User(3)))
+        .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[should_panic(expected = "declared twice")]
+async fn a_second_declaration_is_a_protocol_violation() {
+    let mut h = harness();
+    let id = GlobalId::User(4);
+    h.mux.send(maintained_index(id)).await.expect("send");
+    let _ = h.mux.send(maintained_index(id)).await;
 }
 
 /// A compaction for a collection maintenance hosts reaches interactive too, verbatim.
@@ -690,7 +721,7 @@ async fn maintained_compaction_is_broadcast_to_both() {
 
 /// Only published indexes are broadcast. A maintained sink, the shape of a materialized view's
 /// persist sink, has no arrangement for interactive to import, so its compactions and its drop stay
-/// on maintenance. So does a compaction for an index whose drop was already forwarded.
+/// on maintenance.
 #[mz_ore::test(tokio::test)]
 async fn compaction_of_an_unpublished_collection_is_not_broadcast() {
     let mut h = harness();
@@ -713,28 +744,21 @@ async fn compaction_of_an_unpublished_collection_is_not_broadcast() {
         h.mux
             .send(ComputeCommand::AllowCompaction {
                 id,
-                frontier: Antichain::new(),
+                frontier: ten.clone(),
             })
             .await
-            .expect("send drop");
+            .expect("send compaction");
     }
-    h.mux
-        .send(ComputeCommand::AllowCompaction {
-            id: index,
-            frontier: ten.clone(),
-        })
-        .await
-        .expect("send late compaction");
 
-    assert_eq!(compactions_for(&h, sink), vec![Antichain::new()]);
+    assert_eq!(compactions_for(&h, sink), vec![ten.clone()]);
     assert!(
         compactions_in(inter_commands(&h), sink).is_empty(),
         "a sink's compaction must not reach interactive"
     );
     assert_eq!(
         compactions_in(inter_commands(&h), index),
-        vec![Antichain::new()],
-        "only the index's drop reaches interactive, not the compaction after it"
+        vec![ten],
+        "an index's compaction reaches interactive"
     );
 }
 
@@ -786,7 +810,7 @@ async fn lifecycle_commands_go_to_both() {
 
 #[mz_ore::test(tokio::test)]
 async fn peek_response_forwarded_verbatim() {
-    let mut h = harness();
+    let mut h = peek_harness().await;
     let uuid = Uuid::from_u128(1);
     h.mux.send(peek(uuid, None)).await.expect("send");
 
@@ -827,7 +851,7 @@ async fn peek_response_forwarded_even_without_prior_command() {
 
 #[mz_ore::test(tokio::test)]
 async fn point_lookup_peek_yields_exactly_one_response() {
-    let mut h = harness();
+    let mut h = peek_harness().await;
     let uuid = Uuid::from_u128(3);
     h.mux
         .send(peek(uuid, Some(vec![Row::default()])))
@@ -850,7 +874,7 @@ async fn peek_responses_forwarded_without_dedup() {
     // `PartitionedComputeState` below it (which collapses a cancel-versus-complete split) and
     // the per-process one above it. If two responses arrive for one uuid, the multiplexer
     // forwards both verbatim and lets the layers around it enforce exactly-one.
-    let mut h = harness();
+    let mut h = peek_harness().await;
     let uuid = Uuid::from_u128(4);
     h.mux.send(peek(uuid, None)).await.expect("send");
     h.inter_tx
@@ -932,9 +956,9 @@ async fn frontiers_from_interactive_for_a_maintained_id_are_a_bug() {
 #[mz_ore::test(tokio::test)]
 async fn interactive_transient_frontiers_forwarded_including_after_eviction() {
     // The interactive runtime reports frontiers only for the transient collections it hosts, so
-    // every such report forwards, regardless of `transient_owner`. In particular the trailing
+    // every such report forwards, whether or not the collection is still declared. In particular the trailing
     // (empty) reports a dropped transient emits must reach the controller even though its
-    // `AllowCompaction{empty}` already evicted the ownership entry: the controller runs
+    // `AllowCompaction{empty}` already removed the collection: the controller runs
     // `cleanup_collections` and releases the collection's input read holds only once it observes
     // all of those frontiers reach the empty antichain. Dropping any of them strands the holds
     // and pins upstream read frontiers.
@@ -948,10 +972,10 @@ async fn interactive_transient_frontiers_forwarded_including_after_eviction() {
         })
         .await
         .expect("send");
-    // Ownership is now evicted, so `owner_of(id)` resolves to maintenance.
+    // The collection is no longer declared.
 
-    // A non-empty trailing report for the evicted transient still forwards (not gated on
-    // ownership).
+    // A non-empty trailing report for the dropped transient still forwards (not gated on the
+    // declaration).
     h.inter_tx.send(frontiers(id, 5)).expect("send inter");
     let got = h.mux.recv().await.expect("recv");
     match got {
