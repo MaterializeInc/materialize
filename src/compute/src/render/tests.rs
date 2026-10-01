@@ -27,7 +27,6 @@ use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
 use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
-use super::import_published_index;
 use crate::server::ComputeRuntimeRole;
 
 fn test_rows() -> Vec<(Row, Row)> {
@@ -119,14 +118,8 @@ fn interactive_import_replays_rows_and_holds_at_as_of() {
         let probe = ProbeHandle::new();
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             // `until` empty: no upper suppression, so the whole snapshot at `as_of` flows.
-            let (oks_arranged, errs_arranged, _slot) = import_published_index(
-                scope.clone(),
-                &registry_in,
-                id,
-                "Index",
-                &as_of_in,
-                &Antichain::new(),
-            );
+            let (oks_arranged, errs_arranged, _slot) =
+                registry_in.import(scope.clone(), id, "Index", &as_of_in, &Antichain::new());
 
             let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
                 oks_arranged.stream,
@@ -243,7 +236,7 @@ fn tick(
 /// Mirrors the differential-dataflow primitive's own `import_hold_pins_then_releases`
 /// (`differential-dataflow/tests/sharing.rs`), which demonstrates the identical pin-then-release
 /// contract one layer down, directly on a bare `SharedReader` with no compute-level
-/// wrapping. This test drives the same `import_published_index` primitive that
+/// wrapping. This test drives the same `ArrangementSharingRegistry::import` primitive that
 /// `import_index_shared` calls in production, rather than re-deriving the contract from
 /// scratch.
 ///
@@ -279,14 +272,8 @@ fn interactive_import_hold_releases_on_drop() {
         // lets a consumer downgrade the hold as its frontier advances. The `stream`s are dropped,
         // as a consumer that only needs the trace would.
         let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, errs_arranged, _slot) = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &as_of,
-                &Antichain::new(),
-            );
+            let (oks_arranged, errs_arranged, _slot) =
+                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
 
@@ -374,14 +361,8 @@ fn interactive_import_holds_after_construction() {
         // handle it produced go out of scope with the builder, exactly as production does.
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, _errs_arranged, _slot) = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &as_of,
-                &Antichain::new(),
-            );
+            let (oks_arranged, _errs_arranged, _slot) =
+                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
             let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
                 oks_arranged.stream,
                 |k: DatumSeq, _v: DatumSeq| [Row::pack_slice(&k.into_iter().collect::<Vec<_>>())],
@@ -444,14 +425,8 @@ fn published_since_does_not_chase_reader_holds() {
         // A reader at the higher as_of. Its handles go out of scope with the builder; the
         // import operator's own hold remains.
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (_o, _e, _slot) = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &high,
-                &Antichain::new(),
-            );
+            let (_o, _e, _slot) =
+                registry.import(scope.clone(), id, "Index", &high, &Antichain::new());
         });
         for t in 1..4 {
             tick(
@@ -510,14 +485,8 @@ fn import_reports_physical_within_chain_coverage() {
         );
 
         let mut trace = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, _e, _slot) = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &as_of,
-                &Antichain::new(),
-            );
+            let (oks_arranged, _e, _slot) =
+                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
             oks_arranged.trace
         });
 
@@ -563,14 +532,8 @@ fn interactive_import_hold_downgrades_while_live() {
             });
 
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, errs_arranged, _slot) = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &as_of,
-                &Antichain::new(),
-            );
+            let (oks_arranged, errs_arranged, _slot) =
+                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
 
@@ -633,7 +596,7 @@ fn interactive_import_hold_downgrades_while_live() {
 }
 
 /// A published slot's `since` may already sit above the dataflow's requested `as_of` if the
-/// controller offered an unreadable `as_of`, a protocol error: `import_published_index` must
+/// controller offered an unreadable `as_of`, a protocol error: `ArrangementSharingRegistry::import` must
 /// panic rather than let the read silently see coalesced data, mirroring the maintenance
 /// path's `compaction_frontier` assert in `import_index`.
 ///
@@ -672,14 +635,7 @@ fn import_asserts_since_at_most_as_of() {
 
         // Importing at `as_of` now finds a `since` already beyond it: the assert must panic.
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let _ = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &as_of,
-                &Antichain::new(),
-            );
+            let _ = registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
         });
     });
 }
@@ -728,14 +684,8 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
         // The queued create is now applied. It must import, and the rows it reads at `as_of` must
         // be the ones a read at `as_of` should see rather than a coalesced history.
         let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (oks_arranged, errs_arranged, _slot) = import_published_index(
-                scope.clone(),
-                &registry,
-                id,
-                "Index",
-                &as_of,
-                &Antichain::new(),
-            );
+            let (oks_arranged, errs_arranged, _slot) =
+                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
 
