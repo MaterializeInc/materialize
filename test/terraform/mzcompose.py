@@ -13,6 +13,7 @@ Tests the mz command line tool against a real Cloud instance
 import argparse
 import datetime
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -1352,13 +1353,16 @@ def gcp_run_project() -> str | None:
     A job that authenticates through Buildkite OIDC (with
     GCP_WORKLOAD_IDENTITY_PROVIDER set) deploys into a project of
     its own and deletes it at the end, so whatever a wedged `terraform
-    destroy` leaves behind goes with it. Project IDs stay reserved for about
-    30 days after deletion, and nightly build numbers are never reused.
+    destroy` leaves behind goes with it. The ID is derived from the job ID,
+    which is unique across pipelines and retries. A random ID would not do:
+    the mzcompose plugin's cleanup pass runs as a separate invocation in the
+    same job and must find the same project.
     """
     if not os.getenv("GCP_WORKLOAD_IDENTITY_PROVIDER"):
         return None
     build = os.environ["BUILDKITE_BUILD_NUMBER"]
-    return f"mz-nightly-{build}-{os.getenv('BUILDKITE_RETRY_COUNT', '0')}"
+    job = hashlib.sha256(os.environ["BUILDKITE_JOB_ID"].encode()).hexdigest()[:8]
+    return f"mz-ci-{build}-{job}"
 
 
 class BuildkiteOidcToken:
