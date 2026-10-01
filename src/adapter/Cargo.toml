@@ -66,7 +66,6 @@ mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
-mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util"}

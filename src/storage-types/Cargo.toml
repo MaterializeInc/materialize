@@ -38,6 +38,7 @@ mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
@@ -51,7 +52,6 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
-mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
