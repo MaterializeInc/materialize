@@ -24,9 +24,11 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-09-30* <br>
 *Released to Materialize Self-Managed: 2026-10-01* <br>
 
-### Advanced SSO (OIDC, SAML and SCIM) for Self-Managed (Public Preview) {#v26.44.1-advanced-sso}
+### Advanced SSO (OIDC, SAML and SCIM) for Self-Managed {#v26.44.1-advanced-sso}
 
 <red>*Materialize Self-Managed only*</red>
+
+{{< public-preview />}}
 
 Self-Managed deployments can now use advanced single sign-on (SSO), in public preview. Users sign in to Materialize with your identity provider (IdP), such as Okta, instead of a separate Materialize password:
 
