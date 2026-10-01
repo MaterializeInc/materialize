@@ -53,9 +53,6 @@ class ExplainStage(StrEnum):
     PHYSICAL_PLAN = "PHYSICAL PLAN"
     OPTIMIZER_TRACE = "OPTIMIZER TRACE"
 
-    def __str__(self):
-        return self.value
-
 
 @dataclass(frozen=True)
 class ExplainOption:
