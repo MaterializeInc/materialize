@@ -57,12 +57,15 @@ pub(super) fn builtins(
         _ => None,
     });
 
-    let sources: &'static BuiltinView =
-        Box::leak(Box::new(make_builtin_sources(source_iter, log_iter)));
+    let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(
+        source_iter,
+        log_iter.clone(),
+    )));
     let materialized_views: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
     let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
     let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(index_iter)));
+    let log_indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_log_indexes(log_iter)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
@@ -73,12 +76,19 @@ pub(super) fn builtins(
     });
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         view_iter,
-        [sources, materialized_views, tables, indexes],
+        [sources, materialized_views, tables, indexes, log_indexes],
     )));
 
-    [sources, materialized_views, tables, indexes, views]
-        .into_iter()
-        .map(Builtin::View)
+    [
+        sources,
+        materialized_views,
+        tables,
+        indexes,
+        log_indexes,
+        views,
+    ]
+    .into_iter()
+    .map(Builtin::View)
 }
 
 fn make_builtin_sources(
@@ -314,6 +324,59 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
     }
 }
 
+/// Generates `mz_internal.mz_builtin_log_indexes`, the key of the
+/// introspection index each cluster maintains on a builtin log, which
+/// `mz_catalog.mz_indexes` reads to report those indexes.
+fn make_builtin_log_indexes(iter: impl Iterator<Item = &'static BuiltinLog>) -> BuiltinView {
+    let values = iter
+        .map(|log| {
+            assert_safe_builtin_name(log.name, "log");
+            let desc = log.variant.desc();
+            let index_by = log.variant.index_by();
+            let col_list = index_by
+                .iter()
+                .map(|&i| match desc.get_unambiguous_name(i) {
+                    Some(name) => {
+                        assert_safe_builtin_name(name, "log column");
+                        format!("\"{}\"", name)
+                    }
+                    None => (i + 1).to_string(),
+                })
+                .join(", ");
+            format!(
+                "({}::oid, '{}', '{}', '{}')",
+                log.oid, log.schema, log.name, col_list
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, col_list
+FROM (VALUES {values}) AS v(oid, schema_name, name, col_list)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_log_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_LOG_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("col_list", SqlScalarType::String.nullable(false))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this).
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
 /// Generates `mz_internal.mz_builtin_views`, listing every builtin view,
 /// including itself and the `generated` views.
 ///
@@ -334,7 +397,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
 /// declared keys rely on.
 fn make_builtin_views<'a>(
     iter: impl Iterator<Item = &'a BuiltinView>,
-    generated: [&BuiltinView; 4],
+    generated: [&BuiltinView; 5],
 ) -> BuiltinView {
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 
