@@ -1,0 +1,29 @@
+{{- /*
+  Copyright Materialize, Inc. and contributors. All rights reserved.
+
+  Use of this software is governed by the Business Source License
+  included in the LICENSE file at the root of this repository.
+
+  As of the Change Date specified in that file, in accordance with
+  the Business Source License, use of this software will be governed
+  by the Apache License, Version 2.0.
+*/ -}}
+{{- /*
+  Hugo's embedded sitemap writes .Permalink, which is a bare path when baseURL
+  is one ("/docs"). The sitemap protocol requires absolute URLs, and crawlers
+  drop relative <loc> entries, so prefix the site origin.
+*/ -}}
+{{- $origin := partial "site-origin.html" . -}}
+{{ printf "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>" | safeHTML }}
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+{{- range where .Pages "Sitemap.Disable" "ne" true }}
+{{- if .RelPermalink }}
+  <url>
+    <loc>{{ $origin }}{{ .RelPermalink }}</loc>
+    {{- if not .Lastmod.IsZero }}
+    <lastmod>{{ .Lastmod.Format "2006-01-02T15:04:05-07:00" | safeHTML }}</lastmod>
+    {{- end }}
+  </url>
+{{- end }}
+{{- end }}
+</urlset>

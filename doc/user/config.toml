@@ -132,6 +132,11 @@ unsafe = true
 pattern = "^.+\\.md$"
 contentType = "text/markdown; charset=utf-8"
 
+[[deployment.matchers]]
+# Hugo deploy would otherwise serve the sitemap as application/rss+xml.
+pattern = "^(.+/)?sitemap\\.xml$"
+contentType = "application/xml"
+
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
