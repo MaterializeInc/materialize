@@ -51,5 +51,5 @@ requirements](/clusters/optimize-hydration-requirements/).
 - [Snapshotting](/fundamentals/concepts/snapshotting/)
 - [Clusters](/fundamentals/concepts/clusters/)
 - [Sources](/fundamentals/concepts/sources/)
-- [Troubleshooting](/serve-results/troubleshooting/#hydrating-objects)
+- [Troubleshooting](/serve-results/troubleshooting/unresponsive-queries/#check-for-hydrating-objects)
 - [Updating materialized views](/transform-data/updating-materialized-views/)
