@@ -25,8 +25,9 @@ use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
 use crate::builtin::{
-    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinView,
-    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    Builtin, BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable,
+    BuiltinView, Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    assert_safe_builtin_name,
 };
 
 /// Generate builtin views reporting the given builtins.
@@ -51,12 +52,17 @@ pub(super) fn builtins(
         Builtin::Table(x) => Some(*x),
         _ => None,
     });
+    let index_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Index(x) => Some(*x),
+        _ => None,
+    });
 
     let sources: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_sources(source_iter, log_iter)));
     let materialized_views: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
     let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
+    let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(index_iter)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
@@ -67,10 +73,10 @@ pub(super) fn builtins(
     });
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         view_iter,
-        [sources, materialized_views, tables],
+        [sources, materialized_views, tables, indexes],
     )));
 
-    [sources, materialized_views, tables, views]
+    [sources, materialized_views, tables, indexes, views]
         .into_iter()
         .map(Builtin::View)
 }
@@ -232,6 +238,82 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
     }
 }
 
+/// Generates `mz_internal.mz_builtin_indexes`, which `mz_catalog.mz_indexes`
+/// reads to report builtin indexes.
+fn make_builtin_indexes(iter: impl Iterator<Item = &'static BuiltinIndex>) -> BuiltinView {
+    let values = iter
+        .map(|index| {
+            assert_safe_builtin_name(index.name, "index");
+            let create_sql_str = index.create_sql();
+            let stmt = mz_sql::parse::parse(&create_sql_str)
+                .unwrap_or_else(|e| panic!("invalid sql for builtin index {}: {e}", index.name))
+                .into_element()
+                .ast;
+            let Statement::CreateIndex(idx_stmt) = stmt else {
+                panic!("expected CreateIndex for builtin index {}", index.name);
+            };
+            let mz_sql::ast::RawItemName::Name(on_name) = idx_stmt.on_name else {
+                panic!("expected Name for on_name in builtin index {}", index.name);
+            };
+            assert_eq!(
+                on_name.0.len(),
+                2,
+                "expected schema.name format for on_name in builtin index {}",
+                index.name
+            );
+            let on_schema = on_name.0[0].as_str();
+            let on_name_str = on_name.0[1].as_str();
+            assert_safe_builtin_name(on_schema, "index `on` schema");
+            assert_safe_builtin_name(on_name_str, "index `on` object");
+            let key_exprs = idx_stmt
+                .key_parts
+                .unwrap_or_else(|| {
+                    panic!("builtin index {} must have explicit key parts", index.name)
+                })
+                .iter()
+                .map(|e| e.to_ast_string_stable())
+                .join(", ");
+            // Unlike the identifier names above, key expressions are arbitrary
+            // SQL (column refs, casts, string literals) that can legitimately
+            // contain single quotes — so escape them rather than asserting
+            // them away with `assert_safe_builtin_name`.
+            let key_exprs_escaped = escaped_string_literal(&key_exprs);
+            format!(
+                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped})",
+                index.oid, index.schema, index.name, on_schema, on_name_str
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs
+FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("on_schema_name", SqlScalarType::String.nullable(false))
+            .with_column("on_name", SqlScalarType::String.nullable(false))
+            .with_column("key_exprs", SqlScalarType::String.nullable(false))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this).
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
 /// Generates `mz_internal.mz_builtin_views`, listing every builtin view,
 /// including itself and the `generated` views.
 ///
@@ -252,7 +334,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
 /// declared keys rely on.
 fn make_builtin_views<'a>(
     iter: impl Iterator<Item = &'a BuiltinView>,
-    generated: [&BuiltinView; 3],
+    generated: [&BuiltinView; 4],
 ) -> BuiltinView {
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 
