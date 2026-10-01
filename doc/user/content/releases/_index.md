@@ -30,7 +30,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 {{< public-preview />}}
 
-Self-Managed deployments can now use advanced single sign-on (SSO), in public preview. Users sign in to Materialize with your identity provider (IdP), such as Okta, instead of a separate Materialize password:
+Self-Managed deployments can now use advanced single sign-on (SSO). Users sign in to Materialize with your identity provider (IdP), such as Okta, instead of a separate Materialize password:
 
 - **Sign in with SAML or OIDC**, whichever protocol your IdP already uses.
 - **Provision users and groups with SCIM**, so users are created and deactivated in Materialize as they change in your IdP.
