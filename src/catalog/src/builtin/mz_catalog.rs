@@ -12,7 +12,6 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use itertools::Itertools;
 use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
@@ -24,9 +23,8 @@ use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NA
 use mz_storage_client::controller::IntrospectionType;
 
 use super::{
-    BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinType,
-    BuiltinView, Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
-    assert_safe_builtin_name,
+    BuiltinIndex, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinType, BuiltinView,
+    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
 };
 
 pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
@@ -672,7 +670,6 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         },
     }),
 });
-// mz_indexes is generated dynamically in BUILTINS_STATIC via mz_catalog::make_mz_indexes()
 
 /// User-created indexes, sourced from `mz_catalog_raw` `Item` entries with
 /// `parse_catalog_create_sql(...)` yielding `type = 'index'`.
@@ -727,34 +724,7 @@ const GID_MAPPING_CTES: &str = "\
         WHERE data->>'kind' = 'GidMapping'
     )";
 
-/// Generate the `mz_catalog.mz_indexes` builtin materialized view with builtin
-/// log entries inlined as VALUES clauses.
-///
-/// Includes user-created indexes (from `mz_catalog_raw` `Item` entries),
-/// system builtin indexes (from `mz_builtin_indexes`), and introspection
-/// source indexes (from `IntrospectionSourceIndex` entries).
-pub(super) fn make_mz_indexes(
-    builtin_log_iter: impl Iterator<Item = &'static BuiltinLog>,
-) -> BuiltinMaterializedView {
-    let log_col_values = builtin_log_iter
-        .map(|log| {
-            assert_safe_builtin_name(log.name, "log");
-            let desc = log.variant.desc();
-            let index_by = log.variant.index_by();
-            let col_list = index_by
-                .iter()
-                .map(|&i| match desc.get_unambiguous_name(i) {
-                    Some(name) => {
-                        assert_safe_builtin_name(name, "log column");
-                        format!("\"{}\"", name)
-                    }
-                    None => (i + 1).to_string(),
-                })
-                .join(", ");
-            format!("('{}', '{}')", log.name, col_list)
-        })
-        .join(",");
-
+pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     // Reconstructs `CREATE INDEX ... IN CLUSTER [<id>] ON [<id> AS "schema"."name"] (<keys>)`
     // from `mz_builtin_indexes` joined to `GidMapping` lookups and the
     // `mz_catalog_server` cluster id.
@@ -788,7 +758,7 @@ pub(super) fn make_mz_indexes(
                 's' || (gm.data->'value'->>'catalog_id') AS on_id,
                 cluster_id,
                 '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
-                'CREATE INDEX \"' || idx_name || '_' || cluster_id || '_primary_idx\" IN CLUSTER [' || cluster_id || '] ON \"mz_introspection\".\"' || idx_name || '\" (' || lc.col_list || ')' AS create_sql
+                'CREATE INDEX \"' || idx_name || '_' || cluster_id || '_primary_idx\" IN CLUSTER [' || cluster_id || '] ON \"mz_introspection\".\"' || idx_name || '\" (' || bli.col_list || ')' AS create_sql
             FROM mz_internal.mz_catalog_raw AS isi
             CROSS JOIN LATERAL (
                 SELECT isi.data->'key'->>'name', mz_internal.parse_catalog_id(isi.data->'key'->'cluster_id')
@@ -798,7 +768,7 @@ pub(super) fn make_mz_indexes(
                 gm.data->'key'->>'object_type' = '2' AND
                 gm.data->'key'->>'schema_name' = 'mz_introspection' AND
                 gm.data->'key'->>'object_name' = idx_name
-            JOIN (VALUES {log_col_values}) AS lc(log_name, col_list) ON lc.log_name = idx_name
+            JOIN mz_internal.mz_builtin_log_indexes AS bli ON bli.name = idx_name
             WHERE isi.data->>'kind' = 'ClusterIntrospectionSourceIndex'
         ) AS t
     )");
@@ -906,7 +876,7 @@ SELECT * FROM introspection_source_indexes
             },
         }),
     }
-}
+});
 pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
