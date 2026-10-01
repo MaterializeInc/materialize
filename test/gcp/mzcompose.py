@@ -262,7 +262,11 @@ def _sweep_stale_biglake_namespaces(token: str, project: str, prefix: str) -> No
         match = NAMESPACE_RE.match(ns)
         if not match:
             continue
-        ns_date = datetime.strptime(match.group(1), NAMESPACE_DATE_FORMAT).date()
+        ns_date = (
+            datetime.strptime(match.group(1), NAMESPACE_DATE_FORMAT)
+            .replace(tzinfo=UTC)
+            .date()
+        )
         age = today - ns_date
         if age <= STALE_NAMESPACE_AGE:
             continue
