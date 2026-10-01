@@ -221,6 +221,18 @@ input[type="submit"] {
 
 .osano-cm-widget { display: none; }
 
+.llms-txt-directive {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 /**
     The following section handles these cases:
     1. Buttons with links

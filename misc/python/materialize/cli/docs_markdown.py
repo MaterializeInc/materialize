@@ -200,7 +200,13 @@ class Converter:
             if meta.tag == "meta" and meta.attrs.get("name") == "description":
                 description = collapse_whitespace(meta.attrs.get("content", "")).strip()
                 break
-        return Page(title, description, "\n\n".join(self.blocks(article)))
+        directive = next(
+            (e for e in document.iter() if "llms-txt-directive" in e.classes), None
+        )
+        if directive is None:
+            raise PageError("page has no .llms-txt-directive")
+        blocks = [quote([self.paragraph(directive.children)])] + self.blocks(article)
+        return Page(title, description, "\n\n".join(blocks))
 
     def blocks(self, element: Element) -> list[str]:
         """Renders an element's children as a list of Markdown blocks."""

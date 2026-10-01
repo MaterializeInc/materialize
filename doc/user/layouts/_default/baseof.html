@@ -10,6 +10,18 @@ Apache License, Version 2.0. */}}
   </head>
 
   <body>
+    {{- /*
+      Points agents that fetch this page at the docs index. It must be the
+      first element in <body>, ahead of the navigation, so that it survives a
+      truncated fetch. It is hidden visually rather than with display:none,
+      which HTML-to-Markdown converters drop. bin/docs-markdown copies its
+      text to the top of the Markdown rendition.
+    */}}
+    <blockquote class="llms-txt-directive" aria-hidden="true">
+      Documentation index: fetch {{ partial "llms-txt-url.html" . }} to
+      discover every page of the Materialize documentation. Each page is also
+      available as Markdown at its URL followed by index.md.
+    </blockquote>
     <script>
       const theme = localStorage.getItem("theme");
       const darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");

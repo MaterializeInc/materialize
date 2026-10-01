@@ -20,11 +20,22 @@ from materialize.cli.docs_markdown import (
 )
 
 PAGE_URL = "https://materialize.com/docs/sql/create-index/"
+DIRECTIVE = '<blockquote class="llms-txt-directive">See /llms.txt.</blockquote>'
+
+
+def document(article: str, head: str = "") -> str:
+    return (
+        f"<html><head>{head}</head><body>{DIRECTIVE}<nav>Nav</nav>"
+        f"<main><article>{article}</article></main></body></html>"
+    )
 
 
 def body(article: str) -> str:
-    html = f"<html><body><main><article>{article}</article></main></body></html>"
-    return Converter(PAGE_URL).convert(parse_html(html)).body
+    """Converts an <article> and returns the Markdown after the directive."""
+    page = Converter(PAGE_URL).convert(parse_html(document(article)))
+    directive, _, rest = page.body.partition("\n\n")
+    assert directive == "> See /llms.txt."
+    return rest
 
 
 def test_links_and_images_are_absolute() -> None:
@@ -141,27 +152,33 @@ def test_hard_line_break() -> None:
     assert body("<p>a<br>b</p>") == "a  \nb"
 
 
-def test_front_matter() -> None:
-    html = (
-        '<html><head><title>T | Docs</title><meta name="description" '
-        'content="Says &quot;hi&quot;."></head><body><main><article><h1>Title</h1>'
-        "</article></main></body></html>"
+def test_front_matter_and_directive_lead_the_page() -> None:
+    html = document(
+        "<h1>Title</h1>",
+        head='<title>T | Docs</title><meta name="description" '
+        'content="Says &quot;hi&quot;.">',
     )
     page = Converter(PAGE_URL).convert(parse_html(html))
     assert render(page) == (
-        '---\ntitle: "Title"\ndescription: "Says \\"hi\\"."\n---\n\n# Title\n'
+        '---\ntitle: "Title"\ndescription: "Says \\"hi\\"."\n---\n\n'
+        "> See /llms.txt.\n\n# Title\n"
     )
 
 
 def test_page_without_article_is_an_error() -> None:
-    with pytest.raises(PageError):
-        Converter(PAGE_URL).convert(parse_html("<main><p>x</p></main>"))
+    with pytest.raises(PageError, match="article"):
+        Converter(PAGE_URL).convert(parse_html(f"{DIRECTIVE}<main><p>x</p></main>"))
+
+
+def test_page_without_directive_is_an_error() -> None:
+    with pytest.raises(PageError, match="directive"):
+        Converter(PAGE_URL).convert(parse_html("<main><article></article></main>"))
 
 
 def test_convert_site(tmp_path: Path) -> None:
     page = tmp_path / "sql" / "index.html"
     page.parent.mkdir()
-    page.write_text('<main><article><a href="/docs/x/">x</a></article></main>')
+    page.write_text(document('<a href="/docs/x/">x</a>'))
     # Alias redirect stubs have no <main> and get no Markdown.
     alias = tmp_path / "old" / "index.html"
     alias.parent.mkdir()
