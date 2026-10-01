@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/pool_config/metrics.rs
-revision: 93dcb0ef5a
+revision: de580d5215
 ---
 
 # timely-util::pool_config::metrics
@@ -17,6 +17,7 @@ All metrics are `ComputedUIntGauge` instances that peek at the pool's `PoolStats
 
 | Name | Type | Description |
 |---|---|---|
+| `mz_column_pool_direct_extent_inserts_total` | monotone gauge | Inserts written directly to an extent because resident admission was full |
 | `mz_column_pool_resident_bytes` | gauge | Uncompressed bytes resident in the pool |
 | `mz_column_pool_oversize_bytes` | gauge | Bytes held by oversize chunks that bypass pool paging |
 | `mz_column_pool_inserts_total` | monotone gauge | Chunks inserted into the pool |

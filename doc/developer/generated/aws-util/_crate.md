@@ -1,6 +1,6 @@
 ---
 source: src/aws-util/src/lib.rs
-revision: 122dfd0789
+revision: 1b1aa6a719
 ---
 
 # mz-aws-util
@@ -9,14 +9,13 @@ Provides Materialize-specific wrappers and utilities for the AWS SDK, centering 
 
 ## Module structure
 
-* `lib.rs` — crate root; exports `defaults()` (a `ConfigLoader` with latest behavior version and native-TLS HTTP client), `http_client()`, and `http_client_with_resolver()` (an HTTP client whose DNS resolution delegates to `mz_ore::netio::resolve_address`, with optional global-address enforcement).
+* `lib.rs` — crate root; exports `defaults()` (a `ConfigLoader` with latest behavior version and rustls HTTP client using aws-lc-rs), `http_client()`, and `http_client_with_resolver()` (an HTTP client whose DNS resolution delegates to `mz_ore::netio::resolve_address`, with optional global-address enforcement).
 * `s3` — S3 client construction, object listing, and a `futures::Stream` adapter for `ByteStream` (feature-gated on `s3`).
 * `s3_uploader` — `S3MultiPartUploader`, a streaming multipart-upload helper with configurable part/file size limits (feature-gated on `s3`).
 
 ## Key dependencies
 
-* `aws-config`, `aws-sdk-s3`, `aws-smithy-runtime`, `aws-smithy-types`, `aws-types` — AWS SDK components.
-* `hyper-tls` — native TLS HTTP connector, replacing the SDK's default rustls connector per Materialize policy.
+* `aws-config`, `aws-sdk-s3`, `aws-smithy-http-client`, `aws-smithy-runtime-api`, `aws-types` — AWS SDK components.
 * `mz-ore` — task spawning (`mz_ore::task::spawn`) and error formatting utilities.
 
 ## Downstream consumers

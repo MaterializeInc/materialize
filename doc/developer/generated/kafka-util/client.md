@@ -1,6 +1,6 @@
 ---
 source: src/kafka-util/src/client.rs
-revision: d9bb748bcd
+revision: 1718310c06
 ---
 
 # mz-kafka-util::client
@@ -21,3 +21,5 @@ Defines `MzClientContext`, a `ClientContext` implementation that routes librdkaf
 `TunnelConfig` is an enum with variants: `Ssh(SshTunnelConfig)` for SSH tunnels, `StaticHost(String)` for static PrivateLink host substitution, `Rules(HostMappingRules)` for rule-based PrivateLink routing that rewrites broker addresses according to an ordered list of pattern/rewrite pairs, and `None` for no rewriting.
 
 In `TunnelingClientContext::resolve_broker_addr`, the `TunnelConfig::Rules` branch resolves the broker address via `HostMappingRules::rewrite`, falling back to the original address if no rule matches.
+
+`create<T: FromClientConfig>` and `create_with_context<C, T>` are free functions that wrap `ClientConfig::create` and `ClientConfig::create_with_context` respectively, draining the calling thread's OpenSSL error queue after each call. librdkafka leaves a stale `PEM routines:get_name:no start line` error on the queue after loading `ssl.ca.pem`; `SSL_get_error` interprets any queued error as `SSL_ERROR_SSL`, which would cause a later TLS operation on the same thread (e.g. an HTTPS request to a schema registry) to fail with the stale error rather than blocking normally.
