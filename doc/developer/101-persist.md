@@ -25,13 +25,19 @@ Individual records within a shard (as recorded at a given point in history) are 
 **Clients:** There is no Persist "server". All clients interact directly with blob storage and consensus.
 
 ## Data Layout in Blob Storage
+At its core, a Persist shard is just an append-only log, where writers append batches of blobs
+and readers sift through the blobs to find what they need.
+
+Here is what those blobs look like:
+
 ### Layout: Shard > Batch > Run > Part
 Within a shard, records are organized into:
-- Batches. Together, they cover the entire `[Since, Frontier)` time range without overlapping. Each timestamp within the range belongs to a single batch.
-- Runs. Each batch is made up of one or more runs. Runs are an artifact of how batches are written, not a semantic separation of records.
-- Parts. Each run is made up of one or more parts. Each _part_ of a _run_ is responsible for a range of keys.
+- _Batches._ Together, they cover the entire `[Since, Frontier)` time range without overlapping. Each timestamp within the range belongs to a single batch.
+- _Runs._ Each batch is made up of one or more runs. Runs are an artifact of how batches are written, not a semantic separation of records. i.e. Two runs can cover exactly the same time and key ranges.
+- _Parts._ Each run is made up of one or more parts. Each _part_ of a _run_ is responsible for a range of keys.
   Within a part, records are typically sorted by key, and within a run, parts are sorted by their key ranges (which do not overlap).
 	- _Parts are internally sorted by key only if they've been through compaction. For large shards, most parts have been through compaction._
+
 #### Data Layout in a Part File
 Part files are Parquet, where the columns are:
 - `t` - timestamp
@@ -40,14 +46,16 @@ Part files are Parquet, where the columns are:
 	- `ok` - struct with one field per relation column
 	- `err` - binary-encoded `DataflowError`
 - `v_s` - unused
+
 Our Parquet writer is simple:
 - only one row group
 - no statistics (Predicate push-down chooses which part files to read based on stats we write into shard state--outside the part files themselves.)
 
 _Note: There is also a legacy format with columns `k, v, t, d` and a migration format with `k, v, t, d, k_s, v_s`._
+
 #### Interlude on Future Work: Predicate Push-Down _within_ a Part
 Today, we always read and decode an entire part file.
-If we stop doing that, maybe we can support point (key + time) lookups and improve predicate push-down.
+If we stop doing that, maybe we can improve predicate push-down and even support point (key + time) lookups.
 
 Claude's diagram of Parquet chunks and pages within our one row group:
 ```
@@ -67,7 +75,22 @@ Steps to doing better:
 - Split the file into multiple row groups.
 - Enable `Chunk` or `Page` statistics, which gives us a page index (in the parquet footer) with stats (e.g. column min/max/nulls) for those segmentations of the part file.
 - Add "Range Read" to our Blob Store interface to read from specific offsets within a file. Then, only read the row groups or pages whose stats fit the predicate.
+
 ## Writers
+### First, a bare-minimum introduction to the consensus database
+
+In order to append to a shard, a writer must perform an atomic `compare_and_append` operation:
+1. By comparing sequence numbers, does the actual shard state match the latest shard state the writer has seen?
+2. Durably append the writer's change to the shard's state (with the next sequence number).
+    - Example state change: Append a batch of blobs for the latest timestamp range.
+
+Any client (writers, readers, others) that needs to catch up on the latest shard state performs these operations:
+1. `head`, to get an outline of the latest shard state, including a pointer to the latest state "rollup" blob.
+2. `scan`, to read from the most recent state rollup through all the subsequent state changes.
+
+_Shard state is recorded as a sequence of incremental updates (stored inline in the consensus database) interspersed with periodic full-state rollups (stored in blobs),
+and each client builds its own view of shard state by applying the updates to a rollup._
+
 ### Materialized View sink
 Multiple replicas can write to the same shard, including replicas running different versions of the code.
 - We can't assume all writers agree on the collection's contents.
