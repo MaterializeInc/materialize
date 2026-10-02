@@ -97,6 +97,17 @@ pub mod operators {
         operator before yielding.",
         ParameterScope::Environment,
     );
+
+    /// Whether the persist source evaluates its MFP over chunks of a part's
+    /// columns rather than row by row, when the MFP has a batch form.
+    pub const PERSIST_SOURCE_BATCH_EVALUATION: Config<bool> = Config::new(
+        "enable_persist_source_batch_evaluation",
+        false,
+        "\
+        Whether the persist source evaluates its MFP over chunks of a part's \
+        columns rather than row by row, when the MFP has a batch form.",
+        ParameterScope::Environment,
+    );
 }
 pub mod read;
 pub mod rpc;

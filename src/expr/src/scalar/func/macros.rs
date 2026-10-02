@@ -180,6 +180,15 @@ macro_rules! derive_unary {
                 }
             }
 
+            pub fn eval_batch<'a>(
+                &self,
+                batch: &'a mz_repr::batch::DatumBatch<EvalError>,
+            ) -> Option<mz_repr::batch::DatumBatch<EvalError>> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::eval_batch(f, batch),)*
+                }
+            }
+
             pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_sql_type(f, input_type),)*
@@ -510,6 +519,16 @@ macro_rules! derive_binary {
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*
+                }
+            }
+
+            pub fn eval_batch<'a>(
+                &self,
+                batches: &[&'a mz_repr::batch::DatumBatch<EvalError>],
+                temp_storage: &'a RowArena,
+            ) -> Option<mz_repr::batch::DatumBatch<EvalError>> {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::eval_batch(f, batches, temp_storage),)*
                 }
             }
 

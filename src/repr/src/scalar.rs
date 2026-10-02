@@ -53,6 +53,7 @@ use crate::adt::timestamp::{CheckedTimestamp, TimestampError, TimestampPrecision
 #[cfg(any(test, feature = "proptest"))]
 use crate::adt::timestamp::{HIGH_DATE, LOW_DATE};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
+use crate::batch::{BatchValue, DatumBatch};
 use crate::relation::ReprColumnType;
 pub use crate::relation_and_scalar::ProtoScalarType;
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
@@ -1992,6 +1993,17 @@ pub trait InputDatumType<'a, E>: Sized {
             None => Err(Ok(None)),
         }
     }
+
+    /// Iterates this type out of `batches`, one per component of this type
+    /// and all of the same length.
+    ///
+    /// The caller withholds the rows this type cannot represent: error rows,
+    /// and null rows unless [`Self::nullable`]. Returns `None` when this type
+    /// has no batch form, which is the default.
+    fn iter_batch(batches: &[&'a DatumBatch<E>]) -> Option<impl Iterator<Item = Self>> {
+        let _ = batches;
+        None::<std::iter::Empty<Self>>
+    }
 }
 
 /// A bridge between native Rust types and SQL runtime types represented in Datums
@@ -2004,6 +2016,18 @@ pub trait OutputDatumType<'a, E>: Sized {
 
     /// Convert this Rust type into a Result containing a Datum, or an error
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E>;
+
+    /// An empty batch that [`Self::push_batch`] appends to, or `None` when
+    /// this type has no batch form, which is the default.
+    fn new_batch() -> Option<DatumBatch<E>> {
+        None
+    }
+
+    /// Appends `self` to a batch from [`Self::new_batch`].
+    fn push_batch(self, batch: &mut DatumBatch<E>) {
+        let _ = batch;
+        panic!("push_batch on a type with no batch form");
+    }
 }
 
 /// A new type that wraps a [`Vec`] that is used to differentiate the target [`Datum`] between
@@ -2088,6 +2112,15 @@ impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Option<B> {
             None => Ok(Datum::Null),
         }
     }
+    fn new_batch() -> Option<DatumBatch<E>> {
+        B::new_batch()
+    }
+    fn push_batch(self, batch: &mut DatumBatch<E>) {
+        match self {
+            Some(inner) => inner.push_batch(batch),
+            None => batch.push_null(),
+        }
+    }
 }
 
 impl<E, B: AsColumnType> AsColumnType for Result<B, E> {
@@ -2108,6 +2141,9 @@ impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for Result<B, E> {
     ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
         B::try_from_iter(iter).map(Ok)
     }
+    fn iter_batch(batches: &[&'a DatumBatch<E>]) -> Option<impl Iterator<Item = Self>> {
+        Some(B::iter_batch(batches)?.map(Ok))
+    }
 }
 
 impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Result<B, E> {
@@ -2120,10 +2156,37 @@ impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Result<B, E> {
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.and_then(|inner| inner.into_result(temp_storage))
     }
+    fn new_batch() -> Option<DatumBatch<E>> {
+        B::new_batch()
+    }
+    fn push_batch(self, batch: &mut DatumBatch<E>) {
+        match self {
+            Ok(inner) => inner.push_batch(batch),
+            Err(err) => batch.push_error(err),
+        }
+    }
 }
 
 macro_rules! impl_tuple_input_datum_type {
     ($($T:ident),+) => {
+        impl_tuple_input_datum_type!(@impl [$($T),+] {});
+    };
+    // `$zip` combines the per-component iterators, bound to variables named
+    // after the components, into one iterator over the tuple.
+    ($($T:ident),+ ; $zip:expr) => {
+        impl_tuple_input_datum_type!(@impl [$($T),+] {
+            fn iter_batch(
+                batches: &[&'a DatumBatch<E>],
+            ) -> Option<impl Iterator<Item = Self>> {
+                let mut batches = batches.iter();
+                $(
+                    let $T = <$T>::iter_batch(std::slice::from_ref(batches.next()?))?;
+                )+
+                Some($zip)
+            }
+        });
+    };
+    (@impl [$($T:ident),+] { $($extra:item)* }) => {
         #[allow(non_snake_case)]
         impl<'a, E, $($T: InputDatumType<'a, E>),+> InputDatumType<'a, E> for ($($T,)+) {
             fn try_from_result(_res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -2176,13 +2239,14 @@ macro_rules! impl_tuple_input_datum_type {
                 // even if `propagates_nulls` is false.
                 $( <$T>::nullable() )&&+
             }
+            $($extra)*
         }
     }
 }
 
-impl_tuple_input_datum_type!(T0);
-impl_tuple_input_datum_type!(T0, T1);
-impl_tuple_input_datum_type!(T0, T1, T2);
+impl_tuple_input_datum_type!(T0; T0.map(|a| (a,)));
+impl_tuple_input_datum_type!(T0, T1; T0.zip_eq(T1));
+impl_tuple_input_datum_type!(T0, T1, T2; T0.zip_eq(T1).zip_eq(T2).map(|((a, b), c)| (a, b, c)));
 impl_tuple_input_datum_type!(T0, T1, T2, T3);
 impl_tuple_input_datum_type!(T0, T1, T2, T3, T4);
 impl_tuple_input_datum_type!(T0, T1, T2, T3, T4, T5);
@@ -2318,6 +2382,9 @@ impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for ExcludeNull<B> {
             _ => B::try_from_result(res).map(ExcludeNull),
         }
     }
+    fn iter_batch(batches: &[&'a DatumBatch<E>]) -> Option<impl Iterator<Item = Self>> {
+        Some(B::iter_batch(batches)?.map(ExcludeNull))
+    }
 }
 
 impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for ExcludeNull<B> {
@@ -2330,6 +2397,12 @@ impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for ExcludeNull<B>
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.0.into_result(temp_storage)
     }
+    fn new_batch() -> Option<DatumBatch<E>> {
+        B::new_batch()
+    }
+    fn push_batch(self, batch: &mut DatumBatch<E>) {
+        self.0.push_batch(batch)
+    }
 }
 
 impl<B> std::ops::Deref for ExcludeNull<B> {
@@ -2340,9 +2413,16 @@ impl<B> std::ops::Deref for ExcludeNull<B> {
     }
 }
 
-/// Macro to derive InputDatumType and OutputDatumType for all Datum variants that are simple Copy types
+/// Macro to derive InputDatumType and OutputDatumType for all Datum variants
+/// that are simple Copy types.
+///
+/// The `batch` form also derives the batch methods, for types with a
+/// [`crate::batch::TypedVec`] variant.
 macro_rules! impl_datum_type_copy {
-    ($lt:lifetime, $native:ty, $variant:ident) => {
+    (
+        @impl $lt:lifetime, $native:ty, $variant:ident,
+        { $($input:item)* }, { $($output:item)* }
+    ) => {
         #[allow(unused_lifetimes)]
         impl<$lt> AsColumnType for $native {
             fn as_column_type() -> SqlColumnType {
@@ -2361,6 +2441,7 @@ macro_rules! impl_datum_type_copy {
                     _ => Err(res),
                 }
             }
+            $($input)*
         }
 
         impl<$lt, E> OutputDatumType<$lt, E> for $native {
@@ -2375,26 +2456,57 @@ macro_rules! impl_datum_type_copy {
             fn into_result(self, _temp_storage: &$lt RowArena) -> Result<Datum<$lt>, E> {
                 Ok(Datum::$variant(self.into()))
             }
+            $($output)*
         }
+    };
+    ($lt:lifetime, $native:ty, $variant:ident, batch) => {
+        impl_datum_type_copy!(
+            @impl $lt, $native, $variant,
+            {
+                fn iter_batch(
+                    batches: &[&$lt DatumBatch<E>],
+                ) -> Option<impl Iterator<Item = Self>> {
+                    let [batch] = batches else { return None };
+                    debug_assert!(
+                        batch.is_dense(),
+                        "nulls and errors are withheld before batch evaluation"
+                    );
+                    <Self as BatchValue<$lt>>::iter(batch.values())
+                }
+            },
+            {
+                fn new_batch() -> Option<DatumBatch<E>> {
+                    Some(DatumBatch::new(<Self as BatchValue<$lt>>::empty()))
+                }
+                fn push_batch(self, batch: &mut DatumBatch<E>) {
+                    batch.push_value(self)
+                }
+            }
+        );
+    };
+    ($lt:lifetime, $native:ty, $variant:ident) => {
+        impl_datum_type_copy!(@impl $lt, $native, $variant, {}, {});
+    };
+    ($native:ty, $variant:ident, batch) => {
+        impl_datum_type_copy!('a, $native, $variant, batch);
     };
     ($native:ty, $variant:ident) => {
         impl_datum_type_copy!('a, $native, $variant);
     };
 }
-
-impl_datum_type_copy!(f32, Float32);
-impl_datum_type_copy!(f64, Float64);
-impl_datum_type_copy!(i16, Int16);
-impl_datum_type_copy!(i32, Int32);
-impl_datum_type_copy!(i64, Int64);
-impl_datum_type_copy!(u16, UInt16);
-impl_datum_type_copy!(u32, UInt32);
-impl_datum_type_copy!(u64, UInt64);
+impl_datum_type_copy!(f32, Float32, batch);
+impl_datum_type_copy!(f64, Float64, batch);
+impl_datum_type_copy!(i16, Int16, batch);
+impl_datum_type_copy!(i32, Int32, batch);
+impl_datum_type_copy!(i64, Int64, batch);
+impl_datum_type_copy!(u16, UInt16, batch);
+impl_datum_type_copy!(u32, UInt32, batch);
+impl_datum_type_copy!(u64, UInt64, batch);
 impl_datum_type_copy!(Interval, Interval);
 impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
 impl_datum_type_copy!(Uuid, Uuid);
-impl_datum_type_copy!('a, &'a str, String);
+impl_datum_type_copy!('a, &'a str, String, batch);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
@@ -2408,6 +2520,13 @@ impl<'a, E> InputDatumType<'a, E> for Datum<'a> {
             Ok(datum) => Ok(datum),
             _ => Err(res),
         }
+    }
+
+    fn iter_batch(batches: &[&'a DatumBatch<E>]) -> Option<impl Iterator<Item = Self>> {
+        let [batch] = batches else { return None };
+        Some(batch.iter().map(|row| {
+            row.unwrap_or_else(|_| panic!("errors are withheld before batch evaluation"))
+        }))
     }
 }
 
@@ -2632,6 +2751,15 @@ impl<'a, E> InputDatumType<'a, E> for bool {
             _ => Err(res),
         }
     }
+
+    fn iter_batch(batches: &[&'a DatumBatch<E>]) -> Option<impl Iterator<Item = Self>> {
+        let [batch] = batches else { return None };
+        debug_assert!(
+            batch.is_dense(),
+            "nulls and errors are withheld before batch evaluation"
+        );
+        <Self as BatchValue<'a>>::iter(batch.values())
+    }
 }
 
 impl<'a, E> OutputDatumType<'a, E> for bool {
@@ -2649,6 +2777,14 @@ impl<'a, E> OutputDatumType<'a, E> for bool {
         } else {
             Ok(Datum::False)
         }
+    }
+
+    fn new_batch() -> Option<DatumBatch<E>> {
+        Some(DatumBatch::new(<Self as BatchValue<'a>>::empty()))
+    }
+
+    fn push_batch(self, batch: &mut DatumBatch<E>) {
+        batch.push_value(self)
     }
 }
 
@@ -2669,6 +2805,15 @@ impl<'a, E> InputDatumType<'a, E> for String {
             _ => Err(res),
         }
     }
+
+    fn iter_batch(batches: &[&'a DatumBatch<E>]) -> Option<impl Iterator<Item = Self>> {
+        let [batch] = batches else { return None };
+        debug_assert!(
+            batch.is_dense(),
+            "nulls and errors are withheld before batch evaluation"
+        );
+        Some(<&str as BatchValue<'a>>::iter(batch.values())?.map(str::to_owned))
+    }
 }
 
 impl<'a, E> OutputDatumType<'a, E> for String {
@@ -2682,6 +2827,14 @@ impl<'a, E> OutputDatumType<'a, E> for String {
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self)))
+    }
+
+    fn new_batch() -> Option<DatumBatch<E>> {
+        Some(DatumBatch::new(<&str as BatchValue<'a>>::empty()))
+    }
+
+    fn push_batch(self, batch: &mut DatumBatch<E>) {
+        batch.push_value(self.as_str())
     }
 }
 
