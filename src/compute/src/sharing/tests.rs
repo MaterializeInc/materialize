@@ -109,16 +109,12 @@ fn get_or_create_converges_on_one_slot() {
     let registry = ArrangementSharingRegistry::new();
 
     // Reader creates the point first and mints its handle straight off it.
-    // `SharedIndexArrangement` has no `handles_for_worker`: a slot returned by
-    // `get_or_create` is already scoped to one worker, so its handles come
-    // directly off `Published::handle`, the same way `ArrangementSharingRegistry::mint`
-    // builds them once a slot is located.
-    let slot = registry.get_or_create(id, 0, 1);
+    let slot = registry.get_or_create(id);
     let oks = slot.oks.handle();
 
-    // A second get_or_create call for the same (id, worker_index) must return
+    // A second get_or_create call for the same id must return
     // the SAME Arc, not a second, disconnected slot, before we even get to the adopt below.
-    let republished = registry.get_or_create(id, 0, 1);
+    let republished = registry.get_or_create(id);
     assert!(Arc::ptr_eq(&slot, &republished));
 
     // Publisher adopts the same slot and fills it.
@@ -135,14 +131,12 @@ fn handles_available_after_insert_gone_after_remove() {
     let id = GlobalId::User(1);
     let registry = publish_index(id, test_rows());
 
-    // A published index yields handles on its worker, and no handles on an unpublished worker
-    // slot or an unknown id.
-    assert!(registry.handles(&id, 0).is_some());
-    assert!(registry.handles(&id, 1).is_none());
-    assert!(registry.handles(&GlobalId::User(2), 0).is_none());
+    // A published index yields handles, and an unknown id none.
+    assert!(registry.handles(&id).is_some());
+    assert!(registry.handles(&GlobalId::User(2)).is_none());
 
     registry.remove(&id);
-    assert!(registry.handles(&id, 0).is_none());
+    assert!(registry.handles(&id).is_none());
 }
 
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
@@ -187,7 +181,7 @@ fn minted_handle_snapshots_the_index_rows() {
     let registry = publish_index(id, rows.clone());
 
     // The rows were written at time 0 and sealed by advancing the input to 1.
-    let (oks, _errs) = registry.handles(&id, 0).expect("published");
+    let (oks, _errs) = registry.handles(&id).expect("published");
     assert_eq!(
         read_rows(&oks, Timestamp::from(0_u64)),
         expected_rows(&rows)
@@ -207,7 +201,7 @@ fn cross_runtime_read_sees_published_rows() {
     // dataflow, exercising the `Send` handle across a runtime boundary.
     let reader_registry = registry.clone();
     let found = thread::spawn(move || {
-        let (oks, _errs) = reader_registry.handles(&id, 0).expect("published by A");
+        let (oks, _errs) = reader_registry.handles(&id).expect("published by A");
         read_rows(&oks, Timestamp::from(0_u64))
     })
     .join()
@@ -223,54 +217,38 @@ fn insert_marks_dirty_and_take_drains() {
     // These tests assert the dirty-set semantics, not that a mark wakes anyone, so the waker is
     // the test's own thread. `unpark` on a thread that never parks is a no-op beyond leaving a
     // token behind, and no test here parks.
-    registry.register_waker(0, thread::current());
+    registry.register_waker(thread::current());
 
     // Publication on worker 0 marks `id` dirty for worker 0.
     publish_index_into(&registry, id, test_rows());
-    assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
+    assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
     // A second drain returns nothing: `take_dirty` empties the inbox.
-    assert!(registry.take_dirty(0).is_empty());
+    assert!(registry.take_dirty().is_empty());
 }
 
 #[mz_ore::test]
-fn insert_dirties_only_its_worker() {
+fn remove_dirties_the_reader() {
     let id = GlobalId::User(1);
     let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(0, thread::current());
-    registry.register_waker(1, thread::current());
-
-    // `publish_index_into` inserts on worker 0, so only worker 0's inbox is dirtied.
-    publish_index_into(&registry, id, test_rows());
-    assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
-    assert!(registry.take_dirty(1).is_empty());
-}
-
-#[mz_ore::test]
-fn remove_dirties_all_registered_workers() {
-    let id = GlobalId::User(1);
-    let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(0, thread::current());
-    registry.register_waker(1, thread::current());
+    registry.register_waker(thread::current());
 
     // Drain the publication signal so the remove signal is observed in isolation.
     publish_index_into(&registry, id, test_rows());
-    let _ = registry.take_dirty(0);
+    let _ = registry.take_dirty();
 
-    // `remove` is not worker-specific: every registered worker must re-check `id`.
     registry.remove(&id);
-    assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
-    assert_eq!(registry.take_dirty(1), BTreeSet::from([id]));
+    assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
 }
 
 #[mz_ore::test]
 fn seal_signal_dirties_its_worker() {
     let id = GlobalId::User(1);
     let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(0, thread::current());
+    registry.register_waker(thread::current());
 
     // The seal signal marks the id dirty for its worker without requiring publication.
-    registry.notify(id, 0);
-    assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
+    registry.notify(id);
+    assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
 }
 
 #[mz_ore::test]
@@ -279,14 +257,14 @@ fn notifications_accumulate_until_taken() {
     let id2 = GlobalId::User(2);
     let id3 = GlobalId::User(3);
     let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(0, thread::current());
+    registry.register_waker(thread::current());
 
-    registry.notify(id1, 0);
-    registry.notify(id2, 0);
-    assert_eq!(registry.take_dirty(0), BTreeSet::from([id1, id2]));
+    registry.notify(id1);
+    registry.notify(id2);
+    assert_eq!(registry.take_dirty(), BTreeSet::from([id1, id2]));
 
-    registry.notify(id3, 0);
-    assert_eq!(registry.take_dirty(0), BTreeSet::from([id3]));
+    registry.notify(id3);
+    assert_eq!(registry.take_dirty(), BTreeSet::from([id3]));
 }
 
 /// An input update: `(key, value, time, diff)`. Keys and values are single-column rows, so a
@@ -453,8 +431,8 @@ fn join_over_imported_arrangements_matches_direct() {
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
 
         let worker_index = worker.index();
-        let (oks_a, _errs_a) = registry.handles(&id_a, worker_index).expect("A published");
-        let (oks_b, _errs_b) = registry.handles(&id_b, worker_index).expect("B published");
+        let (oks_a, _errs_a) = registry.handles(&id_a).expect("A published");
+        let (oks_b, _errs_b) = registry.handles(&id_b).expect("B published");
 
         // Interactive side: import both as arrangements and join them. `as_of = 0` matches the
         // earliest real time in either input, so no update coalesces; `until = seal` keeps every
@@ -605,7 +583,7 @@ fn join_over_point_adopted_late_matches_direct() {
 
         // B: published normally, an already-materialized co-input.
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
-        let (oks_b, _errs_b) = registry.handles(&id_b, worker_index).expect("B published");
+        let (oks_b, _errs_b) = registry.handles(&id_b).expect("B published");
 
         // A: a PLACEHOLDER, created before any publisher exists. Mint its reader handle now.
         let point_a: Published<RowRowSpine<Timestamp, Diff>> = Published::new();
@@ -724,8 +702,6 @@ fn bare_handle_read_upper_advances_cross_thread() {
 
     let publisher = thread::spawn(move || {
         timely::execute_directly(move |worker| {
-            let worker_index = worker.index();
-            let peers = worker.peers();
             let (mut oks_input, mut errs_input, _keep) =
                 worker.dataflow::<Timestamp, _, _>(|scope| {
                     let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -745,10 +721,10 @@ fn bare_handle_read_upper_advances_cross_thread() {
                         ErrSpine<_, _>,
                     >("spike errs");
 
-                    let slot = publisher_registry.get_or_create(id, worker_index, peers);
+                    let slot = publisher_registry.get_or_create(id);
                     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
                     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                    publisher_registry.notify(id, worker_index);
+                    publisher_registry.notify(id);
                     (
                         oks_input,
                         errs_input,
@@ -792,7 +768,7 @@ fn bare_handle_read_upper_advances_cross_thread() {
     let (mut oks, _errs) = {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(handles) = registry.handles(&id, 0) {
+            if let Some(handles) = registry.handles(&id) {
                 break handles;
             }
             assert!(Instant::now() < deadline, "publisher never published id");

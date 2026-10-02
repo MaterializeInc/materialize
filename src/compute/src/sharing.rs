@@ -7,17 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A per-process registry of published index arrangements.
+//! A registry of published index arrangements, shared by one maintenance worker and its
+//! interactive peer.
 //!
 //! An index arrangement is normally readable only from the timely worker that maintains it. When
 //! `crate::render` publishes a maintained index through `crate::shared_trace` it records the
-//! resulting `Published` points here, keyed by [`GlobalId`] and worker ordinal, so a reader on
-//! another thread or runtime can mint a `Send` `SharedReader` for the same arrangement.
+//! resulting `Published` points here, keyed by [`GlobalId`], so a reader on another thread or
+//! runtime can mint a `Send` `SharedReader` for the same arrangement.
 //!
-//! The registry is per PROCESS and shared across all timely workers of the runtime. Each worker has
-//! its own `ComputeState`, but they all share one registry `Arc`, the way the persist client cache
-//! is shared. Worker `i` publishes into slot `i`; a reader on worker `i` of another runtime looks up
-//! slot `i`, which is sound only because both sides shard keys by the same `key.hashed() % peers`.
+//! A process holds one registry per local worker ordinal, and each runtime's worker with that
+//! ordinal holds a clone of it. Pairing worker `i` of one runtime with worker `i` of the other is
+//! sound only because both runtimes run the same number of workers per process at the same process
+//! ordinal, so both sides shard keys by the same `key.hashed() % peers`.
 
 // TODO(CPU-215): drop once `crate::render` and `crate::compute_state` call this registry. Only the
 // registry's constructor is reachable yet, so the rest reads as dead.
@@ -63,45 +64,21 @@ struct Waker {
     dirty: BTreeSet<GlobalId>,
 }
 
-/// The registry's state for one worker ordinal: the slots published there and the waker of the
-/// interactive worker that reads them.
+/// The registry's state: the published slots and the interactive peer's [`Waker`]. One lock
+/// covers both. Every critical section is a few map operations, and the publisher takes it once per
+/// seal, not per record.
 #[derive(Default)]
-struct WorkerSlots {
+struct Inner {
     map: BTreeMap<GlobalId, Arc<SharedIndexArrangement>>,
-    /// `None` until the interactive worker with this ordinal registers its waker.
+    /// `None` until the interactive peer registers its waker.
     waker: Option<Waker>,
 }
 
-/// The registry's state, indexed by worker ordinal. One lock covers all of it. Every critical
-/// section is a few map operations, and the publisher takes it once per seal, not per record.
-#[derive(Default)]
-struct Inner {
-    workers: Vec<WorkerSlots>,
-}
-
-impl Inner {
-    /// The state of worker `worker_index`, growing the vector to at least `len` entries.
-    fn worker_mut(&mut self, worker_index: usize, len: usize) -> &mut WorkerSlots {
-        let len = std::cmp::max(len, worker_index + 1);
-        if self.workers.len() < len {
-            self.workers.resize_with(len, WorkerSlots::default);
-        }
-        &mut self.workers[worker_index]
-    }
-
-    /// The slot for `(id, worker_index)`, if published.
-    fn slot(&self, id: &GlobalId, worker_index: usize) -> Option<&Arc<SharedIndexArrangement>> {
-        self.workers.get(worker_index)?.map.get(id)
-    }
-}
-
-/// Per-process registry of published index arrangements.
+/// A registry of published index arrangements, shared by one maintenance worker and its
+/// interactive peer.
 ///
-/// One slot per (`GlobalId`, worker ordinal). Cloning shares the same underlying map, so a clone
-/// handed to each worker's `ComputeState` writes into the same registry.
-///
-/// A slot is an `Arc` so a reader can retain it for the life of its import while the map entry
-/// comes and goes.
+/// Cloning shares the same underlying map. A slot is an `Arc` so a reader can retain it for the
+/// life of its import while the map entry comes and goes.
 #[derive(Clone, Default)]
 pub struct ArrangementSharingRegistry {
     inner: Arc<Mutex<Inner>>,
@@ -113,37 +90,34 @@ impl ArrangementSharingRegistry {
         Self::default()
     }
 
+    /// Creates one registry per local worker ordinal, for a process running `workers_per_process`
+    /// workers per runtime.
+    pub fn per_worker(workers_per_process: usize) -> Vec<Self> {
+        (0..workers_per_process).map(|_| Self::new()).collect()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("registry poisoned")
     }
 
-    /// Returns the existing slot for `(id, worker_index)`, or creates one backed by unbacked
-    /// [`Published`] points and returns that instead.
+    /// Returns the existing slot for `id`, or creates one backed by unbacked [`Published`] points
+    /// and returns that instead.
     ///
-    /// Whichever side touches `(id, worker_index)` first creates the slot; the other observes and
-    /// shares the same `Arc`, so a point a reader already imported is backed in place by a later
+    /// Whichever side touches `id` first creates the slot; the other observes and shares the same
+    /// `Arc`, so a point a reader already imported is backed in place by a later
     /// [`crate::shared_trace::adopt_trace`] rather than being overwritten by a second,
-    /// disconnected arrangement. Grows the per-worker state to `peers` entries.
+    /// disconnected arrangement.
     ///
     /// An unbacked point carries no data, so this does not `notify`: there is nothing yet for a
     /// waiting reader to act on. [`Self::publish`] notifies once the publishers are installed.
-    pub(crate) fn get_or_create(
-        &self,
-        id: GlobalId,
-        worker_index: usize,
-        peers: usize,
-    ) -> Arc<SharedIndexArrangement> {
+    pub(crate) fn get_or_create(&self, id: GlobalId) -> Arc<SharedIndexArrangement> {
         let mut inner = self.lock();
-        let slot = inner
-            .worker_mut(worker_index, peers)
-            .map
-            .entry(id)
-            .or_insert_with(|| {
-                Arc::new(SharedIndexArrangement {
-                    oks: Published::new(),
-                    errs: Published::new(),
-                })
-            });
+        let slot = inner.map.entry(id).or_insert_with(|| {
+            Arc::new(SharedIndexArrangement {
+                oks: Published::new(),
+                errs: Published::new(),
+            })
+        });
         Arc::clone(slot)
     }
 
@@ -165,114 +139,89 @@ impl ArrangementSharingRegistry {
         oks: &RowRowAgent<Timestamp, Diff>,
         errs: &ErrAgent<Timestamp, Diff>,
     ) {
-        let worker_index = worker.index();
-        let slot = self.get_or_create(id, worker_index, worker.peers());
+        let slot = self.get_or_create(id);
         let registry = self.clone();
-        adopt_trace(oks, worker, &slot.oks, move || {
-            registry.notify(id, worker_index)
-        });
+        adopt_trace(oks, worker, &slot.oks, move || registry.notify(id));
         let registry = self.clone();
-        adopt_trace(errs, worker, &slot.errs, move || {
-            registry.notify(id, worker_index)
-        });
-        self.notify(id, worker_index);
+        adopt_trace(errs, worker, &slot.errs, move || registry.notify(id));
+        self.notify(id);
     }
 
-    /// Removes all slots for `id`, called when the index drops.
+    /// Removes the slot for `id`, called when the index drops.
     pub(crate) fn remove(&self, id: &GlobalId) {
         let mut inner = self.lock();
-        // `remove` is not worker-specific: any interactive worker may have pending work on `id`, so
-        // mark it dirty for every registered waker. A waiter re-checks and, finding the slot gone,
-        // drops or keeps its item.
-        for worker in &mut inner.workers {
-            worker.map.remove(id);
-            if let Some(waker) = &mut worker.waker {
-                Self::mark(waker, *id);
-            }
+        inner.map.remove(id);
+        // The reader re-checks and, finding the slot gone, drops or keeps its item.
+        if let Some(waker) = &mut inner.waker {
+            Self::mark(waker, *id);
         }
     }
 
-    /// Mints reader handles for `id` on `worker_index`, if published.
-    pub(crate) fn handles(
-        &self,
-        id: &GlobalId,
-        worker_index: usize,
-    ) -> Option<(SharedOksHandle, SharedErrsHandle)> {
+    /// Mints reader handles for `id`, if published.
+    pub(crate) fn handles(&self, id: &GlobalId) -> Option<(SharedOksHandle, SharedErrsHandle)> {
         let inner = self.lock();
-        let slot = inner.slot(id, worker_index)?;
+        let slot = inner.map.get(id)?;
         Some((slot.oks.handle(), slot.errs.handle()))
     }
 
-    /// The accumulated `oks` logical holds registered against `id` on `worker_index`, if published.
+    /// The accumulated `oks` logical holds registered against `id`, if published.
     ///
     /// Test-only. Minting a handle to observe the published frontiers cannot distinguish a live
     /// reader hold from a frontier that happens to sit there, and that distinction is what says
     /// whether an import is still protected. Empty when every hold has released.
     #[cfg(test)]
-    pub(crate) fn published_logical_holds(
-        &self,
-        id: &GlobalId,
-        worker_index: usize,
-    ) -> Option<Antichain<Timestamp>> {
+    pub(crate) fn published_logical_holds(&self, id: &GlobalId) -> Option<Antichain<Timestamp>> {
         let inner = self.lock();
-        let slot = inner.slot(id, worker_index)?;
+        let slot = inner.map.get(id)?;
         Some(slot.oks.logical_holds())
     }
 
-    /// Registers `worker` as interactive worker `worker_index`'s waker. Called once per interactive worker at startup, from that worker's own thread.
+    /// Registers `worker` as the interactive peer's waker. Called once at startup, from that
+    /// worker's own thread.
     ///
-    /// Overwrites any prior waker for that index, starting with an empty dirty set.
-    pub(crate) fn register_waker(&self, worker_index: usize, worker: Thread) {
+    /// Overwrites any prior waker, starting with an empty dirty set.
+    pub(crate) fn register_waker(&self, worker: Thread) {
         let mut inner = self.lock();
-        inner.worker_mut(worker_index, 0).waker = Some(Waker {
+        inner.waker = Some(Waker {
             worker,
             dirty: BTreeSet::new(),
         });
     }
 
-    /// Atomically drains and returns worker `worker_index`'s dirty set. Returns empty if no waker is
+    /// Atomically drains and returns the interactive peer's dirty set. Returns empty if no waker is
     /// registered.
     ///
     /// Called by the interactive server loop on wake. See `notify` for why the loop MUST
     /// call this before re-reading the map: draining before the map re-check is what closes the
     /// lost-wakeup window.
-    pub(crate) fn take_dirty(&self, worker_index: usize) -> BTreeSet<GlobalId> {
+    pub(crate) fn take_dirty(&self) -> BTreeSet<GlobalId> {
         let mut inner = self.lock();
-        match inner
-            .workers
-            .get_mut(worker_index)
-            .and_then(|w| w.waker.as_mut())
-        {
+        match &mut inner.waker {
             Some(waker) => std::mem::take(&mut waker.dirty),
             None => BTreeSet::new(),
         }
     }
 
-    /// Advances the standing hold on `id`'s published slot on `worker_index`, if one exists.
+    /// Advances the standing hold on `id`'s published slot, if one exists.
     ///
     /// Called from `handle_allow_compaction` on the runtime that may import `id` but does not host it,
     /// which reaches it because the multiplexer broadcasts `AllowCompaction`. The publisher bounds its
     /// logical compaction by this, so a frontier the importing runtime has not applied does not
     /// compact the arrangement.
     ///
-    /// A no-op for ids with no slot on this worker. Nothing has been published there, so no import can
+    /// A no-op for ids with no slot. Nothing has been published there, so no import can
     /// have been built over it, and the frontier a later publisher seeds the hold with (its own
     /// compaction frontier at adoption) is at or below every `as_of` the controller may offer for it.
     /// Does not `notify`: compaction bookkeeping gives a waiting reader nothing new to serve.
-    pub(crate) fn note_standing_hold(
-        &self,
-        id: GlobalId,
-        worker_index: usize,
-        frontier: &Antichain<Timestamp>,
-    ) {
+    pub(crate) fn note_standing_hold(&self, id: GlobalId, frontier: &Antichain<Timestamp>) {
         let inner = self.lock();
-        if let Some(arr) = inner.slot(&id, worker_index) {
+        if let Some(arr) = inner.map.get(&id) {
             arr.oks.note_standing_hold(frontier);
             arr.errs.note_standing_hold(frontier);
         }
     }
 
-    /// Marks `id` dirty for worker `worker_index` and unparks it.
+    /// Marks `id` dirty for the interactive peer and unparks it.
     ///
     /// [`Self::publish`] calls this once a slot's publishers are installed, and each publisher calls
     /// it again on every seal, since a fast-path peek waiting on the shared trace's `upper` is
@@ -299,13 +248,9 @@ impl ArrangementSharingRegistry {
     /// The contradictory interleaving P2 -> W1 with W2 -> P1 is impossible: it would require
     /// P1 -> P2 -> W1 -> W2 -> P1, a cycle. Hence the drain-before-re-read ordering the server loop
     /// guarantees is what makes the separate critical sections lost-wakeup-free.
-    pub(crate) fn notify(&self, id: GlobalId, worker_index: usize) {
+    pub(crate) fn notify(&self, id: GlobalId) {
         let mut inner = self.lock();
-        if let Some(waker) = inner
-            .workers
-            .get_mut(worker_index)
-            .and_then(|w| w.waker.as_mut())
-        {
+        if let Some(waker) = &mut inner.waker {
             Self::mark(waker, id);
         }
     }
