@@ -7,13 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { millisecondsInMinute } from "date-fns/constants";
 import { createStore } from "jotai";
+import { delay, http, HttpResponse } from "msw";
 import parse from "postgres-interval";
 
+import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
 import { DatabaseObject } from "~/api/materialize/objects";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 import {
+  buildColumn,
   buildColumns,
   buildSqlQueryHandlerV2,
   mapKyselyToTabular,
@@ -22,16 +27,45 @@ import server from "~/api/mocks/server";
 import { roleQueryKeys } from "~/platform/roles/queries";
 import { getQueryClient } from "~/queryClient";
 import { allObjects } from "~/store/allObjects";
-import { buildDatabaseObject, createProviderWrapper } from "~/test/utils";
+import {
+  buildDatabaseObject,
+  createProviderWrapper,
+  defaultRegionId,
+  healthyEnvironment,
+  setFakeEnvironment,
+} from "~/test/utils";
+import { parseDbVersion } from "~/version/api";
 
 import {
   buildFreshnessData,
   clusterQueryKeys,
+  replicaStatusesUpdatedAt,
   useClusterLineageIds,
   useFreshnessObjects,
+  useObjectHydrationStretches,
   useOwners,
+  useReplicaHeapLimits,
   useReplicaOfflineEvents,
+  useReplicaStatusHistory,
+  useReplicaUtilizationHistory,
+  useRollingWindowStartMs,
 } from "./queries";
+
+/**
+ * A websocket that never opens, for hooks that mount an idle subscribe. The
+ * test environment has no websocket server.
+ */
+class PendingWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readonly readyState = PendingWebSocket.CONNECTING;
+  addEventListener() {}
+  removeEventListener() {}
+  send() {}
+  close() {}
+}
 
 const ownersColumns = buildColumns([
   "id",
@@ -290,6 +324,529 @@ describe("useReplicaOfflineEvents", () => {
   });
 });
 
+describe("useReplicaHeapLimits", () => {
+  let requests: number;
+
+  const answerHeapLimits = (row: {
+    heapLimit: string | null;
+    memoryBytes: string | null;
+  }) => {
+    requests = 0;
+    server.use(
+      http.post("*/api/sql", ({ request }) => {
+        const queryKey = JSON.parse(
+          new URL(request.url).searchParams.get("query_key") ?? "[]",
+        );
+        if (queryKey[1]?.scope !== "replicaHeapLimits") return undefined;
+        requests += 1;
+        return HttpResponse.json({
+          results: [
+            mapKyselyToTabular({
+              rows: [{ replicaId: "u1", processId: "0", ...row }],
+              columns: buildColumns([
+                "replicaId",
+                "processId",
+                "heapLimit",
+                "memoryBytes",
+              ]),
+            }),
+          ],
+        });
+      }),
+    );
+  };
+
+  const pollFiveMinutes = async () => {
+    vi.useFakeTimers({
+      toFake: [
+        "Date",
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+      ],
+    });
+    const ProviderWrapper = await createProviderWrapper();
+    renderHook(() => useReplicaHeapLimits(["u1"]), {
+      wrapper: ProviderWrapper,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requests).toBe(1);
+    await vi.advanceTimersByTimeAsync(5 * millisecondsInMinute);
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops polling for a replica that reports memory but no heap limit", async () => {
+    answerHeapLimits({ heapLimit: null, memoryBytes: "1073741824" });
+
+    await pollFiveMinutes();
+
+    expect(requests).toBe(1);
+  });
+
+  it("keeps polling while a replica's metrics fetch fails", async () => {
+    answerHeapLimits({ heapLimit: null, memoryBytes: null });
+
+    await pollFiveMinutes();
+
+    expect(requests).toBeGreaterThan(1);
+  });
+});
+
+describe("replicaStatusesUpdatedAt", () => {
+  it("reads the latest change of any replica's process, system replicas included", () => {
+    const status = (
+      replicaId: string,
+      processId: string,
+      updatedAt: string,
+    ) => ({
+      replica_id: replicaId,
+      process_id: processId,
+      reason: null,
+      status: "online",
+      updated_at: updatedAt,
+    });
+    const replica = (id: string, statuses: ReturnType<typeof status>[]) => ({
+      id,
+      name: id,
+      size: "25cc",
+      disk: false,
+      statuses,
+    });
+
+    expect(
+      replicaStatusesUpdatedAt([
+        replica("s1", [
+          status("s1", "0", "2026-10-20T00:00:00.000Z"),
+          status("s1", "1", "2026-10-20T00:07:00.000Z"),
+        ]),
+        replica("s2", [status("s2", "0", "2026-10-20T00:03:00.000Z")]),
+      ]),
+    ).toEqual(Date.UTC(2026, 9, 20, 0, 7));
+    expect(replicaStatusesUpdatedAt([replica("s1", [])])).toBeUndefined();
+  });
+});
+
+describe("useReplicaStatusHistory", () => {
+  const FIRST_UPDATE = Date.UTC(2026, 9, 20, 0, 0);
+  const NEXT_UPDATE = Date.UTC(2026, 9, 20, 0, 5);
+  const statusRow = (atMs: number, reason: string | null = null) => ({
+    replicaId: "u1",
+    processId: "0",
+    occurredAt: String(atMs),
+    status: reason ? "offline" : "online",
+    reason,
+  });
+  let requests: number;
+
+  // Answers each status history request with one more row than the last, after
+  // the first, so a test can tell the answers apart.
+  beforeEach(() => {
+    requests = 0;
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        const queryKey = JSON.parse(
+          new URL(request.url).searchParams.get("query_key") ?? "[]",
+        );
+        if (queryKey[1]?.scope !== "replicaStatusHistory") return undefined;
+        requests += 1;
+        const rows = [
+          statusRow(1_000),
+          ...(requests > 1 ? [statusRow(2_000, OOM_REASON)] : []),
+        ];
+        if (requests > 1) await delay(50);
+        return HttpResponse.json({
+          results: [
+            mapKyselyToTabular({
+              rows,
+              columns: [
+                buildColumn({
+                  name: "occurredAt",
+                  type_oid: MzDataType.timestamptz,
+                }),
+              ],
+            }),
+          ],
+        });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    vi.useRealTimers();
+  });
+
+  const renderStatusHistory = async () => {
+    const ProviderWrapper = await createProviderWrapper();
+    const view = renderHook(
+      ({
+        replicaIds,
+        statusesUpdatedAt,
+      }: {
+        replicaIds: string[];
+        statusesUpdatedAt: number;
+      }) => useReplicaStatusHistory(replicaIds, statusesUpdatedAt),
+      {
+        wrapper: ProviderWrapper,
+        initialProps: {
+          replicaIds: ["u1"],
+          statusesUpdatedAt: FIRST_UPDATE,
+        },
+      },
+    );
+    await waitFor(() => expect(view.result.current.data).toBeDefined());
+    return view;
+  };
+
+  it("fetches again only when the latest status update changes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { rerender } = await renderStatusHistory();
+
+    // Long past any poll, a re-render and a window focus find the history
+    // still fresh.
+    vi.setSystemTime(Date.now() + 10 * millisecondsInMinute);
+    rerender({ replicaIds: ["u1"], statusesUpdatedAt: FIRST_UPDATE });
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    // Long enough for a request started above to land.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(requests).toBe(1);
+
+    rerender({ replicaIds: ["u1"], statusesUpdatedAt: NEXT_UPDATE });
+    await waitFor(() => expect(requests).toBe(2));
+  });
+
+  it("keeps the same replicas' history while a new status update loads", async () => {
+    const { result, rerender } = await renderStatusHistory();
+    const first = result.current.data;
+
+    rerender({ replicaIds: ["u1"], statusesUpdatedAt: NEXT_UPDATE });
+    expect(result.current.data).toEqual(first);
+
+    await waitFor(() =>
+      expect(result.current.data?.oomKills).toEqual([
+        expect.objectContaining({ occurredAt: new Date(2_000) }),
+      ]),
+    );
+  });
+
+  it("shows no history for a new set of replicas until it loads", async () => {
+    const { result, rerender } = await renderStatusHistory();
+
+    rerender({ replicaIds: ["u1", "u2"], statusesUpdatedAt: NEXT_UPDATE });
+
+    expect(result.current.data).toBeUndefined();
+  });
+});
+
+describe("useObjectHydrationStretches", () => {
+  const CREATED_AT = {
+    u11: new Date(Date.UTC(2026, 9, 20, 0, 0)),
+    u12: new Date(Date.UTC(2026, 9, 20, 0, 5)),
+  };
+
+  const hydrationTimesHandler = (
+    objects: Array<{ id: string; createdAt: Date }>,
+    rows: Array<{
+      replicaId: string;
+      objectId: string;
+      hydrationMs: string | null;
+    }>,
+    environmentStartedAt = new Date(Date.UTC(2026, 9, 19)),
+  ) =>
+    // The handler only answers the sorted key.
+    buildSqlQueryHandlerV2({
+      queryKey: clusterQueryKeys.objectHydrationTimes({
+        replicaIds: ["u1", "u2"],
+        objects: objects.map(({ id, createdAt }) => ({
+          id,
+          createdAtMs: createdAt.getTime(),
+        })),
+      }),
+      results: [
+        mapKyselyToTabular({
+          rows,
+          columns: [
+            buildColumn({ name: "hydrationMs", type_oid: MzDataType.float8 }),
+          ],
+        }),
+        mapKyselyToTabular({
+          rows: [{ startedAt: String(environmentStartedAt.getTime()) }],
+          columns: [
+            buildColumn({
+              name: "startedAt",
+              type_oid: MzDataType.timestamptz,
+            }),
+          ],
+        }),
+      ],
+    });
+
+  const renderStretches = async (
+    objects: Array<{ id: string; createdAt: Date }>,
+  ) => {
+    const ProviderWrapper = await createProviderWrapper();
+    return renderHook(
+      () => useObjectHydrationStretches({ replicaIds: ["u2", "u1"], objects }),
+      { wrapper: ProviderWrapper },
+    );
+  };
+
+  it("groups each replica's hydration times with the objects' creation times", async () => {
+    server.use(
+      hydrationTimesHandler(
+        [
+          { id: "u11", createdAt: CREATED_AT.u11 },
+          { id: "u12", createdAt: CREATED_AT.u12 },
+        ],
+        [
+          { replicaId: "u1", objectId: "u11", hydrationMs: "1500" },
+          { replicaId: "u1", objectId: "u12", hydrationMs: null },
+          { replicaId: "u2", objectId: "u11", hydrationMs: "2500" },
+        ],
+      ),
+    );
+    const { result } = await renderStretches([
+      { id: "u12", createdAt: CREATED_AT.u12 },
+      { id: "u11", createdAt: CREATED_AT.u11 },
+    ]);
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual(
+        new Map([
+          [
+            "u1",
+            [
+              {
+                objectId: "u11",
+                createdAtMs: CREATED_AT.u11.getTime(),
+                hydrationMs: 1500,
+              },
+              {
+                objectId: "u12",
+                createdAtMs: CREATED_AT.u12.getTime(),
+                hydrationMs: null,
+              },
+            ],
+          ],
+          [
+            "u2",
+            [
+              {
+                objectId: "u11",
+                createdAtMs: CREATED_AT.u11.getTime(),
+                hydrationMs: 2500,
+              },
+            ],
+          ],
+        ]),
+      ),
+    );
+  });
+
+  it("leaves out objects created before environmentd started", async () => {
+    const objects = [
+      { id: "u11", createdAt: CREATED_AT.u11 },
+      { id: "u12", createdAt: CREATED_AT.u12 },
+    ];
+    server.use(
+      hydrationTimesHandler(
+        objects,
+        [
+          { replicaId: "u1", objectId: "u11", hydrationMs: "1500" },
+          { replicaId: "u1", objectId: "u12", hydrationMs: "1500" },
+        ],
+        new Date(Date.UTC(2026, 9, 20, 0, 1)),
+      ),
+    );
+    const { result } = await renderStretches(objects);
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual(
+        new Map([
+          [
+            "u1",
+            [
+              {
+                objectId: "u12",
+                createdAtMs: CREATED_AT.u12.getTime(),
+                hydrationMs: 1500,
+              },
+            ],
+          ],
+        ]),
+      ),
+    );
+  });
+
+  it("stays idle without objects", async () => {
+    const { result } = await renderStretches([]);
+
+    expect(result.current.fetchStatus).toEqual("idle");
+    expect(result.current.data).toBeUndefined();
+  });
+});
+
+describe("useReplicaUtilizationHistory past the indexed views", () => {
+  const THIRTY_DAYS_MINUTES = 30 * 24 * 60;
+  const BUCKET_START_MS = Date.UTC(2026, 9, 1);
+  const withVersion = (version: string) => ({
+    ...healthyEnvironment,
+    status: {
+      ...healthyEnvironment.status,
+      version: parseDbVersion(`v${version} (0000000000)`),
+    },
+  });
+  let utilizationSql: string[];
+
+  // Answers like the database: the swap columns come back only when the query
+  // selects them.
+  beforeEach(() => {
+    vi.stubGlobal("WebSocket", PendingWebSocket);
+    utilizationSql = [];
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        const queryKey = JSON.parse(
+          new URL(request.url).searchParams.get("query_key") ?? "[]",
+        );
+        if (queryKey[1]?.scope !== "replicaUtilizationHistory")
+          return undefined;
+        if (queryKey[2] === "deploymentLineage") {
+          return HttpResponse.json({
+            results: [
+              mapKyselyToTabular({
+                rows: [],
+                columns: buildColumns([
+                  "clusterId",
+                  "currentDeploymentClusterId",
+                  "clusterName",
+                ]),
+              }),
+            ],
+          });
+        }
+        const body = (await request.json()) as {
+          queries: Array<{ query: string }>;
+        };
+        const sqlText = body.queries[0].query;
+        utilizationSql.push(sqlText);
+        const at = String(BUCKET_START_MS);
+        return HttpResponse.json({
+          results: [
+            mapKyselyToTabular({
+              rows: [
+                {
+                  bucketStart: at,
+                  bucketEnd: String(BUCKET_START_MS + 3_600_000),
+                  replicaId: "u1",
+                  clusterId: "u9",
+                  name: "r1",
+                  size: "100cc",
+                  maxHeapPercent: "0.6",
+                  maxHeapAt: at,
+                  maxMemoryAt: at,
+                  maxDiskAt: at,
+                  maxCpuAt: at,
+                  maxMemoryAndDiskAt: at,
+                  offlineEvents: null,
+                  ...(sqlText.includes('as "swapOfRamPercent"')
+                    ? { swapOfRamPercent: "0.25", heapLimitPercent: "1.25" }
+                    : {}),
+                },
+              ],
+              columns: [
+                ...[
+                  "bucketStart",
+                  "bucketEnd",
+                  "maxHeapAt",
+                  "maxMemoryAt",
+                  "maxDiskAt",
+                  "maxCpuAt",
+                  "maxMemoryAndDiskAt",
+                ].map((name) =>
+                  buildColumn({ name, type_oid: MzDataType.timestamptz }),
+                ),
+                ...[
+                  "maxHeapPercent",
+                  "swapOfRamPercent",
+                  "heapLimitPercent",
+                ].map((name) =>
+                  buildColumn({ name, type_oid: MzDataType.float8 }),
+                ),
+              ],
+            }),
+          ],
+        });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const renderThirtyDays = async ({
+    version,
+    includeMemoryBreakdown,
+  }: {
+    version: string;
+    includeMemoryBreakdown?: boolean;
+  }) => {
+    const environment = withVersion(version);
+    const ProviderWrapper = await createProviderWrapper({
+      initializeState: ({ set }) =>
+        setFakeEnvironment(set, defaultRegionId, environment),
+    });
+    const { result } = renderHook(
+      () =>
+        useReplicaUtilizationHistory({
+          clusterIds: ["u9"],
+          replicaId: undefined,
+          timePeriodMinutes: THIRTY_DAYS_MINUTES,
+          bucketSizeMs: 3_600_000,
+          includeMemoryBreakdown,
+        }),
+      { wrapper: ProviderWrapper },
+    );
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(utilizationSql).toHaveLength(1);
+    expect(utilizationSql[0]).toContain("mz_cluster_replica_metrics_history");
+    return result.current.data?.graphData[0].data[0];
+  };
+
+  it("charts the memory split from the ad-hoc query", async () => {
+    const point = await renderThirtyDays({
+      version: "26.44.0",
+      includeMemoryBreakdown: true,
+    });
+
+    expect(point?.swapPercent).toBeCloseTo(20);
+    expect(point?.ramLimitPercent).toBeCloseTo(80);
+  });
+
+  it("reads no swap column for callers that don't ask for the split", async () => {
+    const point = await renderThirtyDays({ version: "26.44.0" });
+
+    expect(utilizationSql[0]).not.toContain("swap");
+    expect(point?.ramLimitPercent).toBeNull();
+  });
+
+  it("reads no swap column on an environment that predates it", async () => {
+    await renderThirtyDays({
+      version: "26.43.0",
+      includeMemoryBreakdown: true,
+    });
+
+    expect(utilizationSql[0]).not.toContain("swap");
+  });
+});
+
 async function renderFreshnessObjects(initial: DatabaseObject[]) {
   const store = createStore();
   store.set(allObjects, {
@@ -405,5 +962,95 @@ describe("buildFreshnessData", () => {
     const data = buildFreshnessData(readings, objects);
 
     expect(data.currentData[0].lag).toEqual(parse("00:00:01"));
+  });
+});
+
+describe("useRollingWindowStartMs", () => {
+  const NOW = Date.parse("2026-10-16T12:00:00Z");
+  const HOUR = 60 * millisecondsInMinute;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("has its start on the first render and keeps it through mounting", () => {
+    // Each read of the clock is a millisecond later, so a second start taken
+    // while mounting would differ from the first.
+    let reads = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => NOW + reads++);
+    const renderedStarts: Array<number | undefined> = [];
+    renderHook(() => {
+      const startMs = useRollingWindowStartMs(180);
+      renderedStarts.push(startMs);
+      return startMs;
+    });
+    now.mockRestore();
+
+    expect(renderedStarts[0]).toBeCloseTo(NOW - 3 * HOUR, -3);
+    expect(new Set(renderedStarts).size).toBe(1);
+  });
+
+  it("starts one window back and moves forward once per window", () => {
+    const { result } = renderHook(() => useRollingWindowStartMs(180));
+    expect(result.current).toEqual(NOW - 3 * HOUR);
+
+    act(() => vi.advanceTimersByTime(3 * HOUR - 1));
+    expect(result.current).toEqual(NOW - 3 * HOUR);
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current).toEqual(NOW);
+  });
+
+  it("starts the new window back when the window changes, never the old start", () => {
+    const renderedStarts: Array<number | undefined> = [];
+    const { rerender } = renderHook(
+      (windowMinutes: number | undefined) => {
+        const startMs = useRollingWindowStartMs(windowMinutes);
+        renderedStarts.push(startMs);
+        return startMs;
+      },
+      { initialProps: 180 },
+    );
+    act(() => vi.advanceTimersByTime(HOUR));
+    renderedStarts.length = 0;
+
+    rerender(1440);
+
+    const dayStart = NOW + HOUR - 24 * HOUR;
+    expect(renderedStarts.at(-1)).toEqual(dayStart);
+    expect(renderedStarts.filter((startMs) => startMs !== undefined)).toEqual(
+      renderedStarts.filter((startMs) => startMs === dayStart),
+    );
+  });
+
+  it("takes a fresh start when a window comes back", () => {
+    const { result, rerender } = renderHook(
+      (windowMinutes: number | undefined) =>
+        useRollingWindowStartMs(windowMinutes),
+      { initialProps: 180 },
+    );
+    rerender(undefined);
+    act(() => vi.advanceTimersByTime(HOUR));
+
+    rerender(180);
+
+    expect(result.current).toEqual(NOW + HOUR - 3 * HOUR);
+  });
+
+  it("has no start without a window", () => {
+    const { result, rerender } = renderHook(
+      (windowMinutes: number | undefined) =>
+        useRollingWindowStartMs(windowMinutes),
+      { initialProps: 180 },
+    );
+
+    rerender(undefined);
+
+    expect(result.current).toBeUndefined();
   });
 });

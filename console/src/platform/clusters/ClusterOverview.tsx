@@ -26,6 +26,7 @@ import { useParams } from "react-router-dom";
 
 import { MZ_PROBE_CLUSTER } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { hasNoUtilizationMetrics } from "~/api/materialize/cluster/replicaUtilizationBinning";
 import Alert from "~/components/Alert";
 import ErrorBox from "~/components/ErrorBox";
 import { EventEmitterProvider } from "~/components/EventEmitter";
@@ -134,14 +135,7 @@ const ClusterOverview = () => {
   // If there are no metrics at all (rows are all zeros/nulls),
   // the cluster may be misconfigured (issue with metrics collection),
   // so we show an error message in that case.
-  const clusterHasNoMetrics =
-    (graphData ?? []).length &&
-    graphData?.every((d) =>
-      d.data.every(
-        (point) =>
-          !point.cpuPercent && !point.memoryPercent && !point.diskPercent,
-      ),
-    );
+  const clusterHasNoMetrics = hasNoUtilizationMetrics(graphData ?? []);
 
   return (
     <MainContentContainer mt="10">
