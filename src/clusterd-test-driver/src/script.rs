@@ -40,6 +40,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
+use mz_compute_types::dataflows::DataflowClass;
 use mz_dyncfg::{ConfigType, ConfigUpdates, ConfigVal};
 use mz_expr::visit::Visit;
 use mz_expr::{Id, MirRelationExpr};
@@ -980,6 +981,11 @@ impl ScriptState {
         builder.as_of(Timestamp::from(as_of));
         if let Some(until) = until {
             builder.until(Timestamp::from(until));
+            // Mirrors the adapter, which marks a dataflow a one-shot read exactly where it bounds
+            // it one step past its `as_of`.
+            if Some(until) == as_of.checked_add(1) {
+                builder.class(DataflowClass::OneShotRead);
+            }
         }
         Ok((builder, registrations))
     }
