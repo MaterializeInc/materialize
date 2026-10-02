@@ -106,10 +106,10 @@ Views** or **Indexes**, then open the **Workflow** tab.
 Check whether the cluster's replicas restarted recently:
 
 ```mzsql
-SELECT c.name AS cluster, r.name AS replica, h.status, h.reason, h.occurred_at
+SELECT c.name AS cluster, rh.replica_name AS replica, h.status, h.reason, h.occurred_at
 FROM mz_internal.mz_cluster_replica_status_history AS h
-JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
-JOIN mz_catalog.mz_clusters AS c ON c.id = r.cluster_id
+JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
+JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id
 WHERE h.occurred_at > now() - INTERVAL '1 day'
 ORDER BY h.occurred_at DESC
 LIMIT 10;

@@ -222,22 +222,24 @@ SELECT
     h.started_at,
     h.finished_at - h.started_at AS hydration_time,
     h.object_count,
-    pg_size_pretty(h.peak_memory_bytes) AS peak_memory,
-    pg_size_pretty(h.peak_disk_bytes) AS peak_disk
+    pg_size_pretty(h.peak_memory_bytes + coalesce(h.peak_disk_bytes, 0)) AS peak_heap,
+    pg_size_pretty(s.memory_bytes + coalesce(s.disk_bytes, 0)) AS heap_limit
 FROM mz_internal.mz_replica_hydration_history AS h
 JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
-WHERE rh.cluster_name = 'analytics'
+JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id
+JOIN mz_catalog.mz_cluster_replica_sizes AS s ON s.size = rh.size
+WHERE c.name = 'analytics'
 ORDER BY h.started_at DESC;
 ```
 
 ```none
- replica | size  |          started_at           | hydration_time | object_count | peak_memory | peak_disk
----------+-------+-------------------------------+----------------+--------------+-------------+-----------
- r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
+ replica | size  |          started_at           | hydration_time | object_count | peak_heap | heap_limit
+---------+-------+-------------------------------+----------------+--------------+-----------+------------
+ r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 13 GB     | 152 GB
 (1 row)
 ```
 
-Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) to find the size that fits your workload. This lets you create a cluster at a generous size, hydrate once, and then size down with confidence. The new [cluster sizing guide](/clusters/sizing/) walks through that workflow, and [Optimize hydration requirements](/clusters/optimize-hydration-requirements/) covers what to do when a single object accounts for most of the peak.
+Compare `peak_heap` (the memory plus disk a replica process used) with `heap_limit` (the memory plus disk its size provides) to find the size that fits your workload. This lets you create a cluster at a generous size, hydrate once, and then size down with confidence. The new [cluster sizing guide](/clusters/sizing/) walks through that workflow, and [Optimize hydration requirements](/clusters/optimize-hydration-requirements/) covers what to do when a single object accounts for most of the peak.
 
 ### Improvements {#v26.42-improvements}
 - **Vended credentials for Iceberg sink to GCP BigLake**: `CREATE CONNECTION ... TO ICEBERG CATALOG` now accepts a storage provider option, and `ACCESS DELEGATION` is allowed on GCP BigLake catalog connections, so an Iceberg catalog backed by Google Cloud Storage can authenticate with credentials the catalog vends. For more information, see [GCP BigLake](/export-data/iceberg-gcp/).
