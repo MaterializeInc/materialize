@@ -439,4 +439,3 @@ impl ExtractTimestamp for (Timestamp, Subtime) {
         self.0
     }
 }
-
