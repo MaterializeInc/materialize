@@ -2976,6 +2976,20 @@ class FlipFlagsAction(Action):
             "row_with_validate",
             "arrow",
         ]
+        self.flags_with_values["persist_shard_metrics"] = [
+            "none",
+            "summary",
+            "per_shard",
+            "both",
+        ]
+        # Only has an effect while persist_shard_metrics leaves the per-shard
+        # families out. Shard names are GlobalIds, so "^u1" keeps a subset of
+        # the user collections.
+        self.flags_with_values["persist_per_shard_metrics_enable_regex"] = [
+            "''",
+            "'^u1'",
+            "'.*'",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )

@@ -1824,6 +1824,10 @@ metrics:
   - honeycomb
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_blob_gets
+  help: number of Blob::get calls for batch parts, over all shards
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_hedge_armed
   help: 1 once this process has opened a hedge sibling and can hedge when enabled
   source: src/persist/src/metrics.rs
@@ -1867,6 +1871,10 @@ metrics:
 - name: mz_persist_blob_hedges_won
   help: blob gets where the hedge request won the race
   source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_sets
+  help: number of Blob::set calls for batch parts, over all shards
+  source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_cmd_cas_mismatch_count
   help: count of command retries from CaS mismatch
@@ -2062,6 +2070,10 @@ metrics:
   help: time spent in op decodes
   labels:
   - op
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_diff_size_bytes
+  help: total encoded diff size, over all shards
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_encode_count
@@ -2261,6 +2273,10 @@ metrics:
   labels:
   - worker_id
   source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_persist_per_shard_metrics_regex_invalid
+  help: count of metrics scrapes that found persist_per_shard_metrics_enable_regex invalid and so kept no per-shard series
+  source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds_bucket
   help: histogram of (approximate) latency between sending a diff and applying it
@@ -2713,6 +2729,10 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_shard_metrics_mode_invalid
+  help: count of metrics scrapes that found persist_shard_metrics unrecognized and so exported the default
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
   labels:
@@ -2932,6 +2952,10 @@ metrics:
   help: Seconds of time spent scheduled, ie. ready to poll but not yet polled.
   labels:
   - name
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_unconsolidated_snapshot
+  help: in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output, over all shards
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_wait_resolved_via_sleep

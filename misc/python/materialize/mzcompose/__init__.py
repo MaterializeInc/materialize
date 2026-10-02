@@ -463,6 +463,16 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter("persist_stats_audit_panic", "true", ["true", "false"]),
         VariableSystemParameter(
+            "persist_shard_metrics",
+            "summary",
+            ["none", "summary", "per_shard", "both"],
+        ),
+        VariableSystemParameter(
+            "persist_per_shard_metrics_enable_regex",
+            "",
+            ["", "^u1", ".*"],
+        ),
+        VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
         VariableSystemParameter(
