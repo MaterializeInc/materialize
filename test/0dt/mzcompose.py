@@ -3053,6 +3053,138 @@ def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
+def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
+    """Returns the PIDs of processes named *command* in *mz_service*."""
+    return set(
+        c.exec(
+            mz_service,
+            "bash",
+            "-c",
+            f"ps -eo pid=,comm= | awk '$2 == \"{command}\" {{ print $1 }}'",
+            capture=True,
+            silent=True,
+        ).stdout.split()
+    )
+
+
+def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
+    """Verify a DDL-triggered restart of mz_new keeps its stability progress.
+
+    mz_new's replicas outlive the restart, and the stability gate reads their
+    hydration times from the replicas, so the period keeps counting from the
+    original hydration. Restarting the period would make mz_new ready no
+    earlier than the restart plus a full period.
+    """
+    period = 120
+    ddl_after = 60
+
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        f"ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE CLUSTER stable SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER stable AS SELECT * FROM t;
+        CREATE INDEX mv_idx IN CLUSTER stable ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    started = time.time()
+    time.sleep(ddl_after)
+    environmentd = _pids(c, "mz_new", "environmentd")
+    replicas = _pids(c, "mz_new", "clusterd")
+
+    # A table has no dataflow, so this changes no cluster's gated collections.
+    c.sql("CREATE TABLE unrelated (a int)", service="mz_old")
+
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    ready_after = time.time() - started
+
+    assert (
+        _pids(c, "mz_new", "environmentd") != environmentd
+    ), "the DDL did not restart mz_new"
+    assert (
+        _pids(c, "mz_new", "clusterd") == replicas
+    ), "mz_new's replicas did not survive its restart"
+    assert (
+        ready_after < ddl_after + period
+    ), f"mz_new became ready {ready_after:.0f}s after starting, so the restart reset the stability period"
+
+    c.promote_mz("mz_new", retire="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
+    """Verify the stability gate does not wait on hydration no replica reports.
+
+    A materialized view past its last refresh has a sealed shard, so mz_new
+    never runs a dataflow for it. A materialized view pinned to one replica
+    runs only there. Neither may keep any replica of the cluster from counting
+    as hydrated.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        """
+        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '0s';
+        ALTER SYSTEM SET enable_replica_targeted_materialized_views = true;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE CLUSTER pinned REPLICAS (
+            r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+        );
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW sealed IN CLUSTER pinned
+            WITH (REFRESH AT mz_now()::string::int8) AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW on_r1 IN CLUSTER pinned REPLICA r1
+            AS SELECT count(*) FROM t;
+        """,
+        service="mz_old",
+    )
+
+    # Wait for the refresh to seal `sealed`, so mz_new starts with an empty
+    # as_of for it.
+    for _ in range(120):
+        sealed = c.sql_query(
+            """
+            SELECT f.write_frontier IS NULL
+            FROM mz_internal.mz_frontiers f
+            JOIN mz_materialized_views mv ON f.object_id = mv.id
+            WHERE mv.name = 'sealed'
+            """,
+            service="mz_old",
+        )
+        if sealed and sealed[0][0]:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("materialized view `sealed` never sealed its shard")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(
+        DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
+    )
+    c.promote_mz("mz_new", retire="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     """Verify that DDL detection works correctly with batch-allocated user IDs.
 

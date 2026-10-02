@@ -12,45 +12,90 @@
 //!
 //! During a zero-downtime upgrade the new `environmentd` boots read-only and
 //! reports "ready to promote" once its clusters have caught up with the leader
-//! generation. [`Coordinator::maybe_check_caught_up`] runs that check on an
-//! interval (see `with_0dt_deployment_caught_up_check_interval`). We call one
-//! such run a "tick", and the term is used throughout this module.
+//! generation. A task spawned by [`Coordinator::spawn_caught_up_check_task`]
+//! runs that check on an interval (see
+//! [`WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL`]). We call one such run a
+//! "tick", and the term is used throughout this module.
+//!
+//! Each tick the task asks the coordinator to classify the clusters, which
+//! needs controller state only the coordinator loop can reach. The task then
+//! applies the stability gate itself, because the replica queries it needs
+//! call back into the coordinator and would deadlock on its loop.
 //!
 //! A point-in-time caught-up check is not enough on its own: a crash- or
 //! OOM-looping replica can momentarily look hydrated and caught-up, and cutting
 //! over right then drops us straight into a crashing replica. On top of the
-//! per-tick caught-up classification we therefore run a stability gate. Once a
-//! cluster is genuinely caught-up it must stay caught-up and have all replicas
-//! healthy for a configurable period before we report it ready. Any disruption
-//! (a replica not `Online`, a status flap between ticks, or a replica restart)
-//! resets the streak, so a crash-looping replica never accumulates the required
-//! stable time. [`ClusterStabilityState`] holds the per-cluster gate state
-//! across ticks.
+//! per-tick caught-up classification we therefore run a stability gate. A
+//! caught-up cluster is ready only once every replica is `Online` and has had
+//! everything it hosts hydrated for a configurable period.
+//!
+//! Each replica reports its hydration times in its
+//! `mz_compute_hydration_times_per_worker` introspection log. The log lives in
+//! the replica process. It survives environmentd restarts, because a restarted
+//! environmentd reconciles with the same replica processes and they keep
+//! compatible dataflows, so a DDL-triggered restart does not restart the
+//! period. A dataflow that changed rehydrates and restarts it. The log dies
+//! with the process, so a restarted replica has to hydrate again and then wait
+//! out the full period, and a crash-looping replica never becomes ready.
+//!
+//! A replica without introspection logging cannot report hydration times. It
+//! only has to be `Online`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice as _;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK, ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK,
     WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
-    WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD,
+    WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
-use mz_controller::clusters::{ClusterStatus, ProcessId};
+use mz_compute_client::logging::{ComputeLog, LogVariant};
+use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
+use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use timely::progress::{Antichain, Timestamp as _};
+use tokio::sync::oneshot;
+use tokio::time::MissedTickBehavior;
 
-use crate::coord::{ClusterReplicaStatuses, Coordinator};
+use crate::PeekClient;
+use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
+
+/// How long a check waits for a replica to answer the hydration query.
+///
+/// A replica that does not answer in time counts as not hydrated for that
+/// check. The check queries replicas one after another, and the next check
+/// starts only once this one is done.
+const HYDRATION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Returns a query for when a replica last finished hydrating an export.
+///
+/// The one row it returns is NULL if some export, other than a transient one
+/// or one in `ignored`, is not hydrated on some worker. It returns no row if
+/// the replica has reported nothing yet.
+fn hydration_query(ignored: &BTreeSet<GlobalId>) -> String {
+    let mut query = "SELECT hydrated_at \
+        FROM mz_introspection.mz_compute_hydration_times_per_worker \
+        WHERE export_id NOT LIKE 't%'"
+        .to_string();
+    if !ignored.is_empty() {
+        let ids = ignored.iter().map(|id| format!("'{id}'")).join(", ");
+        write!(query, " AND export_id NOT IN ({ids})").expect("writing to a string");
+    }
+    query.push_str(" ORDER BY hydrated_at DESC NULLS FIRST LIMIT 1");
+    query
+}
 
 /// Context needed to check whether clusters/collections are caught up.
 #[derive(Debug)]
@@ -63,19 +108,55 @@ pub struct CaughtUpCheckContext {
     /// When a caught up check is performed as part of a 0dt upgrade, it makes sense to exclude
     /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
     pub exclude_collections: BTreeSet<GlobalId>,
-    /// Per-cluster state for the stability gate, retained across checks.
-    ///
-    /// Only genuinely caught-up clusters have an entry. Entries are dropped as
-    /// soon as a cluster stops being caught-up, so the streak restarts from
-    /// scratch when it becomes caught-up again.
-    pub cluster_stability: BTreeMap<ClusterId, ClusterStabilityState>,
+}
+
+/// A request from the caught-up check task for the coordinator's view of the
+/// clusters, answered by [`Coordinator::handle_caught_up_check_request`].
+#[derive(Debug)]
+pub struct CaughtUpCheckRequest {
+    exclude_collections: Arc<BTreeSet<GlobalId>>,
+    tx: oneshot::Sender<CaughtUpSnapshot>,
+}
+
+/// The coordinator's view of the clusters at one check.
+#[derive(Debug)]
+pub struct CaughtUpSnapshot {
+    now: EpochMillis,
+    /// Whether every cluster is caught up or ignored.
+    all_caught_up: bool,
+    stability_check_enabled: bool,
+    stability_period_ms: u64,
+    /// Every caught-up cluster. Empty when the stability check is disabled.
+    caught_up_clusters: BTreeMap<ClusterId, CaughtUpCluster>,
+}
+
+/// A caught-up cluster, as the stability gate needs to know it.
+#[derive(Debug)]
+struct CaughtUpCluster {
+    /// Compute collections the classification ignored, which therefore need not
+    /// hydrate.
+    ignored_compute_collections: BTreeSet<GlobalId>,
+    replicas: Vec<ReplicaTarget>,
+}
+
+/// A replica of a caught-up cluster, as the stability gate needs to know it.
+#[derive(Debug)]
+struct ReplicaTarget {
+    replica_id: ReplicaId,
+    online: bool,
+    /// Whether the replica maintains introspection logs it can be asked about.
+    logging: bool,
 }
 
 /// How a cluster relates to the 0dt caught-up check on a given tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ClusterCaughtUpStatus {
     /// Genuinely hydrated and within lag. Subject to the stability gate.
-    CaughtUp,
+    CaughtUp {
+        /// Compute collections the classification ignored, see
+        /// [`CaughtUpCluster::ignored_compute_collections`].
+        ignored_compute_collections: BTreeSet<GlobalId>,
+    },
     /// Excluded by the existing checks (no replicas, or hopelessly behind with
     /// only crash/OOM-looping replicas). Does not block readiness and is not
     /// health-gated, so we keep ignoring clusters that are already unhealthy in
@@ -85,180 +166,239 @@ enum ClusterCaughtUpStatus {
     NotCaughtUp,
 }
 
-/// Per-cluster state for the stability gate, retained across caught-up checks.
-///
-/// The gate requires a cluster to stay caught-up and fully healthy for a
-/// configurable period before we report it ready. A point-in-time check isn't
-/// enough: a crash-looping replica can momentarily look hydrated and healthy, so
-/// we'd cut over right into a crash. We therefore track health over time here.
-#[derive(Debug, Default, Clone)]
-pub struct ClusterStabilityState {
-    /// Wall-clock time (environmentd's `now()`) at which the current
-    /// uninterrupted caught-up-and-healthy streak began. `None` while the
-    /// cluster isn't currently in such a streak.
-    ///
-    /// We anchor the window with environmentd's clock so the configured period
-    /// means real wall-clock seconds, independent of orchestrator event times.
-    stable_since: Option<EpochMillis>,
-    /// Max replica-process status-change time observed on the previous tick.
-    ///
-    /// Used to detect status transitions that happened and resolved between two
-    /// ticks (a fast flap we'd otherwise miss by only sampling the current
-    /// status). This is an orchestrator-supplied timestamp (`process.time`), not
-    /// a locally measured one, which is why it's a `DateTime` and not an
-    /// `Instant`. We only ever compare these orchestrator times against each
-    /// other, so orchestrator/environmentd clock skew doesn't matter.
-    last_status_change: Option<DateTime<Utc>>,
-    /// Restart count per replica process observed on the previous tick.
-    ///
-    /// Any difference from this tick resets the streak: an increased count means
-    /// a restart, a decreased one means the process was recreated, and an added
-    /// or removed key means replica/process churn. Restart counts survive gaps
-    /// in the orchestrator watch, so they catch restarts the status stream can
-    /// drop. We track them per process rather than as a cluster-wide sum so that
-    /// offsetting changes across processes can't cancel out and hide a restart.
-    last_restart_counts: Option<BTreeMap<(ReplicaId, ProcessId), u64>>,
-}
-
-/// A point-in-time view of a cluster's replica health, derived from the
-/// in-memory mirror of orchestrator-reported replica statuses.
-#[derive(Debug, Clone)]
-struct ClusterHealthSnapshot {
-    /// True iff the cluster has replicas and every process of every replica is
-    /// `Online`. We deliberately require all replicas to be healthy, so we only
-    /// cut over when the new environment is fully healthy.
-    all_healthy: bool,
-    /// Max status-change time across all of the cluster's replica processes.
-    max_status_change: Option<DateTime<Utc>>,
-    /// Restart count per replica process.
-    ///
-    /// Kept per process rather than summed: restart counts are not monotonic (a
-    /// recreated process resets to zero), so a cluster-wide sum could cancel
-    /// offsetting changes across processes and hide a restart. Comparing the
-    /// whole map between ticks also catches replica/process churn.
-    restart_counts: BTreeMap<(ReplicaId, ProcessId), u64>,
+/// What the stability gate knows about one replica on a given tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplicaHealth {
+    /// The replica is not currently `Online`.
+    NotOnline,
+    /// The replica is `Online`, but has not hydrated everything it hosts, or
+    /// did not answer the hydration query.
+    NotHydrated,
+    /// The replica has been healthy since this wall-clock time.
+    HealthySince(EpochMillis),
+    /// The replica is `Online` and cannot report hydration times, so there is
+    /// nothing to wait on.
+    Exempt,
 }
 
 /// Why a caught-up cluster is being held back by the stability gate on a given
-/// tick.
-///
-/// Only ever set when the cluster is not yet ready, so there is no "stable"
-/// variant. Recorded so we can log the cause.
+/// tick. Recorded so we can log the cause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StabilityBlocker {
     /// Not all replicas are currently `Online`.
-    NotHealthy,
-    /// A status change happened and resolved between two ticks.
-    StatusFlapped,
-    /// A replica process restarted between two ticks.
-    Restarted,
-    /// Currently caught-up and healthy, but the streak hasn't reached the
-    /// required period yet.
+    NotOnline,
+    /// Some replica has not hydrated everything it hosts.
+    NotHydrated,
+    /// Every replica is healthy, but not yet for the required period.
     WithinPeriod,
 }
 
-/// Outcome of folding one health snapshot into a [`ClusterStabilityState`].
+/// Outcome of folding a cluster's replica health.
 #[derive(Debug, Clone, Copy)]
 struct StabilityObservation {
-    /// Whether the cluster has now been continuously caught-up and healthy for
-    /// at least the required period.
-    ready: bool,
-    /// How long the current uninterrupted streak has lasted, in milliseconds.
-    /// `None` when the cluster is not currently in a streak (this tick reset it).
+    /// How long the cluster has been stable, in milliseconds. `None` when some
+    /// replica has no evidence of health.
     stable_for_ms: Option<u64>,
-    /// Why the cluster is being held back, for logging. `None` once it's ready.
+    /// Why the cluster is held back. `None` once it is ready.
     blocked_by: Option<StabilityBlocker>,
 }
 
-impl ClusterStabilityState {
-    /// Folds in the latest health snapshot and returns an observation: whether
-    /// the cluster has now been continuously caught-up and healthy for at least
-    /// `period_ms`, how long the current streak has lasted, and (when not ready)
-    /// what is holding it back.
-    ///
-    /// A cluster is "good" on a tick only if all its replicas are currently
-    /// healthy and nothing changed since the previous tick (no status flap, no
-    /// restart). Any disruption resets the streak, so a crash-looping replica can
-    /// never accumulate the required stable time.
-    fn observe(
-        &mut self,
-        snapshot: &ClusterHealthSnapshot,
-        now: EpochMillis,
-        period_ms: u64,
-    ) -> StabilityObservation {
-        // NOTE: We don't assume orchestrator status events arrive in order or
-        // that every process of a cluster reports within the same tick. The
-        // snapshot reflects whatever the in-memory mirror holds right now, and
-        // the three checks below are deliberately redundant so no single one has
-        // to be reliable on its own:
-        //
-        //   - `all_healthy` is a point-in-time check, independent of ordering.
-        //   - a change in the per-process `restart_counts` is the durable signal:
-        //     k8s reports restart counts and they survive gaps in the orchestrator
-        //     watch, so they catch restarts the status stream drops. We compare
-        //     the whole map, never a cluster-wide sum: restart counts are not
-        //     monotonic (a recreated process resets to zero), so a sum could
-        //     cancel offsetting changes across processes and hide a restart.
-        //   - `max_status_change` advancing is a best-effort flap detector. A
-        //     cluster-wide max is enough here, unlike the restart counts, because
-        //     any status change stamps `process.time` at ~now, so a flap pushes
-        //     the max past the previous tick's value. It can still miss a flap if
-        //     an out-of-order event reports an older time, which is why the
-        //     restart counts are the belt-and-suspenders.
-        //
-        // We only compare the orchestrator-supplied times against each other, so
-        // clock skew between the orchestrator and environmentd doesn't matter.
-        let status_flapped = match (self.last_status_change, snapshot.max_status_change) {
-            (Some(prev), Some(cur)) => cur > prev,
-            _ => false,
-        };
-        let restarted = self
-            .last_restart_counts
-            .as_ref()
-            .is_some_and(|prev| prev != &snapshot.restart_counts);
-
-        let good = snapshot.all_healthy && !status_flapped && !restarted;
-
-        self.stable_since = if good {
-            self.stable_since.or(Some(now))
-        } else {
-            None
-        };
-        self.last_status_change = snapshot.max_status_change;
-        self.last_restart_counts = Some(snapshot.restart_counts.clone());
-
-        let stable_for_ms = self.stable_since.map(|since| now.saturating_sub(since));
-        let ready = stable_for_ms.is_some_and(|elapsed| elapsed >= period_ms);
-
-        let blocked_by = if ready {
-            None
-        } else if !snapshot.all_healthy {
-            Some(StabilityBlocker::NotHealthy)
-        } else if status_flapped {
-            Some(StabilityBlocker::StatusFlapped)
-        } else if restarted {
-            Some(StabilityBlocker::Restarted)
-        } else {
-            Some(StabilityBlocker::WithinPeriod)
-        };
-
-        StabilityObservation {
-            ready,
-            stable_for_ms,
-            blocked_by,
+/// Folds the health of a cluster's replicas into the gate's verdict.
+///
+/// A cluster is stable since the latest of its replicas' healthy-since times.
+/// These can come from replica clocks, which may run ahead of `now`, so they
+/// are clamped to `now`. A replica clock running behind shortens the period by
+/// its skew.
+fn observe_stability(
+    replicas: &[ReplicaHealth],
+    now: EpochMillis,
+    period_ms: u64,
+) -> StabilityObservation {
+    let blocked = |blocker| StabilityObservation {
+        stable_for_ms: None,
+        blocked_by: Some(blocker),
+    };
+    if replicas.is_empty() || replicas.contains(&ReplicaHealth::NotOnline) {
+        return blocked(StabilityBlocker::NotOnline);
+    }
+    let mut stable_since = EpochMillis::MIN;
+    for health in replicas {
+        match health {
+            ReplicaHealth::HealthySince(since) => stable_since = stable_since.max(*since),
+            ReplicaHealth::Exempt => {}
+            ReplicaHealth::NotOnline | ReplicaHealth::NotHydrated => {
+                return blocked(StabilityBlocker::NotHydrated);
+            }
         }
+    }
+    let stable_for_ms = now.saturating_sub(stable_since.min(now));
+    StabilityObservation {
+        stable_for_ms: Some(stable_for_ms),
+        blocked_by: (stable_for_ms < period_ms).then_some(StabilityBlocker::WithinPeriod),
+    }
+}
+
+/// The part of the caught-up check that runs in its own task: it asks replicas
+/// for their hydration times and applies the stability gate.
+struct StabilityGate {
+    client: PeekClient,
+}
+
+impl StabilityGate {
+    /// Returns whether `snapshot` shows every cluster ready for promotion.
+    async fn ready(&mut self, snapshot: CaughtUpSnapshot) -> bool {
+        let CaughtUpSnapshot {
+            now,
+            all_caught_up,
+            stability_check_enabled,
+            stability_period_ms,
+            caught_up_clusters,
+        } = snapshot;
+        // Break-glass: when disabled, a caught-up cluster is immediately
+        // ready, with no replica-health requirement. It is a config-level,
+        // fleet-wide switch. Operators can force a single cutover via
+        // skip-catchup/promote, but this flag changes auto-cutover across all
+        // environments without per-deploy manual intervention or a code
+        // release, mirroring `enable_0dt_caught_up_replica_status_check`.
+        //
+        // While some cluster is not caught up, readiness is blocked anyway, so
+        // no replica needs to be asked.
+        if !all_caught_up || !stability_check_enabled {
+            tracing::info!(all_ready = %all_caught_up, "checked caught-up status of clusters");
+            return all_caught_up;
+        }
+
+        let mut all_ready = true;
+        for (cluster_id, cluster) in caught_up_clusters {
+            let mut health = BTreeMap::new();
+            for replica in cluster.replicas {
+                let replica_health = match replica {
+                    ReplicaTarget { online: false, .. } => ReplicaHealth::NotOnline,
+                    ReplicaTarget { logging: false, .. } => ReplicaHealth::Exempt,
+                    ReplicaTarget { replica_id, .. } => {
+                        self.health(cluster_id, replica_id, &cluster.ignored_compute_collections)
+                            .await
+                    }
+                };
+                health.insert(replica.replica_id, replica_health);
+            }
+
+            let replica_health = health.values().copied().collect_vec();
+            let observation = observe_stability(&replica_health, now, stability_period_ms);
+            if let Some(reason) = observation.blocked_by {
+                all_ready = false;
+                tracing::info!(
+                    %cluster_id,
+                    ?reason,
+                    replicas = ?health,
+                    stable_for_ms = ?observation.stable_for_ms,
+                    required_period_ms = stability_period_ms,
+                    "cluster is caught up but not yet stable for the required period"
+                );
+            }
+        }
+
+        tracing::info!(%all_ready, "checked caught-up status of clusters");
+        all_ready
+    }
+
+    /// Asks an `Online` replica with logging when it last finished hydrating
+    /// an export.
+    async fn health(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> ReplicaHealth {
+        let answer = self
+            .client
+            .background_peek(
+                &hydration_query(ignored),
+                cluster_id,
+                replica_id,
+                HYDRATION_QUERY_TIMEOUT,
+            )
+            .await;
+        let rows = match answer {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%cluster_id, %replica_id, %error, "hydration query failed");
+                return ReplicaHealth::NotHydrated;
+            }
+        };
+        let Some(row) = rows.first() else {
+            return ReplicaHealth::NotHydrated;
+        };
+        let hydrated_at = row.unpack_first();
+        if hydrated_at.is_null() {
+            return ReplicaHealth::NotHydrated;
+        }
+        let millis = hydrated_at.unwrap_timestamptz().timestamp_millis();
+        ReplicaHealth::HealthySince(u64::try_from(millis).unwrap_or(0))
     }
 }
 
 impl Coordinator {
-    /// Checks that all clusters/collections are caught up. If so, this will
-    /// trigger `self.caught_up_check.trigger`.
+    /// Spawns the task that checks, on an interval, whether all
+    /// clusters/collections are caught up, and fires the trigger of
+    /// `self.caught_up_check` once they are.
     ///
-    /// This method is a no-op when the trigger has already been fired.
-    pub async fn maybe_check_caught_up(&mut self) {
-        if self.caught_up_check.is_none() {
+    /// A no-op when there is no caught-up check, i.e. outside read-only mode.
+    pub(crate) fn spawn_caught_up_check_task(&mut self) {
+        let Some(CaughtUpCheckContext {
+            trigger,
+            exclude_collections,
+        }) = self.caught_up_check.take()
+        else {
             return;
-        }
+        };
+        let exclude_collections = Arc::new(exclude_collections);
+        let period = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL
+            .get(self.catalog().system_config().dyncfgs());
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let mut gate = StabilityGate {
+            client: self.background_peek_client(&self.owned_catalog()),
+        };
+
+        task::spawn(|| "caught_up_check", async move {
+            let mut interval = tokio::time::interval(period);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let (tx, rx) = oneshot::channel();
+                let request = CaughtUpCheckRequest {
+                    exclude_collections: Arc::clone(&exclude_collections),
+                    tx,
+                };
+                // A failed send or a dropped reply means the coordinator is
+                // gone.
+                //
+                // NOTE: Returning drops `trigger`, which fires it, so a
+                // coordinator shutdown reads as caught up.
+                if internal_cmd_tx
+                    .send(Message::CaughtUpCheck(request))
+                    .is_err()
+                {
+                    return;
+                }
+                let Ok(snapshot) = rx.await else {
+                    return;
+                };
+                if gate.ready(snapshot).await {
+                    trigger.fire();
+                    return;
+                }
+            }
+        });
+    }
+
+    /// Answers a [`CaughtUpCheckRequest`] with the classification of every
+    /// cluster and the replicas the stability gate has to hear from.
+    pub(crate) async fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
+        let CaughtUpCheckRequest {
+            exclude_collections,
+            tx,
+        } = request;
 
         let replica_frontier_item_id = self
             .catalog()
@@ -283,7 +423,6 @@ impl Coordinator {
             .snapshot_latest(replica_frontier_gid)
             .await
             .expect("can't read mz_cluster_replica_frontiers");
-
         let live_frontiers = live_frontiers
             .into_iter()
             .map(|row| {
@@ -369,16 +508,6 @@ impl Coordinator {
         // and an operator can still force it via skip-catchup.
         let stability_period_ms = u64::try_from(stability_period.as_millis()).unwrap_or(u64::MAX);
 
-        // We clone the exclude set so we don't hold a borrow of `caught_up_check`
-        // across the classification, which lets us update the per-cluster
-        // stability state on it (mutably) afterwards.
-        let exclude_collections = self
-            .caught_up_check
-            .as_ref()
-            .expect("known to exist")
-            .exclude_collections
-            .clone();
-
         let classification = self
             .classify_clusters(
                 allowed_lag.into(),
@@ -390,111 +519,64 @@ impl Coordinator {
             )
             .await;
 
-        // Read the health snapshots for genuinely caught-up clusters now, while we
-        // only hold a shared borrow of `self`. We update the stability state in a
-        // separate, mutable pass below.
-        let health: BTreeMap<ClusterId, ClusterHealthSnapshot> = classification
-            .iter()
-            .filter(|(_, status)| **status == ClusterCaughtUpStatus::CaughtUp)
-            .map(|(&cluster_id, _)| (cluster_id, self.cluster_health(cluster_id)))
-            .collect();
-
-        let ctx = self.caught_up_check.as_mut().expect("known to exist");
-
-        // Drop stability state for clusters that are no longer genuinely caught
-        // up, so the streak restarts from scratch when they become caught-up
-        // again.
-        ctx.cluster_stability.retain(|cluster_id, _| {
-            classification.get(cluster_id) == Some(&ClusterCaughtUpStatus::CaughtUp)
-        });
-
-        let mut all_ready = true;
-        for (&cluster_id, status) in &classification {
-            match status {
-                ClusterCaughtUpStatus::Ignored => {}
-                ClusterCaughtUpStatus::NotCaughtUp => {
-                    all_ready = false;
-                }
-                ClusterCaughtUpStatus::CaughtUp => {
-                    // Break-glass: when disabled, a caught-up cluster is
-                    // immediately ready, with no replica-health requirement,
-                    // i.e. the behavior from before this gate existed. We keep it
-                    // as a config-level, fleet-wide revert. Operators can already
-                    // force a single cutover via skip-catchup/promote, but this
-                    // flag restores prior auto-cutover behavior across all
-                    // environments without per-deploy manual intervention or a
-                    // code release, mirroring
-                    // `enable_0dt_caught_up_replica_status_check`.
-                    if !stability_check_enabled {
-                        continue;
-                    }
-                    let snapshot = health.get(&cluster_id).expect("computed above");
-                    let state = ctx.cluster_stability.entry(cluster_id).or_default();
-                    let observation = state.observe(snapshot, now, stability_period_ms);
-                    if !observation.ready {
-                        all_ready = false;
-                        tracing::info!(
-                            %cluster_id,
-                            reason = ?observation.blocked_by,
-                            all_healthy = snapshot.all_healthy,
-                            stable_for_ms = ?observation.stable_for_ms,
-                            required_period_ms = stability_period_ms,
-                            max_status_change = ?snapshot.max_status_change,
-                            // Summed only for a readable log line. The gate
-                            // compares the per-process map, not this total.
-                            restart_total = snapshot.restart_counts.values().sum::<u64>(),
-                            "cluster is caught up but not yet stable for the required period"
-                        );
-                    }
-                }
-            }
-        }
-
-        tracing::info!(%all_ready, "checked caught-up status of clusters");
-
-        if all_ready {
-            let ctx = self.caught_up_check.take().expect("known to exist");
-            ctx.trigger.fire();
-        }
-    }
-
-    /// Reads the current health of a cluster's replicas from the in-memory
-    /// mirror of orchestrator-reported statuses.
-    ///
-    /// A cluster with no replica status entries (e.g. a freshly created cluster
-    /// whose statuses haven't been initialized) is reported as not healthy.
-    fn cluster_health(&self, cluster_id: ClusterId) -> ClusterHealthSnapshot {
-        let Some(replicas) = self
-            .cluster_replica_statuses
-            .try_get_cluster_statuses(cluster_id)
-            .filter(|replicas| !replicas.is_empty())
-        else {
-            // A cluster with no replica statuses is treated as not healthy.
-            return ClusterHealthSnapshot {
-                all_healthy: false,
-                max_status_change: None,
-                restart_counts: BTreeMap::new(),
-            };
+        let all_caught_up = classification
+            .values()
+            .all(|status| *status != ClusterCaughtUpStatus::NotCaughtUp);
+        let caught_up_clusters = if stability_check_enabled {
+            classification
+                .into_iter()
+                .filter_map(|(cluster_id, status)| match status {
+                    ClusterCaughtUpStatus::CaughtUp {
+                        ignored_compute_collections,
+                    } => Some((
+                        cluster_id,
+                        CaughtUpCluster {
+                            ignored_compute_collections,
+                            replicas: self.replica_targets(cluster_id),
+                        },
+                    )),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            BTreeMap::new()
         };
 
-        let mut all_healthy = true;
-        let mut max_status_change = None;
-        let mut restart_counts = BTreeMap::new();
-        for (replica_id, processes) in replicas {
-            if ClusterReplicaStatuses::cluster_replica_status(processes) != ClusterStatus::Online {
-                all_healthy = false;
-            }
-            for (process_id, process) in processes {
-                max_status_change = max_status_change.max(Some(process.time));
-                restart_counts.insert((*replica_id, *process_id), process.restart_count);
-            }
-        }
+        // A dropped receiver means the task is gone, which leaves nothing to
+        // answer.
+        let _ = tx.send(CaughtUpSnapshot {
+            now,
+            all_caught_up,
+            stability_check_enabled,
+            stability_period_ms,
+            caught_up_clusters,
+        });
+    }
 
-        ClusterHealthSnapshot {
-            all_healthy,
-            max_status_change,
-            restart_counts,
-        }
+    /// Lists the replicas of a cluster, with their current orchestrator status.
+    fn replica_targets(&self, cluster_id: ClusterId) -> Vec<ReplicaTarget> {
+        let cluster = self.catalog().get_cluster(cluster_id);
+        let has_hydration_log = cluster
+            .log_indexes
+            .contains_key(&LogVariant::Compute(ComputeLog::HydrationTime));
+        cluster
+            .replicas()
+            .map(|replica| {
+                let online = self
+                    .cluster_replica_statuses
+                    .try_get_cluster_replica_statuses(cluster_id, replica.replica_id)
+                    .is_some_and(|processes| {
+                        !processes.is_empty()
+                            && ClusterReplicaStatuses::cluster_replica_status(processes)
+                                == ClusterStatus::Online
+                    });
+                ReplicaTarget {
+                    replica_id: replica.replica_id,
+                    online,
+                    logging: has_hydration_log && replica.config.compute.logging.enabled(),
+                }
+            })
+            .collect()
     }
 
     /// Classifies every cluster for the caught-up check.
@@ -587,6 +669,12 @@ impl Coordinator {
         }
 
         let mut all_caught_up = true;
+        let mut ignored_compute_collections: BTreeSet<_> = self
+            .controller
+            .compute
+            .collection_ids(cluster.id)?
+            .filter(|id| exclude_collections.contains(id))
+            .collect();
 
         let storage_frontiers = self
             .controller
@@ -704,6 +792,9 @@ impl Coordinator {
                     "live write frontier of collection {id} is too far behind 'now'; \
                      ignoring for caught-up checks"
                 );
+                if matches!(collection_type, CollectionType::Compute) {
+                    ignored_compute_collections.insert(id);
+                }
                 continue;
             }
 
@@ -731,6 +822,11 @@ impl Coordinator {
             // We don't expect collections to get hydrated, ingestions to be
             // started, etc. when they are already at the empty write frontier.
             if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
+                if readiness != CollectionReadiness::Ready
+                    && matches!(collection_type, CollectionType::Compute)
+                {
+                    ignored_compute_collections.insert(id);
+                }
                 // This is a bit spammy, but log caught-up collections while we
                 // investigate why environments are cutting over but then a lot
                 // of compute collections are _not_ in fact hydrated on
@@ -762,7 +858,9 @@ impl Coordinator {
         }
 
         Ok(if all_caught_up {
-            ClusterCaughtUpStatus::CaughtUp
+            ClusterCaughtUpStatus::CaughtUp {
+                ignored_compute_collections,
+            }
         } else {
             ClusterCaughtUpStatus::NotCaughtUp
         })
@@ -916,141 +1014,48 @@ impl Coordinator {
 mod tests {
     use super::*;
 
-    /// Builds a health snapshot with all restarts attributed to a single
-    /// replica process. `change_secs` is the max status-change time as a
-    /// unix-second offset, `restarts` that process's restart count.
-    fn snapshot(all_healthy: bool, change_secs: i64, restarts: u64) -> ClusterHealthSnapshot {
-        ClusterHealthSnapshot {
-            all_healthy,
-            max_status_change: DateTime::from_timestamp(change_secs, 0),
-            restart_counts: BTreeMap::from([((ReplicaId::User(1), 0), restarts)]),
+    use ReplicaHealth::{Exempt, HealthySince, NotHydrated, NotOnline};
+
+    #[mz_ore::test]
+    fn stable_since_latest_replica() {
+        let period_ms = 1000;
+        let replicas = [HealthySince(100), HealthySince(500), Exempt];
+        let observation = observe_stability(&replicas, 1499, period_ms);
+        assert_eq!(observation.stable_for_ms, Some(999));
+        assert_eq!(observation.blocked_by, Some(StabilityBlocker::WithinPeriod));
+        assert_eq!(
+            observe_stability(&replicas, 1500, period_ms).blocked_by,
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn every_replica_needs_evidence() {
+        // `NotOnline` wins, because it is the more fundamental problem.
+        for (replicas, blocker) in [
+            (vec![], StabilityBlocker::NotOnline),
+            (
+                vec![HealthySince(0), NotOnline],
+                StabilityBlocker::NotOnline,
+            ),
+            (vec![NotHydrated, NotOnline], StabilityBlocker::NotOnline),
+            (
+                vec![HealthySince(0), NotHydrated],
+                StabilityBlocker::NotHydrated,
+            ),
+            (vec![Exempt, NotHydrated], StabilityBlocker::NotHydrated),
+        ] {
+            // Even a zero period requires evidence from every replica.
+            let observation = observe_stability(&replicas, 10_000, 0);
+            assert_eq!(observation.blocked_by, Some(blocker), "{replicas:?}");
+            assert_eq!(observation.stable_for_ms, None, "{replicas:?}");
         }
     }
 
     #[mz_ore::test]
-    fn stability_requires_sustained_health() {
-        let period_ms = 1000;
-        let mut state = ClusterStabilityState::default();
-
-        // The first healthy observation starts the streak but isn't yet stable.
-        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms).ready);
-        // Still within the period.
-        assert!(!state.observe(&snapshot(true, 100, 0), 500, period_ms).ready);
-        // Past the period: ready.
-        assert!(
-            state
-                .observe(&snapshot(true, 100, 0), 1000, period_ms)
-                .ready
-        );
-    }
-
-    #[mz_ore::test]
-    fn unhealthy_resets_streak() {
-        let period_ms = 1000;
-        let mut state = ClusterStabilityState::default();
-
-        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms).ready);
-        // A currently-unhealthy observation resets the streak.
-        assert!(
-            !state
-                .observe(&snapshot(false, 100, 0), 500, period_ms)
-                .ready
-        );
-        // Healthy again, but the clock restarts from here.
-        assert!(!state.observe(&snapshot(true, 100, 0), 600, period_ms).ready);
-        assert!(
-            !state
-                .observe(&snapshot(true, 100, 0), 1599, period_ms)
-                .ready
-        );
-        assert!(
-            state
-                .observe(&snapshot(true, 100, 0), 1600, period_ms)
-                .ready
-        );
-    }
-
-    #[mz_ore::test]
-    fn status_flap_between_ticks_resets_streak() {
-        let period_ms = 1000;
-        let mut state = ClusterStabilityState::default();
-
-        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms).ready);
-        // Currently healthy, but the status-change time advanced, so a flap
-        // happened and resolved between ticks: reset.
-        assert!(
-            !state
-                .observe(&snapshot(true, 200, 0), 1000, period_ms)
-                .ready
-        );
-        // A clean streak from here.
-        assert!(
-            !state
-                .observe(&snapshot(true, 200, 0), 1500, period_ms)
-                .ready
-        );
-        assert!(
-            state
-                .observe(&snapshot(true, 200, 0), 2500, period_ms)
-                .ready
-        );
-    }
-
-    #[mz_ore::test]
-    fn restart_between_ticks_resets_streak() {
-        let period_ms = 1000;
-        let mut state = ClusterStabilityState::default();
-
-        assert!(!state.observe(&snapshot(true, 100, 3), 0, period_ms).ready);
-        // Healthy with the same status-change time, but the restart count went
-        // up: a restart happened and recovered between ticks, which the status
-        // alone would miss. Reset.
-        assert!(
-            !state
-                .observe(&snapshot(true, 100, 4), 1000, period_ms)
-                .ready
-        );
-        assert!(
-            !state
-                .observe(&snapshot(true, 100, 4), 1500, period_ms)
-                .ready
-        );
-        assert!(
-            state
-                .observe(&snapshot(true, 100, 4), 2500, period_ms)
-                .ready
-        );
-    }
-
-    #[mz_ore::test]
-    fn offsetting_restart_changes_reset_streak() {
-        // Two processes whose restart counts move in opposite directions by the
-        // same amount. A cluster-wide sum would be unchanged and miss the
-        // restart, but the per-process map differs, so the streak resets.
-        let period_ms = 1000;
-        let mut state = ClusterStabilityState::default();
-
-        let r = ReplicaId::User(1);
-        let snapshot = |a: u64, b: u64| ClusterHealthSnapshot {
-            all_healthy: true,
-            max_status_change: DateTime::from_timestamp(100, 0),
-            restart_counts: BTreeMap::from([((r, 0u64), a), ((r, 1u64), b)]),
-        };
-
-        // Start a streak with per-process counts summing to 2.
-        assert!(!state.observe(&snapshot(1, 1), 0, period_ms).ready);
-        // One process restarts (+1) while the other is recreated (-1). The sum
-        // is still 2, but the per-process map changed: reset.
-        assert!(!state.observe(&snapshot(2, 0), 1000, period_ms).ready);
-        // A clean streak from here.
-        assert!(!state.observe(&snapshot(2, 0), 1500, period_ms).ready);
-        assert!(state.observe(&snapshot(2, 0), 2500, period_ms).ready);
-    }
-
-    #[mz_ore::test]
-    fn zero_period_ready_on_first_healthy_tick() {
-        let mut state = ClusterStabilityState::default();
-        // With a zero period a single clean, healthy observation is enough.
-        assert!(state.observe(&snapshot(true, 100, 0), 0, 0).ready);
+    fn replica_clock_ahead_is_clamped() {
+        let observation = observe_stability(&[HealthySince(2000)], 1000, 0);
+        assert_eq!(observation.stable_for_ms, Some(0));
+        assert_eq!(observation.blocked_by, None);
     }
 }
