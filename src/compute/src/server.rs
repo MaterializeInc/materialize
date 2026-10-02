@@ -50,6 +50,7 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::process_globals::ProcessGlobals;
 use crate::sharing::ArrangementSharingRegistry;
 
 /// Caller-provided configuration for compute.
@@ -101,16 +102,15 @@ impl ComputeRuntimeRole {
         }
     }
 
-    /// Whether this role runs the non-idempotent, process-global initializers.
+    /// Whether this role applies the process-global settings or inherits them.
     ///
-    /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
-    /// inherits the globals maintenance installs, so re-running them would either double-apply a
-    /// non-idempotent effect or race maintenance.
-    pub fn owns_process_globals(self) -> bool {
-        matches!(
-            self,
-            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
-        )
+    /// An interactive runtime shares the process with maintenance and inherits the globals
+    /// maintenance applies.
+    pub(crate) fn process_globals(self) -> ProcessGlobals {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => ProcessGlobals::Apply,
+            ComputeRuntimeRole::Interactive => ProcessGlobals::Inherit,
+        }
     }
 }
 

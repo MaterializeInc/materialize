@@ -50,7 +50,7 @@ where
     ///
     /// The handle registers a logical hold at the current published `since`, so the arrangement
     /// will not compact past it until the handle (and all its clones) drop. Test-only: production
-    /// reads import the point or capture a [`Self::snapshot`].
+    /// reads hold the point through [`Self::peer_handle`].
     #[cfg(test)]
     pub(crate) fn handle(&self) -> SharedReader<Tr::Batch> {
         self.shared.reader()

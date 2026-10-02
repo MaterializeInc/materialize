@@ -20,10 +20,6 @@
 //! sound only because both runtimes run the same number of workers per process at the same process
 //! ordinal, so both sides shard keys by the same `key.hashed() % peers`.
 
-// TODO(CPU-215): drop once `crate::compute_state` serves peeks through this registry. Until then
-// some of its methods are called only from tests, so the expectation holds outside tests alone.
-#![cfg_attr(not(test), expect(unused))]
-
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::Thread;
