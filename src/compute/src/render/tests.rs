@@ -16,10 +16,10 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
+use timely::PartialOrder;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::{Capture, Probe};
 use timely::dataflow::{ProbeHandle, Scope};
-use timely::PartialOrder;
 use timely::progress::Antichain;
 
 use crate::arrangement::manager::{ErrsTrace, OksTrace};
@@ -243,7 +243,12 @@ fn publish_index_with_writer(
     errs_input.flush();
 
     // The slot is returned with the traces, because the publication lasts only while it is held.
-    (oks_input, errs_input, oks_writer, (errs.trace.clone(), slot))
+    (
+        oks_input,
+        errs_input,
+        oks_writer,
+        (errs.trace.clone(), slot),
+    )
 }
 
 /// Feeds `oks_input` a filler update at `at`, advances it to `next`, and steps `worker` a few
@@ -319,13 +324,10 @@ fn interactive_import_hold_releases_on_drop() {
             (oks_arranged.trace, errs_arranged.trace)
         });
 
-        // The controller requests compaction well past `as_of`, and both runtimes apply it: the
-        // writer handle advances, which the trace mirrors into the published `since` at once, and
-        // `note_standing_hold` advances the importing runtime's own position, exactly as
-        // `handle_allow_compaction` does on each side. The `since` stays pinned to `as_of` here by
-        // the live reader hold.
+        // The controller requests compaction well past `as_of`: the writer handle advances, which
+        // the trace mirrors into the published `since` at once. The `since` stays pinned to `as_of`
+        // here by the live reader hold.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(
@@ -579,10 +581,9 @@ fn interactive_import_hold_downgrades_while_live() {
             (oks_arranged.trace, errs_arranged.trace)
         });
 
-        // The controller allows compaction well past `as_of`, both runtimes apply it, and the
-        // writer applies it to the trace.
+        // The controller allows compaction well past `as_of`, and the writer applies it to the
+        // trace.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(
@@ -656,7 +657,6 @@ fn a_peer_handle_below_the_since_joins_up_to_it() {
             });
 
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(
@@ -676,22 +676,15 @@ fn a_peer_handle_below_the_since_joins_up_to_it() {
     });
 }
 
-/// The standing hold keeps `as_of` importable while the importing runtime is behind.
+/// A peer bundle keeps `as_of` importable while the importing runtime is behind.
 ///
-/// This is [`import_asserts_since_at_most_as_of`] with one difference: the importing runtime has
-/// not applied the controller's compaction. That is the state the two-runtime split makes
-/// reachable, and it is not a protocol error. The controller can create a dataflow at `as_of`,
-/// drop it (a cancelled peek releases its read hold), and allow compaction, all before the runtime
-/// rendering that dataflow has applied the create. From the controller's side nothing is wrong.
-/// The create is still queued, so no reader hold exists to pin the arrangement, and the writer
-/// floor alone would let the publisher compact straight past the `as_of` the queued create is
-/// about to read at.
-///
-/// Asserting the import *succeeds* is the point. The sibling test asserts the panic that a genuine
-/// protocol error produces, so between them a mechanism that pinned nothing, or one that pinned
-/// everything, fails one of the two.
+/// That runtime records the index as a peer from the index's own create, holding at its `as_of`.
+/// The controller can then create a dataflow over the index, drop it (a cancelled peek releases its
+/// read hold), and allow compaction, all before the importing runtime has applied the create. No
+/// reader hold pins the arrangement then, and the writer alone would let the publisher compact
+/// straight past the `as_of` the queued create is about to read at.
 #[mz_ore::test]
-fn standing_hold_pins_until_the_importing_runtime_applies() {
+fn a_peer_bundle_pins_until_the_importing_runtime_applies() {
     let id = GlobalId::User(1);
     let rows = test_rows();
     let as_of_time = Timestamp::from(1_u64);
@@ -703,10 +696,11 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
             .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
+        let mut peer = registry.peer_bundle(id, &as_of);
 
         // The maintenance runtime applies `AllowCompaction(10)` in full: the writer floor moves and
-        // its own trace handle compacts. The interactive runtime has not applied the broadcast copy
-        // of that command, so its standing hold does not move.
+        // its own trace handle compacts. The importing runtime has not applied its copy of that
+        // command, so its peer hold does not move.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
@@ -731,13 +725,13 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
             let (probe_oks, _probe_errs) = registry.handles(&id).expect("still published");
             assert!(
                 probe_oks.snapshot_at(&as_of_time).is_some(),
-                "the standing hold must keep `as_of` readable while the importing runtime is behind"
+                "the peer hold must keep `as_of` readable while the importing runtime is behind"
             );
         }
 
-        // Once that runtime applies the compaction, the bound lifts. The live import's own hold
-        // takes over from here, which is what the sibling hold tests cover.
-        registry.note_standing_hold(id, &target);
+        // Once that runtime applies the compaction, its peer hold moves and the bound lifts.
+        peer.oks_mut().set_logical_compaction(target.borrow());
+        peer.errs_mut().set_logical_compaction(target.borrow());
         drop((oks_trace, errs_trace));
         tick(
             worker,
@@ -748,8 +742,9 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
         let (released_oks, _released_errs) = registry.handles(&id).expect("still published");
         assert!(
             released_oks.snapshot_at(&as_of_time).is_none(),
-            "with the standing hold advanced and no reader left, the arrangement must compact"
+            "with the peer hold advanced and no reader left, the arrangement must compact"
         );
+        drop(peer);
         drop_dataflows(worker);
     });
 }
