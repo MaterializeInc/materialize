@@ -73,7 +73,7 @@ fn maintenance_publishes_logging_index_others_do_not() {
         });
 
         assert_eq!(
-            registry.handles(&id, 0).is_some(),
+            registry.handles(&id).is_some(),
             expect_published,
             "role {role:?} publication mismatch"
         );
