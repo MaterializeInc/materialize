@@ -21,7 +21,7 @@
 
 // TODO(CPU-215): drop once `crate::render` and `crate::compute_state` call this registry. Only the
 // registry's constructor is reachable yet, so the rest reads as dead.
-#![allow(dead_code)]
+#![expect(unused)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
