@@ -45,13 +45,6 @@
   {{- /* build.render=never leaves a page with no permalink to link to. */ -}}
   {{- if not .RelPermalink -}}{{- $keep = false -}}{{- end -}}
   {{- if .Params.headless -}}{{- $keep = false -}}{{- end -}}
-  {{- /*
-    Per-version release notes, filtered by path rather than permalink: the
-    older ones predate the render:never convention and still render, so the
-    permalink check above catches only part of the set. The /releases/ landing
-    page stays.
-  */ -}}
-  {{- if strings.HasPrefix .Path "/releases/v" -}}{{- $keep = false -}}{{- end -}}
   {{- with .Params.robots -}}
     {{- if in (lower .) "noindex" -}}{{- $keep = false -}}{{- end -}}
   {{- end -}}
@@ -121,7 +114,7 @@
 {{- with site.GetPage "/headless/materialize-intro/intro" -}}
   {{- $intro = trim (replaceRE `\s+` " " .RawContent) " " -}}
 {{- end -}}
-{{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop `markdown-docs/` from the URL and drop the\ntrailing `index.md`. Per-version release notes are not listed individually;\nsee the Releases section." -}}
+{{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop `markdown-docs/` from the URL and drop the\ntrailing `index.md`." -}}
 {{- $sections := slice -}}
 {{- range $groups -}}
   {{- $items := sort (where $eligible "Section" .key) "RelPermalink" -}}
