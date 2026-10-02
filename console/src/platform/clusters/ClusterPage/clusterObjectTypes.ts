@@ -7,16 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import IndexList from "../IndexList";
-import MaterializedViewsList from "../MaterializedViewsList";
-import Sinks from "../Sinks";
-import Sources from "../Sources";
+import IndexList from "~/platform/clusters/IndexList";
+import MaterializedViewsList from "~/platform/clusters/MaterializedViewsList";
+import Sinks from "~/platform/clusters/Sinks";
+import Sources from "~/platform/clusters/Sources";
 
 /** Object types listed on the Objects tab, keyed by their URL segment. */
 export const CLUSTER_OBJECT_TYPES = [
   {
     path: "materialized-views",
-    label: "Materialized views",
+    label: "Materialized Views",
     Component: MaterializedViewsList,
   },
   { path: "indexes", label: "Indexes", Component: IndexList },

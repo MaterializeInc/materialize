@@ -19,14 +19,14 @@ import {
   PageTabStrip,
   Tab,
 } from "~/layouts/BaseLayout";
+import { ClusterDetailBreadcrumbs } from "~/platform/clusters/ClusterDetailBreadcrumbs";
+import ClusterOverview from "~/platform/clusters/ClusterOverview";
+import ClusterReplicas from "~/platform/clusters/ClusterReplicas";
+import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
 import { SentryRoutes } from "~/sentry";
 import { useAllClusters } from "~/store/allClusters";
 import { assert, pluralize } from "~/util";
 
-import { ClusterDetailBreadcrumbs } from "../ClusterDetailBreadcrumbs";
-import ClusterOverview from "../ClusterOverview";
-import ClusterReplicas from "../ClusterReplicas";
-import { ClusterParams } from "../ClusterRoutes";
 import { ClusterObjects } from "./ClusterObjects";
 import { CLUSTER_OBJECT_TYPES } from "./clusterObjectTypes";
 
