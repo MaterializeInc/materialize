@@ -58,7 +58,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
-use mz_service::secrets::SecretsReaderCliArgs;
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
