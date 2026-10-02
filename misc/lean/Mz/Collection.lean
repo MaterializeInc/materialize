@@ -16,7 +16,8 @@ are equivalent when they agree on every multiplicity, regardless of how the
 updates are ordered or split.
 
 `consolidate` merges updates to the same record and drops the ones that cancel.
-It is correct when it preserves every multiplicity and leaves no zero diff.
+It is correct when it preserves every multiplicity, leaves no zero diff, and
+leaves at most one update per record.
 -/
 
 namespace Mz
@@ -137,6 +138,59 @@ theorem noZeros_consolidate (c : Collection α) : NoZeros (consolidate c) := by
   | cons u rest ih =>
     obtain ⟨a, d⟩ := u
     exact noZeros_insert a d _ ih
+
+/-- The records that have an update. -/
+def keys (c : Collection α) : List α :=
+  c.map Prod.fst
+
+theorem mem_keys_insert {a x : α} {d : Int} {c : Collection α}
+    (h : x ∈ keys (insert a d c)) : x = a ∨ x ∈ keys c := by
+  induction c with
+  | nil =>
+    simp only [insert] at h
+    split at h <;> simp_all [keys]
+  | cons u rest ih =>
+    obtain ⟨b, e⟩ := u
+    simp only [insert] at h
+    split at h
+    · split at h <;> simp_all [keys]
+    · simp only [keys, List.map_cons, List.mem_cons] at h ⊢
+      rcases h with h | h
+      · exact Or.inr (Or.inl h)
+      · rcases ih h with h | h
+        · exact Or.inl h
+        · exact Or.inr (Or.inr h)
+
+theorem nodup_insert (a : α) (d : Int) (c : Collection α) (h : (keys c).Nodup) :
+    (keys (insert a d c)).Nodup := by
+  induction c with
+  | nil =>
+    simp only [insert]
+    split <;> simp [keys]
+  | cons u rest ih =>
+    obtain ⟨b, e⟩ := u
+    simp only [keys, List.map_cons, List.nodup_cons] at h
+    obtain ⟨hb, hrest⟩ := h
+    simp only [insert]
+    split
+    · subst_vars
+      split
+      · exact hrest
+      · simp only [keys, List.map_cons, List.nodup_cons]
+        exact ⟨hb, hrest⟩
+    · simp only [keys, List.map_cons, List.nodup_cons]
+      refine ⟨fun hmem => ?_, ih hrest⟩
+      rcases mem_keys_insert hmem with h | h
+      · contradiction
+      · exact hb h
+
+/-- Consolidation leaves at most one update per record. -/
+theorem nodup_consolidate (c : Collection α) : (keys (consolidate c)).Nodup := by
+  induction c with
+  | nil => simp [consolidate, keys]
+  | cons u rest ih =>
+    obtain ⟨a, d⟩ := u
+    exact nodup_insert a d _ ih
 
 example : consolidate ([(1, 2), (2, 1), (1, -2)] : Collection Nat) = [(2, 1)] := by
   decide

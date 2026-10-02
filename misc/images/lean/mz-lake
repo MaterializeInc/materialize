@@ -16,8 +16,11 @@ set -euo pipefail
 
 # Mounting the project over /workspace would hide /workspace/.lake, which
 # holds the dependency closure built into the image. The host's own .lake is
-# skipped for the same reason.
-tar -C /src --exclude=./.lake -cf - . | tar -C /workspace -xf -
+# skipped for the same reason. The entries are copied one by one because
+# copying `.` itself makes a non-root user try to change the mode and mtime
+# of the root-owned /workspace, which fails.
+cd /src
+find . -mindepth 1 -maxdepth 1 ! -name .lake -exec cp -R -t /workspace {} +
 
 cd /workspace
 exec lake "$@"

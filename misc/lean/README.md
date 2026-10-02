@@ -14,6 +14,7 @@ bin/mzcompose --find lean run default
 ```
 
 Arguments replace the default `build` and go to `lake`, for example `bin/mzcompose --find lean run default env lean Mz/Collection.lean`.
+Only `lake build` applies the options in `lakefile.toml`, so `lake env lean` reports a `sorry` as a warning and succeeds.
 Separate arguments that start with `-` from the workflow's own options with `--`.
 
 For editor support, install [elan](https://github.com/leanprover/elan) and open this directory.
@@ -22,7 +23,7 @@ elan picks the Lean version from `lean-toolchain`.
 ## Toolchain and dependencies
 
 The `lean` mzbuild image in `misc/images/lean` installs the toolchain named in `lean-toolchain` and builds the dependencies in `lakefile.toml` and `lake-manifest.json` into the image.
-Only those three files are inputs to the image, so editing a model reuses the published image.
+Those three are the only files from this directory that are inputs to the image, so editing a model reuses the published image.
 To change the Lean version, edit `lean-toolchain`.
 To add a dependency, add a `[[require]]` to `lakefile.toml`, pin it by `rev`, and commit the `lake-manifest.json` that `lake update` writes.
 
