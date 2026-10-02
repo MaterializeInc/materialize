@@ -254,7 +254,16 @@ pub fn build_ingestion_dataflow(
 
             let mut tokens = vec![];
 
-            let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
+            // One feedback edge per export, so the source pipeline can observe each
+            // export's committed upper individually. Concatenating them would only expose
+            // their meet.
+            let mut export_upper_handles = BTreeMap::new();
+            let mut export_upper_streams = BTreeMap::new();
+            for export_id in description.source_exports.keys() {
+                let (handle, stream) = mz_scope.feedback(Default::default());
+                export_upper_handles.insert(*export_id, handle);
+                export_upper_streams.insert(*export_id, stream);
+            }
 
             let connection = description.desc.connection.clone();
             tracing::info!(
@@ -312,7 +321,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -322,7 +331,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -332,7 +341,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -342,7 +351,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -352,14 +361,13 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
             };
             tokens.extend(source_tokens);
 
-            let mut upper_streams = vec![];
             let mut health_streams = Vec::with_capacity(source_health.len() + outputs.len());
             health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
@@ -399,7 +407,10 @@ pub fn build_ingestion_dataflow(
                     description.desc.timestamp_interval,
                     remap_upper.clone(),
                 );
-                upper_streams.push(upper_stream);
+                let feedback_handle = export_upper_handles
+                    .remove(&export_id)
+                    .expect("each output corresponds to a source export");
+                upper_stream.connect_loop(feedback_handle);
                 tokens.extend(sink_tokens);
 
                 let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
@@ -414,9 +425,14 @@ pub fn build_ingestion_dataflow(
                 health_streams.push(sink_health.leave(root_scope));
             }
 
-            mz_scope
-                .concatenate(upper_streams)
-                .connect_loop(feedback_handle);
+            // Assert explicitly for debugging. Timely only builds a feedback operator in
+            // `connect_loop`, so a handle left here would fail dataflow construction with an
+            // opague error.
+            assert!(
+                export_upper_handles.is_empty(),
+                "source rendered no output for exports {:?}",
+                export_upper_handles.keys(),
+            );
 
             let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::healthcheck::health_operator(

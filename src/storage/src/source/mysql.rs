@@ -86,7 +86,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
-use crate::source::types::{FuelSize, SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, ResumeUppers, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -105,7 +105,7 @@ impl SourceRender for MySqlSourceConnection {
         self,
         scope: Scope<'scope, GtidPartition>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
