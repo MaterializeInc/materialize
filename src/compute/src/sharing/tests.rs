@@ -194,6 +194,15 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     // A reader bound the re-export's id first on this worker. Publishing backs its point the same
     // way as a point the publisher creates.
     let _reader_slot = registry.get_or_create(reexport);
+    // A peer's holds keep both points readable after the publishing worker has torn down.
+    let minimum = Antichain::from_elem(Timestamp::MIN);
+    let target_slot = registry.get_or_create(target);
+    let _holds = [&target_slot, &_reader_slot].map(|slot| {
+        (
+            slot.oks.peer_handle(&minimum),
+            slot.errs.peer_handle(&minimum),
+        )
+    });
     let registry_in = registry.clone();
     let (target_token, reexport_token) = timely::execute_directly(move |worker| {
         let (oks, errs, mut oks_input, mut errs_input, target_token) = worker
@@ -260,12 +269,13 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
     let target_hold = registry.get_or_create(target).oks.peer_handle(&at(5));
     let reexport_hold = registry.get_or_create(reexport).oks.peer_handle(&at(10));
+    drop(_holds);
     assert_eq!(registry.published_logical_holds(&target), Some(at(5)));
     assert_eq!(registry.published_logical_holds(&reexport), Some(at(10)));
     drop((target_hold, reexport_hold));
 
     // Dropping the index the re-export re-exports leaves the re-export's point readable.
-    drop(target_token);
+    drop((target_token, target_slot));
     assert!(registry.handles(&target).is_none());
     assert!(registry.handles(&reexport).is_some());
     drop(reexport_token);
