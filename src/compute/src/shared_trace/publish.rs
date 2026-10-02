@@ -56,6 +56,15 @@ where
         self.shared.reader()
     }
 
+    /// The `(applied, requested)` logical compaction frontiers of this point.
+    ///
+    /// `applied` is what the publishing runtime's trace compacted to, `requested` what its
+    /// controller stream asked for. They differ by exactly what a peer's hold, or a live reader, is
+    /// keeping the publisher from shedding.
+    pub(crate) fn logical_frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
+        (self.shared.since(), self.shared.writer_since())
+    }
+
     /// A hold on the published arrangement for a runtime that reads it as a peer: logical only, at
     /// the join of `as_of` and the published `since`. See `Shared::reader_at_least`.
     pub(crate) fn peer_handle(&self, as_of: &Antichain<Tr::Time>) -> SharedReader<Tr::Batch> {

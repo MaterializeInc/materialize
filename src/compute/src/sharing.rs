@@ -184,6 +184,36 @@ impl ArrangementSharingRegistry {
         Some(slot.oks.logical_holds())
     }
 
+    /// How far the readers' holds keep the publishing runtime from compacting, over every
+    /// arrangement published here.
+    ///
+    /// Returns the largest gap in milliseconds between an arrangement's requested and applied
+    /// logical compaction frontiers, and how many arrangements have any gap at all. Every
+    /// published id is a point of its own, so a trace published under several ids, as a
+    /// re-export's is, counts once per id. A point whose requested frontier is empty is counted as
+    /// held but contributes no gap: its collection is being dropped and has no finite frontier
+    /// left to subtract from.
+    pub(crate) fn hold_gaps(&self) -> (u64, usize) {
+        let inner = self.lock();
+        let mut max_gap = 0;
+        let mut held = 0;
+        for slot in inner.map.values().filter_map(Weak::upgrade) {
+            let (applied, requested) = slot.oks.logical_frontiers();
+            match (applied.as_option(), requested.as_option()) {
+                (Some(applied), Some(requested)) => {
+                    let gap = u64::from(*requested).saturating_sub(u64::from(*applied));
+                    if gap > 0 {
+                        held += 1;
+                        max_gap = max_gap.max(gap);
+                    }
+                }
+                (Some(_), None) => held += 1,
+                _ => {}
+            }
+        }
+        (max_gap, held)
+    }
+
     /// Registers `worker` as the interactive peer to wake. Called once at startup, from that
     /// worker's own thread.
     pub(crate) fn register_waker(&self, worker: Thread) {
@@ -220,6 +250,16 @@ pub(crate) enum Publisher {
 }
 
 impl Publisher {
+    /// How far readers hold back what this runtime publishes, see
+    /// [`ArrangementSharingRegistry::hold_gaps`]. A runtime that publishes nothing is held back by
+    /// nothing.
+    pub(crate) fn hold_gaps(&self) -> (u64, usize) {
+        match self {
+            Publisher::None => (0, 0),
+            Publisher::Registry(registry) => registry.hold_gaps(),
+        }
+    }
+
     /// Publishes index `id`'s traces, see [`ArrangementSharingRegistry::publish`]. The publication
     /// lasts as long as the returned token.
     pub(crate) fn publish(

@@ -744,11 +744,11 @@ fn logical_frontiers_report_what_the_holds_withhold() {
             );
         }
 
-        // The importing runtime is four behind the controller's request, so the writer applies
-        // four and reports ten.
+        // The peer is four behind the controller's request, so the writer applies four and
+        // reports ten.
         let held = Antichain::from_elem(Timestamp::from(4_u64));
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_standing_hold(&held);
+        let mut peer = published.peer_handle(&held);
         writer.set_logical_compaction(target.borrow());
         tick(
             worker,
@@ -762,8 +762,8 @@ fn logical_frontiers_report_what_the_holds_withhold() {
             "the applied frontier must report the hold and the requested one the controller"
         );
 
-        // The importing runtime catches up and the gap closes.
-        published.note_standing_hold(&target);
+        // The peer catches up and the gap closes.
+        peer.set_logical_compaction(target.borrow());
         tick(
             worker,
             &mut input,
