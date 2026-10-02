@@ -45,6 +45,14 @@ const TELEPORT_APP_DESCRIPTION: &str = "Environmentd Internal HTTP API";
 const TELEPORT_REWRITE_HEADER_NAME: &str = "X-Materialize-User";
 const TELEPORT_REWRITE_HEADER_VALUE: &str = "mz_support";
 
+/// The settings that the `--teleport-*` flags provide.
+#[derive(Clone)]
+pub struct TeleportConfig {
+    pub endpoint: String,
+    pub stack_type: String,
+    pub cluster_name: String,
+}
+
 #[derive(Serialize)]
 struct RewriteHeader {
     name: String,
@@ -83,25 +91,17 @@ pub(super) fn apply_teleport_registration(
     mz: &Materialize,
     service: &mut Service,
 ) {
-    if config.teleport_endpoint.is_none() {
+    let Some(teleport) = &config.teleport else {
         return;
-    }
-    let stack_type = config
-        .teleport_stack_type
-        .as_ref()
-        .expect("--teleport-stack-type is required when --teleport-endpoint is set");
-    let cluster_name = config
-        .teleport_cluster_name
-        .as_ref()
-        .expect("--teleport-cluster-name is required when --teleport-endpoint is set");
+    };
 
     let labels = service.metadata.labels.get_or_insert_with(BTreeMap::new);
     labels.insert(
         "materialize.cloud/app".to_string(),
         mz.environmentd_app_name(),
     );
-    labels.insert("stack-type".to_string(), stack_type.clone());
-    labels.insert("cluster".to_string(), cluster_name.clone());
+    labels.insert("stack-type".to_string(), teleport.stack_type.clone());
+    labels.insert("cluster".to_string(), teleport.cluster_name.clone());
 
     let rewrite = Rewrite {
         headers: vec![RewriteHeader {
