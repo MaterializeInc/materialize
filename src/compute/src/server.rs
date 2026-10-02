@@ -112,19 +112,6 @@ impl ComputeRuntimeRole {
             ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
         )
     }
-
-    /// Whether this role publishes its rendered indexes into the sharing registry.
-    ///
-    /// `Maintenance` publishes its maintained indexes, which its interactive peer reads exclusively
-    /// from the registry. `Interactive` publishes its transient query outputs, which the result
-    /// peeks over them likewise read from the registry and rely on for seal notifications. `Solo`
-    /// has no registry peer, so it does not publish.
-    pub fn publishes(self) -> bool {
-        matches!(
-            self,
-            ComputeRuntimeRole::Maintenance | ComputeRuntimeRole::Interactive
-        )
-    }
 }
 
 /// Configures the server with compute-specific metrics.

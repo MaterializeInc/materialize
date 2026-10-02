@@ -14,30 +14,25 @@ use mz_timely_util::columnation::ColumnationChunker;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
-use crate::server::ComputeRuntimeRole;
-use crate::sharing::ArrangementSharingRegistry;
+use crate::sharing::{ArrangementSharingRegistry, Publisher};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowSpine};
 
 use super::publish_logging_index;
 
-/// A logging/introspection index is a `RowRow` `oks` arrangement plus an (empty) `errs`
-/// arrangement, published into the sharing registry only by the maintenance runtime. Interactive
-/// and Solo must not publish: interactive reads maintenance's slot, and Solo has no registry peer.
-///
-/// Builds real `RowRow`/`Err` arrangements (the exact types the logging path produces) and drives
-/// [`publish_logging_index`] for each role, asserting only maintenance ends up published.
+/// A runtime publishes its logging indexes only through a publishing [`Publisher`], and the
+/// publication lasts as long as the token it returns.
 #[mz_ore::test]
-fn maintenance_publishes_logging_index_others_do_not() {
-    for (role, expect_published) in [
-        (ComputeRuntimeRole::Maintenance, true),
-        (ComputeRuntimeRole::Interactive, false),
-        (ComputeRuntimeRole::Solo, false),
-    ] {
+fn logging_indexes_publish_only_through_a_publishing_publisher() {
+    for publishes in [true, false] {
         let id = GlobalId::System(1);
         let registry = ArrangementSharingRegistry::new();
-        let registry_in = registry.clone();
+        let publisher = if publishes {
+            Publisher::Registry(registry.clone())
+        } else {
+            Publisher::None
+        };
 
-        timely::execute_directly(move |worker| {
+        let token = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
                 let oks = oks_collection.mz_arrange::<
@@ -56,26 +51,20 @@ fn maintenance_publishes_logging_index_others_do_not() {
                     ErrSpine<_, _>,
                 >("test log errs");
 
-                publish_logging_index(
-                    role,
-                    &registry_in,
-                    &scope.clone(),
-                    id,
-                    &oks.trace,
-                    &errs.trace,
-                );
+                let token =
+                    publish_logging_index(&publisher, &scope.clone(), id, &oks.trace, &errs.trace);
 
                 oks_input.advance_to(Timestamp::from(1_u64));
                 oks_input.flush();
                 errs_input.advance_to(Timestamp::from(1_u64));
                 errs_input.flush();
-            });
+                token
+            })
         });
 
-        assert_eq!(
-            registry.handles(&id).is_some(),
-            expect_published,
-            "role {role:?} publication mismatch"
-        );
+        assert_eq!(token.is_some(), publishes);
+        assert_eq!(registry.handles(&id).is_some(), publishes);
+        drop(token);
+        assert!(registry.handles(&id).is_none());
     }
 }
