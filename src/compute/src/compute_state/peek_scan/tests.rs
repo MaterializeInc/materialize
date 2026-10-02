@@ -20,8 +20,7 @@ use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
 use timely::container::PushInto;
 use timely::progress::Antichain;
 
-use crate::arrangement::manager::{PaddedTrace, TraceBundle};
-use crate::compute_state::error_scan::ErrsHandle;
+use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::error_scan::tests::PEEK_TIMESTAMP;
 use crate::compute_state::index_peek_tests::{
     answering_errors, cancelling_errors, index_peek, ok_row as row, trace_bundle, trivial_finishing,
@@ -116,7 +115,7 @@ fn ok_iterator_with_copies(keys: &[Row], copies: Diff) -> PeekResultIterator<Tes
 
 /// A walk over an error trace holding `keys` errors that each cancel to zero at
 /// [`PEEK_TIMESTAMP`], so the walk examines every one of them and finds no error.
-fn clean_error_scan(keys: usize) -> ErrorScan<ErrsHandle> {
+fn clean_error_scan(keys: usize) -> ErrorScan {
     crate::compute_state::error_scan::tests::error_scan(cancelling_errors(keys), None)
 }
 
@@ -125,7 +124,7 @@ fn clean_error_scan(keys: usize) -> ErrorScan<ErrsHandle> {
 /// Mirrors what [`PeekScan::new`] builds. Tests use this rather than `new` to hold a second
 /// cursor layout under test, and to start from an [`ErrorPhase`] that a fresh scan cannot be
 /// in.
-fn scan(error_phase: ErrorPhase<ErrsHandle>, keys: &[Row]) -> PeekScan<TestTrace, ErrsHandle> {
+fn scan(error_phase: ErrorPhase, keys: &[Row]) -> PeekScan<TestTrace> {
     PeekScan {
         peek_timestamp: PEEK_TIMESTAMP,
         target_id: GlobalId::User(1),
@@ -613,7 +612,7 @@ fn open(
     max_result_size: u64,
     peek_stash_eligible: bool,
     peek_stash_threshold_bytes: usize,
-) -> PeekScan<OksHandle, ErrsHandle> {
+) -> PeekScan<OksHandle> {
     let (oks, errs) = bundle.oks_errs_mut();
     PeekScan::new(
         peek,
@@ -635,7 +634,7 @@ fn open(
 /// this reports is comparable across runs that cross the stash threshold and runs that do
 /// not.
 fn run_sliced(
-    subject: &mut PeekScan<OksHandle, ErrsHandle>,
+    subject: &mut PeekScan<OksHandle>,
     fuel_per_step: usize,
     row_iteration_limit: Option<usize>,
 ) -> (ScanOutcome, RowBatch, usize) {
