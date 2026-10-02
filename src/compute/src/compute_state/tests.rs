@@ -13,7 +13,7 @@ use mz_dyncfg::ConfigUpdates;
 
 use std::rc::Rc;
 
-use differential_dataflow::input::Input;
+use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Builder, Description, Trace};
 use mz_compute_types::dataflows::{BuildDesc, IndexDesc};
@@ -41,7 +41,7 @@ use crate::arrangement::manager::PaddedTrace;
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
-use crate::shared_trace::adopt_trace;
+use crate::sharing::UnpublishToken;
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
 #[mz_ore::test]
@@ -212,20 +212,15 @@ fn kv_trace_bundle(upper: Timestamp, peek_ts: Timestamp, kv: &[(Row, Row)]) -> T
 
 /// Walks `peek` over `bundle` with more fuel than the walk can spend, so the outcome reports
 /// where the walk itself ended rather than where the budget cut it off.
-fn walk_local(
-    peek: Peek,
-    bundle: TraceBundle,
-    stash: StashBounds,
-    metrics: &TestMetrics,
-) -> PeekStatus<IndexPeekScan> {
-    let mut local = IndexPeek {
+fn walk(peek: Peek, bundle: TraceBundle, stash: StashBounds, metrics: &TestMetrics) -> PeekStatus {
+    let mut index_peek = IndexPeek {
         peek,
-        traces: IndexTraces::Local(bundle),
+        trace_bundle: bundle,
         span: tracing::Span::none(),
     };
     let mut upper = Antichain::new();
     let mut fuel = usize::MAX;
-    local.seek_fulfillment(
+    index_peek.seek_fulfillment(
         &mut upper,
         u64::MAX,
         stash,
@@ -235,56 +230,25 @@ fn walk_local(
     )
 }
 
-/// Walks `peek` over the arrangement `registry` publishes, as the interactive runtime does, with
-/// the same fuel [`walk_local`] grants.
-fn walk_shared(
-    registry: &ArrangementSharingRegistry,
-    peek: Peek,
-    stash: StashBounds,
-    metrics: &TestMetrics,
-) -> PeekStatus<IndexPeekScan> {
-    let published = peek.target.id();
-    let mut shared = IndexPeek {
-        peek,
-        traces: IndexTraces::Shared {
-            registry: registry.clone(),
-            published,
-        },
-        span: tracing::Span::none(),
-    };
-    let mut upper = Antichain::new();
-    let mut fuel = usize::MAX;
-    shared.seek_fulfillment(
-        &mut upper,
-        u64::MAX,
-        stash,
-        None,
-        &mut fuel,
-        &metrics.as_metrics(),
-    )
-}
-
-/// Publishes `rows` (at time 0, sealed to 1) as a real index arrangement into a fresh registry
-/// under `id` on worker 0 of 1, mirroring how a maintained index publishes on the maintenance
-/// runtime.
-fn publish_kv_index(id: GlobalId, rows: Vec<(Row, Row)>) -> ArrangementSharingRegistry {
-    let registry = ArrangementSharingRegistry::new();
-    publish_kv_index_into(&registry, id, rows);
-    registry
-}
-
-/// Like [`publish_kv_index`], but publishes into an existing `registry`.
-fn publish_kv_index_into(
+/// Publishes `rows` (at time 0, sealed to 1) as a real index arrangement into `registry` under
+/// `id` on worker 0 of 1, as a maintained index publishes on the maintenance runtime. The
+/// publication lasts as long as the returned token.
+///
+/// The publishing dataflow runs to completion and drops its traces, after which the published
+/// `since` follows the writer to the empty frontier. A caller that reads afterwards must hold the
+/// slot at the minimum before this call, for example through
+/// [`ArrangementSharingRegistry::peer_bundle`].
+fn publish_kv_index(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     rows: Vec<(Row, Row)>,
-) {
+) -> UnpublishToken {
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
         // The trace lives as long as an agent does, and the point closes when it drops, so the
         // agents must outlive the stepping that seals the batches. Production keeps them in the
         // trace manager. `execute_directly` steps only after this closure returns, so step here.
-        let keep = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (keep, token) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
             let oks = oks_collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -301,10 +265,8 @@ fn publish_kv_index_into(
                 ErrSpine<_, _>,
             >("test errs");
 
-            let slot = registry_in.get_or_create(id);
-            adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-            adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-            registry_in.notify(id);
+            let token =
+                registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
 
             for (k, v) in rows {
                 oks_input.update((k, v), Diff::ONE);
@@ -313,55 +275,62 @@ fn publish_kv_index_into(
             oks_input.flush();
             errs_input.advance_to(Timestamp::from(1_u64));
             errs_input.flush();
-            (oks.trace.clone(), errs.trace.clone())
+            ((oks.trace.clone(), errs.trace.clone()), token)
         });
         while worker.step() {}
         drop(keep);
-    });
+        token
+    })
 }
 
-/// The interactive inline walk over the sharing registry returns the same `PeekResponse` as the
-/// maintenance runtime's local trace walk over the same rows.
+/// Publishes `kv` under `id` into a fresh registry and returns the bundle through which the
+/// interactive runtime reads it, held at the minimum from before the publication.
+fn published_kv_bundle(id: GlobalId, kv: Vec<(Row, Row)>) -> (TraceBundle, UnpublishToken) {
+    let registry = ArrangementSharingRegistry::new();
+    let bundle = registry.peer_bundle(id, &Antichain::from_elem(Timestamp::MIN));
+    let token = publish_kv_index(&registry, id, kv);
+    (bundle, token)
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
-fn interactive_shared_peek_matches_local_path() {
+fn peek_over_peer_bundle_matches_local_walk() {
     let metrics = TestMetrics::new();
 
     let kv = vec![(row(1), row(10)), (row(2), row(20)), (row(3), row(30))];
     let peek_ts = Timestamp::new(0);
     let trace_upper = Timestamp::new(1);
 
-    // The maintenance runtime's walk over an equivalent, locally built trace bundle.
     let bundle = kv_trace_bundle(trace_upper, peek_ts, &kv);
-    let local_response = match walk_local(make_peek(peek_ts), bundle, NO_STASH, &metrics) {
+    let local_response = match walk(make_peek(peek_ts), bundle, NO_STASH, &metrics) {
         PeekStatus::Ready(response) => response,
-        _ => panic!("a walk with fuel to spare must answer"),
+        other => panic!(
+            "a local walk with fuel to spare must answer, got {}",
+            status_name(&other)
+        ),
     };
 
-    // The interactive runtime's walk: publish the same rows and read them off the registry.
-    let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
-    let shared_response =
-        match walk_shared(&shared_registry, make_peek(peek_ts), NO_STASH, &metrics) {
-            PeekStatus::Ready(response) => response,
-            _ => panic!("a walk with fuel to spare must answer"),
-        };
+    let (shared, _token) = published_kv_bundle(GlobalId::User(1), kv);
+    let shared_response = match walk(make_peek(peek_ts), shared, NO_STASH, &metrics) {
+        PeekStatus::Ready(response) => response,
+        other => panic!(
+            "a shared walk with fuel to spare must answer, got {}",
+            status_name(&other)
+        ),
+    };
 
     assert_eq!(
         local_response, shared_response,
-        "shared-registry peek must return the local path's rows"
+        "a peek over the peer bundle must return the local walk's rows"
     );
 }
 
-/// The interactive walk defers an over-threshold result to the peek stash, exactly as the
-/// maintenance walk does, rather than returning it inline.
-///
 /// An interactive walk that could not reach the stash would answer inline, and a result over
 /// `max_result_size` would then fail with "result exceeds max size" on a query that streams fine
-/// through the stash on the maintenance runtime. Every peek routes to interactive while the
-/// feature is on, and no other test approaches the limit, so nothing else would catch it.
+/// through the stash on the maintenance runtime.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
-fn interactive_shared_peek_defers_over_threshold_result_to_the_stash() {
+fn peek_over_peer_bundle_defers_over_threshold_result_to_the_stash() {
     let metrics = TestMetrics::new();
 
     let kv = vec![(row(1), row(10)), (row(2), row(20)), (row(3), row(30))];
@@ -371,42 +340,35 @@ fn interactive_shared_peek_defers_over_threshold_result_to_the_stash() {
     // The walk stops with a batch to hand over rather than answering inline, which is how a
     // result too large for an inline answer reaches the stash: the driver that finishes the walk
     // writes the batch.
-    let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
-    let shared_scan = match walk_shared(
-        &shared_registry,
-        make_peek(peek_ts),
-        STASH_EVERYTHING,
-        &metrics,
-    ) {
+    let (shared, _token) = published_kv_bundle(GlobalId::User(1), kv.clone());
+    let shared_scan = match walk(make_peek(peek_ts), shared, STASH_EVERYTHING, &metrics) {
         PeekStatus::Offload(scan) => scan,
         other => panic!(
-            "an over-threshold interactive walk must stop with a batch, got {}",
+            "an over-threshold shared walk must stop with a batch, got {}",
             status_name(&other)
         ),
     };
     assert!(
         shared_scan.stash_eligible() && shared_scan.batch_ready(),
-        "the suspended interactive walk must hold a batch bound for the stash"
+        "the suspended shared walk must hold a batch bound for the stash"
     );
 
-    // The maintenance walk over the same rows makes the same call, which is the property that
-    // matters: routing a peek to interactive must not change whether it stashes.
     let bundle = kv_trace_bundle(trace_upper, peek_ts, &kv);
-    let local_scan = match walk_local(make_peek(peek_ts), bundle, STASH_EVERYTHING, &metrics) {
+    let local_scan = match walk(make_peek(peek_ts), bundle, STASH_EVERYTHING, &metrics) {
         PeekStatus::Offload(scan) => scan,
         other => panic!(
-            "an over-threshold maintenance walk must stop with a batch, got {}",
+            "an over-threshold local walk must stop with a batch, got {}",
             status_name(&other)
         ),
     };
     assert!(
         local_scan.stash_eligible() && local_scan.batch_ready(),
-        "the suspended maintenance walk must hold a batch bound for the stash"
+        "the suspended local walk must hold a batch bound for the stash"
     );
 }
 
 /// Names a [`PeekStatus`] for an assertion message, which the scan it may carry cannot render.
-fn status_name<S>(status: &PeekStatus<S>) -> &'static str {
+fn status_name(status: &PeekStatus) -> &'static str {
     match status {
         PeekStatus::NotReady => "NotReady",
         PeekStatus::Offload(_) => "Offload",
@@ -414,146 +376,37 @@ fn status_name<S>(status: &PeekStatus<S>) -> &'static str {
     }
 }
 
-/// A local index peek whose timestamp has been compacted past returns a compaction-frontier
-/// error. The interactive inline path mirrors this exact gate over the registry handles, so
-/// this asserts the error string the shared path reproduces.
+/// Asserts that a peek at time 1 over `bundle`, compacted to time 5, answers with a
+/// compaction-frontier error.
+fn assert_compacted_past_errors(mut bundle: TraceBundle, metrics: &TestMetrics, what: &str) {
+    let peek_timestamp = Timestamp::new(1);
+    let compacted = Antichain::from_elem(Timestamp::new(5));
+    bundle.oks_mut().set_logical_compaction(compacted.borrow());
+    bundle.errs_mut().set_logical_compaction(compacted.borrow());
+
+    let response = match walk(make_peek(peek_timestamp), bundle, NO_STASH, metrics) {
+        PeekStatus::Ready(response) => response,
+        other => panic!(
+            "a compacted-past read over the {what} bundle must resolve directly, got {}",
+            status_name(&other)
+        ),
+    };
+    assert!(
+        matches!(&response, PeekResponse::Error(PeekError::Unstructured(msg)) if msg.contains("compaction frontier")),
+        "expected a compaction-frontier error over the {what} bundle, got {response:?}",
+    );
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn seek_fulfillment_compacted_past_errors() {
     let metrics = TestMetrics::new();
 
-    // A peek at time 1, against a trace that has compacted its logical frontier to time 5: the
-    // read is beyond the trace's compaction frontier.
-    let peek_timestamp = Timestamp::new(1);
-    let trace_upper = Timestamp::new(10);
+    let local = kv_trace_bundle(Timestamp::new(10), Timestamp::new(1), &[]);
+    assert_compacted_past_errors(local, &metrics, "local");
 
-    let mut bundle = kv_trace_bundle(trace_upper, peek_timestamp, &[]);
-    let compacted = Antichain::from_elem(Timestamp::new(5));
-    bundle.oks_mut().set_logical_compaction(compacted.borrow());
-    bundle.errs_mut().set_logical_compaction(compacted.borrow());
-
-    let response = match walk_local(make_peek(peek_timestamp), bundle, NO_STASH, &metrics) {
-        PeekStatus::Ready(response) => response,
-        _ => panic!("a compacted-past read must resolve directly"),
-    };
-    assert!(
-        matches!(&response, PeekResponse::Error(PeekError::Unstructured(msg)) if msg.contains("compaction frontier")),
-        "expected a compaction-frontier error, got {response:?}",
-    );
-}
-
-/// A peek for an index that is not yet published defers via `NotReady` (rather than blocking or
-/// erroring), and resolves with the correct rows once the maintenance runtime publishes and the
-/// pending-peek retry runs again.
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)]
-fn interactive_shared_peek_defers_until_published() {
-    let metrics = TestMetrics::new();
-    let id = GlobalId::User(1);
-    let kv = vec![(row(1), row(10)), (row(2), row(20))];
-    let registry = ArrangementSharingRegistry::new();
-
-    let peek = make_peek(Timestamp::new(0));
-    assert!(
-        matches!(
-            walk_shared(&registry, peek.clone(), NO_STASH, &metrics),
-            PeekStatus::NotReady,
-        ),
-        "an unpublished index must defer",
-    );
-
-    // Publishing lets the turn a dirty mark grants resolve the peek.
-    publish_kv_index_into(&registry, id, kv.clone());
-    assert!(
-        matches!(
-            walk_shared(&registry, peek, NO_STASH, &metrics),
-            PeekStatus::Ready(PeekResponse::Rows(_)),
-        ),
-        "a published index must resolve",
-    );
-}
-
-/// A peek at a timestamp the arrangement's upper has not yet sealed defers via `NotReady`, then
-/// resolves once the upper advances past the peek timestamp. Uses a live worker so the
-/// published trace carries a finite (non-empty) upper, which `execute_directly`'s
-/// run-to-completion sealing cannot stage.
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)]
-fn interactive_shared_peek_defers_until_sealed() {
-    let id = GlobalId::User(1);
-    timely::execute_directly(move |worker| {
-        let metrics = TestMetrics::new();
-        let registry = ArrangementSharingRegistry::new();
-        let registry_in = registry.clone();
-
-        let (mut oks_input, mut errs_input, _keep) =
-            worker.dataflow::<Timestamp, _, _>(move |scope| {
-                let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-                let oks = oks_collection.mz_arrange::<
-                    ColumnationChunker<_>,
-                    RowRowBatcher<_, _>,
-                    RowRowBuilder<_, _>,
-                    RowRowSpine<_, _>,
-                >("test oks");
-                let (errs_input, errs_collection) =
-                    scope.new_collection::<DataflowErrorSer, Diff>();
-                let errs = KeyCollection::from(errs_collection).mz_arrange::<
-                    ColumnationChunker<_>,
-                    ErrBatcher<_, _>,
-                    ErrBuilder<_, _>,
-                    ErrSpine<_, _>,
-                >("test errs");
-
-                let slot = registry_in.get_or_create(id);
-                adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-                adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                registry_in.notify(id);
-                (
-                    oks_input,
-                    errs_input,
-                    (oks.trace.clone(), errs.trace.clone()),
-                )
-            });
-
-        // A row at time 0, batch sealed so the trace's upper is {1}.
-        oks_input.update((row(1), row(10)), Diff::ONE);
-        oks_input.advance_to(Timestamp::from(1_u64));
-        oks_input.flush();
-        errs_input.advance_to(Timestamp::from(1_u64));
-        errs_input.flush();
-        for _ in 0..16 {
-            worker.step();
-        }
-
-        // upper {1} does not seal a peek at time 1: defer.
-        assert!(
-            matches!(
-                walk_shared(&registry, make_peek(Timestamp::new(1)), NO_STASH, &metrics,),
-                PeekStatus::NotReady,
-            ),
-            "an unsealed peek must defer",
-        );
-
-        // Advance the upper past the peek timestamp; the retry now resolves.
-        oks_input.advance_to(Timestamp::from(2_u64));
-        oks_input.flush();
-        errs_input.advance_to(Timestamp::from(2_u64));
-        errs_input.flush();
-        for _ in 0..16 {
-            worker.step();
-        }
-
-        assert!(
-            matches!(
-                walk_shared(&registry, make_peek(Timestamp::new(1)), NO_STASH, &metrics,),
-                PeekStatus::Ready(PeekResponse::Rows(_)),
-            ),
-            "a sealed peek must resolve",
-        );
-
-        // Keep the publisher inputs alive until here so the publication stayed open.
-        let _keep = (&oks_input, &errs_input);
-    });
+    let (shared, _token) = published_kv_bundle(GlobalId::User(1), vec![]);
+    assert_compacted_past_errors(shared, &metrics, "peer");
 }
 
 fn test_compute_instance_context() -> ComputeInstanceContext {
@@ -578,7 +431,7 @@ fn test_persist_clients() -> (tokio::runtime::Runtime, Arc<PersistClientCache>) 
 }
 
 /// Builds an interactive-runtime `ComputeState` over `registry`, with a fresh, isolated metrics
-/// registry. Enough to drive `handle_peek`/`resolve_dirty` in a test `ActiveComputeState`.
+/// registry. Must be called on the worker thread, which it registers as the registry's waker.
 fn interactive_compute_state(
     persist_clients: Arc<PersistClientCache>,
     registry: ArrangementSharingRegistry,
@@ -603,71 +456,149 @@ fn interactive_compute_state(
     )
 }
 
-/// Publishes `rows` as a `RowRow` index under `id` on the CURRENT worker (no nested
-/// `execute_directly`), sealing the batch and draining to the empty upper. Returns the trace
-/// agents, which the caller keeps for as long as it reads: the point closes with the trace.
-fn publish_index_current_worker(
-    worker: &mut TimelyWorker,
-    registry: &ArrangementSharingRegistry,
-    id: GlobalId,
-    rows: Vec<(Row, Row)>,
-) -> (RowRowAgent<Timestamp, Diff>, ErrAgent<Timestamp, Diff>) {
-    let registry_in = registry.clone();
-    let (mut oks_input, mut errs_input, keep) = worker.dataflow::<Timestamp, _, _>(move |scope| {
-        let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-        let oks = oks_collection.mz_arrange::<
-            ColumnationChunker<_>,
-            RowRowBatcher<_, _>,
-            RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >("test oks");
-        let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
-        let errs = KeyCollection::from(errs_collection).mz_arrange::<
-            ColumnationChunker<_>,
-            ErrBatcher<_, _>,
-            ErrBuilder<_, _>,
-            ErrSpine<_, _>,
-        >("test errs");
-
-        let slot = registry_in.get_or_create(id);
-        adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-        adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-        registry_in.notify(id);
-        (
-            oks_input,
-            errs_input,
-            (oks.trace.clone(), errs.trace.clone()),
-        )
-    });
-
-    for (k, v) in rows {
-        oks_input.update((k, v), Diff::ONE);
+fn activate<'a>(
+    timely_worker: &'a mut TimelyWorker,
+    compute_state: &'a mut ComputeState,
+    response_tx: &'a mut ResponseSender,
+) -> ActiveComputeState<'a> {
+    ActiveComputeState {
+        timely_worker,
+        compute_state,
+        response_tx,
     }
-    oks_input.advance_to(Timestamp::from(1_u64));
-    oks_input.flush();
-    errs_input.advance_to(Timestamp::from(1_u64));
-    errs_input.flush();
-    for _ in 0..16 {
-        worker.step();
-    }
-    // Drop the inputs and drain: the batch seals to the empty upper, readable at any finite ts.
-    // The returned agents keep the trace, and with it the publication, alive.
-    drop(oks_input);
-    drop(errs_input);
-    for _ in 0..16 {
-        worker.step();
-    }
-    keep
 }
 
-/// A peek issued before its index is published enqueues in `pending_work` (never the maintenance
-/// `pending_peeks` poll path) and is served only when the target id is presented as dirty to
-/// `resolve_dirty`. A re-examination with an empty dirty set, even after the data is published
-/// and ready, serves nothing: this is the no-polling property.
+/// A maintenance publisher of a `(k, v)` index on the current worker, whose upper the test
+/// advances.
+struct LivePublisher {
+    oks_input: InputSession<Timestamp, (Row, Row), Diff>,
+    errs_input: InputSession<Timestamp, DataflowErrorSer, Diff>,
+    /// The trace lives as long as an agent does, and the point closes when it drops.
+    _traces: (RowRowAgent<Timestamp, Diff>, ErrAgent<Timestamp, Diff>),
+    _token: UnpublishToken,
+}
+
+impl LivePublisher {
+    /// Publishes index `id` into `registry` from the current worker, with an upper at the minimum.
+    fn new(worker: &mut TimelyWorker, registry: &ArrangementSharingRegistry, id: GlobalId) -> Self {
+        let registry_in = registry.clone();
+        worker.dataflow::<Timestamp, _, _>(move |scope| {
+            let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+            let oks = oks_collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("test oks");
+            let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
+            let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                ColumnationChunker<_>,
+                ErrBatcher<_, _>,
+                ErrBuilder<_, _>,
+                ErrSpine<_, _>,
+            >("test errs");
+
+            let token =
+                registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
+            LivePublisher {
+                oks_input,
+                errs_input,
+                _traces: (oks.trace.clone(), errs.trace.clone()),
+                _token: token,
+            }
+        })
+    }
+
+    /// Inserts `rows` at the current input time.
+    fn insert(&mut self, rows: Vec<(Row, Row)>) {
+        for (k, v) in rows {
+            self.oks_input.update((k, v), Diff::ONE);
+        }
+    }
+
+    /// Seals both halves up to `upper` and steps the worker until the published point has it.
+    fn seal_to(&mut self, worker: &mut TimelyWorker, upper: Timestamp) {
+        self.oks_input.advance_to(upper);
+        self.oks_input.flush();
+        self.errs_input.advance_to(upper);
+        self.errs_input.flush();
+        for _ in 0..16 {
+            worker.step();
+        }
+    }
+}
+
+/// A `(k, v)` `ReprRelationType` of two non-null `int64` columns, matching the rows the
+/// publishers here publish.
+fn two_int64_type() -> ReprRelationType {
+    let desc = RelationDesc::builder()
+        .with_column("k", SqlScalarType::Int64.nullable(false))
+        .with_column("v", SqlScalarType::Int64.nullable(false))
+        .finish();
+    ReprRelationType::from(desc.typ())
+}
+
+/// A maintained dataflow exporting index `index_id` on `on_id`, as the controller ships it. The
+/// interactive runtime does not render it, and records its exports as peers instead.
+fn maintained_index_dataflow(
+    index_id: GlobalId,
+    on_id: GlobalId,
+    as_of: Timestamp,
+) -> DataflowDescription<RenderPlan, CollectionMetadata> {
+    let mut dataflow = DataflowDescription::new("test-maintained-index".into());
+    dataflow.class = DataflowClass::Maintained;
+    dataflow.as_of = Some(Antichain::from_elem(as_of));
+    dataflow.index_exports.insert(
+        index_id,
+        (
+            IndexDesc {
+                on_id,
+                key: vec![MirScalarExpr::column(0)],
+            },
+            two_int64_type(),
+        ),
+    );
+    dataflow
+}
+
+/// The rows of a peek response with their multiplicities, sorted.
+fn response_rows(response: &PeekResponse) -> Vec<(Row, usize)> {
+    let PeekResponse::Rows(collections) = response else {
+        panic!("expected rows, got {response:?}");
+    };
+    let mut rows: Vec<_> = collections
+        .iter()
+        .flat_map(|collection| {
+            (0..collection.entries()).map(move |idx| {
+                let (row, diff) = collection.get(idx).expect("index within entries");
+                (row.to_owned(), diff.get())
+            })
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// The row a [`make_peek`] response carries for the index entry `(row(k), row(v))`.
+fn peek_row(k: i64, v: i64) -> Row {
+    Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
+}
+
+/// Takes the one peek response sent so far.
+fn expect_peek_response(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+) -> PeekResponse {
+    match rx.try_recv() {
+        Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
+        other => panic!("expected a peek response, got {other:?}"),
+    }
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn interactive_peek_resolves_on_publication_not_on_bare_tick() {
+fn interactive_peek_on_peer_index_waits_for_publication() {
     let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
     let kv = vec![(row(1), row(10)), (row(2), row(20))];
     // The persist cache spawns a task that needs a Tokio reactor; build it (and keep the
     // runtime alive) before entering the timely worker thread.
@@ -675,235 +606,125 @@ fn interactive_peek_resolves_on_publication_not_on_bare_tick() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        // Part A: register this interactive worker's waker, as startup does.
-        registry.register_waker(std::thread::current());
-
         let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
 
-        // A peek issued before publication enqueues, does not respond, and does not touch the
-        // poll path.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
+            active.handle_create_dataflow(maintained_index_dataflow(id, on_id, Timestamp::MIN));
+            assert!(
+                active.compute_state.peers.contains(&id),
+                "a maintained dataflow's export must be recorded as a peer"
+            );
+            assert!(
+                active.compute_state.collections.is_empty(),
+                "the interactive runtime must not render a maintained dataflow"
+            );
+            assert!(
+                active.compute_state.traces.get(&id).is_some(),
+                "a peer index must have a trace bundle to peek"
+            );
+            assert!(
+                registry.handles(&id).is_some(),
+                "the peer bundle must hold the registry slot before publication"
+            );
+
             active.handle_peek(make_peek(Timestamp::new(0)));
+            active.process_peeks();
             assert_eq!(
-                active
-                    .compute_state
-                    .pending_work
-                    .values()
-                    .map(Vec::len)
-                    .sum::<usize>(),
+                active.compute_state.queued_peeks.len(),
                 1,
-                "an unpublished peek must enqueue in pending_work"
+                "a peek on an unpublished peer index must wait in queued_peeks"
             );
             assert!(
                 active.compute_state.pending_peeks.is_empty(),
-                "the interactive peek must not use the pending_peeks poll path"
+                "a waiting index peek must not be handed to a driver"
             );
-            assert!(
-                active.compute_state.pending_work.contains_key(&id),
-                "the peek must be indexed under its target id"
-            );
-
-            // No-polling: with no dirtied id, re-examination serves nothing.
-            active.resolve_dirty(BTreeSet::new());
         }
         assert!(rx.try_recv().is_err(), "no response before publication");
 
-        // Publish the index from this same worker. `insert` marks the id dirty for worker 0.
-        let _keep = publish_index_current_worker(worker, &registry, id, kv.clone());
+        let mut publisher = LivePublisher::new(worker, &registry, id);
+        publisher.insert(kv);
+        publisher.seal_to(worker, Timestamp::new(1));
 
-        // No-polling: the data is now published and ready, yet a re-examination with an empty
-        // dirty set must NOT serve the peek. Only a dirtied id triggers work.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
-            active.resolve_dirty(BTreeSet::new());
-        }
-        assert!(
-            rx.try_recv().is_err(),
-            "a bare tick (empty dirty set) must not resolve pending work"
-        );
-
-        // The genuine wake: drain the dirty inbox (the id, marked by `insert`) and resolve.
-        let dirty = registry.take_dirty();
-        assert_eq!(
-            dirty,
-            BTreeSet::from([id]),
-            "publication must have marked the id dirty"
-        );
-        {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
-            active.resolve_dirty(dirty);
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
+            active.process_peeks();
             assert!(
-                active.compute_state.pending_work.is_empty(),
-                "a served peek is removed from the store"
+                active.compute_state.queued_peeks.is_empty(),
+                "a served peek must leave queued_peeks"
             );
         }
-        let response = match rx.try_recv() {
-            Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
-            other => panic!("expected a peek response, got {other:?}"),
-        };
+        let response = expect_peek_response(&mut rx);
+        assert_eq!(
+            response_rows(&response),
+            vec![(peek_row(1, 10), 1), (peek_row(2, 20), 1)],
+            "the served peek must carry the published rows"
+        );
+
+        activate(worker, &mut compute_state, &mut response_tx)
+            .handle_allow_compaction(id, Antichain::new());
         assert!(
-            matches!(response, PeekResponse::Rows(_)),
-            "the served peek must carry rows, got {response:?}"
+            compute_state.traces.get(&id).is_none() && !compute_state.peers.contains(&id),
+            "compacting a peer to the empty frontier must release it"
         );
     });
 }
 
-/// A published-but-not-sealed peek stays enqueued and is served only after a frontier advance
-/// drives `note_frontier` (the seal signal `export_index` wires). A re-examination after the
-/// seal but with no dirty mark serves nothing (no-polling).
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn interactive_peek_resolves_on_seal_via_note_frontier() {
+fn interactive_peek_on_peer_index_waits_for_seal() {
     let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
     let (_rt, persist_clients) = test_persist_clients();
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        registry.register_waker(std::thread::current());
-
         let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
 
-        // Publish a row at time 0, sealing only to upper {1}.
-        let registry_in = registry.clone();
-        let (mut oks_input, mut errs_input, _keep) =
-            worker.dataflow::<Timestamp, _, _>(move |scope| {
-                let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-                let oks = oks_collection.mz_arrange::<
-                    ColumnationChunker<_>,
-                    RowRowBatcher<_, _>,
-                    RowRowBuilder<_, _>,
-                    RowRowSpine<_, _>,
-                >("test oks");
-                let (errs_input, errs_collection) =
-                    scope.new_collection::<DataflowErrorSer, Diff>();
-                let errs = KeyCollection::from(errs_collection).mz_arrange::<
-                    ColumnationChunker<_>,
-                    ErrBatcher<_, _>,
-                    ErrBuilder<_, _>,
-                    ErrSpine<_, _>,
-                >("test errs");
+        activate(worker, &mut compute_state, &mut response_tx)
+            .handle_create_dataflow(maintained_index_dataflow(id, on_id, Timestamp::MIN));
 
-                let slot = registry_in.get_or_create(id);
-                adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-                adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                registry_in.notify(id);
-                (
-                    oks_input,
-                    errs_input,
-                    (oks.trace.clone(), errs.trace.clone()),
-                )
-            });
+        // A row at time 0, sealed so the published upper is {1}.
+        let mut publisher = LivePublisher::new(worker, &registry, id);
+        publisher.insert(vec![(row(1), row(10))]);
+        publisher.seal_to(worker, Timestamp::new(1));
 
-        oks_input.update((row(1), row(10)), Diff::ONE);
-        oks_input.advance_to(Timestamp::from(1_u64));
-        oks_input.flush();
-        errs_input.advance_to(Timestamp::from(1_u64));
-        errs_input.flush();
-        for _ in 0..16 {
-            worker.step();
-        }
-        // Drain the publication's dirty mark so the seal signal is observed in isolation.
-        let _ = registry.take_dirty();
-
-        // A peek at ts 1: published but not sealed (upper {1}). Enqueues.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
             active.handle_peek(make_peek(Timestamp::new(1)));
+            active.process_peeks();
             assert_eq!(
-                active
-                    .compute_state
-                    .pending_work
-                    .values()
-                    .map(Vec::len)
-                    .sum::<usize>(),
+                active.compute_state.queued_peeks.len(),
                 1,
-                "an unsealed peek must enqueue"
+                "a peek the published upper does not pass must wait in queued_peeks"
             );
         }
-        assert!(rx.try_recv().is_err(), "an unsealed peek does not respond");
+        assert!(rx.try_recv().is_err(), "an unsealed peek must not respond");
 
-        // Advance the upper past the peek ts and step, so the shared trace seals ts 1.
-        oks_input.advance_to(Timestamp::from(2_u64));
-        oks_input.flush();
-        errs_input.advance_to(Timestamp::from(2_u64));
-        errs_input.flush();
-        for _ in 0..16 {
-            worker.step();
-        }
+        publisher.seal_to(worker, Timestamp::new(2));
 
-        // No-polling: the seal alone does not re-examine the peek until the id is dirtied.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
-            active.resolve_dirty(BTreeSet::new());
-        }
-        assert!(
-            rx.try_recv().is_err(),
-            "a seal with no dirty mark must not resolve the peek"
-        );
-
-        // The seal signal: `export_index`'s frontier hook calls `note_frontier`. Drive it.
-        registry.notify(id);
-        let dirty = registry.take_dirty();
-        assert_eq!(dirty, BTreeSet::from([id]));
-        {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
-            active.resolve_dirty(dirty);
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
+            active.process_peeks();
             assert!(
-                active.compute_state.pending_work.is_empty(),
-                "a sealed peek is served and removed"
+                active.compute_state.queued_peeks.is_empty(),
+                "a sealed peek must be served by the next sweep"
             );
         }
-        let response = match rx.try_recv() {
-            Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
-            other => panic!("expected a peek response, got {other:?}"),
-        };
-        assert!(
-            matches!(response, PeekResponse::Rows(_)),
-            "the sealed peek must carry rows, got {response:?}"
+        let response = expect_peek_response(&mut rx);
+        assert_eq!(
+            response_rows(&response),
+            vec![(peek_row(1, 10), 1)],
+            "the sealed peek must carry the published row"
         );
 
-        // Keep the publisher inputs alive until here so the publication stayed open.
-        let _keep = (&oks_input, &errs_input);
+        activate(worker, &mut compute_state, &mut response_tx)
+            .handle_allow_compaction(id, Antichain::new());
     });
-}
-
-/// A `(k, v)` `ReprRelationType` of two non-null `int64` columns, matching the rows
-/// [`publish_index_current_worker`] publishes.
-fn two_int64_type() -> ReprRelationType {
-    let desc = RelationDesc::builder()
-        .with_column("k", SqlScalarType::Int64.nullable(false))
-        .with_column("v", SqlScalarType::Int64.nullable(false))
-        .finish();
-    ReprRelationType::from(desc.typ())
 }
 
 /// Converts a lowered index-only dataflow into the `<RenderPlan, CollectionMetadata>` shape the
@@ -941,10 +762,10 @@ fn to_render_dataflow(
     }
 }
 
-/// A real query dataflow that imports the maintenance index `index_id` (arranging `on_id` by
-/// `[0]`) and exports `out_index_id` = `count(*)` over it. Built by lowering hand-written MIR,
-/// exactly as the controller would ship it. No optimization is needed: a reduce lowers
-/// faithfully.
+/// A real one-shot query dataflow that imports the maintenance index `index_id` (arranging
+/// `on_id` by `[0]`) and exports `out_index_id` = `count(*)` over it. Built by lowering
+/// hand-written MIR, exactly as the controller would ship it. No optimization is needed: a reduce
+/// lowers faithfully.
 fn reduce_count_dataflow(
     index_id: GlobalId,
     on_id: GlobalId,
@@ -989,6 +810,7 @@ fn reduce_count_dataflow(
         },
         reduce_type,
     );
+    mir.class = DataflowClass::OneShotRead;
     let lowered = LirRelationExpr::finalize_dataflow(mir, &OptimizerFeatures::default(), None)
         .expect("lowering the reduce dataflow");
     to_render_dataflow(lowered)
@@ -1015,14 +837,11 @@ fn make_count_peek(id: GlobalId, timestamp: Timestamp) -> Peek {
     }
 }
 
-/// An interactive query dataflow that imports a not-yet-published maintenance index is built
-/// IMMEDIATELY in arrival order. The import binds through a registry placeholder rather than
-/// deferring, so the output collection appears in `collections` right away and nothing lands in
-/// `pending_work`. With the placeholder unadopted, the import produces no data and the output
-/// frontier holds at the minimum, so a result peek at the as_of stays pending.
+/// A one-shot query over a peer index that is not yet published is built on arrival: its import
+/// binds through the peer bundle's placeholder slot, which the publisher adopts in place later.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn interactive_build_is_immediate() {
+fn interactive_build_over_unpublished_peer_index_is_immediate() {
     let index_id = GlobalId::User(1);
     let on_id = GlobalId::User(2);
     let reduce_id = GlobalId::User(3);
@@ -1034,7 +853,6 @@ fn interactive_build_is_immediate() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        registry.register_waker(std::thread::current());
         let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
@@ -1043,34 +861,14 @@ fn interactive_build_is_immediate() {
         let mut dataflow = reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, as_of);
         dataflow.until = Antichain::from_elem(as_of.step_forward());
 
-        // The build is NOT deferred, even though the imported index is unpublished: the import
-        // binds through a placeholder that a maintenance publisher adopts later.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
+            active.handle_create_dataflow(maintained_index_dataflow(index_id, on_id, as_of));
             active.handle_create_dataflow(dataflow);
             assert!(
-                active.compute_state.pending_work.is_empty(),
-                "an immediately-built dataflow must not sit in pending_work"
-            );
-            assert!(
                 active.compute_state.collections.contains_key(&out_index_id),
-                "the query output collection is built immediately"
+                "the query output collection must be built on arrival"
             );
-            // Binding the import through get-or-create created a placeholder slot for the
-            // unpublished dependency, so its handles now exist.
-            assert!(
-                active
-                    .compute_state
-                    .sharing_registry
-                    .handles(&index_id)
-                    .is_some(),
-                "the interactive import created a placeholder slot for its dependency"
-            );
-
             // Start the (suspended) dataflow, as a `Schedule` command would.
             active.handle_schedule(out_index_id);
         }
@@ -1081,41 +879,41 @@ fn interactive_build_is_immediate() {
             worker.step();
         }
 
-        // A result peek at the as_of cannot resolve while the output frontier is held at the
-        // minimum: it stays pending rather than returning wrong (empty) rows.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
             active.handle_peek(make_count_peek(out_index_id, as_of));
+            active.process_peeks();
             assert_eq!(
-                active
-                    .compute_state
-                    .pending_work
-                    .values()
-                    .map(Vec::len)
-                    .sum::<usize>(),
+                active.compute_state.queued_peeks.len(),
                 1,
-                "the result peek stays pending while the output frontier is held at the minimum"
+                "the result peek must wait while the placeholder input is unadopted"
             );
         }
         assert!(
             rx.try_recv().is_err(),
-            "no result is produced while the placeholder input is unadopted"
+            "no result may be produced while the placeholder input is unadopted"
         );
 
-        // Tear down the built dataflow so the worker can shut down. Its import over the never
-        // adopted placeholder holds a frontier at the minimum forever, so without dropping it the
-        // dataflow never completes and `execute_directly` would wedge on teardown.
+        // Publishing backs the placeholder the query already imported, so the query completes.
+        let mut publisher = LivePublisher::new(worker, &registry, index_id);
+        publisher.insert(vec![(row(1), row(10)), (row(2), row(20))]);
+        publisher.seal_to(worker, as_of.step_forward());
+        for _ in 0..64 {
+            worker.step();
+        }
+        activate(worker, &mut compute_state, &mut response_tx).process_peeks();
+        let response = expect_peek_response(&mut rx);
+        assert_eq!(
+            response_rows(&response),
+            vec![(row(2), 1)],
+            "the query must count the rows published after it was built"
+        );
+
+        // Tear down the query and release the peer so the worker can shut down.
         {
-            let mut active = ActiveComputeState {
-                timely_worker: &mut *worker,
-                compute_state: &mut compute_state,
-                response_tx: &mut response_tx,
-            };
+            let mut active = activate(worker, &mut compute_state, &mut response_tx);
             active.handle_allow_compaction(out_index_id, Antichain::new());
+            active.handle_allow_compaction(index_id, Antichain::new());
         }
         for _ in 0..16 {
             worker.step();
