@@ -282,7 +282,7 @@ annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "58", default-features = false }
+arrow = { version = "60", default-features = false }
 arrow-ipc = "58"
 askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
 assert_cmd = "2.2.2"
