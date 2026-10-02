@@ -536,6 +536,7 @@ tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
 tokio-openssl = "0.6.5"
 tokio-postgres = "0.7.15"
+tokio-rustls = { version = "0.26.2", default-features = false }
 tokio-stream = "0.1.18"
 tokio-test = "0.4.6"
 tokio-util = "0.7.18"

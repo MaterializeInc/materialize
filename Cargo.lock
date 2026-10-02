@@ -8119,9 +8119,11 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr-consts",
  "mz-server-core",
+ "openssl",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
