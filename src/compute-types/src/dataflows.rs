@@ -27,6 +27,19 @@ use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
+/// What kind of work a dataflow is, which decides the compute runtime that renders it.
+///
+/// A class, not a destination. The command history is shared by replicas with different runtime
+/// layouts, and a replica with one runtime renders every class.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub enum DataflowClass {
+    /// Maintained work: indexes, materialized views, sinks, subscribes, and copy-tos.
+    #[default]
+    Maintained,
+    /// A dataflow that exists to answer a single read and is dropped after it.
+    OneShotRead,
+}
+
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S: 'static = ()> {
@@ -67,6 +80,8 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub debug_name: String,
     /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
     pub time_dependence: Option<TimeDependence>,
+    /// What kind of work this dataflow is. Every rebuild of a description must carry it over.
+    pub class: DataflowClass,
 }
 
 impl<P, S> DataflowDescription<P, S> {
@@ -270,6 +285,7 @@ impl<P, S> DataflowDescription<P, S> {
             refresh_schedule: None,
             debug_name: name,
             time_dependence: None,
+            class: DataflowClass::Maintained,
         }
     }
 
@@ -387,18 +403,22 @@ impl<P, S> DataflowDescription<P, S> {
         self.export_ids().all(|id| id.is_transient())
     }
 
-    /// Whether this dataflow exists only to produce the answer to one peek: it installs transient
-    /// collections, reads a single time, and drives no sink that outlives the read.
+    /// Whether this dataflow's shape fits its [`DataflowClass`].
     ///
-    /// Transience alone is not the property, because it says nothing about when the dataflow stops.
-    /// A `REFRESH AT` materialized view is durable and still gets a finite `until`, and an
-    /// introspection subscribe is transient and never stops. Callers that place a dataflow on the
-    /// strength of "it finishes on its own" want this, not `is_transient`.
-    pub fn is_peek_dataflow(&self) -> bool {
-        self.is_transient()
-            && self.is_single_time()
-            && self.subscribe_ids().next().is_none()
-            && self.copy_to_ids().next().is_none()
+    /// A [`DataflowClass::OneShotRead`] installs transient collections, reads a single time, and
+    /// drives no sink that outlives the read. Transience alone is not the property, because it
+    /// says nothing about when the dataflow stops: an introspection subscribe is transient and
+    /// never stops. A [`DataflowClass::Maintained`] dataflow may have any shape.
+    pub fn class_fits_shape(&self) -> bool {
+        match self.class {
+            DataflowClass::Maintained => true,
+            DataflowClass::OneShotRead => {
+                self.is_transient()
+                    && self.is_single_time()
+                    && self.subscribe_ids().next().is_none()
+                    && self.copy_to_ids().next().is_none()
+            }
+        }
     }
 
     /// Returns the description of the object to build with the specified
@@ -528,7 +548,9 @@ where
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
     /// Compatible dataflows have structurally equal exports, imports, and objects to build. The
-    /// `as_of` of the receiver has to be less equal the `other` `as_of`.
+    /// `as_of` of the receiver has to be less equal the `other` `as_of`. The `class` is not
+    /// compared: a class change across a reconnect must not rebuild a dataflow a runtime already
+    /// renders, and each runtime keeps the placement it acted on.
     ///
     /// Note that this method performs normalization as part of the structural equality checking,
     /// which involves cloning both `self` and `other`. It is therefore relatively expensive and
@@ -611,6 +633,7 @@ where
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
             time_dependence: self.time_dependence.clone(),
+            class: self.class,
         }
     }
 }

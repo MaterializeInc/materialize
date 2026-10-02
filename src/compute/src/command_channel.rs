@@ -372,6 +372,7 @@ fn split_command(
                     initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                     refresh_schedule: dataflow.refresh_schedule.clone(),
                     time_dependence: dataflow.time_dependence.clone(),
+                    class: dataflow.class,
                 })
                 .map(Box::new)
                 .map(move |dataflow| {
