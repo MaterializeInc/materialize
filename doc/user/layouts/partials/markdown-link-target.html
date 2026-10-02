@@ -1,0 +1,40 @@
+{{- /*
+  Returns the absolute URL a link in a page's Markdown should point at in the
+  website build, or "" to leave the link as written.
+
+  A link to a page becomes the absolute URL of that page's Markdown, keeping
+  any #fragment. Any other link inside the docs, such as an image, becomes an
+  absolute URL under the base path. Root-relative links ("/sql/create-cluster/")
+  resolve against the docs root; some data files write them with the base path
+  already included ("/docs/sql/..."). Path-relative links ("../create-role")
+  resolve against the page's own directory, as they do from the HTML page.
+  Fragments, absolute URLs, other schemes and <angle-bracket> targets are left
+  alone.
+
+  Arguments (dict):
+    page    (required) the Page the link appears on
+    target  (required) the link target as written
+
+  Usage:
+    {{ partial "markdown-link-target.html" (dict "page" . "target" "../create-role") }}
+*/ -}}
+{{- $url := "" -}}
+{{- $target := .target -}}
+{{- if not (or (strings.HasPrefix $target "#") (strings.HasPrefix $target "//") (strings.HasPrefix $target "<") (findRE `^[A-Za-z][A-Za-z0-9+.-]*:` $target)) -}}
+  {{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
+  {{- $path := index (split $target "#") 0 -}}
+  {{- $fragment := strings.TrimPrefix $path $target -}}
+  {{- if strings.HasPrefix $path "/" -}}
+    {{- $path = strings.TrimPrefix (printf "%s/" $basePath) $path | printf "/%s" | replaceRE `^//` "/" -}}
+  {{- else -}}
+    {{- $dir := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
+    {{- $path = path.Join $dir $path | printf "/%s" | replaceRE `^//` "/" -}}
+  {{- end -}}
+  {{- $url = printf "%s%s%s%s" (partial "site-origin.html" .) $basePath $path $fragment -}}
+  {{- if not (path.Ext $path) -}}
+    {{- with site.GetPage (strings.TrimSuffix "/" $path) -}}
+      {{- $url = printf "%s%s" (partial "markdown-url.html" (dict "page" . "absolute" true)) $fragment -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- return $url -}}

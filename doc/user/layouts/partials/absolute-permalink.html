@@ -1,0 +1,13 @@
+{{- /*
+  Returns a page's permalink as an absolute URL. With a bare-path baseURL, such
+  as "/docs", .Permalink has no scheme or host, so take them from the
+  site-origin partial.
+
+  Usage:
+    {{ partial "absolute-permalink.html" . }}
+*/ -}}
+{{- $url := .Permalink -}}
+{{- if not (urls.Parse $url).Host -}}
+  {{- $url = printf "%s%s" (partial "site-origin.html" .) $url -}}
+{{- end -}}
+{{- return $url -}}

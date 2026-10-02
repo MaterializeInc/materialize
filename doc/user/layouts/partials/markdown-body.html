@@ -1,0 +1,64 @@
+{{- /*
+  Returns a page's body for the Markdown output: its .RenderShortcodes output,
+  without Hugo heading attributes and with links made absolute, after a
+  pointer to llms.txt.
+
+  Source links are mostly written relative to the docs root, such as
+  "/sql/create-cluster/#syntax", or to the page, such as "../create-role". The
+  HTML pass resolves them in _markup/render-link.html, but .RenderShortcodes
+  leaves Markdown links as written, and the website serves the Markdown under
+  <baseURL>/markdown-docs/, where such links do not resolve.
+
+  The pointer is the llms.txt directive the Agent-Friendly Documentation Spec
+  recommends. The skill bundle has no llms.txt, so it gets no pointer.
+
+  In the website build, each link in an inline link, a reference definition
+  or an HTML href or src attribute is rewritten by markdown-link-target. The
+  bin/gen-claude-skill bundle has base path "/", and its links stay as written,
+  because there they name directories under the bundle root.
+
+  Arguments (dict):
+    page  (required) the Page whose body to render
+
+  Usage:
+    {{ partial "markdown-body.html" (dict "page" .) }}
+*/ -}}
+{{- /*
+  Hugo heading attributes, such as "## Object Introspection (SHOW) { #show }",
+  are syntax for the HTML pass. Drop them from the Markdown, in both builds.
+*/ -}}
+{{- $content := replaceRE `(?m)^(#{1,6} .*?)[ \t]*\{[ \t]*[#.][^}\n]*\}[ \t]*$` "$1" .page.RenderShortcodes -}}
+{{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
+{{- if $basePath -}}
+  {{- /*
+    The leading blank line separates the pointer from the description that
+    single.skill.md writes just before the body without a newline; without it
+    the pointer joins the description's line and is not a blockquote.
+  */ -}}
+  {{- $content = printf "\n\n> For the complete documentation index, see [llms.txt](%s).\n\n%s" (partial "llms-txt-url.html" (dict "absolute" true)) $content -}}
+  {{- /*
+    Three link forms, each as (prefix, target, end): inline links, reference
+    definitions, and href or src attributes in HTML that shortcodes emit. A
+    reference definition's target must start with "/" or "." and end the line
+    or precede a title, so that prose such as "[Note]: Materialize ..." is not
+    mistaken for one.
+  */ -}}
+  {{- $forms := slice
+    (dict "find" `(\]\()([^)\s]+)([)\s])` "end" `[)\s]`)
+    (dict "find" `(?m)(^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*)([./]\S*)([ \t]*$|[ \t]+["'(])` "end" `(?:[ \t]*$|[ \t]+["'(])`)
+    (dict "find" `((?:href|src)=")([^"]+)(")` "end" `"`)
+  -}}
+  {{- range $forms -}}
+    {{- $end := .end -}}
+    {{- range findRESubmatch .find $content -}}
+      {{- $prefix := index . 1 -}}
+      {{- $target := index . 2 -}}
+      {{- $url := partial "markdown-link-target.html" (dict "page" $.page "target" $target) -}}
+      {{- if $url -}}
+        {{- $quoted := replaceRE `([\\.+*?()|\[\]{}^$])` `\$1` (printf "%s%s" $prefix $target) -}}
+        {{- $content = replaceRE (printf `(?m)%s(%s)` $quoted $end) (printf "%s%s$1" $prefix $url) $content -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- return $content -}}

@@ -23,8 +23,9 @@ cd doc/user
 # Build main docs to public/
 hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 
-# Build skill docs to public/markdown-docs/
-hugo --config config.toml,config.skill.toml --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
+# Build skill docs to public/markdown-docs/. --environment preview makes their
+# absolute links point at preview.materialize.com, like the HTML build above.
+hugo --config config.toml,config.skill.toml --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]
@@ -44,3 +45,11 @@ curl -fsSL \
         \"target_url\": \"https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/\",\
         \"context\": \"preview-docs\"\
     }"
+
+# Report on the preview's Markdown. The check does not fail the build.
+preview_url="https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST"
+
+ci_uncollapsed_heading "Checking the Markdown docs' sizes and links"
+if ! ../../ci/test/check-docs-markdown.py public/markdown-docs "$preview_url/markdown-docs/"; then
+    echo "check-docs-markdown found problems; see above. This check does not fail the build."
+fi
