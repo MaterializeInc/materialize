@@ -73,10 +73,10 @@ fn publish_index(
             "test errs",
         );
 
-    let slot = registry.get_or_create(id, 0, 1);
+    let slot = registry.get_or_create(id);
     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-    registry.notify(id, 0);
+    registry.notify(id);
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
@@ -188,10 +188,10 @@ fn publish_index_with_writer(
             "test errs",
         );
 
-    let slot = registry.get_or_create(id, 0, 1);
+    let slot = registry.get_or_create(id);
     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-    registry.notify(id, 0);
+    registry.notify(id);
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
@@ -283,7 +283,7 @@ fn interactive_import_hold_releases_on_drop() {
         // `handle_allow_compaction` does on each side. The `since` stays pinned to `as_of` here by
         // the live reader hold.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_standing_hold(id, 0, &target);
+        registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(
@@ -298,7 +298,7 @@ fn interactive_import_hold_releases_on_drop() {
         // dropped immediately, so the hold it registers at the current `since` cannot outlive this
         // scope and confound the release assertion below.
         {
-            let (probe_oks, _probe_errs) = registry.handles(&id, 0).expect("still published");
+            let (probe_oks, _probe_errs) = registry.handles(&id).expect("still published");
             assert!(
                 probe_oks.snapshot_at(&as_of_time).is_some(),
                 "the live interactive-import hold must keep `as_of` readable"
@@ -319,7 +319,7 @@ fn interactive_import_hold_releases_on_drop() {
 
         // The trace compacted past `as_of`: a fresh handle (minted only now, so it introduces no
         // new hold at `as_of`) can no longer read there.
-        let (released_oks, _released_errs) = registry.handles(&id, 0).expect("still published");
+        let (released_oks, _released_errs) = registry.handles(&id).expect("still published");
         assert!(
             released_oks.snapshot_at(&as_of_time).is_none(),
             "after the hold drops, the trace must be free to compact past `as_of`"
@@ -387,7 +387,7 @@ fn interactive_import_holds_after_construction() {
         );
 
         let holds = registry
-            .published_logical_holds(&id, 0)
+            .published_logical_holds(&id)
             .expect("still published");
         assert!(
             !holds.is_empty(),
@@ -438,7 +438,7 @@ fn published_since_does_not_chase_reader_holds() {
         }
 
         // The writer has compacted nothing, so a read at the lower time is still legal.
-        let (probe_oks, _) = registry.handles(&id, 0).expect("published");
+        let (probe_oks, _) = registry.handles(&id).expect("published");
         let since = probe_oks.frontiers().0;
         assert!(
             timely::PartialOrder::less_equal(&since, &low),
@@ -540,7 +540,7 @@ fn interactive_import_hold_downgrades_while_live() {
         // The controller allows compaction well past `as_of`, both runtimes apply it, and the
         // writer applies it to the trace.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_standing_hold(id, 0, &target);
+        registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(
@@ -552,7 +552,7 @@ fn interactive_import_hold_downgrades_while_live() {
 
         // Still pinned: the import has not downgraded, so `as_of` stays readable.
         {
-            let (probe_oks, _probe_errs) = registry.handles(&id, 0).expect("still published");
+            let (probe_oks, _probe_errs) = registry.handles(&id).expect("still published");
             assert!(
                 probe_oks.snapshot_at(&as_of_time).is_some(),
                 "an import that has not downgraded must keep `as_of` readable"
@@ -579,7 +579,7 @@ fn interactive_import_hold_downgrades_while_live() {
 
         // The publisher followed the downgrade: `as_of` is no longer readable even though the
         // import is still live and still holding at the downgraded frontier.
-        let (compacted_oks, _compacted_errs) = registry.handles(&id, 0).expect("still published");
+        let (compacted_oks, _compacted_errs) = registry.handles(&id).expect("still published");
         assert!(
             compacted_oks.snapshot_at(&as_of_time).is_none(),
             "after the downgrade, the publisher must compact past the original `as_of`"
@@ -623,7 +623,7 @@ fn import_asserts_since_at_most_as_of() {
         // `as_of` on the next tick: no reader hold pins it, and the standing hold has moved with
         // the writer floor.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_standing_hold(id, 0, &target);
+        registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(
@@ -692,7 +692,7 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
         // Scoped: the probe registers a hold of its own at the current `since`, which would pin the
         // arrangement at `as_of` and make the release assertion below pass for the wrong reason.
         {
-            let (probe_oks, _probe_errs) = registry.handles(&id, 0).expect("still published");
+            let (probe_oks, _probe_errs) = registry.handles(&id).expect("still published");
             assert!(
                 probe_oks.snapshot_at(&as_of_time).is_some(),
                 "the standing hold must keep `as_of` readable while the importing runtime is behind"
@@ -701,7 +701,7 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
 
         // Once that runtime applies the compaction, the bound lifts. The live import's own hold
         // takes over from here, which is what the sibling hold tests cover.
-        registry.note_standing_hold(id, 0, &target);
+        registry.note_standing_hold(id, &target);
         drop((oks_trace, errs_trace));
         tick(
             worker,
@@ -709,7 +709,7 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
             Timestamp::from(11_u64),
             Timestamp::from(12_u64),
         );
-        let (released_oks, _released_errs) = registry.handles(&id, 0).expect("still published");
+        let (released_oks, _released_errs) = registry.handles(&id).expect("still published");
         assert!(
             released_oks.snapshot_at(&as_of_time).is_none(),
             "with the standing hold advanced and no reader left, the arrangement must compact"

@@ -1122,15 +1122,11 @@ impl<'a> ActiveComputeState<'a> {
                 traces.oks_mut().read_upper(&mut new_frontier);
             } else if let Some(frontier) = &collection.sink_write_frontier {
                 new_frontier.clone_from(&frontier.borrow());
-            } else if let Some(upper) =
-                self.compute_state
-                    .shared_reexports
-                    .get(&id)
-                    .and_then(|gid| {
-                        self.compute_state
-                            .sharing_registry
-                            .published_upper(gid, self.timely_worker.index())
-                    })
+            } else if let Some(upper) = self
+                .compute_state
+                .shared_reexports
+                .get(&id)
+                .and_then(|gid| self.compute_state.sharing_registry.published_upper(gid))
             {
                 new_frontier.clone_from(&upper);
             } else {

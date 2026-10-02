@@ -1104,9 +1104,8 @@ fn shared_trace_flavor_feeds_join_and_reduce() {
         let mut keep_a = publish_join_input(&registry, worker, id_a, &a, seal);
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
 
-        let worker_index = worker.index();
-        let (oks_a, errs_a) = registry.handles(&id_a, worker_index).expect("A published");
-        let (oks_b, errs_b) = registry.handles(&id_b, worker_index).expect("B published");
+        let (oks_a, errs_a) = registry.handles(&id_a).expect("A published");
+        let (oks_b, errs_b) = registry.handles(&id_b).expect("B published");
 
         let join_probe = ProbeHandle::new();
         let reduce_probe = ProbeHandle::new();
@@ -1291,9 +1290,8 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
             keep_b(worker);
         }
 
-        let worker_index = worker.index();
-        let (oks_a, errs_a) = registry.handles(&id_a, worker_index).expect("A published");
-        let (oks_b, errs_b) = registry.handles(&id_b, worker_index).expect("B published");
+        let (oks_a, errs_a) = registry.handles(&id_a).expect("A published");
+        let (oks_b, errs_b) = registry.handles(&id_b).expect("B published");
 
         // First half of the premise: the spine folded batches, so the import seeds from a merged
         // chain rather than from the one-batch-per-time shape the other tests cover. Each
