@@ -18,10 +18,10 @@ import OverflowMenu from "~/components/OverflowMenu";
 import { UiPreviewToggle } from "~/components/UiPreviewToggle";
 import { Breadcrumb, PageBreadcrumbs } from "~/layouts/BaseLayout";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
+import { replaceClusterIdAndName } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { assert } from "~/util";
 
-import { replaceClusterIdAndName } from "../routeHelpers";
 import AlterClusterMenuItem from "./AlterClusterMenuItem";
 import { useOwners } from "./queries";
 import { useShowSystemObjects } from "./useShowSystemObjects";
