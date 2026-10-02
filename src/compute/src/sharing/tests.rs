@@ -256,18 +256,13 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         );
     }
 
-    // The two collections compact independently, so each point carries its own standing hold.
-    let standing_hold = |id: &GlobalId| {
-        registry
-            .published_diagnostics(id)
-            .expect("published")
-            .standing_hold
-    };
+    // The two collections compact independently, so a hold on one point does not reach the other.
     let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
-    registry.note_standing_hold(target, &at(5));
-    registry.note_standing_hold(reexport, &at(10));
-    assert_eq!(standing_hold(&target), at(5));
-    assert_eq!(standing_hold(&reexport), at(10));
+    let target_hold = registry.get_or_create(target).oks.peer_handle(&at(5));
+    let reexport_hold = registry.get_or_create(reexport).oks.peer_handle(&at(10));
+    assert_eq!(registry.published_logical_holds(&target), Some(at(5)));
+    assert_eq!(registry.published_logical_holds(&reexport), Some(at(10)));
+    drop((target_hold, reexport_hold));
 
     // Dropping the index the re-export re-exports leaves the re-export's point readable.
     drop(target_token);
