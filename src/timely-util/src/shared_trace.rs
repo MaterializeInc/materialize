@@ -236,6 +236,24 @@ impl<B: BatchReader> Shared<B> {
         })
     }
 
+    /// A reader holding logical compaction at the join of `as_of` and the published `since`, and
+    /// nothing physically.
+    ///
+    /// Never refuses. It is the hold a runtime keeps on a collection its peer publishes, whose
+    /// `as_of` can sit below the published `since`, and which reads only through readers it mints
+    /// with [`SharedReader::fresh_reader`].
+    pub fn reader_at_least(self: &Arc<Self>, as_of: &Antichain<B::Time>) -> SharedReader<B> {
+        let mut state = self.lock();
+        let logical = as_of.join(&state.logical);
+        adjust(&mut state.remote_logical, &Antichain::new(), &logical);
+        drop(state);
+        SharedReader {
+            shared: Arc::clone(self),
+            logical,
+            physical: Antichain::new(),
+        }
+    }
+
     fn wake_writer(state: &State<B>) {
         if let Some(activator) = &state.writer_activator {
             let _ = activator.activate();
@@ -613,6 +631,14 @@ impl<B: BatchReader> SharedReader<B> {
     /// The publication point.
     pub fn shared(&self) -> &Arc<Shared<B>> {
         &self.shared
+    }
+
+    /// A reader at this reader's logical hold that also holds the chain physically at the coverage
+    /// it is seeded with, as an import must.
+    pub fn fresh_reader(&self) -> SharedReader<B> {
+        self.shared
+            .reader_at(&self.logical)
+            .expect("the publication's since is at or below every hold registered on it")
     }
 }
 

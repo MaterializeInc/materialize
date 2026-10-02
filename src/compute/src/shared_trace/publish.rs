@@ -10,7 +10,7 @@
 //! The publisher half: the publication point's owner-facing API and the attachment of a
 //! trace to it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Trace, TraceReader};
@@ -19,41 +19,17 @@ use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
-/// Why a publication point refused an `as_of`.
-///
-/// Read off the point rather than off a handle, so a failure path registers no hold on its way to a
-/// panic, and so the caller reports the point that actually refused rather than a sibling. The
-/// refusing `since` is already in [`Published::handle_at`]'s `Err`, so it is not repeated here.
-pub(crate) struct Diagnostics<T> {
-    /// The frontier the importing runtime has applied.
-    ///
-    /// A refusal with this AT the refusing `since` means that runtime had already applied the
-    /// compaction before it built the importing dataflow, and no replica-side hold could have
-    /// prevented it. BELOW that `since` means the writer escaped its own bound, which is a bug here
-    /// rather than upstream.
-    pub(crate) standing_hold: Antichain<T>,
-}
-
-/// A publication point for one arrangement plus the standing hold on it.
+/// A publication point for one arrangement.
 ///
 /// Holding it keeps the point registered. Once it and every reader minted from it are dropped, the
 /// writer detaches the point at its next mutation, see `SharedSpine::detach_unreachable`.
 pub(crate) struct Published<Tr: TraceReader> {
     pub(super) shared: Arc<Shared<Tr::Batch>>,
-    /// A logical hold with no reader behind it, tracking the frontier the runtime that may import
-    /// this arrangement has applied.
-    ///
-    /// The two runtimes drain their command streams independently, so the owning runtime can apply
-    /// a compaction the importing one has not. An importing dataflow whose `CreateDataflow` is still
-    /// queued there has registered no hold, and would be built against an arrangement already
-    /// compacted past its `as_of`. This hold forbids that: a shared arrangement compacts only as
-    /// fast as the slowest runtime's stream position.
-    pub(super) standing: Mutex<SharedReader<Tr::Batch>>,
 }
 
 impl<Tr: TraceReader> Published<Tr>
 where
-    // The standing hold is a reader, and a reader cuts a totally ordered chain.
+    // A reader cuts a totally ordered chain.
     Tr::Time: TotalOrder,
 {
     /// Creates a publication point. It starts unattached: an empty chain with `since` and `upper`
@@ -65,14 +41,8 @@ where
     /// captures its input trace) observes the filled chain: the handle is a live proxy into the
     /// shared state, not a snapshot.
     pub(crate) fn new() -> Self {
-        let shared = Arc::new(Shared::new());
-        let mut standing = shared.reader();
-        // A standing hold is logical only. Joining with the empty antichain releases the physical
-        // hold a reader registers by default, which would otherwise stop the spine merging.
-        standing.set_physical_compaction(Antichain::new().borrow());
         Published {
-            shared,
-            standing: Mutex::new(standing),
+            shared: Arc::new(Shared::new()),
         }
     }
 
@@ -84,56 +54,10 @@ where
         self.shared.reader()
     }
 
-    /// Hands out a handle whose hold is registered at `as_of`, failing when the published `since` is
-    /// already beyond it.
-    ///
-    /// This is the mint a reader that intends to read at `as_of` must use. Observing `since`,
-    /// deciding it permits `as_of`, and then advancing a hold are three separate acquisitions of the
-    /// state lock, and the writer can advance `since` between any two of them. Checking and
-    /// registering under one acquisition means a returned handle's hold is one the trace can still
-    /// honour.
-    ///
-    /// `Err` carries the published `since` that ruled `as_of` out. That is a protocol-ordering
-    /// failure rather than a serving failure, since the controller promises an index's `since` never
-    /// passes the `as_of` of a dataflow importing it, so callers report it loudly rather than
-    /// degrading.
-    pub(crate) fn handle_at(
-        &self,
-        as_of: &Antichain<Tr::Time>,
-    ) -> Result<SharedReader<Tr::Batch>, Antichain<Tr::Time>> {
-        self.shared.reader_at(as_of)
-    }
-
-    /// The published `upper`.
-    pub(crate) fn upper(&self) -> Antichain<Tr::Time> {
-        self.shared.upper()
-    }
-
-    /// Why this point would refuse an `as_of`. See [`Diagnostics`].
-    pub(crate) fn diagnostics(&self) -> Diagnostics<Tr::Time> {
-        Diagnostics {
-            standing_hold: self.standing_hold(),
-        }
-    }
-
-    /// The standing hold currently bounding this arrangement's logical compaction.
-    pub(crate) fn standing_hold(&self) -> Antichain<Tr::Time> {
-        self.standing
-            .lock()
-            .expect("standing hold poisoned")
-            .get_logical_compaction()
-            .to_owned()
-    }
-
-    /// Advances the standing hold to its join with `frontier`, recording that the runtime which may
-    /// import this arrangement has applied the controller's compaction that far.
-    ///
-    /// Joins rather than assigning, so a reordered or replayed command cannot lower a bound the
-    /// writer already compacted to. The empty frontier releases the hold.
-    pub(crate) fn note_standing_hold(&self, frontier: &Antichain<Tr::Time>) {
-        if let Ok(mut standing) = self.standing.lock() {
-            standing.set_logical_compaction(frontier.borrow());
-        }
+    /// A hold on the published arrangement for a runtime that reads it as a peer: logical only, at
+    /// the join of `as_of` and the published `since`. See `Shared::reader_at_least`.
+    pub(crate) fn peer_handle(&self, as_of: &Antichain<Tr::Time>) -> SharedReader<Tr::Batch> {
+        self.shared.reader_at_least(as_of)
     }
 }
 
@@ -160,14 +84,6 @@ pub(crate) fn adopt_trace<Inner, F>(
     Inner::Time: TotalOrder,
     F: Fn() + 'static,
 {
-    // Seed the standing hold at the trace's own compaction frontier. The importing runtime may
-    // not have applied any compaction for this collection yet, and until it has, this is the
-    // frontier the trace may compact to: the controller offers no `as_of` below a collection's
-    // own `since`, so no importer can need a frontier below it. Without this seed a point created
-    // before attachment holds at the minimum time and stops the arrangement compacting at all.
-    let since = trace.clone().get_logical_compaction().to_owned();
-    point.note_standing_hold(&since);
-
     // A reader moving a hold wakes the arrange operator, whose `exert` applies it to the trace.
     let activator = worker.sync_activator_for(trace.operator().address.to_vec());
     trace.trace_box_unstable().borrow().trace().attach(

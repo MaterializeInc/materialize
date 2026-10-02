@@ -57,8 +57,8 @@ impl<B: BatchReader + Clone> TraceSnapshot<B> {
 
 /// Observations on a publication point's internals that no reader surface exposes.
 impl<Tr: TraceReader> Published<Tr> {
-    /// The accumulated logical holds registered against this publication point, the standing hold
-    /// included. Empty when every hold has released.
+    /// The accumulated logical holds registered against this publication point. Empty when every
+    /// hold has released.
     pub(crate) fn logical_holds(&self) -> Antichain<Tr::Time> {
         self.shared.logical_holds()
     }
@@ -404,10 +404,9 @@ fn tick(
 /// advances its logical compaction on the writer's own handle, the published `since` must follow,
 /// so the trace actually compacts.
 ///
-/// Exercises the publisher's compaction forwarding with the standing hold as the only accumulated
-/// hold, which no other test in this crate or `crate::sharing` covers: `crate::render`'s
-/// `interactive_import_hold_releases_on_drop` always has a live reader hold present at some point
-/// in the scenario.
+/// Exercises the publisher's compaction forwarding with no accumulated hold, which no other test in
+/// this crate or `crate::sharing` covers: `crate::render`'s `interactive_import_hold_releases_on_drop`
+/// always has a live reader hold present at some point in the scenario.
 #[mz_ore::test]
 fn publish_without_readers_does_not_pin_compaction() {
     timely::execute_directly(move |worker| {
@@ -440,12 +439,7 @@ fn publish_without_readers_does_not_pin_compaction() {
         // The controller requests compaction to 10 on the writer's own handle (the production path
         // is `handle_allow_compaction` through the `TraceManager`), which the trace mirrors into the
         // published `since` at once.
-        //
-        // The standing hold moves with it, as it does in production once the importing runtime
-        // applies the same broadcast command. Without it the target stays bounded at the adoption
-        // floor, which is what `standing_hold_holds_since_behind_the_writer` covers.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_standing_hold(&target);
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
         tick(
@@ -504,7 +498,7 @@ fn a_point_nothing_references_is_detached() {
             "the trace must release a point nothing else references"
         );
         assert_eq!(
-            kept.upper(),
+            kept.shared.upper(),
             Antichain::from_elem(Timestamp::from(2_u64)),
             "a referenced point keeps receiving the trace"
         );
@@ -548,7 +542,6 @@ fn snapshot_holds_nothing_and_outlives_compaction() {
         assert!(captured_upper.less_equal(&Timestamp::from(3_u64)));
 
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_standing_hold(&target);
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
         tick(
@@ -583,35 +576,23 @@ fn snapshot_holds_nothing_and_outlives_compaction() {
     });
 }
 
-/// I1c: a compaction the importing runtime has not applied does not advance the published `since`.
+/// A peer handle keeps the published `since` behind the writer until it advances.
 ///
-/// This is the invariant the two-runtime split loses without a standing hold. The controller's
-/// `AllowCompaction` reaches both runtimes, but they drain independently, so the owning runtime can
-/// realize a frontier the importing one has not. A dataflow whose `CreateDataflow` is still queued
-/// there has registered no reader hold yet, so without the standing hold nothing would stop the
-/// publisher following the controller past that dataflow's `as_of`, and it would render against
-/// compacted data.
-///
-/// The third phase is what keeps the bound from being a permanent pin: with no standing hold noted
-/// at all, compaction still reaches the frontier the arrangement was adopted at.
+/// The runtime that holds an index as a peer moves its hold only on the compactions it has applied,
+/// so the owning runtime's trace must not compact past it. Once the hold advances, the arrangement
+/// compacts to the frontier both runtimes have applied, and no further.
 #[mz_ore::test]
-fn standing_hold_holds_since_behind_the_writer() {
+fn peer_handle_holds_since_behind_the_writer() {
     timely::execute_directly(move |worker| {
         let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let mut arranged = collection.mz_arrange::<
+            let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
                 RowRowBatcher<_, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >("standing-hold oks");
+            >("peer-hold oks");
             let writer = arranged.trace.clone();
-            // Adopt at 3, standing in for a dataflow whose `as_of` is 3: the publisher captures
-            // that as the floor it may compact to before any command has been applied anywhere.
-            // Set on the arrangement's own agent, not on a temporary clone, whose `Drop` would
-            // give the hold straight back before `adopt` clones from it.
-            let at_three = Antichain::from_elem(Timestamp::from(3_u64));
-            arranged.trace.set_logical_compaction(at_three.borrow());
             let published = adopt_fresh(&arranged);
             (writer, published, input)
         });
@@ -624,15 +605,16 @@ fn standing_hold_holds_since_behind_the_writer() {
                 Timestamp::from(t + 1),
             );
         }
+        let at_three = Antichain::from_elem(Timestamp::from(3_u64));
+        let mut peer = published.peer_handle(&at_three);
         assert_eq!(
-            published.standing_hold(),
-            Antichain::from_elem(Timestamp::from(3_u64)),
-            "adoption seeds the standing hold at the publisher's own compaction frontier"
+            peer.get_physical_compaction(),
+            Antichain::new().borrow(),
+            "a peer handle holds nothing physically"
         );
 
-        // The maintenance runtime applies `AllowCompaction(10)` and its trace really does compact:
-        // both the writer handle and the publisher's writer-driven floor move to 10. The importing
-        // runtime has not applied it, so its standing hold stays at 3.
+        // The owning runtime applies `AllowCompaction(10)`. The peer has not, so its hold stays at
+        // 3 and a read at 5 is still admitted and accurate.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
@@ -642,19 +624,16 @@ fn standing_hold_holds_since_behind_the_writer() {
             Timestamp::from(10_u64),
             Timestamp::from(11_u64),
         );
-
-        // A read at 5 is still admitted, and is still accurate: the trace's real compaction is the
-        // meet over its agents, and the publisher's own agent is still held at 3.
         assert!(
             published
                 .handle()
                 .snapshot_at(&Timestamp::from(5_u64))
                 .is_some(),
-            "the published since advanced past the importing runtime's applied frontier"
+            "the published since advanced past the peer's hold"
         );
 
-        // Once that runtime applies the same command, the bound lifts and the arrangement compacts.
-        published.note_standing_hold(&target);
+        // Once the peer applies the same command, the bound lifts and the arrangement compacts.
+        peer.set_logical_compaction(target.borrow());
         tick(
             worker,
             &mut input,
@@ -666,7 +645,7 @@ fn standing_hold_holds_since_behind_the_writer() {
                 .handle()
                 .snapshot_at(&Timestamp::from(5_u64))
                 .is_none(),
-            "the standing hold advanced but the arrangement did not compact"
+            "the peer's hold advanced but the arrangement did not compact"
         );
         assert!(
             published
@@ -678,7 +657,38 @@ fn standing_hold_holds_since_behind_the_writer() {
     });
 }
 
-/// `Published::handle_at` mints a hold at the requested `as_of`, and refuses when the published
+/// A peer handle minted below the published `since` holds at that `since` rather than refusing.
+#[mz_ore::test]
+fn peer_handle_below_the_since_joins_up_to_it() {
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged = collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("peer-join oks");
+            let writer = arranged.trace.clone();
+            let published = adopt_fresh(&arranged);
+            (writer, published, input)
+        });
+        let target = Antichain::from_elem(Timestamp::from(10_u64));
+        writer.set_logical_compaction(target.borrow());
+        writer.set_physical_compaction(target.borrow());
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(10_u64),
+            Timestamp::from(11_u64),
+        );
+
+        let mut peer = published.peer_handle(&Antichain::from_elem(Timestamp::from(3_u64)));
+        assert_eq!(peer.get_logical_compaction(), target.borrow());
+    });
+}
+
+/// `Shared::reader_at` mints a hold at the requested `as_of`, and refuses when the published
 /// `since` has already passed it.
 ///
 /// Refusing is the whole point: a reader that observed `since`, decided it permitted its `as_of`,
@@ -687,7 +697,7 @@ fn standing_hold_holds_since_behind_the_writer() {
 /// trace can still serve. A refusal is reported, not degraded, because the controller promises an
 /// index's `since` never passes the `as_of` of a dataflow importing it.
 #[mz_ore::test]
-fn handle_at_mints_at_as_of_or_refuses() {
+fn reader_at_mints_at_as_of_or_refuses() {
     timely::execute_directly(move |worker| {
         let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -715,7 +725,8 @@ fn handle_at_mints_at_as_of_or_refuses() {
         // exactly where it was asked for, not at `since`.
         let at_three = Antichain::from_elem(Timestamp::from(3_u64));
         let mut hold = published
-            .handle_at(&at_three)
+            .shared
+            .reader_at(&at_three)
             .expect("since is still at the minimum");
         assert_eq!(
             hold.get_logical_compaction().to_owned(),
@@ -740,10 +751,9 @@ fn handle_at_mints_at_as_of_or_refuses() {
         );
         drop(hold);
 
-        // The controller allows compaction to 10 and both runtimes apply it, so the publisher
-        // forwards a `since` of 10 on its next activation.
+        // The controller allows compaction to 10, so the publisher forwards a `since` of 10 on its
+        // next activation.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_standing_hold(&target);
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
         tick(
@@ -754,12 +764,12 @@ fn handle_at_mints_at_as_of_or_refuses() {
         );
 
         assert_eq!(
-            published.handle_at(&at_three).err(),
+            published.shared.reader_at(&at_three).err(),
             Some(target.clone()),
             "a mint below the published since must be refused, and report it"
         );
         assert!(
-            published.handle_at(&target).is_ok(),
+            published.shared.reader_at(&target).is_ok(),
             "a mint at the published since must succeed"
         );
     });
@@ -798,10 +808,6 @@ fn empty_logical_request_releases_the_hold() {
         let target = Antichain::from_elem(Timestamp::from(2_u64));
         writer.set_logical_compaction(target.borrow());
 
-        // Release the standing hold first. The accumulation is a meet, so a hold at or above the
-        // standing hold is invisible through `logical_holds`, and the assertion below would pass
-        // whether or not the empty request released anything.
-        published.note_standing_hold(&Antichain::new());
         assert!(published.logical_holds().is_empty());
 
         // A reduce over a finished input does exactly this: `upper_limit` becomes the empty
@@ -820,7 +826,7 @@ fn empty_logical_request_releases_the_hold() {
 /// An accumulation that has emptied does not release the trace.
 ///
 /// A collection's drop empties every hold at once: `AllowCompaction` carries the empty frontier, so
-/// the standing hold empties and no reader is left. Forwarding the empty accumulation would tell the
+/// the peer's hold empties and no reader is left. Forwarding the empty accumulation would tell the
 /// agent to compact everything, and its joining setter could never take that back, so the publisher
 /// leaves the agent where it stands and lets the dataflow's own drop release the trace. Without that
 /// the published `since` empties with it, in step with a trace that has released its contents.
@@ -846,10 +852,11 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
             );
         }
 
-        // The controller drops the collection. Both the writer's frontier and the importing
-        // runtime's applied frontier become empty, and there is no reader hold.
+        // The controller drops the collection. The peer's hold becomes empty, and there is no
+        // reader hold left.
         let empty = Antichain::new();
-        published.note_standing_hold(&empty);
+        let mut peer = published.peer_handle(&Antichain::from_elem(Timestamp::MIN));
+        peer.set_logical_compaction(empty.borrow());
         tick(
             worker,
             &mut input,
@@ -857,12 +864,8 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
             Timestamp::from(4_u64),
         );
 
-        let standing = published.diagnostics().standing_hold;
+        assert!(published.logical_holds().is_empty());
         let since = published.handle().frontiers().0;
-        assert!(
-            standing.is_empty(),
-            "the standing hold did not follow the controller's empty frontier: {standing:?}"
-        );
         assert_eq!(
             since,
             Antichain::from_elem(Timestamp::MIN),

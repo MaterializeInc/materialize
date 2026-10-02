@@ -15,8 +15,8 @@
 //! the holds readers register there to its own compaction. This module is the Materialize-side
 //! glue over that primitive.
 //!
-//! * [`Published`] is a publication point plus the *standing hold*, a logical hold with no reader
-//!   behind it that tracks the frontier the importing runtime has applied.
+//! * [`Published`] is a publication point. A runtime that reads it as a peer holds it through a
+//!   logical-only *peer handle*, which tracks the frontier that runtime has applied.
 //! * [`adopt_trace`] attaches an arrangement's trace to a point on the owning worker.
 //! * [`SharedReader`] is the `Clone + Send` reader, implementing
 //!   [`TraceReader`] so it drives compaction and cursors
@@ -38,7 +38,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::shared_trace::SharedReader;
 
-pub(crate) use self::publish::{Diagnostics, Published, adopt_trace};
+pub(crate) use self::publish::{Published, adopt_trace};
 
 use crate::typedefs::{ErrSpine, RowRowSpine};
 
