@@ -31,6 +31,15 @@ export const absoluteClusterPath = (
   cluster: ClusterPathParams,
 ) => `${regionPath(regionSlug)}/clusters/${relativeClusterPath(cluster)}`;
 
+/** The Freshness page, optionally opened on a given cluster. */
+export const absoluteFreshnessPath = (
+  regionSlug: string,
+  clusterId?: string,
+) =>
+  clusterId
+    ? `${regionPath(regionSlug)}/freshness?cluster=${encodeURIComponent(clusterId)}`
+    : `${regionPath(regionSlug)}/freshness`;
+
 export const relativeClusterPath = (cluster: ClusterPathParams) =>
   `${cluster.id}/${encodeURIComponent(cluster.name)}`;
 
