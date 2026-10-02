@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
@@ -19,12 +20,13 @@ use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
     BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
     DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
-    MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, Transaction,
+    MOCK_AUTHENTICATION_NONCE_KEY, Metrics, Schema, TestCatalogStateBuilder, Transaction,
     test_bootstrap_args,
 };
 use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
@@ -772,6 +774,93 @@ async fn test_fenced_ephemeral_item_write(state_builder: TestCatalogStateBuilder
         "rejected ephemeral item write became durable"
     );
     Box::new(new_state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_sync_of_upper_progress_skips_consolidation() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_sync_of_upper_progress_skips_consolidation(state_builder).await;
+}
+
+/// The incoming generation's fence loop in `open_inner` syncs before every compare-and-append,
+/// while the serving leader advances the catalog upper on every group commit. If each of those
+/// syncs consolidated the whole snapshot, an attempt on a large catalog would outlast the
+/// leader's next advance, and the fence would starve until the leader stalled.
+async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut leader = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // `transaction` fails while updates from opening are unconsumed.
+    let _ = leader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let mut reader = state_builder
+        .with_metrics(Arc::clone(&metrics))
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    // Consume the updates from opening, so the next sync returns only new ones.
+    let _ = reader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let consolidations = metrics.snapshot_consolidations.get();
+    for _ in 0..3 {
+        let upper = leader.current_upper().await;
+        leader.advance_upper(upper.step_forward()).await.unwrap();
+    }
+    let updates = reader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+    assert_eq!(
+        updates,
+        Vec::new(),
+        "the leader's upper advances carried no content"
+    );
+    assert_eq!(
+        metrics.snapshot_consolidations.get(),
+        consolidations,
+        "a sync that applied no updates consolidated the snapshot"
+    );
+
+    // A sync that does apply an update still consolidates.
+    let mut txn = leader.transaction().await.unwrap();
+    insert_view(
+        &mut txn,
+        CatalogItemId::User(300),
+        SchemaId::User(0),
+        "v",
+        None,
+    );
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+    let updates = reader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+    assert_ne!(updates, Vec::new());
+    assert!(
+        metrics.snapshot_consolidations.get() > consolidations,
+        "a sync that applied updates did not consolidate the snapshot"
+    );
+
+    Box::new(reader).expire().await;
+    Box::new(leader).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
