@@ -816,33 +816,32 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
 
                 // Borrows the arrangements, so it must precede moving their traces into the
                 // `TraceBundle` below.
-                if compute_state.role().publishes() {
-                    compute_state.sharing_registry.publish(
-                        idx_id,
-                        oks.stream.scope().worker(),
-                        &oks.trace,
-                        &errs.trace,
-                    );
-                }
+                let publication = compute_state.publisher.publish(
+                    idx_id,
+                    oks.stream.scope().worker(),
+                    &oks.trace,
+                    &errs.trace,
+                );
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop((needed_tokens, publication)),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                if compute_state.role().publishes() {
-                    compute_state.sharing_registry.publish(
-                        idx_id,
-                        self.scope.worker(),
-                        trace.oks().unpadded(),
-                        trace.errs().unpadded(),
-                    );
-                }
-                compute_state.traces.set(idx_id, trace);
+                let publication = compute_state.publisher.publish(
+                    idx_id,
+                    self.scope.worker(),
+                    trace.oks().unpadded(),
+                    trace.errs().unpadded(),
+                );
+                let to_drop = trace.to_drop().clone();
+                compute_state
+                    .traces
+                    .set(idx_id, trace.with_drop((to_drop, publication)));
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -937,33 +936,32 @@ where
 
                 // Borrows the arrangements, so it must precede moving their traces into the
                 // `TraceBundle` below.
-                if compute_state.role().publishes() {
-                    compute_state.sharing_registry.publish(
-                        idx_id,
-                        oks.stream.scope().worker(),
-                        &oks.trace,
-                        &errs.trace,
-                    );
-                }
+                let publication = compute_state.publisher.publish(
+                    idx_id,
+                    oks.stream.scope().worker(),
+                    &oks.trace,
+                    &errs.trace,
+                );
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop((needed_tokens, publication)),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                if compute_state.role().publishes() {
-                    compute_state.sharing_registry.publish(
-                        idx_id,
-                        outer.worker(),
-                        trace.oks().unpadded(),
-                        trace.errs().unpadded(),
-                    );
-                }
-                compute_state.traces.set(idx_id, trace);
+                let publication = compute_state.publisher.publish(
+                    idx_id,
+                    outer.worker(),
+                    trace.oks().unpadded(),
+                    trace.errs().unpadded(),
+                );
+                let to_drop = trace.to_drop().clone();
+                compute_state
+                    .traces
+                    .set(idx_id, trace.with_drop((to_drop, publication)));
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());

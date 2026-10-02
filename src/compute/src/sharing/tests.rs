@@ -195,9 +195,9 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     // way as a point the publisher creates.
     let _reader_slot = registry.get_or_create(reexport);
     let registry_in = registry.clone();
-    timely::execute_directly(move |worker| {
-        let (oks, errs, mut oks_input, mut errs_input) =
-            worker.dataflow::<Timestamp, _, _>(|scope| {
+    let (target_token, reexport_token) = timely::execute_directly(move |worker| {
+        let (oks, errs, mut oks_input, mut errs_input, target_token) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
                 let (oks_input, oks) = scope.new_collection::<(Row, Row), Diff>();
                 let oks = oks.mz_arrange::<
                     ColumnationChunker<_>,
@@ -212,8 +212,13 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
                     ErrBuilder<_, _>,
                     ErrSpine<_, _>,
                 >("test errs");
-                registry_in.publish(target, oks.stream.scope().worker(), &oks.trace, &errs.trace);
-                (oks.trace, errs.trace, oks_input, errs_input)
+                let token = registry_in.publish(
+                    target,
+                    oks.stream.scope().worker(),
+                    &oks.trace,
+                    &errs.trace,
+                );
+                (oks.trace, errs.trace, oks_input, errs_input, token)
             });
 
         // The re-export's dataflow must build the same graph on every worker, so publishing the
@@ -222,8 +227,8 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         worker.dataflow::<Timestamp, _, _>(|_| {});
         let empty = worker.peek_identifier() - before;
         let before = worker.peek_identifier();
-        worker.dataflow::<Timestamp, _, _>(|scope| {
-            registry_in.publish(reexport, scope.worker(), &oks, &errs);
+        let reexport_token = worker.dataflow::<Timestamp, _, _>(|scope| {
+            registry_in.publish(reexport, scope.worker(), &oks, &errs)
         });
         assert_eq!(worker.peek_identifier() - before, empty);
         let _ = registry_in.take_dirty();
@@ -240,6 +245,7 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         // Each point signals its seals under its own id.
         assert_eq!(registry_in.take_dirty(), BTreeSet::from([target, reexport]));
         drop((oks, errs));
+        (target_token, reexport_token)
     });
 
     for id in [target, reexport] {
@@ -264,9 +270,10 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     assert_eq!(standing_hold(&reexport), at(10));
 
     // Dropping the index the re-export re-exports leaves the re-export's point readable.
-    registry.remove(&target);
+    drop(target_token);
     assert!(registry.handles(&target).is_none());
     assert!(registry.handles(&reexport).is_some());
+    drop(reexport_token);
 }
 
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
