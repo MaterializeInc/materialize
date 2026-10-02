@@ -59,6 +59,8 @@ The endpoint offers two ways to read, with the same token:
 
 ## Available metrics
 
+This list is subject to change.
+
 Metrics are grouped by the question they answer. Series are labeled with object
 IDs; join on `mz_object_info`, `mz_cluster_info`, and `mz_replica_info` for
 names.
