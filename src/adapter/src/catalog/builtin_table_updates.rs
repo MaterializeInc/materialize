@@ -11,16 +11,14 @@ mod notice;
 
 use bytesize::ByteSize;
 use ipnet::IpNet;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OPERATORS, MZ_PSEUDO_TYPES,
-    MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA,
-    MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEX_COLUMNS,
+    MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+    MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
@@ -34,7 +32,6 @@ use mz_ore::collections::CollectionExt;
 use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
@@ -257,33 +254,7 @@ impl CatalogState {
             }
         }
 
-        // Use initial lcw so that we can tell apart default from non-existent windows.
-        if let Some(cw) = entry.item().initial_logical_compaction_window() {
-            updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
-        }
-
         updates
-    }
-
-    fn pack_history_retention_strategy_update(
-        &self,
-        id: CatalogItemId,
-        cw: CompactionWindow,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let cw: u64 = cw.comparable_timestamp().into();
-        let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
-            .expect("must serialize");
-        BuiltinTableUpdate::row(
-            &*MZ_HISTORY_RETENTION_STRATEGIES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                // FOR is the only strategy at the moment. We may introduce FROM or others later.
-                Datum::String("FOR"),
-                cw.into_row().into_element(),
-            ]),
-            diff,
-        )
     }
 
     fn pack_materialized_view_update(

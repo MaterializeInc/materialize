@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
+use crate::strconv;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 
@@ -187,6 +188,31 @@ impl Interval {
             days: 0,
             micros: duration.as_micros().try_into()?,
         })
+    }
+
+    /// Converts a parsed `INTERVAL '...'` literal into an `Interval`.
+    pub fn from_literal(
+        literal: &mz_sql_parser::ast::IntervalValue,
+    ) -> Result<Interval, anyhow::Error> {
+        let precision_high = DateTimeField::from(literal.precision_high);
+        let precision_low = DateTimeField::from(literal.precision_low);
+        let mut interval = strconv::parse_interval_w_disambiguator(
+            &literal.value,
+            match precision_high {
+                DateTimeField::Hour | DateTimeField::Minute => Some(precision_high),
+                _ => None,
+            },
+            precision_low,
+        )?;
+        // Like PostgreSQL, the range qualifier only disambiguates parsing and
+        // discards fields below its low end. Fields above its high end are kept
+        // as written.
+        interval.truncate_low_fields(
+            precision_low,
+            literal.fsec_max_precision,
+            RoundBehavior::Nearest,
+        )?;
+        Ok(interval)
     }
 
     /// Converts a `chrono::Duration` to an `Interval`. The resulting `Interval` will only have

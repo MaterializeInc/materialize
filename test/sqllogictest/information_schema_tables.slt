@@ -422,7 +422,7 @@ VIEW
 materialize
 mz_internal
 mz_history_retention_strategies
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_hydration_statuses
