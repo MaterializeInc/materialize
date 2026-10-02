@@ -70,6 +70,7 @@ const POLL_INTERVAL_MS: Record<string, number> = {
   // Cached name lookup, refetched only when the largest-queries set changes.
   "clusters.maintainedObjectNames": Infinity,
   "clusters.replicaOfflineEvents": 20_000,
+  "clusters.deploymentLineage": 300_000,
   "roles.owners": 300_000,
   // No refetchInterval in the console: fetched on mount and window refocus
   // only, so replay them once per VU rather than at the 5s default.
