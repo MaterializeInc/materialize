@@ -49,6 +49,14 @@ Syncing identity provider groups to Materialize via SCIM is now generally availa
 
 As team members join, leave, or change teams, updating their group membership in your IdP keeps their access in Materialize aligned. Set it up in the [Materialize Console](/developer-tools/console/) or with Terraform. For more information, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 
+### Improved query latency under load {#v26.44.1-improved-query-latency-under-load}
+
+We've changed how Materialize serves indexed queries under heavy load. In our tests, the client-side p99 latency of single-key lookups running next to heavy scans dropped from 3.64s to 37ms. Excluding the network round trip, the server-side p99 latency dropped from 3.61s to 3ms.
+
+![Client-side latency of single-key lookups running next to heavy scans, with offload disabled (2 to 4 seconds) and enabled (about 30 ms)](/images/releases/v2644_query_latency.png)
+
+We've done this by offloading heavy `SELECT` queries onto separate threads. Previously, heavy `SELECT` queries (such as a filter on a key that matches millions of rows) caused head-of-line blocking. Now, these queries run on separate threads, allowing smaller lookups to keep running in parallel. Concurrent heavy scans also finish faster, because they run side by side instead of queuing on one worker. Queries that read little data are unaffected.
+
 ### Operational dashboards for Self-Managed {#v26.44.1-operational-dashboards}
 
 <red>*Materialize Self-Managed only*</red>
@@ -61,14 +69,6 @@ Starting with v13.1.2 of the [Materialize Terraform modules](/self-managed-deplo
 ![Materialize Upgrade dashboard during a blue/green upgrade, showing the old and new generations' hydration progress, worst-case lag, pods, and versions](/images/releases/v2644_upgrade_dashboard.png)
 
 For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
-
-### Improved query latency under load {#v26.44.1-improved-query-latency-under-load}
-
-We've changed how Materialize serves indexed queries under heavy load. In our tests, the client-side p99 latency of single-key lookups running next to heavy scans dropped from 3.64s to 37ms. Excluding the network round trip, the server-side p99 latency dropped from 3.61s to 3ms.
-
-![Client-side latency of single-key lookups running next to heavy scans, with offload disabled (2 to 4 seconds) and enabled (about 30 ms)](/images/releases/v2644_query_latency.png)
-
-We've done this by offloading heavy `SELECT` queries onto separate threads. Previously, heavy `SELECT` queries (such as a filter on a key that matches millions of rows) caused head-of-line blocking. Now, these queries run on separate threads, allowing smaller lookups to keep running in parallel. Concurrent heavy scans also finish faster, because they run side by side instead of queuing on one worker. Queries that read little data are unaffected.
 
 ### Improvements {#v26.44.1-improvements}
 - **Improved freshness, by addressing slow object storage reads**: A single hung read from object storage, such as one on a connection that died without closing, could hold back every dataflow that depends on it. Materialize now retries a read that is still outstanding after 2 seconds on a second, independent connection and uses whichever response arrives first. In Materialize Cloud, this cut reads slower than 4 seconds by about 70%.
