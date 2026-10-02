@@ -982,6 +982,8 @@ async fn create_postgres_tables(
             staging.clone(),
             Sql::ident(DIFF_COLUMN),
         ),
+        ensure_deletable(&connection.schema, &connection.table),
+        ensure_deletable(&connection.schema, &staging_name),
         // Connections of an earlier incarnation of this sink may still be
         // alive, either mid-COPY on the staging table or merely not yet reaped
         // by TCP keepalives. Either blocks the TRUNCATE below until the server
@@ -1008,6 +1010,35 @@ async fn create_postgres_tables(
 
     batch_execute(&**client, Sql::join(statements, ";\n")).await?;
     Ok(())
+}
+
+/// Gives `table` a replica identity when it would otherwise be undeletable.
+///
+/// A `CREATE PUBLICATION ... FOR ALL TABLES` in the target database covers
+/// every table created after it, and PostgreSQL rejects `DELETE` on a
+/// published table that has no replica identity. Both tables this sink creates
+/// are deleted from on every window, so without this the first window fails
+/// with `cannot delete from table ... because it does not have a replica
+/// identity and publishes deletes`.
+///
+/// Only a table that would actually fail is altered. A target table the user
+/// created with a primary key already has a replica identity, and replacing it
+/// with the full row would make their own downstream replication match on every
+/// column instead.
+fn ensure_deletable(schema: &str, table: &str) -> Sql {
+    let qualified = Sql::literal(&format!(
+        "{}.{}",
+        Sql::ident(schema).as_str(),
+        Sql::ident(table).as_str()
+    ));
+    sql!(
+        "DO $mz$ DECLARE t regclass := to_regclass({}); BEGIN \
+         IF (SELECT relreplident FROM pg_class WHERE oid = t) = 'd' \
+         AND NOT EXISTS (SELECT 1 FROM pg_index WHERE indrelid = t AND indisprimary) \
+         THEN EXECUTE format('ALTER TABLE %s REPLICA IDENTITY FULL', t); \
+         END IF; END $mz$",
+        qualified,
+    )
 }
 
 /// `application_name` carried by every connection a sink opens, so that a

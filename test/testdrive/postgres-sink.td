@@ -23,10 +23,19 @@ $ set-arg-default single-replica-cluster=quickstart
 # multiple statements in one line share an implicit transaction that a COMMIT
 # inside the procedure is not allowed to end.
 
+# The publication is what makes this test cover a target database configured
+# for logical replication. `FOR ALL TABLES` covers every table created after
+# it, including the ones the sink creates, and PostgreSQL rejects DELETE on a
+# published table with no replica identity. The sink deletes from both of its
+# tables on every window, so without the replica identity it sets they would be
+# undeletable and the sink would restart-loop.
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION IF EXISTS pgsink_all_tables;
 DROP SCHEMA IF EXISTS pgsink CASCADE;
 DROP SCHEMA IF EXISTS materialize CASCADE;
 CREATE SCHEMA pgsink;
+CREATE PUBLICATION pgsink_all_tables FOR ALL TABLES;
 CREATE PROCEDURE pgsink.wait_for(query text, expected text) LANGUAGE plpgsql AS $$ DECLARE actual text; BEGIN FOR i IN 1..600 LOOP EXECUTE query INTO actual; IF actual IS NOT DISTINCT FROM expected THEN RETURN; END IF; COMMIT; PERFORM pg_sleep(0.1); END LOOP; RAISE EXCEPTION 'query % returned % but expected %', query, actual, expected; END $$;
 
 > CREATE SECRET pgsink_pass AS 'postgres'
@@ -68,15 +77,26 @@ CALL pgsink.wait_for('SELECT string_agg(attname || '' '' || format_type(atttypid
 CALL pgsink.wait_for('SELECT string_agg(attname || '' '' || format_type(atttypid, atttypmod) || CASE WHEN attnotnull THEN '' not null'' ELSE '''' END, '', '' ORDER BY attnum) FROM pg_attribute WHERE attrelid = ''pgsink.target_mz_staging_${sink-id}''::regclass AND attnum > 0 AND NOT attisdropped', 'a integer not null, b text, c numeric(39,2), d timestamp with time zone, e jsonb, f uuid, g integer[], mz_timestamp bigint not null, mz_diff smallint not null');
 CALL pgsink.wait_for('SELECT string_agg(indexname, '', '' ORDER BY indexname) FROM pg_indexes WHERE schemaname = ''pgsink'' AND tablename = ''target_mz_staging_${sink-id}''', 'target_mz_staging_${sink-id}_mz_diff_idx, target_mz_staging_${sink-id}_mz_timestamp_idx');
 
+# A halted sink is reported here, with its error, rather than being left to
+# time out one of the polls below against an empty target table.
+> SELECT status, error FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
+running <null>
+
+# The recorded frontier moving off zero says the apply step committed a window,
+# which separates a broken apply from a broken copy when one of the content
+# assertions below fails.
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CALL pgsink.wait_for('SELECT (mz_frontier > 0)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
+CALL pgsink.wait_for('SELECT string_agg(sink_id || '' '' || sink_schema || '' '' || sink_table, '', '') FROM materialize.sink_progress', '${sink-id} pgsink target');
+
 # Every column round-trips into the target, including NULLs and text with
 # tabs, newlines, backslashes and quotes. Staging drains as windows are
-# applied, and the recorded frontier moves off zero.
+# applied.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b, chr(9), ''<TAB>''), chr(10), ''<NL>''), ''<NULL>'') || ''|'' || coalesce(c::text, ''<NULL>'') || ''|'' || coalesce(d::text, ''<NULL>'') || ''|'' || coalesce(e::text, ''<NULL>'') || ''|'' || coalesce(f::text, ''<NULL>'') || ''|'' || coalesce(g::text, ''<NULL>''), '' ; '' ORDER BY a) FROM pgsink.target', '1|one|1.50|2024-01-01 00:00:00+00|{"k": 1}|00000000-0000-0000-0000-000000000001|{1,2} ; 2|tab<TAB>nl<NL>bs\ quote''s|-2.25|<NULL>|<NULL>|<NULL>|<NULL> ; 3|<NULL>|<NULL>|<NULL>|null|<NULL>|{}');
 CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target_mz_staging_${sink-id}', '0');
-CALL pgsink.wait_for('SELECT (mz_frontier > 0)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
-CALL pgsink.wait_for('SELECT string_agg(sink_id || '' '' || sink_schema || '' '' || sink_table, '', '') FROM materialize.sink_progress', '${sink-id} pgsink target');
 
 > SELECT write_frontier > 0 FROM mz_internal.mz_frontiers WHERE object_id = '${sink-id}'
 true
@@ -240,3 +260,6 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT count(*)::text FROM pg_tables WHERE schemaname = ''pgsink'' AND tablename LIKE ''bad_target%''', '0');
 
 > DROP SINK pgsink_bad_snk
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION IF EXISTS pgsink_all_tables;
