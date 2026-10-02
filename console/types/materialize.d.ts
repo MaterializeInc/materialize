@@ -1030,6 +1030,9 @@ export interface MzConsoleClusterUtilizationOverview {
   bucket_start: Timestamp;
   cluster_id: string | null;
   disk_percent: number | null;
+  // TODO: heap_limit_percent, ram_percent and swap_of_ram_percent are hand-added
+  // for mz >= 26.44. Keep them through `yarn gen:types` until every environment has them.
+  heap_limit_percent: number | null;
   heap_percent: number | null;
   max_cpu_at: Timestamp;
   max_cpu_percent: number | null;
@@ -1043,8 +1046,10 @@ export interface MzConsoleClusterUtilizationOverview {
   memory_percent: number | null;
   name: string | null;
   offline_events: Json | null;
+  ram_percent: number | null;
   replica_id: string;
   size: string | null;
+  swap_of_ram_percent: number | null;
 }
 
 export interface MzConsoleClusterUtilizationOverview24h {
@@ -1052,6 +1057,9 @@ export interface MzConsoleClusterUtilizationOverview24h {
   bucket_start: Timestamp;
   cluster_id: string | null;
   disk_percent: number | null;
+  // TODO: heap_limit_percent, ram_percent and swap_of_ram_percent are hand-added
+  // for mz >= 26.44. Keep them through `yarn gen:types` until every environment has them.
+  heap_limit_percent: number | null;
   heap_percent: number | null;
   max_cpu_at: Timestamp;
   max_cpu_percent: number | null;
@@ -1065,21 +1073,28 @@ export interface MzConsoleClusterUtilizationOverview24h {
   memory_percent: number | null;
   name: string | null;
   offline_events: Json | null;
+  ram_percent: number | null;
   replica_id: string;
   size: string | null;
+  swap_of_ram_percent: number | null;
 }
 
 export interface MzConsoleClusterUtilizationOverview3h {
   cluster_id: string | null;
   cpu_percent: number | null;
   disk_percent: number | null;
+  // TODO: heap_limit_percent, ram_percent and swap_of_ram_percent are hand-added
+  // for mz >= 26.44. Keep them through `yarn gen:types` until every environment has them.
+  heap_limit_percent: number | null;
   heap_percent: number | null;
   memory_and_disk_percent: number | null;
   memory_percent: number | null;
   name: string | null;
   occurred_at: Timestamp;
+  ram_percent: number | null;
   replica_id: string;
   size: string;
+  swap_of_ram_percent: number | null;
 }
 
 export interface MzDatabases {
@@ -2713,6 +2728,19 @@ export interface MzRelations {
    * The type of the relation: either `table`, `source`, `view`, or `materialized view`.
    */
   type: string;
+}
+
+// TODO: hand-added for mz >= 26.41. Keep through `yarn gen:types` until every environment has it.
+export interface MzReplicaHydrationHistory {
+  cluster_id: string;
+  finished_at: Timestamp | null;
+  object_count: string;
+  peak_disk_bytes: string | null;
+  peak_memory_bytes: string | null;
+  process_id: string | null;
+  replica_id: string;
+  started_at: Timestamp;
+  status: string;
 }
 
 export interface MzRoleAuth {
@@ -4425,6 +4453,7 @@ export interface DB {
   mz_records_per_dataflow_operator_per_worker: MzRecordsPerDataflowOperatorPerWorker;
   mz_records_per_dataflow_per_worker: MzRecordsPerDataflowPerWorker;
   mz_relations: MzRelations;
+  mz_replica_hydration_history: MzReplicaHydrationHistory;
   mz_role_auth: MzRoleAuth;
   mz_role_members: MzRoleMembers;
   mz_role_parameters: MzRoleParameters;

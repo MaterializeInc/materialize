@@ -171,7 +171,7 @@ CONSOLE_DEPLOYMENT_MODE='flexible-deployment' yarn start
 
 # Terminal 3: Run tests (--workers=1 to avoid tests fighting over the same instance)
 cd console
-yarn playwright test scalability/ --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ --workers=1
 ```
 
 #### Setup (staging)
@@ -183,7 +183,7 @@ export E2E_EMAIL=<your-staging-email>
 export E2E_PASSWORD=<your-staging-password>
 export CLUSTER_NAME=<cluster-name>
 export CLUSTER_ID=<cluster-id>
-yarn playwright test scalability/ --project=chromium
+yarn test:e2e:scalability scalability/
 ```
 
 #### Test files
@@ -199,11 +199,11 @@ Pages tested: cluster detail, cluster list, sources list, sinks list, object exp
 
 ```shell
 # Run all audits
-yarn playwright test scalability/query-audit --project=chromium
+yarn test:e2e:scalability scalability/query-audit
 
 # Run one page
-yarn playwright test scalability/query-audit -g "cluster detail" --project=chromium
-yarn playwright test scalability/query-audit -g "object explorer" --project=chromium
+yarn test:e2e:scalability scalability/query-audit -g "cluster detail"
+yarn test:e2e:scalability scalability/query-audit -g "object explorer"
 ```
 
 **`tab-stress.spec.ts`** — Multi-tab stress tests
@@ -218,7 +218,7 @@ Two tests that measure how the console behaves with many tabs open:
   error checks.
 
 ```shell
-yarn playwright test scalability/tab-stress --project=chromium
+yarn test:e2e:scalability scalability/tab-stress
 ```
 
 **`page-load.spec.ts`** — UI snappiness
@@ -234,14 +234,14 @@ can be run individually.
 
 ```shell
 # All cold loads + navigation
-yarn playwright test scalability/page-load --project=chromium
+yarn test:e2e:scalability scalability/page-load
 
 # Individual cold loads
-yarn playwright test scalability/page-load -g "cold load: cluster detail" --project=chromium
-yarn playwright test scalability/page-load -g "cold load: cluster list" --project=chromium
-yarn playwright test scalability/page-load -g "cold load: sources list" --project=chromium
-yarn playwright test scalability/page-load -g "cold load: sinks list" --project=chromium
-yarn playwright test scalability/page-load -g "cold load: object explorer" --project=chromium
+yarn test:e2e:scalability scalability/page-load -g "cold load: cluster detail"
+yarn test:e2e:scalability scalability/page-load -g "cold load: cluster list"
+yarn test:e2e:scalability scalability/page-load -g "cold load: sources list"
+yarn test:e2e:scalability scalability/page-load -g "cold load: sinks list"
+yarn test:e2e:scalability scalability/page-load -g "cold load: object explorer"
 ```
 
 #### Running tests per page
@@ -251,32 +251,32 @@ to avoid tests contending for the same Materialize instance.
 
 **Cluster detail:**
 ```shell
-yarn playwright test scalability/ -g "cluster detail|progressive tab" --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ -g "cluster detail|progressive tab" --workers=1
 ```
 
 **Cluster list:**
 ```shell
-yarn playwright test scalability/ -g "cluster list|navigation flow: cluster|mixed page" --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ -g "cluster list|navigation flow: cluster|mixed page" --workers=1
 ```
 
 **Sources list:**
 ```shell
-yarn playwright test scalability/ -g "sources list" --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ -g "sources list" --workers=1
 ```
 
 **Sinks list:**
 ```shell
-yarn playwright test scalability/ -g "sinks list" --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ -g "sinks list" --workers=1
 ```
 
 **Object explorer:**
 ```shell
-yarn playwright test scalability/ -g "object explorer|cold load: object explorer" --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ -g "object explorer|cold load: object explorer" --workers=1
 ```
 
 **Everything:**
 ```shell
-yarn playwright test scalability/ --project=chromium --workers=1
+yarn test:e2e:scalability scalability/ --workers=1
 ```
 
 #### Configuration

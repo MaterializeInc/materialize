@@ -25,6 +25,13 @@ export interface DataPoint {
   heapPercent: number | null;
   diskPercent: number | null;
   maxMemoryAndDiskPercent: number | null;
+  /**
+   * Swap in use and the RAM allocation, as percentages of the heap limit (RAM
+   * plus swap) like `heapPercent`. Null when the environment doesn't report them.
+   */
+  swapPercent: number | null;
+  /** 100 when the size has no swap. */
+  ramLimitPercent: number | null;
   offlineEvents: OfflineEvent[];
 }
 

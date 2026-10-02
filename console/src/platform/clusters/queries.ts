@@ -63,11 +63,18 @@ import {
   MaterializationLagParams,
 } from "~/api/materialize/cluster/materializationLag";
 import fetchMaxReplicasPerCluster from "~/api/materialize/cluster/maxReplicasPerCluster";
+import { fetchObjectCreationTimes } from "~/api/materialize/cluster/objectCreationTimes";
+import { fetchReplicaHeapLimits } from "~/api/materialize/cluster/replicaHeapLimits";
 import { fetchReplicaHydration } from "~/api/materialize/cluster/replicaHydration";
 import {
   ClusterReplicasParams,
   fetchClusterReplicas,
 } from "~/api/materialize/cluster/replicas";
+import {
+  fetchReplicaHydrationEpisodes,
+  fetchReplicaStatusHistory,
+  fetchUnhydratedComputeObjects,
+} from "~/api/materialize/cluster/replicaStatusTimeline";
 import {
   ClusterReplicasWithUtilizationParams,
   fetchClusterReplicasWithUtilization,
@@ -107,6 +114,7 @@ type ReplicaUtilizationHistoryFilters = {
   replicaId: ReplicaUtilizationHistoryParameters["replicaId"];
   timePeriodMinutes: number;
   bucketSizeMs: ReplicaUtilizationHistoryParameters["bucketSizeMs"];
+  includeMemoryBreakdown?: ReplicaUtilizationHistoryParameters["includeMemoryBreakdown"];
 };
 
 type ClusterFreshnessParams = {
@@ -204,6 +212,37 @@ export const clusterQueryKeys = {
     ] as const,
   replicaHydration: () =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicaHydration")] as const,
+  replicaStatusHistory: (params: { replicaIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaStatusHistory", params),
+    ] as const,
+  replicaHydrationEpisodes: (params: {
+    replicaIds: string[];
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaHydrationEpisodes", params),
+    ] as const,
+  unhydratedComputeObjects: (params: { replicaIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("unhydratedComputeObjects", params),
+    ] as const,
+  replicaHeapLimits: (params: { replicaIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaHeapLimits", params),
+    ] as const,
+  objectCreationTimes: (params: {
+    objectIds: string[];
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("objectCreationTimes", params),
+    ] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
       ...clusterQueryKeys.all(),
@@ -754,6 +793,10 @@ export function useReplicaOfflineEvents(
   return data;
 }
 
+// TODO: remove these gates once all environments are past them.
+const REPLICA_MEMORY_BREAKDOWN_MIN_VERSION = "26.44.0";
+const REPLICA_HYDRATION_HISTORY_MIN_VERSION = "26.43.0";
+
 /**
  * SUBSCRIBE variant for the live (≤3h) window: streams the un-binned 3h base
  * (lineage resolved by `useClusterLineageIds`), bins client-side, shapes like
@@ -766,8 +809,10 @@ export function useReplicaOfflineEvents(
 function useReplicaUtilizationHistorySubscribe(
   params: ReplicaUtilizationHistoryFilters,
   enabled: boolean,
+  includeOfflineEvents: boolean,
 ) {
-  const { replicaId, timePeriodMinutes, bucketSizeMs } = params;
+  const { replicaId, timePeriodMinutes, bucketSizeMs, includeMemoryBreakdown } =
+    params;
   const lineage = useClusterLineageIds(params.clusterIds, enabled);
   const lineageIdsKey = lineage.data?.join(",") ?? "";
 
@@ -782,8 +827,9 @@ function useReplicaUtilizationHistorySubscribe(
     return buildConsoleClusterUtilizationUnbinned3hSubscribe<UtilizationSample>(
       clusterIds,
       minDate,
+      includeMemoryBreakdown,
     );
-  }, [enabled, lineageIdsKey, timePeriodMinutes]);
+  }, [enabled, lineageIdsKey, timePeriodMinutes, includeMemoryBreakdown]);
 
   const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
@@ -800,7 +846,7 @@ function useReplicaUtilizationHistorySubscribe(
   const offlineEvents = useReplicaOfflineEvents(
     data,
     timePeriodMinutes,
-    enabled,
+    enabled && includeOfflineEvents,
   );
 
   const result = useMemo(() => {
@@ -841,7 +887,7 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
   params: ReplicaUtilizationHistoryFilters,
   enabled: boolean,
 ) {
-  const { replicaId, timePeriodMinutes } = params;
+  const { replicaId, timePeriodMinutes, includeMemoryBreakdown } = params;
   const lineage = useClusterLineageIds(params.clusterIds, enabled);
   const lineageIdsKey = lineage.data?.join(",") ?? "";
 
@@ -854,8 +900,9 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     return buildConsoleClusterUtilizationOverview24hSubscribe<BinnedSubscribeRow>(
       clusterIds,
       minDate,
+      includeMemoryBreakdown,
     );
-  }, [enabled, lineageIdsKey, timePeriodMinutes]);
+  }, [enabled, lineageIdsKey, timePeriodMinutes, includeMemoryBreakdown]);
 
   const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
@@ -894,7 +941,12 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
 
 export function useReplicaUtilizationHistory(
   params: ReplicaUtilizationHistoryFilters,
-  queryOptions?: { enabled?: boolean },
+  queryOptions?: {
+    enabled?: boolean;
+    // `false` skips the <=3h windows' offline-events poll, for callers that
+    // read replica status from elsewhere. Their buckets carry no events then.
+    includeOfflineEvents?: boolean;
+  },
 ) {
   const enabled = queryOptions?.enabled ?? true;
   const minutes = params.timePeriodMinutes;
@@ -904,6 +956,14 @@ export function useReplicaUtilizationHistory(
   // this, so its poll path is not gated.
   // TODO: remove the gate once all environments are >= 26.32.
   const hasIndexedViews = useEnvironmentGate("26.32.0") === true;
+  const hasMemoryBreakdown =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
+  const filters = {
+    ...params,
+    // `false` would change the query key for callers that don't pass this.
+    includeMemoryBreakdown:
+      (params.includeMemoryBreakdown && hasMemoryBreakdown) || undefined,
+  };
 
   const useUnbinnedSubscribe =
     hasIndexedViews && minutes <= SUBSCRIBE_UNBINNED_MAX_MINUTES;
@@ -913,16 +973,17 @@ export function useReplicaUtilizationHistory(
     minutes <= SUBSCRIBE_BINNED_MAX_MINUTES;
 
   const unbinnedResult = useReplicaUtilizationHistorySubscribe(
-    params,
+    filters,
     enabled && useUnbinnedSubscribe,
+    queryOptions?.includeOfflineEvents ?? true,
   );
   const binnedResult = useReplicaUtilizationHistoryBinnedSubscribe(
-    params,
+    filters,
     enabled && useBinnedSubscribe,
   );
 
   const queryResult = useQuery({
-    queryKey: clusterQueryKeys.replicaUtilizationHistory(params),
+    queryKey: clusterQueryKeys.replicaUtilizationHistory(filters),
     refetchInterval: 20_000,
     // Poll whatever a subscribe isn't serving: >24h on new mz, and every window
     // on old mz (where the subscribes are gated off).
@@ -966,6 +1027,168 @@ export function useReplicaUtilizationHistory(
         ? binnedResult.isRefreshing
         : false,
   };
+}
+
+/** Status transitions of the given replicas. Idle while `replicaIds` is empty. */
+export function useReplicaStatusHistory(replicaIds: string[]) {
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaStatusHistory({ replicaIds }),
+    enabled: replicaIds.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaStatusHistory({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
+}
+
+/**
+ * Hydration episodes of the given replicas over the window. Idle while
+ * `replicaIds` is empty or the environment predates the history.
+ */
+export function useReplicaHydrationEpisodes(params: {
+  replicaIds: string[];
+  timePeriodMinutes: number;
+}) {
+  const hasHydrationHistory =
+    useEnvironmentGate(REPLICA_HYDRATION_HISTORY_MIN_VERSION) === true;
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaHydrationEpisodes(params),
+    enabled: hasHydrationHistory && params.replicaIds.length > 0,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaHydrationEpisodes({
+        params: {
+          replicaIds: queryKeyParams.replicaIds,
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
+}
+
+// Module-level so react-query reuses the result while the rows are unchanged.
+// An inline function reruns on every render, and a Set or Map skips
+// structural sharing, so each render would get a new identity.
+const toUnhydratedCountByReplicaId = (
+  rows: Array<{ replicaId: string; objectId: string }>,
+) => {
+  const objectIds = new Map<string, Set<string>>();
+  for (const { replicaId, objectId } of rows) {
+    const ids = objectIds.get(replicaId) ?? new Set<string>();
+    ids.add(objectId);
+    objectIds.set(replicaId, ids);
+  }
+  return new Map(
+    [...objectIds].map(([replicaId, ids]) => [replicaId, ids.size]),
+  );
+};
+
+const toHeapLimitBytesByReplicaId = (
+  rows: Array<{ replicaId: string; heapLimit: string | null }>,
+) => {
+  const limits = new Map<string, number>();
+  for (const { replicaId, heapLimit } of rows) {
+    if (heapLimit === null) continue;
+    limits.set(
+      replicaId,
+      Math.max(limits.get(replicaId) ?? 0, Number(heapLimit)),
+    );
+  }
+  return limits;
+};
+
+/**
+ * How many objects each of the given replicas has yet to hydrate, for replicas
+ * that are hydrating. Idle while `replicaIds` is empty.
+ */
+export function useUnhydratedObjectCounts(replicaIds: string[]) {
+  return useQuery({
+    queryKey: clusterQueryKeys.unhydratedComputeObjects({ replicaIds }),
+    enabled: replicaIds.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchUnhydratedComputeObjects({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    select: toUnhydratedCountByReplicaId,
+  });
+}
+
+/**
+ * Each replica's per-process heap limit in bytes, for replicas reporting one.
+ * Idle while `replicaIds` is empty.
+ */
+export function useReplicaHeapLimits(replicaIds: string[]) {
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaHeapLimits({ replicaIds }),
+    enabled: replicaIds.length > 0,
+    // A replica's heap limit is fixed by its size, so once every replica has
+    // reported one there is nothing left to poll for. A failed metrics fetch
+    // records a null limit, so a null keeps polling.
+    staleTime: Infinity,
+    refetchInterval: (query) => {
+      const reported = new Set(
+        query.state.data
+          ?.filter((row) => row.heapLimit !== null)
+          .map((row) => row.replicaId) ?? [],
+      );
+      return replicaIds.every((id) => reported.has(id)) ? false : 60_000;
+    },
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaHeapLimits({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    select: toHeapLimitBytesByReplicaId,
+  });
+}
+
+/** Creation times of the given objects over the window. Idle while `objectIds` is empty. */
+export function useObjectCreationTimes(params: {
+  objectIds: string[];
+  timePeriodMinutes: number;
+}) {
+  return useQuery({
+    queryKey: clusterQueryKeys.objectCreationTimes(params),
+    enabled: params.objectIds.length > 0,
+    // A creation time never changes, and a new object changes the key.
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchObjectCreationTimes({
+        params: {
+          objectIds: queryKeyParams.objectIds,
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
 }
 
 export const LINE_MAX_COUNT = 10;

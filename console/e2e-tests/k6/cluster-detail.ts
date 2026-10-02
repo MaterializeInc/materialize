@@ -71,6 +71,13 @@ const POLL_INTERVAL_MS: Record<string, number> = {
   "clusters.maintainedObjectNames": Infinity,
   "clusters.replicaOfflineEvents": 20_000,
   "clusters.deploymentLineage": 300_000,
+  // Redesigned cluster page (UI preview clusterDetailsRedesign).
+  "clusters.replicaStatusHistory": 30_000,
+  "clusters.unhydratedComputeObjects": 30_000,
+  "clusters.replicaHydrationEpisodes": 60_000,
+  // Fetched once; heap limits refetch only while a replica hasn't reported one.
+  "clusters.replicaHeapLimits": Infinity,
+  "clusters.objectCreationTimes": Infinity,
   "roles.owners": 300_000,
   // No refetchInterval in the console: fetched on mount and window refocus
   // only, so replay them once per VU rather than at the 5s default.
