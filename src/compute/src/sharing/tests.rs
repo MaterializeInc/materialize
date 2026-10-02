@@ -958,13 +958,12 @@ fn consolidate_capture(
         .collect()
 }
 
-/// Exercises [`ArrangementFlavor::SharedTrace`], the render variant that carries a
-/// maintenance-published index imported into the interactive runtime *as an arrangement*.
+/// Exercises [`ArrangementFlavor::Trace`] over a maintenance-published index imported into the
+/// interactive runtime *as an arrangement*.
 ///
-/// Two `RowRow` indexes are published, imported through `SharedReader::import_frontier_core`
-/// as a static `as_of` snapshot, entered into a region, and wrapped in
-/// `ArrangementFlavor::SharedTrace`, exactly as `import_index_shared` does with its
-/// `.enter(self.scope)`. Because the import is a snapshot at `as_of`, every update is coalesced
+/// Two `RowRow` indexes are published, imported through `OksTrace::import_frontier_core` as a
+/// static `as_of` snapshot, entered into a region, and wrapped in `ArrangementFlavor::Trace`,
+/// exactly as `import_index` does with its `.enter(self.scope)`. Because the import is a snapshot at `as_of`, every update is coalesced
 /// to `as_of`, so key 1's insert and retraction cancel. The flavor is then consumed two ways,
 /// standing in for the two downstream operator families that matter:
 ///
@@ -976,10 +975,9 @@ fn consolidate_capture(
 ///   direct join.
 ///
 /// Both consume the imported shared arrangement AS an arrangement, never re-deriving it from a
-/// collection. That is the property the `SharedTrace` variant exists to preserve, and the
-/// property the prior `CollectionBundle::from_collections` degradation broke.
+/// collection.
 #[mz_ore::test]
-fn shared_trace_flavor_feeds_join_and_reduce() {
+fn shared_trace_import_feeds_join_and_reduce() {
     let id_a = GlobalId::User(1);
     let id_b = GlobalId::User(2);
 
@@ -1076,7 +1074,7 @@ fn shared_trace_flavor_feeds_join_and_reduce() {
                 until,
             );
 
-            scope.region_named("SharedTraceFlavor", |inner| {
+            scope.region_named("SharedImport", |inner| {
                 // Enter the region and wrap as `Trace`, mirroring `import_index`.
                 let flavor_a =
                     ArrangementFlavor::Trace(id_a, arr_a.enter(inner), err_a.enter(inner));
@@ -1135,12 +1133,12 @@ fn shared_trace_flavor_feeds_join_and_reduce() {
     assert_eq!(
         consolidate_capture(join_rx),
         expected_join_rows,
-        "join over SharedTrace flavor diverged from the direct join"
+        "join over the shared import diverged from the direct join"
     );
     assert_eq!(
         consolidate_capture(reduce_rx),
         expected_reduce_rows,
-        "flat_map_ok over SharedTrace flavor diverged from the published rows"
+        "flat_map_ok over the shared import diverged from the published rows"
     );
 }
 
@@ -1311,7 +1309,7 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
                 until,
             );
 
-            scope.region_named("SharedTraceFlavor", |inner| {
+            scope.region_named("SharedImport", |inner| {
                 let flavor_a =
                     ArrangementFlavor::Trace(id_a, arr_a.enter(inner), err_a.enter(inner));
                 let flavor_b =
