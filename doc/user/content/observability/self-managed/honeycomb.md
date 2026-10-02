@@ -141,11 +141,13 @@ configuration change. Confirm against a recent time window.
 
 Build Honeycomb [triggers
 ⧉](https://docs.honeycomb.io/investigate/alerts/triggers/) from the metrics and
-thresholds in [Alerting](/observability/self-managed/alerting/).
+thresholds in [Alerting](/observability/self-managed/alerting/#thresholds).
 
 The monitoring stack also ships Alertmanager rules that evaluate against the
-bundled Thanos. Decide which system owns which alerts rather than running both
-against the same thresholds.
+bundled Thanos, and notify no one until you [configure a
+receiver](/observability/self-managed/alerting/#step-2-configure-a-receiver).
+Decide which system owns which alerts rather than running both against the same
+thresholds.
 
 ## How to control which metrics Honeycomb receives
 

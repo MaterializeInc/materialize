@@ -119,11 +119,13 @@ In Datadog, **Metrics > Summary** filtered to `mz_` is the quickest place to loo
 
 With metrics in Datadog, build [monitors ⧉](https://docs.datadoghq.com/monitors/)
 from the metrics and thresholds in
-[Alerting](/observability/self-managed/alerting/).
+[Alerting](/observability/self-managed/alerting/#thresholds).
 
 The monitoring stack also ships Alertmanager rules that evaluate against the
-bundled Thanos. Decide which system owns which alerts rather than running both
-against the same thresholds and paging twice.
+bundled Thanos, and notify no one until you [configure a
+receiver](/observability/self-managed/alerting/#step-2-configure-a-receiver).
+Decide which system owns which alerts rather than running both against the same
+thresholds and paging twice.
 
 ## How to control which metrics Datadog receives
 
