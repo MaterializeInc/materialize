@@ -7,21 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  Box,
-  Table,
-  Tbody,
-  Td,
-  Text,
-  Th,
-  Thead,
-  Tr,
-  useTheme,
-} from "@chakra-ui/react";
+import { Box, Text, useTheme, VStack } from "@chakra-ui/react";
+import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
 
 import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
 import StatusPill from "~/components/StatusPill";
+import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
+import { TablePagination } from "~/components/Table/TablePagination";
+import { UniversalTable } from "~/components/Table/UniversalTable";
+import { useUniversalTable } from "~/components/Table/useUniversalTable";
 import {
   bucketForHydration,
   HYDRATION_LABELS,
@@ -31,20 +26,80 @@ import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { formatDurationForAxis } from "~/utils/format";
 
-import { FreshnessRow, SortKey, sortRows } from "./freshnessRows";
+import { FreshnessRow } from "./freshnessRows";
 
-const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
-  { key: "objectName", label: "Object", numeric: false },
-  { key: "objectType", label: "Type", numeric: false },
-  { key: "current", label: "Now", numeric: true },
-  { key: "peak", label: "Peak", numeric: true },
-  { key: "p90", label: "p90", numeric: true },
-];
+const PAGE_SIZE = 25;
 
-const HydrationPill = ({ row }: { row: FreshnessRow }) => {
+/** Shown where a statistic has no value, matching the rest of the Console. */
+const NO_VALUE = "—";
+
+const ObjectCell = ({ row }: { row: FreshnessRow }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <>
+      <Text noOfLines={1}>{row.objectName}</Text>
+      {row.namespace && (
+        <Text
+          textStyle="text-small"
+          color={colors.foreground.secondary}
+          noOfLines={1}
+        >
+          {row.namespace}
+        </Text>
+      )}
+    </>
+  );
+};
+
+/**
+ * A statistic, marked when it is the one that put its row over the threshold.
+ *
+ * The swatch says a row is on the graph; it does not say which of its three
+ * numbers is responsible, so the responsible one is marked here.
+ */
+const StatCell = ({
+  value,
+  row,
+}: {
+  value: number | null;
+  row: FreshnessRow;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const breaching = row.breaching && row.breachValue === value;
+
+  return (
+    <Text
+      color={breaching ? colors.accent.red : undefined}
+      fontWeight={breaching ? "500" : undefined}
+    >
+      {value === null ? NO_VALUE : formatDurationForAxis(value)}
+    </Text>
+  );
+};
+
+/**
+ * The "Now" cell, which is where an unreadable object is called out.
+ *
+ * Such a row carries `breachValue: Infinity` so it sorts and highlights as the
+ * worst one. Naming the state here is what keeps that number off the screen.
+ */
+const NowCell = ({ row }: { row: FreshnessRow }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  if (row.notQueryable) {
+    return (
+      <Text color={colors.accent.red} fontWeight="500">
+        {NULL_LAG_TEXT}
+      </Text>
+    );
+  }
+  return <StatCell value={row.current} row={row} />;
+};
+
+const HydrationCell = ({ row }: { row: FreshnessRow }) => {
   const bucket = bucketForHydration(row.hydratedReplicas, row.totalReplicas);
   // No rows in `mz_hydration_statuses` for the object yet.
-  if (!bucket) return <>-</>;
+  if (!bucket) return <>{NO_VALUE}</>;
 
   return (
     <StatusPill
@@ -55,159 +110,116 @@ const HydrationPill = ({ row }: { row: FreshnessRow }) => {
   );
 };
 
+const ColorSwatch = ({ row }: { row: FreshnessRow }) => {
+  if (!row.color) return null;
+  return (
+    <Box
+      boxSize="2.5"
+      borderRadius="sm"
+      background={row.color}
+      role="img"
+      aria-label="Shown on the graph"
+    />
+  );
+};
+
+const columnHelper = createColumnHelper<FreshnessRow>();
+
+const columns = [
+  columnHelper.display({
+    id: "swatch",
+    header: () => <Box aria-label="Graph color" />,
+    cell: (info) => <ColorSwatch row={info.row.original} />,
+    size: 32,
+  }),
+  columnHelper.accessor("objectName", {
+    header: "Object",
+    sortingFn: sortingFunctions.nullsLast,
+    cell: (info) => <ObjectCell row={info.row.original} />,
+    meta: { cellProps: truncateMaxWidth },
+  }),
+  columnHelper.accessor("objectType", {
+    header: "Type",
+    sortingFn: sortingFunctions.nullsLast,
+  }),
+  columnHelper.accessor("current", {
+    header: "Now",
+    // `numericNullsLast` rather than the text collation, which compares 12.48
+    // as (12, 48) against 12.5 as (12, 5) and calls the first one larger.
+    sortingFn: sortingFunctions.numericNullsLast,
+    cell: (info) => <NowCell row={info.row.original} />,
+  }),
+  columnHelper.accessor("peak", {
+    header: "Peak",
+    sortingFn: sortingFunctions.numericNullsLast,
+    cell: (info) => (
+      <StatCell value={info.getValue()} row={info.row.original} />
+    ),
+  }),
+  columnHelper.accessor("p90", {
+    header: "p90",
+    sortingFn: sortingFunctions.numericNullsLast,
+    cell: (info) => (
+      <StatCell value={info.getValue()} row={info.row.original} />
+    ),
+  }),
+  columnHelper.display({
+    id: "hydration",
+    header: "Hydration",
+    cell: (info) => <HydrationCell row={info.row.original} />,
+  }),
+];
+
 export interface FreshnessTableProps {
   rows: FreshnessRow[];
-  emptyMessage: React.ReactNode;
   /** Clicking a row toggles it onto the graph. Omitted where that is not offered. */
   onToggleRow?: (key: string) => void;
+  /** Names the rows in the pagination footer. */
+  itemLabel?: string;
 }
 
 /**
- * Objects and their freshness, sortable.
+ * Objects and their freshness.
  *
- * The swatch is the only link between a row and its line, so it appears exactly
- * where a line is drawn in color: on everything over the threshold, plus
- * anything picked by hand. A value over the threshold is marked in the cell as
- * well, because the swatch says "this is on the graph" and not which reading
- * put it there.
+ * Paginated because "All objects" lists every object on the cluster, and a
+ * cluster can carry thousands. It opens in the order it is given, which is
+ * worst first by whatever the active predicate judges.
  */
 const FreshnessTableInner = ({
   rows,
-  emptyMessage,
   onToggleRow,
+  itemLabel = "objects",
 }: FreshnessTableProps) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const [sort, setSort] = React.useState<{ key: SortKey; direction: 1 | -1 }>({
-    key: "peak",
-    direction: -1,
+  const table = useUniversalTable({
+    data: rows,
+    columns,
+    // No initial sorting: `buildFreshnessRows` already orders worst first by
+    // `breachValue`, which is whichever statistic the active predicate judges.
+    // Naming a column here would instead fix the order to one statistic, and
+    // would put the rows with nothing to judge at the top, since a descending
+    // sort reverses the nulls-last comparators.
+    initialSorting: [],
+    pageSize: PAGE_SIZE,
+    getRowId: (row) => row.key,
   });
 
-  const sorted = React.useMemo(
-    () => sortRows(rows, sort.key, sort.direction),
-    [rows, sort],
+  const onRowClick = React.useMemo(
+    () =>
+      onToggleRow ? (row: FreshnessRow) => onToggleRow(row.key) : undefined,
+    [onToggleRow],
   );
-
-  if (rows.length === 0) {
-    return (
-      <Box padding="4" color={colors.foreground.secondary}>
-        {emptyMessage}
-      </Box>
-    );
-  }
-
-  const cell = (value: number | null, breaching: boolean) => (
-    <Td
-      isNumeric
-      color={breaching ? colors.accent.red : undefined}
-      fontWeight={breaching ? "500" : undefined}
-    >
-      {value === null ? "—" : formatDurationForAxis(value)}
-    </Td>
-  );
-
-  /**
-   * The "Now" cell, which is where an unreadable object is called out. Its
-   * `breachValue` is `Infinity` so that it sorts and highlights as the worst
-   * row, and naming the state here is what keeps that number off the screen.
-   */
-  const nowCell = (row: FreshnessRow) =>
-    row.notQueryable ? (
-      <Td isNumeric color={colors.accent.red} fontWeight="500">
-        {NULL_LAG_TEXT}
-      </Td>
-    ) : (
-      cell(row.current, row.breaching && row.breachValue === row.current)
-    );
 
   return (
-    <Table variant="standalone">
-      <Thead>
-        <Tr>
-          <Th width="8" aria-label="Graph color" />
-          {COLUMNS.map((column) => (
-            <Th
-              key={column.key}
-              isNumeric={column.numeric}
-              cursor="pointer"
-              userSelect="none"
-              aria-sort={
-                sort.key === column.key
-                  ? sort.direction === -1
-                    ? "descending"
-                    : "ascending"
-                  : "none"
-              }
-              onClick={() =>
-                setSort((prev) =>
-                  prev.key === column.key
-                    ? {
-                        key: column.key,
-                        direction: prev.direction === 1 ? -1 : 1,
-                      }
-                    : // First click on a new column picks the direction that
-                      // column is usually read in: durations worst first, names
-                      // alphabetically.
-                      { key: column.key, direction: column.numeric ? -1 : 1 },
-                )
-              }
-            >
-              {column.label}
-              {sort.key === column.key && (sort.direction === -1 ? " ▾" : " ▴")}
-            </Th>
-          ))}
-          <Th>Hydration</Th>
-        </Tr>
-      </Thead>
-      <Tbody>
-        {sorted.map((row) => (
-          <Tr
-            key={row.key}
-            cursor={onToggleRow ? "pointer" : undefined}
-            _hover={
-              onToggleRow
-                ? { background: colors.background.secondary }
-                : undefined
-            }
-            onClick={onToggleRow ? () => onToggleRow(row.key) : undefined}
-          >
-            <Td py="2" pr="0">
-              {row.color && (
-                <Box
-                  boxSize="2.5"
-                  borderRadius="sm"
-                  background={row.color}
-                  role="img"
-                  aria-label="Shown on the graph"
-                />
-              )}
-            </Td>
-            <Td {...truncateMaxWidth} py="2">
-              <Text noOfLines={1}>{row.objectName}</Text>
-              {row.namespace && (
-                <Text
-                  textStyle="text-small"
-                  color={colors.foreground.secondary}
-                  noOfLines={1}
-                >
-                  {row.namespace}
-                </Text>
-              )}
-            </Td>
-            <Td>
-              <Text textStyle="text-ui-sm" color={colors.foreground.secondary}>
-                {row.objectType}
-              </Text>
-            </Td>
-            {nowCell(row)}
-            {cell(row.peak, row.breaching && row.breachValue === row.peak)}
-            {cell(row.p90, row.breaching && row.breachValue === row.p90)}
-            <Td>
-              <HydrationPill row={row} />
-            </Td>
-          </Tr>
-        ))}
-      </Tbody>
-    </Table>
+    <VStack spacing="4" alignItems="stretch" width="100%">
+      <UniversalTable
+        table={table}
+        variant={onToggleRow ? "linkable" : "standalone"}
+        onRowClick={onRowClick}
+      />
+      {rows.length > PAGE_SIZE && (
+        <TablePagination table={table} itemLabel={itemLabel} />
+      )}
+    </VStack>
   );
 };
 
@@ -215,6 +227,6 @@ const FreshnessTableInner = ({
  * Memoized because a threshold drag re-renders the page on every pointer move,
  * and re-rendering a row per object at that rate is what makes the drag
  * stutter. The props it receives are memoized upstream for the same reason: a
- * single rebuilt array or element here would make this memo a no-op.
+ * single rebuilt array here would make this memo a no-op.
  */
 export const FreshnessTable = React.memo(FreshnessTableInner);

@@ -251,28 +251,6 @@ const FreshnessContent = ({
   const window =
     predicate === "current" ? "" : ` in the ${rangeLabel.toLowerCase()}`;
 
-  // A JSX element is an object, so building it inline would change identity on
-  // every render and defeat the memo on `FreshnessTable`.
-  const breachingEmptyMessage = React.useMemo(
-    () => (
-      <>
-        <Text as="span" color={colors.accent.green}>
-          No objects exceeded {formatDurationForAxis(settledThreshold)}{" "}
-          {predicateLabel}
-          {window}.
-        </Text>{" "}
-        All {rows.length} objects are within target.
-      </>
-    ),
-    [
-      colors.accent.green,
-      settledThreshold,
-      predicateLabel,
-      window,
-      rows.length,
-    ],
-  );
-
   return (
     <VStack alignItems="stretch" width="100%" spacing="4">
       <HStack spacing="2" alignItems="center">
@@ -321,21 +299,35 @@ const FreshnessContent = ({
             count={`(${breaching.length}/${rows.length})`}
           />
           <AccordionPanel px="0">
-            <FreshnessTable
-              rows={breaching}
-              emptyMessage={breachingEmptyMessage}
-            />
+            {breaching.length === 0 ? (
+              <Box padding="4" color={colors.foreground.secondary}>
+                <Text as="span" color={colors.accent.green}>
+                  No objects exceeded {formatDurationForAxis(settledThreshold)}{" "}
+                  {predicateLabel}
+                  {window}.
+                </Text>{" "}
+                All {rows.length} objects are within target.
+              </Box>
+            ) : (
+              <FreshnessTable rows={breaching} itemLabel="objects" />
+            )}
           </AccordionPanel>
         </AccordionItem>
 
         <AccordionItem>
           <SectionHeader title="All objects" count={`(${rows.length})`} />
           <AccordionPanel px="0">
-            <FreshnessTable
-              rows={rows}
-              onToggleRow={toggleRow}
-              emptyMessage="No objects with freshness data on this cluster."
-            />
+            {rows.length === 0 ? (
+              <Box padding="4" color={colors.foreground.secondary}>
+                No objects with freshness data on this cluster.
+              </Box>
+            ) : (
+              <FreshnessTable
+                rows={rows}
+                onToggleRow={toggleRow}
+                itemLabel="objects"
+              />
+            )}
           </AccordionPanel>
         </AccordionItem>
       </Accordion>

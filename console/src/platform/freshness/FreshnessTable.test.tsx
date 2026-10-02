@@ -64,9 +64,7 @@ const rows: FreshnessRow[] = [
 
 describe("FreshnessTable", () => {
   it("lists every object, over threshold or not", async () => {
-    await renderComponent(
-      <FreshnessTable rows={rows} emptyMessage="nothing" />,
-    );
+    await renderComponent(<FreshnessTable rows={rows} />);
 
     expect(await screen.findByText("orders_mv")).toBeVisible();
     expect(screen.getByText("users_idx")).toBeVisible();
@@ -74,9 +72,7 @@ describe("FreshnessTable", () => {
   });
 
   it("marks only the rows drawn on the graph", async () => {
-    await renderComponent(
-      <FreshnessTable rows={rows} emptyMessage="nothing" />,
-    );
+    await renderComponent(<FreshnessTable rows={rows} />);
 
     // The swatch is the only link between a row and its line, so an extra or a
     // missing one misattributes.
@@ -88,9 +84,7 @@ describe("FreshnessTable", () => {
   });
 
   it("renders a missing reading as a dash rather than a zero", async () => {
-    await renderComponent(
-      <FreshnessTable rows={rows} emptyMessage="nothing" />,
-    );
+    await renderComponent(<FreshnessTable rows={rows} />);
 
     const nullRow = (await screen.findByText("legacy_sink")).closest("tr");
     // An object with no reading has not been measured at zero lag.
@@ -98,9 +92,7 @@ describe("FreshnessTable", () => {
   });
 
   it("labels hydration with the same buckets as the other tables", async () => {
-    await renderComponent(
-      <FreshnessTable rows={rows} emptyMessage="nothing" />,
-    );
+    await renderComponent(<FreshnessTable rows={rows} />);
 
     // Three buckets, not a boolean: "hydrating" is a real state, and collapsing
     // it into "not hydrated" would misreport an object that is catching up.
@@ -109,9 +101,7 @@ describe("FreshnessTable", () => {
   });
 
   it("sorts on a column when its header is clicked", async () => {
-    await renderComponent(
-      <FreshnessTable rows={rows} emptyMessage="nothing" />,
-    );
+    await renderComponent(<FreshnessTable rows={rows} />);
 
     await userEvent.click(await screen.findByText(/^Object/));
     const names = screen
@@ -124,27 +114,40 @@ describe("FreshnessTable", () => {
   it("toggles a row onto the graph when that is offered", async () => {
     const onToggleRow = vi.fn();
     await renderComponent(
-      <FreshnessTable
-        rows={rows}
-        emptyMessage="nothing"
-        onToggleRow={onToggleRow}
-      />,
+      <FreshnessTable rows={rows} onToggleRow={onToggleRow} />,
     );
 
     await userEvent.click(await screen.findByText("users_idx"));
     expect(onToggleRow).toHaveBeenCalledWith("u2");
   });
 
-  it("says so when the cluster has nothing to report", async () => {
-    await renderComponent(
-      <FreshnessTable
-        rows={[]}
-        emptyMessage="No objects with freshness data"
-      />,
-    );
+  it("opens sorted worst first", async () => {
+    await renderComponent(<FreshnessTable rows={rows} />);
 
-    expect(
-      await screen.findByText(/No objects with freshness data/),
-    ).toBeVisible();
+    await screen.findByText("orders_mv");
+    const names = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getAllByRole("cell")[1].textContent);
+    // The worst peak leads, so the row a reader came for is the first one.
+    expect(names[0]).toContain("orders_mv");
+  });
+
+  it("pages rather than mounting a row per object", async () => {
+    // A cluster can carry thousands of objects. Before pagination this mounted
+    // a `tr` for every one of them.
+    const many = Array.from({ length: 60 }, (_, i) =>
+      buildRow({
+        key: `u${i + 10}`,
+        objectName: `object_${String(i).padStart(2, "0")}`,
+        peak: 1_000 + i,
+      }),
+    );
+    await renderComponent(<FreshnessTable rows={many} />);
+
+    await screen.findByText("object_00");
+    // 25 rows plus the header.
+    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.queryByText("object_59")).not.toBeInTheDocument();
   });
 });

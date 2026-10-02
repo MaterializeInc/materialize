@@ -223,24 +223,3 @@ export function buildFreshnessRows({
         a.objectName.localeCompare(b.objectName),
     );
 }
-
-export type SortKey = "objectName" | "objectType" | "current" | "peak" | "p90";
-
-/** Sorts rows, keeping nulls last whichever direction is asked for. */
-export function sortRows(
-  rows: FreshnessRow[],
-  key: SortKey,
-  direction: 1 | -1,
-): FreshnessRow[] {
-  return [...rows].sort((a, b) => {
-    const x = a[key];
-    const y = b[key];
-    if (x === null && y === null) return 0;
-    if (x === null) return 1;
-    if (y === null) return -1;
-    if (typeof x === "string" && typeof y === "string") {
-      return x.localeCompare(y) * direction;
-    }
-    return ((x as number) - (y as number)) * direction;
-  });
-}

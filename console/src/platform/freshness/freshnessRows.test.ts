@@ -19,7 +19,6 @@ import {
   computeStats,
   judgeLines,
   Predicate,
-  sortRows,
 } from "./freshnessRows";
 import { HydrationCounts } from "./queries";
 
@@ -254,23 +253,5 @@ describe("buildFreshnessRows", () => {
 
   it("lists every object whatever the threshold", () => {
     expect(rowsFor("peak", 60_000)).toHaveLength(4);
-  });
-});
-
-describe("sortRows", () => {
-  it("keeps nulls last in both directions", () => {
-    const rows = rowsFor("peak", 2_000);
-    expect(sortRows(rows, "peak", -1).at(-1)?.key).toBe("absent");
-    expect(sortRows(rows, "peak", 1).at(-1)?.key).toBe("absent");
-  });
-
-  it("sorts names alphabetically", () => {
-    const rows = rowsFor("peak", 2_000);
-    expect(sortRows(rows, "objectName", 1).map((r) => r.key)).toEqual([
-      "absent",
-      "spiky",
-      "steady",
-      "unreadable",
-    ]);
   });
 });
