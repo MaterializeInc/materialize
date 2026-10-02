@@ -2538,10 +2538,8 @@ impl CatalogState {
     /// cannot read the value from their own `worker_config`, because the decision is made in
     /// `environmentd` before the replica exists.
     ///
-    /// Parses through `ConfigType` rather than the value type's own `FromStr`, because a stored
-    /// override is a var-format string: `bool` formats as `on`/`off`, which `str::parse::<bool>()`
-    /// rejects. Parsing it the wrong way silently resolved `false` for an override every other
-    /// surface reported as on.
+    /// Parses through `ConfigType`, because a stored override is a var-format string. `bool`
+    /// formats as `on`/`off`, which the value type's own `str::parse::<bool>()` rejects.
     pub fn replica_scoped<D: ConfigDefault>(
         &self,
         replica_id: ReplicaId,

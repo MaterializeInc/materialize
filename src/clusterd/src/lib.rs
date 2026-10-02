@@ -492,8 +492,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // NOTE: The interactive runtime starts before either branch below opens a listener. On a
     // unified cluster the storage objects render on the maintenance runtime, whose compute logging
     // the compute controller's `CreateInstance` installs, and a dataflow rendered before that
-    // never appears in compute introspection. A storage listener opened while the interactive
-    // runtime was still starting gave a storage controller that whole startup to render first.
+    // never appears in compute introspection. A storage listener opened before the interactive
+    // runtime finishes starting gives a storage controller that whole startup to render first.
     //
     // Shared fate: the panic hook `main` installs covers both runtimes' threads, so a panic on
     // either aborts the process. That bounds an interactive import's read hold to the life of the

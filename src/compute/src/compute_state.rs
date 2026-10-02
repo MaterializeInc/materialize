@@ -811,7 +811,20 @@ impl<'a> ActiveComputeState<'a> {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
+                let Some(trace_bundle) = self.compute_state.traces.get(id).cloned() else {
+                    // The controller sends a peek only after the index's `CreateDataflow`, which
+                    // every runtime of the replica answers by hosting the index or recording it as
+                    // a peer, so a missing trace is a protocol violation.
+                    soft_panic_or_log!("peek {} targets unknown index {id}", peek.uuid);
+                    self.send_compute_response(ComputeResponse::PeekResponse(
+                        peek.uuid,
+                        PeekResponse::Error(PeekError::unstructured(format!(
+                            "index {id} is not available on this replica"
+                        ))),
+                        OpenTelemetryContext::obtain(),
+                    ));
+                    return;
+                };
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
