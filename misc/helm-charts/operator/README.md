@@ -280,6 +280,12 @@ You manage its contents and lifecycle.
 For setup, runtime updates, and verification, see
 [Configure balancerd dynamic configuration](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#configure-balancerd-dynamic-configuration).
 
+Before setting the connection watermarks
+(`balancerd_connection_high_watermark` and `balancerd_connection_low_watermark`),
+confirm that the load balancer in front of balancerd keeps established
+connections open when a backend is not ready. See
+[Take a nearly full balancerd out of load balancer rotation](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#take-a-nearly-full-balancerd-out-of-load-balancer-rotation).
+
 ### Network Policies
 
 Network policies can be enabled by setting `networkPolicies.enabled=true`. By default, the chart uses native Kubernetes network policies. To use Cilium network policies instead, set `networkPolicies.useNativeKubernetesPolicy=false`.
