@@ -36,10 +36,7 @@ use super::*;
 /// The published chain outlives the worker through its `Arc`s, and nothing compacts the trace, so
 /// the snapshot reads below observe the sealed contents even after the publishing worker has torn
 /// down.
-fn publish_index(
-    id: GlobalId,
-    rows: Vec<(Row, Row)>,
-) -> (ArrangementSharingRegistry, UnpublishToken) {
+fn publish_index(id: GlobalId, rows: Vec<(Row, Row)>) -> (ArrangementSharingRegistry, Publication) {
     let registry = ArrangementSharingRegistry::new();
     let token = publish_index_into(&registry, id, rows);
     (registry, token)
@@ -54,9 +51,17 @@ fn publish_index_into(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     rows: Vec<(Row, Row)>,
-) -> UnpublishToken {
+) -> Publication {
+    // The publishing dataflow runs to completion and drops its trace, which releases the writer's
+    // compaction. A peer's hold is what keeps the published `since` at the minimum after that.
+    let slot = registry.get_or_create(id);
+    let minimum = Antichain::from_elem(Timestamp::MIN);
+    let holds = (
+        slot.oks.peer_handle(&minimum),
+        slot.errs.peer_handle(&minimum),
+    );
     let registry_in = registry.clone();
-    timely::execute_directly(move |worker| {
+    let token = timely::execute_directly(move |worker| {
         // The trace lives as long as an agent does, and the point closes when it drops, so the
         // agents must outlive the stepping that seals the batches. Production keeps them in the
         // trace manager. `execute_directly` steps only after this closure returns, so step here.
@@ -93,7 +98,20 @@ fn publish_index_into(
         while worker.step() {}
         drop(keep);
         token
-    })
+    });
+    // Held until the publisher has taken the same slot.
+    drop(slot);
+    Publication {
+        _token: token,
+        _holds: holds,
+    }
+}
+
+/// A publication that tests read after its publishing worker has torn down: the publisher's token
+/// and a peer's holds at the minimum.
+struct Publication {
+    _token: UnpublishToken,
+    _holds: (SharedOksHandle, SharedErrsHandle),
 }
 
 fn test_rows() -> Vec<(Row, Row)> {
