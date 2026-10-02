@@ -482,6 +482,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.38"
+rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu = "1.0.23"
@@ -570,6 +571,7 @@ uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
 which = "8"
+x509-cert = { version = "0.2.5", default-features = false }
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
