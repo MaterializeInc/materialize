@@ -1,5 +1,5 @@
 ---
-title: "Exporting Metrics from Materialize Cloud"
+title: "DO NOT MERGE - Metrics in Materialize Cloud"
 description: "Query or scrape your Materialize Cloud metrics from Grafana, Prometheus, or Datadog."
 menu:
   main:
@@ -32,10 +32,13 @@ Exporting metrics from Materialize Cloud is a good fit if you need:
 - **Bring Materialize metrics into your existing observability stack**: connect
   Grafana directly, or scrape with Prometheus or the Datadog Agent.
 
+For step by step setup, see [Grafana](/observability/cloud/grafana/) and
+[Datadog](/observability/cloud/datadog/).
+
 {{< note >}}
-Intended to replace the [Prometheus SQL exporter setup](/observability/cloud/grafana/)
-for most use cases. (Draft: whether the SQL exporter remains supported is still
-open.)
+Replaces the previous setup, which required running a Prometheus SQL exporter
+against your environment. (Draft: whether the SQL exporter remains supported
+during migration is still open.)
 {{</ note >}}
 
 ## How it works
@@ -54,23 +57,29 @@ The endpoint offers two ways to read, with the same token:
 - **Scrape endpoint**: returns the latest values in Prometheus text format, for
   your own Prometheus or Datadog Agent to collect and store.
 
-## Available metrics (more to be added)
+## Available metrics
 
-| Metric | What it tells you | Labels |
-| --- | --- | --- |
-| `mz_arrangement_size_bytes`, `mz_arrangement_records` | Memory held by each index, materialized view, and source | object, cluster, replica |
-| `mz_dataflow_elapsed_seconds_total` | CPU time per dataflow | object, cluster, replica |
-| `mz_dataflow_error_count` | Live error rows per object | object, cluster, replica |
-| `mz_compute_metric_sink_frontier_ms` | Freshness of each metric set; stale if it stops advancing | sink |
-| `mz_compute_metric_sink_errors` | Errors in a metric set; alert when above 0 | sink |
+Metrics are grouped by the question they answer. Series are labeled with object
+IDs; join on `mz_object_info`, `mz_cluster_info`, and `mz_replica_info` for
+names.
 
-Labels include both IDs and names, so you do not need to join against the
-catalog. (Draft: additional stable metrics, such as memory limits and active
-sessions, are under consideration.)
+| Question | Metrics |
+| --- | --- |
+| Is my data fresh? | `mz_dataflow_wallclock_lag_seconds` |
+| How much memory does each object use? | `mz_metric_sink_curated_arrangement_size_bytes`, `mz_metric_sink_curated_arrangement_records`, `mz_metric_sink_curated_arrangement_batches` |
+| Are my queries fast and succeeding? | `mz_compute_peek_duration_seconds_bucket`, `mz_query_total`, `mz_adapter_commands` |
+| Who is connected? | `mz_active_sessions`, `mz_active_subscribes` |
+| Are my sources keeping up? | `mz_source_offset_known`, `mz_source_offset_committed`, `mz_source_bytes_received`, `mz_source_messages_received` |
+| Are my sinks healthy? | `mz_sink_bytes_committed`, `mz_sink_bytes_staged`, `mz_sink_rdkafka_txerrs`, `mz_sink_rdkafka_outbuf_msg_cnt`, `mz_sink_iceberg_commit_failures`, `mz_sink_iceberg_commit_duration_seconds_bucket` |
+| Is anything erroring? | `mz_metric_sink_curated_dataflow_error_count` |
+| Are these metrics current? | `mz_compute_metric_sink_frontier_ms`, `mz_compute_metric_sink_errors` |
+| What are the names behind the IDs? | `mz_object_info`, `mz_cluster_info`, `mz_replica_info`, `mz_source_info`, `mz_sink_info` |
 
-Coming soon: the goal is to cover everything in
-[Essential metrics](/observability/essential-metrics/). If you need a specific
-metric, reach out to your Materialize representative.
+(Draft: the `mz_metric_sink_curated_*` and `mz_compute_metric_sink_*` metrics are
+published by the curated metric sinks on every replica. The rest come from the
+[essential metrics](/observability/essential-metrics/) for self-managed; which of
+them Cloud exposes is not yet final. Replica level memory and CPU utilization and
+credit consumption are under consideration. Tell us what is missing.)
 
 ## Prerequisites
 
