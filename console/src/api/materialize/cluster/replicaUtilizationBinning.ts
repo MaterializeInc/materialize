@@ -395,9 +395,11 @@ export function toReplicaUtilizationGraphData(
             size,
             offlineEvents,
             name,
+            clusterId,
           }) => ({
             id: replicaId,
             name,
+            clusterId,
             bucketEnd: bucketEnd.getTime(),
             bucketStart: bucketStart.getTime(),
             cpuPercent: maxCpu?.percent ? maxCpu.percent * 100 : null,

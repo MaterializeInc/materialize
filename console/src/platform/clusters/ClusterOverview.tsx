@@ -51,6 +51,7 @@ import { ClusterParams } from "./ClusterRoutes";
 import {
   CLUSTER_METRICS_UNAVAILABLE_MESSAGE,
   CLUSTERS_FETCH_ERROR_MESSAGE,
+  MIN_BUCKET_SIZE_MS,
 } from "./constants";
 import LargestMaintainedQueries from "./LargestMaintainedQueries";
 import { useReplicaUtilizationHistory } from "./queries";
@@ -59,9 +60,6 @@ export interface ReplicaData {
   id: string;
   data: DataPoint[];
 }
-
-// because the data is sampled on 60s intervals, we don't want to show more granular data than this.
-const MIN_BUCKET_SIZE_MS = 60 * 1000;
 
 const GRAPH_SPACING = 24;
 
@@ -271,7 +269,7 @@ const ClusterOverview = () => {
   );
 };
 
-const ClusterInfoBox = ({ cluster }: { cluster: Cluster }) => {
+export const ClusterInfoBox = ({ cluster }: { cluster: Cluster }) => {
   const appConfig = useAppConfig();
   let message = null;
 

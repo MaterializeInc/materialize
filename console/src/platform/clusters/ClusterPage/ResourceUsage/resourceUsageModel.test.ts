@@ -13,13 +13,18 @@ import {
   assignReplicaColors,
   canSwap,
   datumAt,
+  groupReplicasByName,
   hasOomBetween,
   HydrationEpisode,
   memoryBar,
   mergeBuckets,
   mergedBucketMs,
+  mergeTimelines,
+  mostBarsAtOnce,
   OOM_REASON,
   paintObjectHydration,
+  placeChangeTicks,
+  placeStatusSegments,
   ramLimitPercent,
   replicasRestartedSince,
   sharedHeapLimitBytes,
@@ -577,5 +582,199 @@ describe("transformDdlEvents", () => {
         occurredAtMs: 200,
       },
     ]);
+  });
+});
+
+describe("placeChangeTicks", () => {
+  const created = (id: string, occurredAtMs: number) => ({
+    id,
+    name: id,
+    objectType: "index",
+    occurredAtMs,
+  });
+  // One pixel per millisecond.
+  const place = (events: ReturnType<typeof created>[]) =>
+    placeChangeTicks(events, (timeMs) => timeMs, [0, 1000], 8);
+
+  it("merges each creation less than the threshold after the one before it", () => {
+    const ticks = place([
+      created("a", 100),
+      created("b", 105),
+      created("c", 112),
+      created("d", 120),
+    ]);
+
+    expect(
+      ticks.map(({ startMs, endMs, atMs, events }) => ({
+        startMs,
+        endMs,
+        atMs,
+        ids: events.map(({ id }) => id),
+      })),
+    ).toEqual([
+      { startMs: 100, endMs: 112, atMs: 106, ids: ["a", "b", "c"] },
+      { startMs: 120, endMs: 120, atMs: 120, ids: ["d"] },
+    ]);
+  });
+
+  it("drops creations outside the plot", () => {
+    expect(
+      place([created("a", -1), created("b", 500), created("c", 1001)]).map(
+        ({ events }) => events.map(({ id }) => id),
+      ),
+    ).toEqual([["b"]]);
+  });
+
+  it("places no ticks without creations", () => {
+    expect(place([])).toEqual([]);
+  });
+});
+
+describe("placeStatusSegments", () => {
+  const segments = [
+    { state: "running" as const, startMs: 0, endMs: 100 },
+    { state: "hydrating" as const, startMs: 100, endMs: 101 },
+    { state: "running" as const, startMs: 101, endMs: 199 },
+    { state: "offline" as const, startMs: 199, endMs: 200 },
+  ];
+
+  it("widens brief stretches and draws them over the others", () => {
+    const placed = placeStatusSegments(segments, (timeMs) => timeMs, 200, 4);
+
+    expect(
+      placed.map(({ segment, x, width }) => [segment.state, x, width]),
+    ).toEqual([
+      ["running", 0, 100],
+      ["running", 101, 98],
+      ["hydrating", 100, 4],
+      // Kept inside the plot's right edge.
+      ["offline", 196, 4],
+    ]);
+  });
+});
+
+describe("groupReplicasByName", () => {
+  const replica = (
+    id: string,
+    name: string,
+    isCurrent = false,
+    clusterId = "u9",
+  ) => ({
+    id,
+    name,
+    clusterId,
+    isCurrent,
+  });
+
+  it("groups a scheduled cluster's refreshes under its current replica", () => {
+    const groups = groupReplicasByName(
+      [replica("u3", "r1", true), replica("u1", "r1"), replica("u2", "r1")],
+      new Map([
+        ["u1", 100],
+        ["u2", 200],
+      ]),
+    );
+
+    expect([...groups]).toEqual([
+      ["u3", "u3"],
+      ["u1", "u3"],
+      ["u2", "u3"],
+    ]);
+  });
+
+  it("keys dropped replicas by the one that reported last", () => {
+    const groups = groupReplicasByName(
+      [replica("u1", "r1"), replica("u2", "r1"), replica("u4", "r2")],
+      new Map([
+        ["u1", 100],
+        ["u2", 200],
+        ["u4", 50],
+      ]),
+    );
+
+    expect([...groups]).toEqual([
+      ["u1", "u2"],
+      ["u2", "u2"],
+      ["u4", "u4"],
+    ]);
+  });
+
+  it("keeps a past blue-green deployment's replica apart from the current one", () => {
+    const groups = groupReplicasByName(
+      [replica("u3", "r1", true), replica("u1", "r1", false, "u8")],
+      new Map([["u1", 100]]),
+    );
+
+    expect([...groups]).toEqual([
+      ["u3", "u3"],
+      ["u1", "u1"],
+    ]);
+  });
+});
+
+describe("mergeTimelines", () => {
+  it("joins replicas that ran one after another into one row", () => {
+    const timeline = mergeTimelines([
+      {
+        segments: [{ state: "running", startMs: 40, endMs: 60 }],
+        oomAtMs: [55],
+      },
+      {
+        segments: [{ state: "running", startMs: 0, endMs: 20 }],
+        oomAtMs: [],
+      },
+    ]);
+
+    expect(timeline).toEqual({
+      segments: [
+        { state: "running", startMs: 0, endMs: 20 },
+        { state: "running", startMs: 40, endMs: 60 },
+      ],
+      oomAtMs: [55],
+    });
+  });
+
+  it("lets the later replica's segment win where two overlap", () => {
+    const timeline = mergeTimelines([
+      {
+        segments: [{ state: "running", startMs: 0, endMs: 50 }],
+        oomAtMs: [],
+      },
+      {
+        segments: [{ state: "offline", startMs: 30, endMs: 60 }],
+        oomAtMs: [],
+      },
+    ]);
+
+    expect(timeline.segments).toEqual([
+      { state: "running", startMs: 0, endMs: 30 },
+      { state: "offline", startMs: 30, endMs: 60 },
+    ]);
+  });
+});
+
+describe("mostBarsAtOnce", () => {
+  const series = (id: string, bucketStarts: number[]) => ({
+    id,
+    data: bucketStarts.map((bucketStart) =>
+      mkPoint({ bucketStart, bucketEnd: bucketStart + 60, heapPercent: 50 }),
+    ),
+  });
+
+  it("counts only replicas with a bar at the same time", () => {
+    expect(
+      mostBarsAtOnce([
+        series("u1", [0, 60]),
+        series("u2", [120, 180]),
+        series("u3", [240]),
+      ]),
+    ).toEqual(1);
+    expect(
+      mostBarsAtOnce([series("u1", [0, 60]), series("u2", [60, 120])]),
+    ).toEqual(2);
+  });
+
+  it("is 1 without any bar", () => {
+    expect(mostBarsAtOnce([])).toEqual(1);
   });
 });

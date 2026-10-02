@@ -11,7 +11,10 @@ import { greatest, max, sort } from "d3";
 import { millisecondsInHour, millisecondsInMinute } from "date-fns/constants";
 
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
-import { DataPoint } from "~/platform/clusters/ClusterOverview/types";
+import {
+  DataPoint,
+  ReplicaData,
+} from "~/platform/clusters/ClusterOverview/types";
 
 export { OOM_REASON };
 
@@ -277,6 +280,110 @@ export function transformDdlEvents(
   return sort(events, (event) => event.occurredAtMs);
 }
 
+export interface ChangeTick {
+  /** The middle of its events' span, where the tick is drawn. */
+  atMs: number;
+  startMs: number;
+  endMs: number;
+  events: DdlEvent[];
+}
+
+/**
+ * The Objects Created row's ticks for `events`, oldest first, that land in
+ * `[rangeStartPx, rangeEndPx]`. An event less than `mergePx` after the one
+ * before it joins that one's tick, so no two ticks are closer than `mergePx`.
+ */
+export function placeChangeTicks(
+  events: DdlEvent[],
+  xOf: (timeMs: number) => number,
+  [rangeStartPx, rangeEndPx]: [number, number],
+  mergePx: number,
+): ChangeTick[] {
+  const ticks: Array<Omit<ChangeTick, "atMs">> = [];
+  let lastX = Number.NEGATIVE_INFINITY;
+  for (const event of events) {
+    const x = xOf(event.occurredAtMs);
+    if (x < rangeStartPx || x > rangeEndPx) continue;
+    const open = ticks.at(-1);
+    if (open && x - lastX < mergePx) {
+      open.events.push(event);
+      open.endMs = event.occurredAtMs;
+    } else {
+      ticks.push({
+        startMs: event.occurredAtMs,
+        endMs: event.occurredAtMs,
+        events: [event],
+      });
+    }
+    lastX = x;
+  }
+  return ticks.map((tick) => ({
+    ...tick,
+    atMs: (tick.startMs + tick.endMs) / 2,
+  }));
+}
+
+/**
+ * Where to draw a timeline's segments, each at least `minWidthPx` wide so a
+ * brief stretch, such as a hydration after a restart, stays visible. A widened
+ * segment keeps its start unless that would cross `rangeEndPx`, and comes last
+ * so the stretch after it doesn't cover it. Only the drawing widens: `stateAt`
+ * still reads the true times.
+ */
+export function placeStatusSegments(
+  segments: StatusSegment[],
+  xOf: (timeMs: number) => number,
+  rangeEndPx: number,
+  minWidthPx: number,
+) {
+  const placed = segments.map((segment) => {
+    const x = xOf(segment.startMs);
+    const width = xOf(segment.endMs) - x;
+    return width >= minWidthPx
+      ? { segment, x, width, isWidened: false }
+      : {
+          segment,
+          x: Math.min(x, rangeEndPx - minWidthPx),
+          width: minWidthPx,
+          isWidened: true,
+        };
+  });
+  return [
+    ...placed.filter(({ isWidened }) => !isWidened),
+    ...placed.filter(({ isWidened }) => isWidened),
+  ];
+}
+
+/**
+ * Why a window has no readings. A down replica and missing metrics collection
+ * both report empty readings, so replica status tells them apart:
+ * `unmeasured` when a replica was up, `offlineOom` or `offline` when every
+ * replica was down (by the last offline reason), and `unknown` without status.
+ */
+export type MissingUsageCause =
+  "unmeasured" | "offlineOom" | "offline" | "unknown";
+
+export function missingUsageCause({
+  timelines,
+  transitions,
+  isStatusError,
+}: {
+  timelines: ReplicaTimeline[];
+  transitions: StatusTransition[];
+  isStatusError: boolean;
+}): MissingUsageCause {
+  const states = timelines.flatMap(({ segments }) =>
+    segments.map(({ state }) => state),
+  );
+  if (isStatusError || states.length === 0) return "unknown";
+  if (states.some((state) => state !== "offline")) return "unmeasured";
+  const lastOffline = greatest(
+    transitions.filter(({ status }) => status !== "online"),
+    (transition) => transition.occurredAt.getTime(),
+  );
+  return lastOffline?.reason === OOM_REASON ? "offlineOom" : "offline";
+}
+
 export const stateAt = (timeline: ReplicaTimeline, timeMs: number) =>
   timeline.segments.find(
     (segment) => segment.startMs <= timeMs && timeMs < segment.endMs,
@@ -334,6 +441,94 @@ export function mergeBuckets(
   });
 }
 
+/**
+ * Each replica's group, keyed by the id that stands for its cluster and name:
+ * the current replica of that name, else the one that reported last. A
+ * scheduled cluster gets a new replica id under the same name on every
+ * refresh. A cluster holds one live replica per name (`replica_id_by_name_` in
+ * the catalog), so a name's replicas in one cluster ran one after another
+ * unless one was renamed. A past blue-green deployment is another cluster, and
+ * its replicas run alongside the current ones while those hydrate, so they
+ * keep their own groups.
+ */
+export function groupReplicasByName(
+  replicas: Array<{
+    id: string;
+    name: string;
+    clusterId: string;
+    isCurrent: boolean;
+  }>,
+  lastReportedMs: Map<string, number>,
+) {
+  const groupKey = ({ clusterId, name }: (typeof replicas)[number]) =>
+    `${clusterId}\0${name}`;
+  const membersByKey = new Map<string, typeof replicas>();
+  for (const replica of replicas) {
+    membersByKey.set(groupKey(replica), [
+      ...(membersByKey.get(groupKey(replica)) ?? []),
+      replica,
+    ]);
+  }
+  const groupIdByKey = new Map(
+    [...membersByKey].map(([key, members]) => [
+      key,
+      (
+        members.find((replica) => replica.isCurrent) ??
+        greatest(members, (replica) => lastReportedMs.get(replica.id) ?? 0) ??
+        members[0]
+      ).id,
+    ]),
+  );
+  return new Map(
+    replicas.map((replica) => [
+      replica.id,
+      groupIdByKey.get(groupKey(replica)) ?? replica.id,
+    ]),
+  );
+}
+
+/**
+ * One status timeline for replicas that ran one after another. Where they
+ * overlap, the later segment wins.
+ */
+export function mergeTimelines(timelines: ReplicaTimeline[]): ReplicaTimeline {
+  if (timelines.length === 1) return timelines[0];
+  const segments = sort(
+    timelines.flatMap((timeline) => timeline.segments),
+    (segment) => segment.startMs,
+  ).map((segment, index, sorted) => ({
+    ...segment,
+    endMs: Math.min(segment.endMs, sorted[index + 1]?.startMs ?? Infinity),
+  }));
+  return {
+    segments: mergeAdjacent(
+      segments.filter((segment) => segment.endMs > segment.startMs),
+    ),
+    oomAtMs: sort(timelines.flatMap((timeline) => timeline.oomAtMs)),
+  };
+}
+
+/**
+ * The series with a memory bar in each bucket, in series order, so bars at one
+ * time share only that time's slot.
+ */
+export function seriesWithBarAt(series: ReplicaData[]) {
+  const idsByBucketStart = new Map<number, string[]>();
+  for (const { id, data } of series) {
+    for (const point of data) {
+      if (!memoryBar(point)) continue;
+      const ids = idsByBucketStart.get(point.bucketStart);
+      if (ids) ids.push(id);
+      else idsByBucketStart.set(point.bucketStart, [id]);
+    }
+  }
+  return idsByBucketStart;
+}
+
+/** The most memory bars at one time, at least 1. */
+export const mostBarsAtOnce = (series: ReplicaData[]) =>
+  max([...seriesWithBarAt(series).values()], (ids) => ids.length) ?? 1;
+
 const BUCKET_WIDTHS_MS = [
   ...[1, 2, 3, 5, 6, 10, 15, 20, 30].map(
     (minutes) => minutes * millisecondsInMinute,
@@ -344,10 +539,10 @@ const BUCKET_WIDTHS_MS = [
 ];
 
 /**
- * The bucket width that gives each replica's bar at least `minSlotPx`: the
- * source width when that already does, else the narrowest round width that
- * is a multiple of it. Capped at the widest multiple of the source width that
- * fits in the domain.
+ * The bucket width that gives each bar at least `minSlotPx` when
+ * `replicaCount` bars share a time: the source width when that already does,
+ * else the narrowest round width that is a multiple of it. Capped at the
+ * widest multiple of the source width that fits in the domain.
  */
 export function mergedBucketMs({
   sourceBucketMs,

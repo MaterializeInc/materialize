@@ -749,7 +749,7 @@ export function useMaterializationLag(params: MaterializationLagParams) {
 // live SUBSCRIBE (push). Beyond that we poll. Bounds are the views' retentions.
 const SUBSCRIBE_UNBINNED_MAX_MINUTES = 180; // 3h: live un-binned base, client-binned
 const SUBSCRIBE_BINNED_MAX_MINUTES = 1440; // 24h: live 5-min binned view
-const OVERVIEW_MAX_MINUTES = 20160; // 14d: polled overview view; beyond, ad-hoc
+export const OVERVIEW_MAX_MINUTES = 20160; // 14d: polled overview view; beyond, ad-hoc
 
 // A blue-green cutover changes a cluster's lineage. Refetching on this interval
 // bounds how long that takes to reach an open chart.
@@ -834,7 +834,7 @@ export function useReplicaOfflineEvents(
 
 // TODO: remove these gates once all environments are past them.
 const UTILIZATION_INDEXED_VIEWS_MIN_VERSION = "26.32.0";
-const REPLICA_MEMORY_BREAKDOWN_MIN_VERSION = "26.44.0";
+export const REPLICA_MEMORY_BREAKDOWN_MIN_VERSION = "26.44.0";
 const REPLICA_HYDRATION_HISTORY_MIN_VERSION = "26.43.0";
 
 /**
@@ -1295,13 +1295,15 @@ const toAllocationsBySize = (rows: Array<SizeAllocation & { size: string }>) =>
 
 /**
  * Each size's process count and per-process allocations. Sizes don't change,
- * so this is fetched once. Idle while `sizes` is empty.
+ * so this is fetched once. Idle while `sizes` is empty. While a changed
+ * `sizes` loads, the previous answer stands.
  */
 export function useReplicaSizeAllocations(sizes: string[]) {
   return useQuery({
     queryKey: clusterQueryKeys.replicaSizeAllocations({ sizes }),
     enabled: sizes.length > 0,
     staleTime: Infinity,
+    placeholderData: keepPreviousData,
     queryFn: ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
       return fetchReplicaSizeAllocations({
