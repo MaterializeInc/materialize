@@ -400,41 +400,45 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
-                let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
-                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
-                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
-                let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
-                info!(
-                    ?path,
-                    backgrund_interval=?interval,
-                    clear_bytes,
-                    eager_return,
-                    file_growth_dampener,
-                    local_buffer_bytes,
-                    "enabling lgalloc"
-                );
-                let background_worker_config = lgalloc::BackgroundWorkerConfig {
-                    interval,
-                    clear_bytes,
-                };
-                lgalloc::lgalloc_set_config(
-                    lgalloc::LgAlloc::new()
-                        .enable()
-                        .with_path(path.clone())
-                        .with_background_config(background_worker_config)
-                        .eager_return(eager_return)
-                        .file_growth_dampener(file_growth_dampener)
-                        .local_buffer_bytes(local_buffer_bytes),
-                );
+        // lgalloc is process-global. Only the maintenance runtime configures it; the interactive
+        // runtime shares the same process and inherits maintenance's configuration.
+        if self.role.owns_process_globals() {
+            if ENABLE_LGALLOC.get(config) {
+                if let Some(path) = &self.context.scratch_directory {
+                    let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
+                    let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
+                    let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
+                    let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
+                    let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
+                    info!(
+                        ?path,
+                        backgrund_interval=?interval,
+                        clear_bytes,
+                        eager_return,
+                        file_growth_dampener,
+                        local_buffer_bytes,
+                        "enabling lgalloc"
+                    );
+                    let background_worker_config = lgalloc::BackgroundWorkerConfig {
+                        interval,
+                        clear_bytes,
+                    };
+                    lgalloc::lgalloc_set_config(
+                        lgalloc::LgAlloc::new()
+                            .enable()
+                            .with_path(path.clone())
+                            .with_background_config(background_worker_config)
+                            .eager_return(eager_return)
+                            .file_growth_dampener(file_growth_dampener)
+                            .local_buffer_bytes(local_buffer_bytes),
+                    );
+                } else {
+                    debug!("not enabling lgalloc, scratch directory not specified");
+                }
             } else {
-                debug!("not enabling lgalloc, scratch directory not specified");
+                info!("disabling lgalloc");
+                lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
             }
-        } else {
-            info!("disabling lgalloc");
-            lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
         // Pager backend selection follows scratch-directory availability:
@@ -450,12 +454,16 @@ impl ComputeState {
             mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
         }
 
-        crate::memory_limiter::apply_limiter_config(config);
+        // The memory limiter and the columnation lgalloc region flag are process-global. Only
+        // maintenance configures them; the interactive runtime inherits maintenance's settings.
+        if self.role.owns_process_globals() {
+            crate::memory_limiter::apply_limiter_config(config);
 
-        mz_ore::region::ENABLE_LGALLOC_REGION.store(
-            ENABLE_COLUMNATION_LGALLOC.get(config),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+            mz_ore::region::ENABLE_LGALLOC_REGION.store(
+                ENABLE_COLUMNATION_LGALLOC.get(config),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
 
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
         // settings above, it is captured once at replica creation (see `handle_create_instance`
@@ -600,14 +608,18 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
-        match overflowing_behavior.parse() {
-            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
-            Err(err) => {
-                error!(
-                    err,
-                    overflowing_behavior, "Invalid value for ore_overflowing_behavior"
-                );
+        // `set_behavior` mutates a process-global. Only maintenance applies it; the interactive
+        // runtime inherits the behavior maintenance installs.
+        if self.role.owns_process_globals() {
+            let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
+            match overflowing_behavior.parse() {
+                Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
+                Err(err) => {
+                    error!(
+                        err,
+                        overflowing_behavior, "Invalid value for ore_overflowing_behavior"
+                    );
+                }
             }
         }
     }
@@ -728,12 +740,15 @@ impl<'a> ActiveComputeState<'a> {
         // Apply dictionary compression exactly once, here at instance creation, from the value the
         // controller captured when the replica was created. We deliberately do NOT re-apply it on
         // `handle_update_configuration`, so flipping the flag does not retroactively change this
-        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global and a replica process
-        // hosts a single instance, so this single store covers all of the replica's arrangements.
-        mz_row_spine::DICTIONARY_COMPRESSION.store(
-            config.arrangement_dictionary_compression,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global. Only the maintenance
+        // runtime stores it; the interactive runtime shares the process and inherits the value, and
+        // both runtimes host a single instance, so this single store covers all arrangements.
+        if self.compute_state.role.owns_process_globals() {
+            mz_row_spine::DICTIONARY_COMPRESSION.store(
+                config.arrangement_dictionary_compression,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
 
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);
