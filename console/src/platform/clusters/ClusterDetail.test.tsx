@@ -33,6 +33,9 @@ vi.mock("~/platform/clusters/ClusterOverview", () => ({
     return <div>ClusterOverview component</div>;
   },
 }));
+vi.mock("~/platform/clusters/ClusterPage/ClusterMetrics", () => ({
+  ClusterMetrics: () => <div>ClusterMetrics component</div>,
+}));
 vi.mock("~/platform/clusters/ClusterReplicas", () => ({
   default: () => <div>ClusterReplicas component</div>,
 }));
@@ -154,7 +157,7 @@ describe("ClusterDetail redesign preview", () => {
       expect(
         screen.queryByRole("link", { name: "Materialized Views" }),
       ).not.toBeInTheDocument();
-      expect(screen.getByText("ClusterOverview component")).toBeVisible();
+      expect(screen.getByText("ClusterMetrics component")).toBeVisible();
     });
 
     it("opens the Objects tab on its first object type", async () => {
@@ -189,9 +192,7 @@ describe("ClusterDetail redesign preview", () => {
       await user.click(await screen.findByRole("link", { name: "Metrics" }));
 
       await expectPathname("/u1/default");
-      expect(
-        await screen.findByText("ClusterOverview component"),
-      ).toBeVisible();
+      expect(await screen.findByText("ClusterMetrics component")).toBeVisible();
     });
 
     it("redirects classic tab URLs into the Objects tab", async () => {

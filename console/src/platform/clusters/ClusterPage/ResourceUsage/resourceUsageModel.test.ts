@@ -13,10 +13,13 @@ import {
   assignReplicaColors,
   canSwap,
   datumAt,
+  groupReplicasByName,
   hasOomBetween,
   memoryBar,
   mergeBuckets,
   mergedBucketMs,
+  mergeTimelines,
+  mostBarsAtOnce,
   OOM_REASON,
   ramLimitPercent,
   replicasRestartedSince,
@@ -383,5 +386,131 @@ describe("transformDdlEvents", () => {
         occurredAtMs: 200,
       },
     ]);
+  });
+});
+
+describe("groupReplicasByName", () => {
+  const replica = (
+    id: string,
+    name: string,
+    isCurrent = false,
+    clusterId = "u9",
+  ) => ({
+    id,
+    name,
+    clusterId,
+    isCurrent,
+  });
+
+  it("groups a scheduled cluster's refreshes under its current replica", () => {
+    const groups = groupReplicasByName(
+      [replica("u3", "r1", true), replica("u1", "r1"), replica("u2", "r1")],
+      new Map([
+        ["u1", 100],
+        ["u2", 200],
+      ]),
+    );
+
+    expect([...groups]).toEqual([
+      ["u3", "u3"],
+      ["u1", "u3"],
+      ["u2", "u3"],
+    ]);
+  });
+
+  it("keys dropped replicas by the one that reported last", () => {
+    const groups = groupReplicasByName(
+      [replica("u1", "r1"), replica("u2", "r1"), replica("u4", "r2")],
+      new Map([
+        ["u1", 100],
+        ["u2", 200],
+        ["u4", 50],
+      ]),
+    );
+
+    expect([...groups]).toEqual([
+      ["u1", "u2"],
+      ["u2", "u2"],
+      ["u4", "u4"],
+    ]);
+  });
+
+  it("keeps a past blue-green deployment's replica apart from the current one", () => {
+    const groups = groupReplicasByName(
+      [replica("u3", "r1", true), replica("u1", "r1", false, "u8")],
+      new Map([["u1", 100]]),
+    );
+
+    expect([...groups]).toEqual([
+      ["u3", "u3"],
+      ["u1", "u1"],
+    ]);
+  });
+});
+
+describe("mergeTimelines", () => {
+  it("joins replicas that ran one after another into one row", () => {
+    const timeline = mergeTimelines([
+      {
+        segments: [{ state: "running", startMs: 40, endMs: 60 }],
+        oomAtMs: [55],
+      },
+      {
+        segments: [{ state: "running", startMs: 0, endMs: 20 }],
+        oomAtMs: [],
+      },
+    ]);
+
+    expect(timeline).toEqual({
+      segments: [
+        { state: "running", startMs: 0, endMs: 20 },
+        { state: "running", startMs: 40, endMs: 60 },
+      ],
+      oomAtMs: [55],
+    });
+  });
+
+  it("lets the later replica's segment win where two overlap", () => {
+    const timeline = mergeTimelines([
+      {
+        segments: [{ state: "running", startMs: 0, endMs: 50 }],
+        oomAtMs: [],
+      },
+      {
+        segments: [{ state: "offline", startMs: 30, endMs: 60 }],
+        oomAtMs: [],
+      },
+    ]);
+
+    expect(timeline.segments).toEqual([
+      { state: "running", startMs: 0, endMs: 30 },
+      { state: "offline", startMs: 30, endMs: 60 },
+    ]);
+  });
+});
+
+describe("mostBarsAtOnce", () => {
+  const series = (id: string, bucketStarts: number[]) => ({
+    id,
+    data: bucketStarts.map((bucketStart) =>
+      mkPoint({ bucketStart, bucketEnd: bucketStart + 60, heapPercent: 50 }),
+    ),
+  });
+
+  it("counts only replicas with a bar at the same time", () => {
+    expect(
+      mostBarsAtOnce([
+        series("u1", [0, 60]),
+        series("u2", [120, 180]),
+        series("u3", [240]),
+      ]),
+    ).toEqual(1);
+    expect(
+      mostBarsAtOnce([series("u1", [0, 60]), series("u2", [60, 120])]),
+    ).toEqual(2);
+  });
+
+  it("is 1 without any bar", () => {
+    expect(mostBarsAtOnce([])).toEqual(1);
   });
 });
