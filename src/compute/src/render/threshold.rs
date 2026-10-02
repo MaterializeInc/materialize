@@ -82,15 +82,6 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
                 );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
-        ArrangementFlavor::SharedTrace(_, oks, errs) => {
-            let oks = threshold_arrangement(oks, "Threshold shared trace");
-            let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
-            let errs = errs
-                .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                    "Arrange threshold basic err",
-                );
-            CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
-        }
     }
 }
 

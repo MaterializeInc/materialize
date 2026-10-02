@@ -47,8 +47,7 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::shared_trace::SharedOksEnter;
-use crate::typedefs::{RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::typedefs::{ImportedRowRowEnter, RowRowAgent, RowRowSpine};
 
 /// Available linear join implementations.
 ///
@@ -274,9 +273,7 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
-    /// A shared-trace arrangement imported into the interactive runtime.
-    SharedTrace(Arranged<'scope, SharedOksEnter<T>>),
+    Trace(Arranged<'scope, ImportedRowRowEnter<T>>),
 }
 
 impl<'scope, T> Context<'scope, T>
@@ -319,10 +316,6 @@ where
             (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
                 JoinedFlavor::Trace(oks.enter_region(inner))
-            }
-            (Some(ArrangementFlavor::SharedTrace(_gid, oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::SharedTrace(oks.enter_region(inner))
             }
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
@@ -431,19 +424,16 @@ where
                 errors.push(errs);
                 joined = JoinedFlavor::Local(arranged);
             }
-            JoinedFlavor::Local(_) | JoinedFlavor::Trace(_) | JoinedFlavor::SharedTrace(_) => {}
+            JoinedFlavor::Local(_) | JoinedFlavor::Trace(_) => {}
         }
 
         let arrangement = lookup_relation
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
 
-        // The nine `(stream flavor) x (lookup flavor)` combinations differ only in the two trace
+        // The four `(stream flavor) x (lookup flavor)` combinations differ only in the two trace
         // types handed to the generic `differential_join_inner` and the two arrangement values
-        // consumed. This local macro spells one combination. The `SharedTrace` rows exist so an
-        // interactive-runtime join over imported indexes type-checks. At runtime a dataflow's
-        // arrangements are all one runtime's flavor, so the mixed rows never fire, but exhaustive
-        // matching requires them.
+        // consumed. This local macro spells one combination.
         macro_rules! join {
             ($stream:expr, $stream_tr:ty, $lookup:expr, $lookup_tr:ty, $errs1:expr) => {{
                 let (oks, errs2) = self.differential_join_inner::<$stream_tr, $lookup_tr>(
@@ -464,32 +454,21 @@ where
                     join!(local, RowRowAgent<_, _>, oks, RowRowAgent<_, _>, errs1)
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    join!(local, RowRowAgent<_, _>, oks, RowRowEnter<_, _, _>, errs1)
-                }
-                ArrangementFlavor::SharedTrace(_gid, oks, errs1) => {
-                    join!(local, RowRowAgent<_, _>, oks, SharedOksEnter<_>, errs1)
+                    join!(local, RowRowAgent<_, _>, oks, ImportedRowRowEnter<_>, errs1)
                 }
             },
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    join!(trace, RowRowEnter<_, _, _>, oks, RowRowAgent<_, _>, errs1)
+                    join!(trace, ImportedRowRowEnter<_>, oks, RowRowAgent<_, _>, errs1)
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    join!(trace, RowRowEnter<_, _, _>, oks, RowRowEnter<_, _, _>, errs1)
-                }
-                ArrangementFlavor::SharedTrace(_gid, oks, errs1) => {
-                    join!(trace, RowRowEnter<_, _, _>, oks, SharedOksEnter<_>, errs1)
-                }
-            },
-            JoinedFlavor::SharedTrace(trace) => match arrangement {
-                ArrangementFlavor::Local(oks, errs1) => {
-                    join!(trace, SharedOksEnter<_>, oks, RowRowAgent<_, _>, errs1)
-                }
-                ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    join!(trace, SharedOksEnter<_>, oks, RowRowEnter<_, _, _>, errs1)
-                }
-                ArrangementFlavor::SharedTrace(_gid, oks, errs1) => {
-                    join!(trace, SharedOksEnter<_>, oks, SharedOksEnter<_>, errs1)
+                    join!(
+                        trace,
+                        ImportedRowRowEnter<_>,
+                        oks,
+                        ImportedRowRowEnter<_>,
+                        errs1
+                    )
                 }
             },
         }
