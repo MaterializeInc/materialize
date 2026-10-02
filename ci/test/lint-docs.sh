@@ -17,7 +17,8 @@ set -euo pipefail
 
 git clean -ffdX ci/www/public
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
-try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination ../../ci/www/public/docs/markdown-docs
+try bin/docs-markdown ci/www/public/docs --base-url https://ci.materialize.com/docs/
+try bin/pytest -qq misc/python/materialize/cli/docs_markdown_test.py
 echo "<!doctype html>" > ci/www/public/index.html
 try htmltest -s ci/www/public -c doc/user/.htmltest.yml
 try ci/test/lint-docs-catalog.sh

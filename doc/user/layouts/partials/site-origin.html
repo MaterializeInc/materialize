@@ -1,0 +1,17 @@
+{{- /*
+  Returns scheme://host for the site, for building absolute URLs.
+
+  baseURL is a bare path in the production and preview builds ("/docs",
+  "/materialize/$PR"), so .Permalink cannot yield an absolute URL. When baseURL
+  carries no host of its own, fall back to params.canonicalHost, except under
+  `hugo --environment preview`, where the artifacts serve from
+  preview.materialize.com.
+*/ -}}
+{{- $parsed := urls.Parse site.BaseURL -}}
+{{- $origin := site.Params.canonicalHost -}}
+{{- if $parsed.Host -}}
+  {{- $origin = printf "%s://%s" $parsed.Scheme $parsed.Host -}}
+{{- else if eq hugo.Environment "preview" -}}
+  {{- $origin = "https://preview.materialize.com" -}}
+{{- end -}}
+{{- return $origin -}}

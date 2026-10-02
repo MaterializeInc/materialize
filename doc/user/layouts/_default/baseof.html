@@ -10,6 +10,18 @@ Apache License, Version 2.0. */}}
   </head>
 
   <body>
+    {{- /*
+      Points agents that fetch this page at the docs index. It must be the
+      first element in <body>, ahead of the navigation, so that it survives a
+      truncated fetch. It is hidden visually rather than with display:none,
+      which HTML-to-Markdown converters drop. bin/docs-markdown copies its
+      text to the top of the Markdown rendition.
+    */}}
+    <blockquote class="llms-txt-directive" aria-hidden="true">
+      Documentation index: fetch {{ partial "llms-txt-url.html" . }} to
+      discover the available pages before exploring further. Each page is also
+      available as Markdown at its URL followed by index.md.
+    </blockquote>
     <script>
       const theme = localStorage.getItem("theme");
       const darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -59,7 +71,12 @@ Apache License, Version 2.0. */}}
         </button>
         <div>
           {{ partial "breadcrumbs.html" . }}
-          {{ block "main" . }}{{ end }}
+          {{- /*
+            The <article> is the page body that the Markdown rendition is
+            generated from (bin/docs-markdown). Mark chrome inside it with
+            data-markdown-ignore to keep it out of the Markdown.
+          */}}
+          <article>{{ block "main" . }}{{ end }}</article>
         </div>
 
         <a href="#top" class="back-to-top">Back to top &uarr;</a>
@@ -135,22 +152,45 @@ Apache License, Version 2.0. */}}
         });
       });
 
-      // Add click handlers for all top-level items with children.
-      const menus = $("nav[role=navigation] li.has-children");
-      menus.find("a:not([href])").click((e) => {
-        $(e.target).parents("li").first().toggleClass("open");
-        e.preventDefault();
-        return false;
-      });
-      // When an item is already active, and it's clicked, just collapse it
-      menus.find("a.active").click((e) => {
-        $(e.target).parents("li").first().toggleClass("open");
-        e.preventDefault();
-        return false;
-      });
+      // Toggle a submenu when its header is clicked. When an item is already
+      // active, and it's clicked, just collapse it. The handler is delegated
+      // because the branches merged in below arrive after this runs.
+      const sidebarNav = $("nav.sidebar");
+      sidebarNav.on(
+        "click",
+        "li.has-children a:not([href]), li.has-children a.active",
+        (e) => {
+          $(e.currentTarget).parents("li").first().toggleClass("open");
+          e.preventDefault();
+          return false;
+        }
+      );
 
       // Open the submenu containing the current page by default.
-      menus.has(".active").addClass("open");
+      sidebarNav.find("li.has-children").has(".active").addClass("open");
+
+      // The page renders only the sidebar branch leading to itself (see
+      // partials/sidebar-items.html). Fill in the other branches from the
+      // full tree in sidebar.html.
+      fetch("{{ "sidebar.html" | relURL }}")
+        .then((response) =>
+          response.ok ? response.text() : Promise.reject(response.status)
+        )
+        .then((html) => {
+          const full = new DOMParser().parseFromString(html, "text/html");
+          const lists = new Map();
+          for (const item of full.querySelectorAll("li[data-nav]")) {
+            const list = item.querySelector(":scope > ul");
+            if (list) lists.set(item.dataset.nav, list);
+          }
+          for (const item of sidebarNav[0].querySelectorAll("li[data-nav]")) {
+            const list = lists.get(item.dataset.nav);
+            if (list && !item.querySelector(":scope > ul")) {
+              item.appendChild(document.importNode(list, true));
+            }
+          }
+        })
+        .catch((error) => console.error("Failed to load the full sidebar: " + error));
 
       //Scroll the sidebar to the active element
       $(".sidebar").scrollTop(

@@ -40,10 +40,10 @@ cd doc/user
 if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANCH" == self-managed-docs/* ]]; then
     VERSION=${BUILDKITE_BRANCH#self-managed-docs/}
     hugo --gc --baseURL "/docs/self-managed/$VERSION" --destination "public/docs/self-managed/$VERSION"
+    ../../bin/docs-markdown "public/docs/self-managed/$VERSION" --base-url "https://materialize.com/docs/self-managed/$VERSION/"
 else
     hugo --gc --baseURL /docs --destination public/docs
-    # Build skill docs to public/docs/markdown-docs/.
-    hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
+    ../../bin/docs-markdown public/docs --base-url https://materialize.com/docs/
 fi
 hugo deploy --maxDeletes -1
 

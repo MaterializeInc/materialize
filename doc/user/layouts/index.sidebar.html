@@ -1,0 +1,17 @@
+{{- /*
+  Renders sidebar.html, the full sidebar tree with no entry marked active.
+  Pages render only the branch leading to themselves, and the sidebar script
+  in baseof.html fetches this file to fill in the rest.
+*/ -}}
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
+  </head>
+  <body>
+    <ul>
+      {{- partial "sidebar-items.html" (dict "entries" site.Menus.main.ByWeight "level" 1 "path" "" "page" nil) }}
+    </ul>
+  </body>
+</html>

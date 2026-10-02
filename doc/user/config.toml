@@ -108,15 +108,6 @@ url = "https://materialize.com/securitydisclosure"
 weight = 55
 
 #
-# Custom output format for Claude skill generation
-#
-[outputFormats.skill]
-  mediaType = "text/markdown"
-  baseName = "index"
-  isPlainText = true
-  notAlternative = true
-
-#
 # Custom output format for the llms.txt docs index
 #
 [outputFormats.llmstxt]
@@ -125,8 +116,25 @@ weight = 55
   isPlainText = true
   notAlternative = true
 
+#
+# The full sidebar tree, fetched by the sidebar script (baseof.html).
+#
+[outputFormats.sidebar]
+  mediaType = "text/html"
+  baseName = "sidebar"
+  isHTML = true
+  notAlternative = true
+
 [outputs]
-  home = ["HTML", "RSS", "llmstxt"]
+  home = ["HTML", "RSS", "llmstxt", "sidebar"]
+
+# Each top-level section publishes its own llms.txt, which the root llms.txt
+# links to.
+[[cascade]]
+  outputs = ["HTML", "RSS", "llmstxt"]
+  [cascade.target]
+    kind = "section"
+    path = "/*"
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
@@ -141,6 +149,16 @@ unsafe = true
   [markup.tableOfContents]
     startLevel = 2
     endLevel = 4
+
+[[deployment.matchers]]
+# RFC 7763 makes charset a required parameter of text/markdown.
+pattern = "^.+\\.md$"
+contentType = "text/markdown; charset=utf-8"
+
+[[deployment.matchers]]
+# Hugo deploy would otherwise serve the sitemap as application/rss+xml.
+pattern = "^(.+/)?sitemap\\.xml$"
+contentType = "application/xml"
 
 [[deployment.targets]]
 name = "production"

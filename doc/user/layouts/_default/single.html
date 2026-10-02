@@ -3,7 +3,7 @@
 {{ if not (.Params.disable_h1) }}
   <div class="title-row">
     <h1>{{.Title | markdownify}}</h1>
-    <a class="btn-ghost" href="{{ partial "markdown-url.html" (dict "page" .) }}">View as Markdown</a>
+    <a class="btn-ghost" data-markdown-ignore href="{{ partial "markdown-url.html" (dict "page" .) }}">View as Markdown</a>
   </div>
 {{ end }}
 
