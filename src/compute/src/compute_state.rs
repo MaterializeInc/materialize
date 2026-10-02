@@ -25,7 +25,7 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::{DataflowClass, DataflowDescription};
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
@@ -51,7 +51,6 @@ use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
@@ -76,9 +75,11 @@ use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
+use crate::placement::Placement;
+use crate::process_globals::ProcessGlobals;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
-use crate::sharing::{ArrangementSharingRegistry, Publisher};
+use crate::sharing::{ArrangementSharingRegistry, PeerTraces, Publisher};
 
 mod error_scan;
 mod peek_budget;
@@ -217,6 +218,18 @@ pub struct ComputeState {
     pub persist_clients: Arc<PersistClientCache>,
     /// Publishes this runtime's indexes for its peer runtime.
     pub(crate) publisher: Publisher,
+    /// Whether this runtime applies the process-global settings.
+    process_globals: ProcessGlobals,
+    /// The dataflow classes this runtime renders.
+    placement: Placement,
+    /// Reads the indexes the process's other runtime publishes.
+    peer_traces: PeerTraces,
+    /// Collections a dataflow placed on the process's other runtime exports.
+    ///
+    /// Never in `collections`, which drives frontier reporting: the runtime that renders a
+    /// collection reports its frontiers, and a second report would race it. A peer index also has
+    /// a shared trace in `traces`, whose logical compaction is this runtime's hold on it.
+    pub(crate) peers: BTreeSet<GlobalId>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -335,6 +348,21 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            process_globals: match role {
+                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => ProcessGlobals::Apply,
+                ComputeRuntimeRole::Interactive => ProcessGlobals::Inherit,
+            },
+            placement: match role {
+                ComputeRuntimeRole::Solo => Placement::All,
+                ComputeRuntimeRole::Maintenance => Placement::Maintained,
+                ComputeRuntimeRole::Interactive => Placement::OneShotReads,
+            },
+            peer_traces: match role {
+                // Only maintenance publishes, for the interactive runtime.
+                ComputeRuntimeRole::Interactive => PeerTraces::Registry(sharing_registry.clone()),
+                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => PeerTraces::None,
+            },
+            peers: Default::default(),
             publisher: match role {
                 // Only maintenance has a peer that reads its indexes.
                 ComputeRuntimeRole::Maintenance => Publisher::Registry(sharing_registry.clone()),
@@ -397,46 +425,8 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        // lgalloc is process-global. Only the maintenance runtime configures it; the interactive
-        // runtime shares the same process and inherits maintenance's configuration.
-        if self.role.owns_process_globals() {
-            if ENABLE_LGALLOC.get(config) {
-                if let Some(path) = &self.context.scratch_directory {
-                    let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
-                    let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                    let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
-                    let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
-                    let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
-                    info!(
-                        ?path,
-                        backgrund_interval=?interval,
-                        clear_bytes,
-                        eager_return,
-                        file_growth_dampener,
-                        local_buffer_bytes,
-                        "enabling lgalloc"
-                    );
-                    let background_worker_config = lgalloc::BackgroundWorkerConfig {
-                        interval,
-                        clear_bytes,
-                    };
-                    lgalloc::lgalloc_set_config(
-                        lgalloc::LgAlloc::new()
-                            .enable()
-                            .with_path(path.clone())
-                            .with_background_config(background_worker_config)
-                            .eager_return(eager_return)
-                            .file_growth_dampener(file_growth_dampener)
-                            .local_buffer_bytes(local_buffer_bytes),
-                    );
-                } else {
-                    debug!("not enabling lgalloc, scratch directory not specified");
-                }
-            } else {
-                info!("disabling lgalloc");
-                lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
-            }
-        }
+        self.process_globals
+            .apply_config(config, self.context.scratch_directory.as_ref());
 
         // Pager backend selection follows scratch-directory availability:
         // a scratch dir means the file backend; no scratch dir means swap.
@@ -449,17 +439,6 @@ impl ComputeState {
             mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
         } else {
             mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
-        }
-
-        // The memory limiter and the columnation lgalloc region flag are process-global. Only
-        // maintenance configures them; the interactive runtime inherits maintenance's settings.
-        if self.role.owns_process_globals() {
-            crate::memory_limiter::apply_limiter_config(config);
-
-            mz_ore::region::ENABLE_LGALLOC_REGION.store(
-                ENABLE_COLUMNATION_LGALLOC.get(config),
-                std::sync::atomic::Ordering::Relaxed,
-            );
         }
 
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
@@ -604,21 +583,6 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
-
-        // `set_behavior` mutates a process-global. Only maintenance applies it; the interactive
-        // runtime inherits the behavior maintenance installs.
-        if self.role.owns_process_globals() {
-            let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
-            match overflowing_behavior.parse() {
-                Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
-                Err(err) => {
-                    error!(
-                        err,
-                        overflowing_behavior, "Invalid value for ore_overflowing_behavior"
-                    );
-                }
-            }
-        }
     }
 
     /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
@@ -737,21 +701,29 @@ impl<'a> ActiveComputeState<'a> {
         // Apply dictionary compression exactly once, here at instance creation, from the value the
         // controller captured when the replica was created. We deliberately do NOT re-apply it on
         // `handle_update_configuration`, so flipping the flag does not retroactively change this
-        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global. Only the maintenance
-        // runtime stores it; the interactive runtime shares the process and inherits the value, and
-        // both runtimes host a single instance, so this single store covers all arrangements.
-        if self.compute_state.role.owns_process_globals() {
-            mz_row_spine::DICTIONARY_COMPRESSION.store(
-                config.arrangement_dictionary_compression,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
+        // replica's arrangements. Both runtimes of a process host a single instance, so the one
+        // store covers all arrangements.
+        self.compute_state
+            .process_globals
+            .apply_dictionary_compression(config.arrangement_dictionary_compression);
 
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);
         }
 
-        self.initialize_logging(config.logging);
+        // Logging dataflows are maintained work. A runtime that does not render it holds the
+        // other runtime's logging indexes as peers.
+        if self
+            .compute_state
+            .placement
+            .renders(DataflowClass::Maintained)
+        {
+            self.initialize_logging(config.logging);
+        } else {
+            let index_ids: Vec<_> = config.logging.index_logs.values().copied().collect();
+            let minimum = Antichain::from_elem(Timestamp::MIN);
+            self.record_peers(index_ids.clone().into_iter(), index_ids, &minimum);
+        }
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
@@ -794,6 +766,37 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
+        // Placement comes first, before anything allocates a dataflow index: a dataflow this
+        // runtime does not render builds nothing here.
+        if self.compute_state.placement.renders(dataflow.class) {
+            self.render_dataflow(dataflow);
+        } else {
+            let as_of = dataflow.as_of.clone().expect("dataflow has an as_of");
+            let index_ids: Vec<_> = dataflow.index_exports.keys().copied().collect();
+            self.record_peers(dataflow.export_ids(), index_ids, &as_of);
+        }
+    }
+
+    /// Records collections the process's other runtime exports, holding each index among them at
+    /// `as_of` where this runtime reads that runtime's indexes.
+    fn record_peers(
+        &mut self,
+        export_ids: impl Iterator<Item = GlobalId>,
+        index_ids: impl IntoIterator<Item = GlobalId>,
+        as_of: &Antichain<Timestamp>,
+    ) {
+        for id in export_ids {
+            let fresh = self.compute_state.peers.insert(id);
+            mz_ore::soft_assert_or_log!(fresh, "peer collection {id} recorded twice");
+        }
+        for id in index_ids {
+            if let Some(bundle) = self.compute_state.peer_traces.bundle(id, as_of) {
+                self.compute_state.traces.set(id, bundle);
+            }
+        }
+    }
+
+    fn render_dataflow(&mut self, dataflow: DataflowDescription<RenderPlan, CollectionMetadata>) {
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
@@ -915,6 +918,13 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
+        //
+        // A peer's dataflow runs on the other runtime, so its `Schedule` changes nothing here.
+        mz_ore::soft_assert_or_log!(
+            self.compute_state.collections.contains_key(&id)
+                || self.compute_state.peers.contains(&id),
+            "schedule for unknown collection {id}"
+        );
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
         drop(suspension_token);
 
@@ -926,13 +936,18 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
-        if frontier.is_empty() {
-            // Indicates that we may drop `id`, as there are no more valid times to read.
-            self.drop_collection(id);
-        } else {
-            self.compute_state
+        // An empty frontier means there are no more valid times to read, so the collection goes.
+        // For a peer, compaction moves this runtime's hold on the other runtime's publication.
+        match (self.compute_state.peers.contains(&id), frontier.is_empty()) {
+            (false, true) => self.drop_collection(id),
+            (true, true) => {
+                self.compute_state.peers.remove(&id);
+                self.compute_state.traces.remove(&id);
+            }
+            (_, false) => self
+                .compute_state
                 .traces
-                .allow_compaction(id, frontier.borrow());
+                .allow_compaction(id, frontier.borrow()),
         }
     }
 
@@ -990,9 +1005,10 @@ impl<'a> ActiveComputeState<'a> {
         // such as appending a batch or advancing the upper.
         self.compute_state.persist_clients.cfg().enable_compaction();
 
+        // A peer's writes happen on the other runtime.
         if let Some(collection) = self.compute_state.collections.get_mut(&id) {
             collection.allow_writes();
-        } else {
+        } else if !self.compute_state.peers.contains(&id) {
             soft_panic_or_log!("allow writes for unknown collection {id}");
         }
     }

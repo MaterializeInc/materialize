@@ -452,14 +452,20 @@ impl TraceBundle {
     /// to use it to "uncompact" an existing TVC. The only valid use of the padded bundle is to
     /// initializa a new TVC.
     ///
-    /// Panics on traces this runtime does not maintain, whose compaction its peer owns.
+    /// A bundle over traces the other runtime publishes comes back unchanged: that runtime pads its
+    /// own traces.
     pub fn into_padded(self) -> Self {
-        let (OksTrace::Local(oks), ErrsTrace::Local(errs)) = (self.oks, self.errs) else {
-            panic!("only a trace this runtime maintains can be padded");
+        let oks = match self.oks {
+            OksTrace::Local(oks) => OksTrace::Local(oks.into_padded()),
+            shared @ OksTrace::Shared(_) => shared,
+        };
+        let errs = match self.errs {
+            ErrsTrace::Local(errs) => ErrsTrace::Local(errs.into_padded()),
+            shared @ ErrsTrace::Shared(_) => shared,
         };
         Self {
-            oks: OksTrace::Local(oks.into_padded()),
-            errs: ErrsTrace::Local(errs.into_padded()),
+            oks,
+            errs,
             to_drop: self.to_drop,
         }
     }
