@@ -15,12 +15,13 @@ use mz_ore::metrics::MetricsRegistry;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-// NOTE: mimalloc advises its arenas `MADV_HUGEPAGE` by default
-// (`MIMALLOC_ALLOW_THP`). On hosts with transparent huge pages in `madvise`
-// mode, untouched tails of huge pages count towards RSS: a local catalog
-// server replica measured 585 MiB anonymous RSS with the default and 390 MiB
-// with `MIMALLOC_ALLOW_THP=0`. Swap splits huge pages, which return as base
-// pages on swap-in.
+// NOTE: The workspace builds mimalloc with `no_thp`, so it never advises its
+// arenas `MADV_HUGEPAGE`. With the advice, on hosts with transparent huge pages
+// in `madvise` mode, untouched tails of huge pages count towards RSS: feature
+// benchmarks measured clusterd at 2.4x jemalloc's memory. `MIMALLOC_ALLOW_THP=0`
+// is no substitute, because mimalloc implements it with
+// `prctl(PR_SET_THP_DISABLE)`, which also disables the huge pages the buffer
+// pool requests. Swap splits huge pages, which return as base pages on swap-in.
 #[cfg(all(feature = "mimalloc", not(miri)))]
 #[global_allocator]
 static ALLOC: mz_ore::alloc_track::TrackingAlloc<mimalloc::MiMalloc> =

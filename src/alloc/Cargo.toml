@@ -26,10 +26,11 @@ libc = { workspace = true, optional = true }
 
 [features]
 default = []
-# Whether to use jemalloc instead of the system allocator.
+# Whether to use jemalloc instead of the system allocator for Rust allocations.
 jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
-# Whether to use mimalloc, wrapped in the sampling allocation tracker, instead
-# of the system allocator. Takes precedence over `jemalloc`.
+# Whether to use mimalloc instead of the system allocator. Rust allocations go
+# through the sampling allocation tracker, and mimalloc also replaces `malloc`
+# for C dependencies. Takes precedence over `jemalloc`.
 mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys", "dep:libc", "mz-ore/alloc-track", "mz-prof-http/alloc-track"]
 
 [package.metadata.unused-deps]

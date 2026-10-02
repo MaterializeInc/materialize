@@ -25,7 +25,9 @@ use pprof_util::ProfStartTime;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
 
 #[allow(non_upper_case_globals)]
-#[unsafe(export_name = "malloc_conf")]
+// The workspace builds jemalloc with its `_rjem_` symbol prefix, so it reads
+// its configuration from the prefixed symbol.
+#[unsafe(export_name = "_rjem_malloc_conf")]
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 #[derive(Copy, Clone, Debug)]
