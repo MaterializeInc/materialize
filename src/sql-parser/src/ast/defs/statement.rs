@@ -31,9 +31,9 @@ use crate::ast::{
     CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
     CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, IcebergSinkMode,
     Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
-    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    SinkIncludeMetadata, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1389,6 +1389,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub from: T::ItemName,
     pub connection: CreateSinkConnection<T>,
     pub format: Option<FormatSpecifier<T>>,
+    pub include_metadata: Vec<SinkIncludeMetadata>,
     pub envelope: Option<SinkEnvelope>,
     pub mode: Option<IcebergSinkMode>,
     pub with_options: Vec<CreateSinkOption<T>>,
@@ -1416,6 +1417,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if let Some(format) = &self.format {
             f.write_str(" ");
             f.write_node(format);
+        }
+        if !self.include_metadata.is_empty() {
+            f.write_str(" INCLUDE ");
+            f.write_node(&display::comma_separated(&self.include_metadata));
         }
         if let Some(envelope) = &self.envelope {
             f.write_str(" ENVELOPE ");

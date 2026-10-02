@@ -435,6 +435,7 @@ mod tests {
                 relation_key_indices: None,
                 key_desc_and_indices: None,
                 headers_index: None,
+                sink_id_header: None,
                 value_desc: RelationDesc::builder()
                     .with_column("a", SqlScalarType::String.nullable(false))
                     .finish(),

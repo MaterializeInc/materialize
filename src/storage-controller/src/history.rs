@@ -351,6 +351,7 @@ mod tests {
                 relation_key_indices: Default::default(),
                 key_desc_and_indices: Default::default(),
                 headers_index: Default::default(),
+                sink_id_header: None,
                 value_desc: RelationDesc::new(
                     SqlRelationType {
                         column_types: Default::default(),

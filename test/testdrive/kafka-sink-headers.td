@@ -119,3 +119,90 @@ b         d         {"k": 5, "h": {"a": [98], "c": [100]}}
 
 $ kafka-verify-data headers=a,c format=json sink=materialize.public.bytea_snk key=false sort-messages=true
 b         <null>    {"k": 6, "h": {"a": [98], "c": null}}
+
+# Test INCLUDE SINK ID, which attaches the sink's ID to every message as a
+# header.
+
+> CREATE TABLE sink_id_tbl (k int, h map[text => text])
+> INSERT INTO sink_id_tbl VALUES (1, '{"a" => "b", "sink-id" => "spoofed"}')
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_kafka_sink_include_sink_id = false
+
+! CREATE SINK sink_id_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  FORMAT JSON
+  INCLUDE SINK ID
+  ENVELOPE UPSERT
+contains:INCLUDE SINK ID for Kafka sinks is not available
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_kafka_sink_include_sink_id = true
+
+! CREATE SINK sink_id_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  FORMAT JSON
+  INCLUDE SINK ID, SINK ID AS other
+  ENVELOPE UPSERT
+contains:INCLUDE SINK ID specified more than once
+
+! CREATE SINK sink_id_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  FORMAT JSON
+  INCLUDE SINK ID AS "materialize-timestamp"
+  ENVELOPE UPSERT
+contains:INCLUDE SINK ID alias "materialize-timestamp" cannot start with "materialize-"
+
+> CREATE SINK no_sink_id_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-no-sink-id-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  FORMAT JSON
+  ENVELOPE UPSERT
+
+$ kafka-verify-data headers=materialize-sink-id format=json sink=materialize.public.no_sink_id_snk key=false
+<missing> {"k": 1, "h": {"a": "b", "sink-id": "spoofed"}}
+
+> CREATE SINK sink_id_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  FORMAT JSON
+  INCLUDE SINK ID
+  ENVELOPE UPSERT
+
+$ set-from-sql var=sink-id
+SELECT id FROM mz_sinks WHERE name = 'sink_id_snk'
+
+$ kafka-verify-data headers=materialize-sink-id format=json sink=materialize.public.sink_id_snk key=false
+\${sink-id} {"k": 1, "h": {"a": "b", "sink-id": "spoofed"}}
+
+# The alias names the header. A HEADERS entry with the same key is dropped,
+# otherwise kafka-verify-data would reject the duplicate `sink-id` header.
+
+> CREATE SINK sink_id_alias_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-alias-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  HEADERS h
+  FORMAT JSON
+  INCLUDE SINK ID AS "sink-id"
+  ENVELOPE UPSERT
+
+$ set-from-sql var=sink-id-alias
+SELECT id FROM mz_sinks WHERE name = 'sink_id_alias_snk'
+
+$ kafka-verify-data headers=sink-id,a,materialize-sink-id format=json sink=materialize.public.sink_id_alias_snk key=false
+\${sink-id-alias} b <missing> {"k": 1, "h": {"a": "b", "sink-id": "spoofed"}}
