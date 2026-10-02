@@ -57,10 +57,7 @@ pub(super) fn builtins(
         _ => None,
     });
 
-    let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(
-        source_iter,
-        log_iter.clone(),
-    )));
+    let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(source_iter)));
     let materialized_views: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
     let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
@@ -76,45 +73,41 @@ pub(super) fn builtins(
     });
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         view_iter,
-        [sources, materialized_views, tables, indexes, log_indexes],
+        [log_indexes, sources, materialized_views, tables, indexes],
     )));
 
+    // Creation order: `mz_builtin_sources` reads `mz_builtin_log_indexes`, so
+    // the latter has to exist first.
     [
+        log_indexes,
         sources,
         materialized_views,
         tables,
         indexes,
-        log_indexes,
         views,
     ]
     .into_iter()
     .map(Builtin::View)
 }
 
-fn make_builtin_sources(
-    source_iter: impl Iterator<Item = &'static BuiltinSource>,
-    log_iter: impl Iterator<Item = &'static BuiltinLog>,
-) -> BuiltinView {
+fn make_builtin_sources(source_iter: impl Iterator<Item = &'static BuiltinSource>) -> BuiltinView {
     let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
-    let source_values = source_iter.map(|src| {
-        let privileges = make_privileges_sql(&src.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'source', {})",
-            src.oid, src.schema, src.name, privileges
-        )
-    });
-    let log_values = log_iter.map(|log| {
-        let privileges = make_privileges_sql(&log.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'log', {})",
-            log.oid, log.schema, log.name, privileges
-        )
-    });
-    let values = source_values.chain(log_values).join(",");
+    let source_values = source_iter
+        .map(|src| {
+            let privileges = make_privileges_sql(&src.access, &owner_priv);
+            format!(
+                "({}::oid, '{}', '{}', 'source', {})",
+                src.oid, src.schema, src.name, privileges
+            )
+        })
+        .join(",");
     let sql = format!(
         "
 SELECT oid, schema_name, name, type, privileges
-FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
+FROM (VALUES {source_values}) AS v(oid, schema_name, name, type, privileges)
+UNION ALL
+SELECT oid, schema_name, name, 'log', privileges
+FROM mz_internal.mz_builtin_log_indexes"
     );
 
     BuiltinView {
@@ -130,8 +123,6 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
-            .with_key(vec![0])
-            .with_key(vec![2])
             .finish(),
         column_comments: Default::default(),
         sql: Box::leak(sql.into_boxed_str()),
@@ -324,10 +315,12 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
     }
 }
 
-/// Generates `mz_internal.mz_builtin_log_indexes`, the key of the
-/// introspection index each cluster maintains on a builtin log, which
-/// `mz_catalog.mz_indexes` reads to report those indexes.
+/// Generates `mz_internal.mz_builtin_log_indexes`: per builtin log, the key of
+/// the introspection index each cluster maintains on it, and its privileges.
 fn make_builtin_log_indexes(iter: impl Iterator<Item = &'static BuiltinLog>) -> BuiltinView {
+    // A log is a source for RBAC purposes; this is the owner privilege the
+    // catalog grants when it applies builtin logs.
+    let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
     let values = iter
         .map(|log| {
             assert_safe_builtin_name(log.name, "log");
@@ -343,16 +336,17 @@ fn make_builtin_log_indexes(iter: impl Iterator<Item = &'static BuiltinLog>) -> 
                     None => (i + 1).to_string(),
                 })
                 .join(", ");
+            let privileges = make_privileges_sql(&log.access, &owner_priv);
             format!(
-                "({}::oid, '{}', '{}', '{}')",
-                log.oid, log.schema, log.name, col_list
+                "({}::oid, '{}', '{}', '{}', {})",
+                log.oid, log.schema, log.name, col_list, privileges
             )
         })
         .join(",");
     let sql = format!(
         "
-SELECT oid, schema_name, name, col_list
-FROM (VALUES {values}) AS v(oid, schema_name, name, col_list)"
+SELECT oid, schema_name, name, col_list, privileges
+FROM (VALUES {values}) AS v(oid, schema_name, name, col_list, privileges)"
     );
 
     BuiltinView {
@@ -364,6 +358,10 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, col_list)"
             .with_column("schema_name", SqlScalarType::String.nullable(false))
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("col_list", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
             // (`verify_builtin_descs` enforces this).
