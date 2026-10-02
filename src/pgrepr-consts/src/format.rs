@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use tokio::io;
-
-use crate::codec::input_err;
+use std::io;
 
 /// The encoding format for a `mz_pgrepr::Value`.
 ///
@@ -33,7 +31,10 @@ impl TryFrom<u16> for Format {
         match value {
             0 => Ok(Format::Text),
             1 => Ok(Format::Binary),
-            n => Err(input_err(format!("unknown format code: {}", n))),
+            n => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown format code: {}", n),
+            )),
         }
     }
 }
