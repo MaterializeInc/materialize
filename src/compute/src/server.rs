@@ -552,6 +552,15 @@ impl ClusterSpec for Config {
         }
     }
 
+    fn thread_name_prefix(&self) -> std::borrow::Cow<'static, str> {
+        match self.role {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => {
+                std::borrow::Cow::Borrowed(Self::NAME)
+            }
+            ComputeRuntimeRole::Interactive => std::borrow::Cow::Borrowed("interactive"),
+        }
+    }
+
     fn run_worker(
         &self,
         timely_worker: &mut TimelyWorker,
