@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/alloc-default",
@@ -131,6 +132,7 @@ members = [
 # from the workspace's default members.
 default-members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/arrow-util",

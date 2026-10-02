@@ -6216,16 +6216,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-adapter-dyncfgs"
+version = "0.0.0"
+dependencies = [
+ "mz-dyncfg",
+ "mz-ore",
+ "serde_json",
+]
+
+[[package]]
 name = "mz-adapter-types"
 version = "0.0.0"
 dependencies = [
+ "mz-adapter-dyncfgs",
  "mz-compute-types",
- "mz-dyncfg",
  "mz-ore",
  "mz-repr",
  "mz-storage-types",
  "serde",
- "serde_json",
  "timely",
 ]
 
@@ -9086,7 +9094,7 @@ dependencies = [
  "deadpool-postgres",
  "dec",
  "futures",
- "mz-adapter-types",
+ "mz-adapter-dyncfgs",
  "mz-ore",
  "mz-pgrepr",
  "mz-postgres-client",
