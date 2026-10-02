@@ -9,7 +9,7 @@ menu:
 Use `ALTER CLUSTER` to:
 
 - Change configuration of a cluster, such as the `SIZE` or
-`REPLICATON FACTOR`.
+`REPLICATION FACTOR`.
 - Rename a cluster.
 - Change owner of a cluster.
 
@@ -150,17 +150,30 @@ The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
-#### Downtime considerations for v26.35 or after
-Starting in v26.35, ALTER CLUSTER <name> SET (SIZE = ...) by default resizes
-the cluster gracefully and without downtime. For example:
+#### Resizing is graceful by default
+
+`ALTER CLUSTER <name> SET (SIZE = ...)` resizes the cluster gracefully and
+without downtime. This is the default: you do **not** need to specify `WAIT
+UNTIL READY`, or any other `WITH` option, to get a zero-downtime resize.
+
+Graceful resizing became the default in **v26.35** on Materialize Cloud and in
+**v26.34.1** on Materialize Self-Managed.
 
 ```mzsql
 ALTER CLUSTER c1 SET (SIZE = '100cc');
 ```
 
+The statement returns immediately and the resize proceeds in the background,
+with a default deadline of 24 hours. If the new replicas have not become ready
+by the deadline, Materialize rolls the resize back and the cluster keeps its
+current size.
+
+The `WAIT UNTIL READY` and `WAIT FOR` options do not enable graceful resizing,
+and they are not required for it. Their only effect is to customize the
+deadline and what happens if the deadline passes. See [Customizing the
+timeout](#customizing-the-timeout).
+
 ##### Resizing process
-The resize proceeds in the background, allowing the command to return
-immediately.
 
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
@@ -173,10 +186,16 @@ Throughout, the cluster keeps serving queries, first from the old replicas,
 then from both sets as the new replicas come up, so the resize incurs no
 downtime.
 
-If the new replicas do not become ready within the reconfiguration
-timeout (24 hours by default), Materialize rolls back the resize and the cluster
-keeps its current size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
-The resize still proceeds in the background.
+Because the resize runs in the background, it is unaffected by the session that
+started it. Closing the connection does not cancel it. To stop a resize, see
+[Cancel a resize](#cancel-a-resize).
+
+##### Customizing the timeout
+
+By default, a resize has a deadline of 24 hours, and Materialize rolls the
+resize back if the new replicas have not become ready by then. Use the `WAIT
+UNTIL READY` or `WAIT FOR` options to change the deadline, or to change what
+happens when it passes.
 
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
@@ -194,8 +213,11 @@ The resize still proceeds in the background.
   it rolls back the resize and keeps the current size if the target replicas
   are not ready.
 
-See [Monitoring a resize](#monitoring-a-resize) to track progress and
-[cancel](#monitoring-a-resize) an in-flight resize.
+Both options return immediately and let the resize proceed in the background.
+Neither one holds the session open.
+
+See [Monitoring a resize](#monitoring-a-resize) to track progress and [Cancel a
+resize](#cancel-a-resize) to stop an in-flight resize.
 
 ##### Monitoring a resize
 You can monitor a resize through the following:
@@ -223,6 +245,17 @@ To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
 current size. Materialize drops the target replicas and keeps the current
 configuration.
 
+#### System clusters
+
+`ALTER CLUSTER ... SET (SIZE = ...)` applies to system clusters (such as
+`mz_catalog_server`, `mz_system`, `mz_probe`, `mz_support`, and `mz_analytics`)
+as well as to clusters you create yourself. As with any cluster, altering one
+requires [ownership of it](#required-privileges), which for most system clusters
+means connecting as `mz_system`.
+
+Resizing a system cluster is graceful, and behaves the same way as resizing a
+cluster you created yourself.
+
 #### Downtime considerations for v26.34 or before
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
@@ -233,7 +266,7 @@ original replica.
 
 ```sql
 ALTER CLUSTER c1
-SET (SIZE '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 The `ALTER` statement is blocking and will return only when the new replica
