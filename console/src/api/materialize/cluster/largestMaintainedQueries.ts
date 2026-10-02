@@ -17,7 +17,7 @@ import {
 } from "~/api/materialize";
 
 export type LargestMaintainedQueriesParams = {
-  replicaHeapLimit: number;
+  replicaHeapLimit: number | null;
   limit: number;
   clusterName: string;
   replicaName: string;
@@ -87,7 +87,9 @@ export function buildLargestMaintainedQueriesQuery({
       })
       // Filter out transient dataflows
       .where("ce.export_id", "not like", "t%")
-      .orderBy("memoryPercentage", sql`desc NULLS LAST`)
+      // Order by size: without a heap limit, memoryPercentage is NULL on every
+      // row.
+      .orderBy("size", sql`desc NULLS LAST`)
       .limit(() => sql.raw(limit.toString()))
   );
 }
@@ -119,7 +121,7 @@ export async function fetchLargestMaintainedQueries({
 export type LargestMaintainedObjectSizesParams = {
   clusterId: string;
   replicaName: string;
-  replicaHeapLimit: number;
+  replicaHeapLimit: number | null;
   limit: number;
 };
 

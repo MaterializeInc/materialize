@@ -54,9 +54,7 @@ import { ResourceUsage } from "./ResourceUsage";
 import { CHART_MARGIN } from "./resourceUsageStyles";
 
 // The Metrics page's other card has its own tests and queries.
-vi.mock("~/platform/clusters/LargestMaintainedQueries", () => ({
-  default: () => null,
-}));
+vi.mock("../MemoryByObject", () => ({ MemoryByObject: () => null }));
 
 // jsdom lays nothing out, so give the charts a real width.
 const WIDTH_PX = 900;

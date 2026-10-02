@@ -118,23 +118,63 @@ const LargestMaintainedQueriesError = ({
   );
 };
 
-const LargestMaintainedQueries = (props: LargestMaintainedQueriesProps) => {
+export interface LargestReplica {
+  name: string;
+  /** Null while the replica reports none, as always under the process orchestrator. */
+  heapLimit: number | null;
+}
+
+export interface LargestReplicaBoundaryProps {
+  clusterId: string;
+  /** The replica to load instead of the cluster's largest. */
+  replicaName?: string;
+  children: (replica: LargestReplica) => React.ReactNode;
+  /** Wraps the loading and error states, so a caller can draw them in its card. */
+  wrapFallback?: (fallback: React.ReactNode) => React.ReactNode;
+}
+
+const identity = (fallback: React.ReactNode) => fallback;
+
+/**
+ * Loads the cluster's largest replica and renders `children` with it, behind
+ * the loading and error states of the per-object memory insights. Renders
+ * nothing for a cluster without replicas.
+ */
+export const LargestReplicaBoundary = ({
+  clusterId,
+  replicaName,
+  children,
+  wrapFallback = identity,
+}: LargestReplicaBoundaryProps) => {
   return (
     <AppErrorBoundary
-      renderFallback={({ error }) => (
-        <LargestMaintainedQueriesError error={error} />
-      )}
+      renderFallback={({ error }) =>
+        wrapFallback(<LargestMaintainedQueriesError error={error} />)
+      }
     >
-      <React.Suspense fallback={<LoadingContainer />}>
-        <LargestReplicaLoader {...props} />
+      <React.Suspense fallback={wrapFallback(<LoadingContainer />)}>
+        <LargestReplicaLoader
+          clusterId={clusterId}
+          replicaName={replicaName}
+          wrapFallback={wrapFallback}
+        >
+          {children}
+        </LargestReplicaLoader>
       </React.Suspense>
     </AppErrorBoundary>
   );
 };
 
-const LargestReplicaLoader = (props: LargestMaintainedQueriesProps) => {
+const LargestReplicaLoader = ({
+  clusterId,
+  replicaName,
+  children,
+  wrapFallback,
+}: Omit<Required<LargestReplicaBoundaryProps>, "replicaName"> &
+  Pick<LargestReplicaBoundaryProps, "replicaName">) => {
   const { data: largestReplica } = useLargestClusterReplica({
-    clusterId: props.clusterId,
+    clusterId,
+    replicaName,
   });
 
   // Don't show anything if the cluster has no replicas
@@ -142,19 +182,37 @@ const LargestReplicaLoader = (props: LargestMaintainedQueriesProps) => {
 
   return (
     <AppErrorBoundary
-      renderFallback={({ error }) => (
-        <LargestMaintainedQueriesError
-          error={error}
-          replicaName={largestReplica.name}
+      renderFallback={({ error }) =>
+        wrapFallback(
+          <LargestMaintainedQueriesError
+            error={error}
+            replicaName={largestReplica.name}
+          />,
+        )
+      }
+    >
+      {children({
+        name: largestReplica.name,
+        heapLimit:
+          largestReplica.heapLimit === null
+            ? null
+            : Number(largestReplica.heapLimit),
+      })}
+    </AppErrorBoundary>
+  );
+};
+
+const LargestMaintainedQueries = (props: LargestMaintainedQueriesProps) => {
+  return (
+    <LargestReplicaBoundary clusterId={props.clusterId}>
+      {(replica) => (
+        <LargestMaintainedQueriesInner
+          {...props}
+          replicaName={replica.name}
+          replicaHeapLimit={replica.heapLimit}
         />
       )}
-    >
-      <LargestMaintainedQueriesInner
-        {...props}
-        replicaName={largestReplica.name}
-        replicaHeapLimit={Number(largestReplica.heapLimit)}
-      />
-    </AppErrorBoundary>
+    </LargestReplicaBoundary>
   );
 };
 
@@ -165,7 +223,7 @@ const LargestMaintainedQueriesInner = ({
   replicaHeapLimit,
 }: LargestMaintainedQueriesProps & {
   replicaName: string;
-  replicaHeapLimit: number;
+  replicaHeapLimit: number | null;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const navigate = useNavigate();

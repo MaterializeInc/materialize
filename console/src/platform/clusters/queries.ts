@@ -498,7 +498,8 @@ export type UseLargestMaintainedQueriesParams = {
   clusterName: string;
   limit?: number;
   replicaName: string | undefined;
-  replicaHeapLimit: number | undefined;
+  /** Null when the replica reports none: sizes then carry no percentage. */
+  replicaHeapLimit: number | null;
 };
 export function useLargestMaintainedQueries(
   params: UseLargestMaintainedQueriesParams,
@@ -517,12 +518,7 @@ export function useLargestMaintainedQueries(
     }),
     queryFn: async ({ queryKey, signal }) => {
       const [, paramsFromKey] = queryKey;
-      if (
-        paramsFromKey.replicaHeapLimit === null ||
-        paramsFromKey.replicaHeapLimit === undefined ||
-        !paramsFromKey.replicaName
-      )
-        return null;
+      if (!paramsFromKey.replicaName) return null;
 
       if (paramsFromKey.unifiedSizes) {
         const sizes = await fetchLargestMaintainedObjectSizes({

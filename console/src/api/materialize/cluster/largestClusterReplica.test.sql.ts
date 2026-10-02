@@ -40,6 +40,10 @@ describe("buildLargestClusterReplicaQuery", () => {
           replica_id TEXT NOT NULL,
           time_ns bigint
         );
+      > CREATE TABLE mz_cluster_replica_sizes (
+          size TEXT NOT NULL,
+          processes uint8 NOT NULL
+        );
     `);
 
     const {
@@ -84,6 +88,31 @@ describe("buildLargestClusterReplicaQuery", () => {
     expect(result.name).toBe("r2");
     expect(result.size).toBe("scale=1,workers=1,mem=8GiB");
     expect(result.heapLimit).toBe("8589934592");
+
+    const {
+      rows: [named],
+    } = await executeSqlHttp(
+      buildLargestClusterReplicaQuery(cluster.id, "r1").compile(),
+      {
+        sessionVariables: {
+          search_path: mockedSearchPath,
+          cluster: QUICKSTART_CLUSTER,
+        },
+      },
+    );
+    expect(named.name).toBe("r1");
+    expect(named.heapLimit).toBe("4294967296");
+
+    // Object sizes cover every process of a replica, so its heap limit does
+    // too. Four 4GiB processes outrank one 8GiB process.
+    await client.query(`
+      INSERT INTO internal_test.mz_cluster_replica_sizes VALUES
+        ('scale=1,workers=1,mem=4GiB', 4)
+    `);
+    const multiProcess = await fetchLargest();
+    expect([r1.name, r3.name]).toContain(multiProcess.name);
+    expect(multiProcess.heapLimit).toBe("17179869184");
+    await client.query(`DELETE FROM internal_test.mz_cluster_replica_sizes`);
 
     // A hydrated replica is preferred over a larger, still-hydrating one
     // (its object is present but has no hydration time yet).

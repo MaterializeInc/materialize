@@ -27,9 +27,7 @@ vi.mock("~/hooks/useFlags", () => ({
 }));
 // The page's cards have their own tests and queries.
 vi.mock("./ResourceUsage/ResourceUsage", () => ({ ResourceUsage: () => null }));
-vi.mock("~/platform/clusters/LargestMaintainedQueries", () => ({
-  default: () => null,
-}));
+vi.mock("./MemoryByObject", () => ({ MemoryByObject: () => null }));
 
 const renderClusterMetrics = () =>
   renderComponent(
