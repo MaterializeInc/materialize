@@ -81,10 +81,6 @@ published by the curated metric sinks on every replica. The rest come from the
 them Cloud exposes is not yet final. Replica level memory and CPU utilization and
 credit consumption are under consideration. Tell us what is missing.)
 
-Coming soon: the goal is to cover everything in
-[Essential metrics](/observability/essential-metrics/). If you need a specific
-metric, reach out to your Materialize representative.
-
 ## Prerequisites
 
 - The **Organization Admin** role, to create metrics tokens. (Draft: which roles
