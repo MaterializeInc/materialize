@@ -200,9 +200,10 @@ fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
 /// Derives the interactive compute runtime's `TimelyConfig` from the CLI arg, if present.
 ///
 /// Sets the interactive config's process ordinal to match the maintenance runtime, since both
-/// runtimes are the same process. Asserts that the two runtimes span an equal number of Timely
-/// peers: the arrangement sharing registry pairs worker `i` of one runtime with worker `i` of the
-/// other, and reads are sound only because both shard keys across the same peer count.
+/// runtimes are the same process. Asserts that the two runtimes run equally many workers over
+/// equally many processes: each local worker shares an arrangement sharing registry with the worker
+/// of the same local ordinal on the other runtime, and reads are sound only because both then shard
+/// keys across the same peers.
 ///
 /// Returns `None` when the arg is absent, in which case the process runs exactly one compute
 /// runtime.
@@ -213,11 +214,11 @@ fn prepare_interactive_compute_config(
 ) -> Option<TimelyConfig> {
     let mut interactive = arg?;
     interactive.process = process;
-    let maintenance_peers = maintenance.workers * maintenance.addresses.len();
-    let interactive_peers = interactive.workers * interactive.addresses.len();
     assert_eq!(
-        maintenance_peers, interactive_peers,
-        "interactive and maintenance compute runtimes must span an equal number of Timely peers",
+        (maintenance.workers, maintenance.addresses.len()),
+        (interactive.workers, interactive.addresses.len()),
+        "interactive and maintenance compute runtimes must run equally many workers per process \
+         over equally many processes",
     );
     Some(interactive)
 }
@@ -484,9 +485,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
-    // The sharing registry is per process rather than per runtime: a reader on one runtime looks up
-    // the slot a publisher on another runtime filled, so both must hold the same registry.
-    let sharing_registry = ArrangementSharingRegistry::new();
+    // One sharing registry per local worker, rather than per runtime: a reader on one runtime looks
+    // up the slot its peer worker on another runtime filled, so both must hold the same registry.
+    let sharing_registries = ArrangementSharingRegistry::per_worker(compute_timely_config.workers);
 
     let interactive_compute_timely_config = prepare_interactive_compute_config(
         args.interactive_compute_timely_config,
@@ -515,7 +516,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 ComputeRuntimeRole::Interactive,
                 &metrics_registry,
                 Arc::clone(&persist_clients),
-                sharing_registry.clone(),
+                sharing_registries.clone(),
                 txns_ctx.clone(),
                 Arc::clone(&tracing_handle),
                 ComputeInstanceContext {
@@ -539,7 +540,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             maintenance_role,
             &metrics_registry,
             persist_clients,
-            sharing_registry,
+            sharing_registries,
             txns_ctx,
             tracing_handle,
             ComputeInstanceContext {
@@ -626,7 +627,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         maintenance_role,
         &metrics_registry,
         persist_clients,
-        sharing_registry,
+        sharing_registries,
         txns_ctx,
         tracing_handle,
         ComputeInstanceContext {
@@ -697,7 +698,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn prepare_interactive_config_sets_process_and_accepts_equal_peers() {
+    fn prepare_interactive_config_sets_process_and_accepts_equal_shape() {
         let maintenance = timely_config(2, &["a", "b"]);
         let arg = timely_config(2, &["c", "d"]);
         let got = prepare_interactive_compute_config(Some(arg), 1, &maintenance)
@@ -707,11 +708,11 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[should_panic(expected = "equal number of Timely peers")]
-    fn prepare_interactive_config_rejects_unequal_peers() {
+    #[should_panic(expected = "equally many workers per process")]
+    fn prepare_interactive_config_rejects_unequal_workers() {
         let maintenance = timely_config(2, &["a", "b"]);
-        // One worker over two processes is two peers; maintenance has four. Must fail.
-        let arg = timely_config(1, &["c", "d"]);
+        // Four peers on either side, but local worker ordinals no longer pair up.
+        let arg = timely_config(4, &["c"]);
         let _ = prepare_interactive_compute_config(Some(arg), 0, &maintenance);
     }
 
