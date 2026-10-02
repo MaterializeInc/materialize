@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, VStack } from "@chakra-ui/react";
+import { VStack } from "@chakra-ui/react";
 import React from "react";
 import { useParams } from "react-router-dom";
 
@@ -17,10 +17,10 @@ import { MainContentContainer } from "~/layouts/BaseLayout";
 import { ClusterInfoBox } from "~/platform/clusters/ClusterOverview";
 import ClusterFreshness from "~/platform/clusters/ClusterOverview/ClusterFreshness";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
-import LargestMaintainedQueries from "~/platform/clusters/LargestMaintainedQueries";
 import { useAllClusters } from "~/store/allClusters";
 import { assert } from "~/util";
 
+import { MemoryByObject } from "./MemoryByObject";
 import { ResourceUsage } from "./ResourceUsage/ResourceUsage";
 
 export const ClusterMetrics = () => {
@@ -39,12 +39,7 @@ export const ClusterMetrics = () => {
       <VStack spacing="6">
         <ClusterInfoBox cluster={cluster} />
         <ResourceUsage cluster={cluster} />
-        <Box width="100%">
-          <LargestMaintainedQueries
-            clusterId={cluster.id}
-            clusterName={cluster.name}
-          />
-        </Box>
+        <MemoryByObject clusterId={cluster.id} clusterName={cluster.name} />
         {flags["console-freshness-2855"] && (
           <ClusterFreshness clusterId={clusterId} />
         )}
