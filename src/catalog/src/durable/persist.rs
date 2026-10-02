@@ -553,6 +553,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let updates_applied_before = self.updates_applied;
 
         // Reset the amortized consolidation tracker so it picks up the
         // current snapshot size as its baseline.
@@ -596,8 +597,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
-        // Always consolidate at the end to ensure the snapshot is clean.
-        self.consolidate();
+        // Only consolidate when there are actual updates.
+        if self.updates_applied != updates_applied_before {
+            self.consolidate();
+        }
         Ok(())
     }
 
