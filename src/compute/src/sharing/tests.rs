@@ -430,7 +430,6 @@ fn join_over_imported_arrangements_matches_direct() {
         let mut keep_a = publish_join_input(&registry, worker, id_a, &a, seal);
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
 
-        let worker_index = worker.index();
         let (oks_a, _errs_a) = registry.handles(&id_a).expect("A published");
         let (oks_b, _errs_b) = registry.handles(&id_b).expect("B published");
 
@@ -579,7 +578,6 @@ fn join_over_point_adopted_late_matches_direct() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let worker_index = worker.index();
 
         // B: published normally, an already-materialized co-input.
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
