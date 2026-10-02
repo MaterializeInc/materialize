@@ -194,6 +194,33 @@ impl ArrangementSharingRegistry {
     }
 }
 
+/// Publishes this runtime's index arrangements for the process's other compute runtime, or does
+/// nothing where that runtime reads none. Chosen once, when the runtime is built.
+#[derive(Clone)]
+pub(crate) enum Publisher {
+    /// The runtime publishes nothing.
+    None,
+    /// The runtime publishes into the registry it shares with its peer worker.
+    Registry(ArrangementSharingRegistry),
+}
+
+impl Publisher {
+    /// Publishes index `id`'s traces, see [`ArrangementSharingRegistry::publish`]. The publication
+    /// lasts as long as the returned token.
+    pub(crate) fn publish(
+        &self,
+        id: GlobalId,
+        worker: &Worker,
+        oks: &RowRowAgent<Timestamp, Diff>,
+        errs: &ErrAgent<Timestamp, Diff>,
+    ) -> Option<UnpublishToken> {
+        match self {
+            Publisher::None => None,
+            Publisher::Registry(registry) => Some(registry.publish(id, worker, oks, errs)),
+        }
+    }
+}
+
 /// The publisher's hold on a published slot. Dropping it ends the publication.
 pub(crate) struct UnpublishToken {
     registry: ArrangementSharingRegistry,

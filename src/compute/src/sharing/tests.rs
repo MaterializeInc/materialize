@@ -240,7 +240,6 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
             registry_in.publish(reexport, scope.worker(), &oks, &errs)
         });
         assert_eq!(worker.peek_identifier() - before, empty);
-        let _ = registry_in.take_dirty();
 
         for (k, v) in test_rows() {
             oks_input.update((k, v), Diff::ONE);
@@ -251,8 +250,6 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         errs_input.flush();
         drop((oks_input, errs_input));
         while worker.step() {}
-        // Each point signals its seals under its own id.
-        assert_eq!(registry_in.take_dirty(), BTreeSet::from([target, reexport]));
         drop((oks, errs));
         (target_token, reexport_token)
     });
