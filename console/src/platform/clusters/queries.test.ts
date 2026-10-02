@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { millisecondsInMinute } from "date-fns/constants";
 import { createStore } from "jotai";
 import parse from "postgres-interval";
 
@@ -31,6 +32,7 @@ import {
   useFreshnessObjects,
   useOwners,
   useReplicaOfflineEvents,
+  useRollingWindowStartMs,
 } from "./queries";
 
 const ownersColumns = buildColumns([
@@ -419,5 +421,64 @@ describe("buildFreshnessData", () => {
     const data = buildFreshnessData(readings, objects);
 
     expect(data.currentData[0].lag).toEqual(parse("00:00:01"));
+  });
+});
+
+describe("useRollingWindowStartMs", () => {
+  const NOW = Date.parse("2026-10-16T12:00:00Z");
+  const HOUR = 60 * millisecondsInMinute;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("starts one window back and moves forward once per window", () => {
+    const { result } = renderHook(() => useRollingWindowStartMs(180));
+    expect(result.current).toEqual(NOW - 3 * HOUR);
+
+    act(() => vi.advanceTimersByTime(3 * HOUR - 1));
+    expect(result.current).toEqual(NOW - 3 * HOUR);
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current).toEqual(NOW);
+  });
+
+  it("starts the new window back when the window changes, never the old start", () => {
+    const renderedStarts: Array<number | undefined> = [];
+    const { rerender } = renderHook(
+      (windowMinutes: number | undefined) => {
+        const startMs = useRollingWindowStartMs(windowMinutes);
+        renderedStarts.push(startMs);
+        return startMs;
+      },
+      { initialProps: 180 },
+    );
+    act(() => vi.advanceTimersByTime(HOUR));
+    renderedStarts.length = 0;
+
+    rerender(1440);
+
+    const dayStart = NOW + HOUR - 24 * HOUR;
+    expect(renderedStarts.at(-1)).toEqual(dayStart);
+    expect(renderedStarts.filter((startMs) => startMs !== undefined)).toEqual(
+      renderedStarts.filter((startMs) => startMs === dayStart),
+    );
+  });
+
+  it("has no start without a window", () => {
+    const { result, rerender } = renderHook(
+      (windowMinutes: number | undefined) =>
+        useRollingWindowStartMs(windowMinutes),
+      { initialProps: 180 },
+    );
+
+    rerender(undefined);
+
+    expect(result.current).toBeUndefined();
   });
 });
