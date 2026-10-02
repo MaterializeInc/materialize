@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
+use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
@@ -31,7 +32,6 @@ use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_persist_types::ShardId;
-use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};

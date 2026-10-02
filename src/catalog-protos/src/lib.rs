@@ -9,7 +9,6 @@
 
 //! All types we durably persist in the Catalog.
 
-pub mod audit_log;
 pub mod objects;
 pub mod objects_v74;
 pub mod objects_v75;
@@ -30,7 +29,12 @@ pub mod objects_v89;
 pub mod objects_v90;
 pub mod objects_v91;
 pub mod objects_v92;
-pub mod serialization;
+
+impl From<String> for objects::StringWrapper {
+    fn from(value: String) -> Self {
+        objects::StringWrapper { inner: value }
+    }
+}
 
 /// The current version of the `Catalog`.
 ///
