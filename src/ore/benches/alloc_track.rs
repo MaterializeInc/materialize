@@ -20,6 +20,8 @@
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::hint::black_box;
+use std::sync::Barrier;
+use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mimalloc::MiMalloc;
@@ -79,5 +81,60 @@ fn bench(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench);
+/// Sizes cycled by [`mixed_churn`]: small allocations dominate the count and
+/// the large ones dominate the bytes, so samples are frequent enough for
+/// contention on the sampling path to show.
+const MIXED_SIZES: [usize; 4] = [64, 1 << 10, 16 << 10, 256 << 10];
+
+fn mixed_churn<A: GlobalAlloc>(alloc: &A, ptrs: &mut Vec<(*mut u8, Layout)>) {
+    for i in 0..BATCH {
+        let layout = Layout::from_size_align(MIXED_SIZES[i % MIXED_SIZES.len()], 8).unwrap();
+        // SAFETY: `layout` has nonzero size.
+        ptrs.push((unsafe { alloc.alloc(layout) }, layout));
+    }
+    for (ptr, layout) in ptrs.drain(..) {
+        // SAFETY: allocated above with `layout`.
+        unsafe { alloc.dealloc(black_box(ptr), layout) };
+    }
+}
+
+/// Wall time for `threads` threads to each run `iters` rounds of
+/// [`mixed_churn`] concurrently.
+fn concurrent<A: GlobalAlloc + Sync>(alloc: &A, threads: usize, iters: u64) -> Duration {
+    let barrier = Barrier::new(threads + 1);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                let mut ptrs = Vec::with_capacity(BATCH);
+                barrier.wait();
+                for _ in 0..iters {
+                    mixed_churn(alloc, &mut ptrs);
+                }
+                barrier.wait();
+            });
+        }
+        barrier.wait();
+        let start = Instant::now();
+        barrier.wait();
+        start.elapsed()
+    })
+}
+
+fn bench_concurrent(c: &mut Criterion) {
+    static TRACKED: TrackingAlloc<MiMalloc> = TrackingAlloc(MiMalloc);
+    let mut group = c.benchmark_group("alloc_track_concurrent");
+    group.throughput(Throughput::Elements(u64::try_from(BATCH).unwrap()));
+    for threads in [1usize, 4, 16] {
+        group.bench_with_input(BenchmarkId::new("mimalloc", threads), &threads, |b, &t| {
+            b.iter_custom(|iters| concurrent(&MiMalloc, t, iters))
+        });
+        alloc_track::set_active(true);
+        group.bench_with_input(BenchmarkId::new("tracked", threads), &threads, |b, &t| {
+            b.iter_custom(|iters| concurrent(&TRACKED, t, iters))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench, bench_concurrent);
 criterion_main!(benches);

@@ -226,6 +226,9 @@ struct ThreadState {
     rng: Cell<u64>,
     /// Set while this thread runs tracker code. See the module docs.
     busy: Cell<bool>,
+    /// The registry's stack shard for this thread, `u32::MAX` until the
+    /// first sample assigns one.
+    stack_shard: Cell<u32>,
 }
 
 thread_local! {
@@ -237,6 +240,7 @@ thread_local! {
             countdown: Cell::new(Sampler::UNSEEDED.countdown),
             rng: Cell::new(Sampler::UNSEEDED.rng),
             busy: Cell::new(false),
+            stack_shard: Cell::new(u32::MAX),
         }
     };
 }

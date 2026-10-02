@@ -16,21 +16,34 @@
 //! The sample registry: live samples, interned stacks, and aggregates.
 //!
 //! All functions here run with the thread's reentrancy flag set. Locks are
-//! never nested: a sample interns its stack and then inserts into its shard,
-//! and a free removes from its shard and then interns the free stack.
+//! never nested: a sample interns its stack and then inserts into its live
+//! shard, and a free removes from its live shard and then interns the free
+//! stack.
+//!
+//! Live records are sharded by address. Stacks and the cumulative
+//! aggregates are sharded by thread, because a hot stack sampled on many
+//! threads otherwise serializes them on one lock: with a single stack
+//! table, a 16-thread benchmark spent about 30% of its cycles contending on
+//! that table's lock. A stack
+//! sampled on several threads is therefore interned once per shard, and
+//! [`snapshot`] merges the shards and renumbers stacks densely.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use crate::alloc_track::{FreeKind, Space, TRACK_FREES, filter, sample_scale};
+use crate::alloc_track::{FreeKind, Space, THREAD, TRACK_FREES, filter, sample_scale};
 use crate::cast::{CastFrom, CastLossy};
 
 const SHARD_COUNT: usize = 64;
+const STACK_SHARD_BITS: u32 = 6;
+const STACK_SHARD_COUNT: u32 = 1 << STACK_SHARD_BITS;
 const MAX_FRAMES: usize = 64;
 
 #[derive(Debug, Clone, Copy)]
 struct Live {
+    /// A stack id as described on [`Stacks`].
     stack: u32,
     size: usize,
     space: Space,
@@ -53,20 +66,12 @@ impl Totals {
         self.count += scale;
         self.bytes += scale * f64::cast_lossy(size);
     }
-}
 
-struct Stacks {
-    ids: BTreeMap<Box<[usize]>, u32>,
-    frames: Vec<Box<[usize]>>,
-    /// Cumulative sampled allocations by (space, stack).
-    allocated: BTreeMap<(Space, u32), Totals>,
+    fn merge(&mut self, other: &Totals) {
+        self.count += other.count;
+        self.bytes += other.bytes;
+    }
 }
-
-static STACKS: Mutex<Stacks> = Mutex::new(Stacks {
-    ids: BTreeMap::new(),
-    frames: Vec::new(),
-    allocated: BTreeMap::new(),
-});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct FreeKey {
@@ -83,7 +88,26 @@ struct FreeTotals {
     lifetime_secs: f64,
 }
 
-static FREES: Mutex<BTreeMap<FreeKey, FreeTotals>> = Mutex::new(BTreeMap::new());
+/// One stack shard. A stack id encodes its shard in the low
+/// [`STACK_SHARD_BITS`] bits and its index into that shard's `frames` in
+/// the bits above.
+struct Stacks {
+    ids: BTreeMap<Box<[usize]>, u32>,
+    frames: Vec<Box<[usize]>>,
+    /// Cumulative sampled allocations by (space, stack).
+    allocated: BTreeMap<(Space, u32), Totals>,
+    /// Cumulative sampled frees, recorded in the freeing thread's shard.
+    freed: BTreeMap<FreeKey, FreeTotals>,
+}
+
+static STACKS: [Mutex<Stacks>; 1 << STACK_SHARD_BITS] = [const {
+    Mutex::new(Stacks {
+        ids: BTreeMap::new(),
+        frames: Vec::new(),
+        allocated: BTreeMap::new(),
+        freed: BTreeMap::new(),
+    })
+}; 1 << STACK_SHARD_BITS];
 
 /// Locks `mutex`, ignoring poison: a panic while holding a registry lock
 /// leaves at worst a partially updated aggregate, and the allocator must not
@@ -95,6 +119,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 fn shard(addr: usize) -> &'static Mutex<BTreeMap<usize, Live>> {
     let hash = (u64::cast_from(addr) >> 4).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 58;
     &SHARDS[usize::cast_from(hash)]
+}
+
+/// Returns the calling thread's stack shard. Threads take shards round
+/// robin on their first sample, so threads share a shard only once more
+/// than [`STACK_SHARD_COUNT`] of them have sampled.
+fn stack_shard() -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    THREAD.with(|t| {
+        let mut shard = t.stack_shard.get();
+        if shard == u32::MAX {
+            shard = NEXT.fetch_add(1, Ordering::Relaxed) % STACK_SHARD_COUNT;
+            t.stack_shard.set(shard);
+        }
+        shard
+    })
 }
 
 /// Captures the calling stack, root first, into `buf`, returning the frame
@@ -116,11 +155,16 @@ fn capture(buf: &mut [usize; MAX_FRAMES]) -> usize {
 }
 
 impl Stacks {
-    fn intern(&mut self, frames: &[usize]) -> u32 {
+    /// Interns `frames` into this shard, numbered `shard`.
+    fn intern(&mut self, shard: u32, frames: &[usize]) -> u32 {
         if let Some(&id) = self.ids.get(frames) {
             return id;
         }
-        let id = u32::try_from(self.frames.len()).expect("fewer than 2^32 distinct stacks");
+        let index = u32::try_from(self.frames.len())
+            .ok()
+            .filter(|&index| index < 1 << (32 - STACK_SHARD_BITS))
+            .expect("fewer than 2^26 distinct stacks per shard");
+        let id = (index << STACK_SHARD_BITS) | shard;
         self.frames.push(frames.into());
         self.ids.insert(frames.into(), id);
         id
@@ -135,8 +179,9 @@ pub(super) fn record_alloc(addr: usize, size: usize, space: Space, interval: u64
         return;
     }
     let stack = {
-        let mut stacks = lock(&STACKS);
-        let id = stacks.intern(&buf[..n]);
+        let shard = stack_shard();
+        let mut stacks = lock(&STACKS[usize::cast_from(shard)]);
+        let id = stacks.intern(shard, &buf[..n]);
         stacks
             .allocated
             .entry((space, id))
@@ -164,21 +209,22 @@ pub(super) fn record_free(addr: usize, kind: FreeKind) {
         return;
     };
     filter::remove(addr);
-    if !TRACK_FREES.load(std::sync::atomic::Ordering::Relaxed) {
+    if !TRACK_FREES.load(Ordering::Relaxed) {
         return;
     }
     let lifetime = live.born.elapsed().as_secs_f64();
     let mut buf = [0; MAX_FRAMES];
     let n = capture(&mut buf);
-    let free_stack = lock(&STACKS).intern(&buf[..n]);
+    let shard = stack_shard();
+    let mut stacks = lock(&STACKS[usize::cast_from(shard)]);
+    let free_stack = stacks.intern(shard, &buf[..n]);
     let key = FreeKey {
         space: live.space,
         kind,
         alloc_stack: live.stack,
         free_stack,
     };
-    let mut frees = lock(&FREES);
-    let entry = frees.entry(key).or_default();
+    let entry = stacks.freed.entry(key).or_default();
     entry.totals.add(live.scale, live.size);
     entry.lifetime_secs += live.scale * lifetime;
 }
@@ -222,7 +268,7 @@ pub struct Snapshot {
     pub sample_interval: u64,
     /// The number of live sampled allocations.
     pub live_samples: usize,
-    /// Interned stacks as return addresses, root first.
+    /// Distinct stacks as return addresses, root first.
     pub stacks: Vec<Box<[usize]>>,
     /// Live allocations by site.
     pub live: Vec<Site>,
@@ -239,25 +285,79 @@ pub fn snapshot() -> Snapshot {
 }
 
 fn snapshot_inner() -> Snapshot {
-    // Shards are read before the stack table: every stack id a shard holds
-    // was interned before its record was inserted, so the table copied
-    // afterwards resolves it.
-    let mut live: BTreeMap<(Space, u32), Totals> = BTreeMap::new();
+    // Live shards are read before stack shards: every stack id a live record
+    // or a free aggregate holds was interned before that record or
+    // aggregate was written, so the stack shards copied afterwards resolve
+    // it.
     let mut live_samples = 0;
+    let mut live_raw: BTreeMap<(Space, u32), Totals> = BTreeMap::new();
     for shard in &SHARDS {
         let shard = lock(shard);
         live_samples += shard.len();
         for l in shard.values() {
-            live.entry((l.space, l.stack))
+            live_raw
+                .entry((l.space, l.stack))
                 .or_default()
                 .add(l.scale, l.size);
         }
     }
-    let (stacks, allocated) = {
-        let stacks = lock(&STACKS);
-        (stacks.frames.clone(), stacks.allocated.clone())
+    let copies: Vec<_> = STACKS
+        .iter()
+        .map(|shard| {
+            let shard = lock(shard);
+            (
+                shard.frames.clone(),
+                shard.allocated.clone(),
+                shard.freed.clone(),
+            )
+        })
+        .collect();
+
+    // Renumber stacks densely, merging stacks interned in several shards.
+    let mut stacks = Vec::new();
+    let mut dense_ids: BTreeMap<&[usize], u32> = BTreeMap::new();
+    let mut remap: Vec<Vec<u32>> = Vec::with_capacity(copies.len());
+    for (frames, _, _) in &copies {
+        let mut shard_remap = Vec::with_capacity(frames.len());
+        for f in frames {
+            let id = *dense_ids.entry(&**f).or_insert_with(|| {
+                stacks.push(f.clone());
+                u32::try_from(stacks.len() - 1).expect("fewer than 2^32 distinct stacks")
+            });
+            shard_remap.push(id);
+        }
+        remap.push(shard_remap);
+    }
+    let dense = |id: u32| {
+        let shard = usize::cast_from(id & (STACK_SHARD_COUNT - 1));
+        remap[shard][usize::cast_from(id >> STACK_SHARD_BITS)]
     };
-    let freed = lock(&FREES).clone();
+
+    let mut live: BTreeMap<(Space, u32), Totals> = BTreeMap::new();
+    for ((space, stack), t) in &live_raw {
+        live.entry((*space, dense(*stack))).or_default().merge(t);
+    }
+    let mut allocated: BTreeMap<(Space, u32), Totals> = BTreeMap::new();
+    let mut freed: BTreeMap<FreeKey, FreeTotals> = BTreeMap::new();
+    for (_, shard_allocated, shard_freed) in &copies {
+        for ((space, stack), t) in shard_allocated {
+            allocated
+                .entry((*space, dense(*stack)))
+                .or_default()
+                .merge(t);
+        }
+        for (k, f) in shard_freed {
+            let key = FreeKey {
+                alloc_stack: dense(k.alloc_stack),
+                free_stack: dense(k.free_stack),
+                ..*k
+            };
+            let entry = freed.entry(key).or_default();
+            entry.totals.merge(&f.totals);
+            entry.lifetime_secs += f.lifetime_secs;
+        }
+    }
+
     let site = |((space, stack), t): ((Space, u32), Totals)| Site {
         space,
         stack,
@@ -293,7 +393,10 @@ fn snapshot_inner() -> Snapshot {
 /// interned stacks are kept.
 pub fn reset_history() {
     super::with_busy(|| {
-        lock(&STACKS).allocated.clear();
-        lock(&FREES).clear();
+        for shard in &STACKS {
+            let mut shard = lock(shard);
+            shard.allocated.clear();
+            shard.freed.clear();
+        }
     });
 }

@@ -42,6 +42,7 @@ struct Leaf([AtomicU8; LEAF_LEN]);
 static ROOT: [AtomicPtr<Leaf>; ROOT_LEN] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; ROOT_LEN];
 
+#[inline]
 fn split(addr: usize) -> (usize, usize) {
     (addr >> LEAF_SHIFT, (addr >> GRANULE_SHIFT) & (LEAF_LEN - 1))
 }

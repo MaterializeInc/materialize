@@ -69,6 +69,16 @@ fn freed_bytes(snapshot: &Snapshot, space: Space, alloc_needle: &str, free_needl
         .sum()
 }
 
+/// Samples every allocation of at least 1 MiB with weight 1 on this thread,
+/// which makes the estimates exact up to small unrelated allocations.
+fn sample_every_mib() {
+    alloc_track::set_sample_interval(4096);
+    // The thread picks up the interval at its next sample, and a countdown
+    // drawn at the default interval can skip a 1 MiB allocation. One 64 MiB
+    // allocation consumes any such countdown.
+    drop(std::hint::black_box(vec![0u8; 64 * MIB]));
+}
+
 fn assert_close(actual: f64, expected: usize, what: &str) {
     let expected = f64::cast_lossy(expected);
     assert!(
@@ -91,9 +101,7 @@ fn heap_free_site(bufs: Vec<Vec<u8>>) {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
 fn heap_live_and_free_sites() {
     alloc_track::set_track_frees(true);
-    // At this interval every 1 MiB buffer is sampled with weight 1, which
-    // makes the estimates exact up to the small outer vector.
-    alloc_track::set_sample_interval(4096);
+    sample_every_mib();
     let bufs = heap_alloc_site(64);
     let snapshot = alloc_track::snapshot();
     assert_close(
@@ -131,7 +139,7 @@ fn pool_free_site(chunks: Vec<mz_ore::pool::ChunkHandle>) {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
 fn pool_slots_are_tracked() {
     alloc_track::set_track_frees(true);
-    alloc_track::set_sample_interval(4096);
+    sample_every_mib();
     let pool = Pool::new().expect("pool reservation");
     let chunks = pool_insert_site(&pool, 16);
     let snapshot = alloc_track::snapshot();
@@ -153,4 +161,45 @@ fn pool_slots_are_tracked() {
         16 * MIB,
         "freed slots",
     );
+}
+
+#[inline(never)]
+fn thread_alloc_site(n: usize) -> Vec<Vec<u8>> {
+    (0..n).map(|_| vec![1u8; MIB]).collect()
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+fn threads_sampling_one_stack_merge_into_one_site() {
+    sample_every_mib();
+    let bufs: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..4).map(|_| s.spawn(|| thread_alloc_site(8))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let snapshot = alloc_track::snapshot();
+    let mut stacks = snapshot.stacks.clone();
+    stacks.sort();
+    stacks.dedup();
+    assert_eq!(stacks.len(), snapshot.stacks.len(), "stacks are distinct");
+    let sites: Vec<_> = snapshot
+        .live
+        .iter()
+        // Skips the outer vectors, which the sampler may also catch.
+        .filter(|s| s.space == Space::Heap && s.bytes >= f64::cast_lossy(MIB))
+        // NOTE: The linker may fold `thread_alloc_site`'s closure with
+        // identical ones of other tests, so the needle is this test's name.
+        .filter(|s| {
+            stack_mentions(
+                &snapshot.stacks[usize::try_from(s.stack).unwrap()],
+                "threads_sampling_one_stack_merge_into_one_site",
+            )
+        })
+        .collect();
+    assert_eq!(
+        sites.len(),
+        1,
+        "one site for one stack sampled on 4 threads"
+    );
+    assert_close(sites[0].bytes, 32 * MIB, "live");
+    drop(bufs);
 }
