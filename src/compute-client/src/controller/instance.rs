@@ -1454,6 +1454,19 @@ impl Instance {
         if as_of.is_empty() && dataflow.copy_to_ids().next().is_some() {
             return Err(EmptyAsOfForCopyTo);
         }
+        // A replica with a second runtime renders a one-shot read there, and that runtime can only
+        // serve one: its imports of maintained indexes are snapshots bounded one step past the
+        // `as_of`, so they cannot feed a dataflow that runs further, a subscribe never stops, and
+        // reconciliation refuses a copy-to's S3 sink. The runtime that renders a one-shot read also
+        // reports frontiers only for the collections it renders, which must therefore be transient.
+        mz_ore::soft_assert_or_log!(
+            dataflow.class_fits_shape(),
+            "dataflow {} has class {:?} but not its shape: exports={} until={:?}",
+            dataflow.debug_name,
+            dataflow.class,
+            dataflow.display_export_ids(),
+            dataflow.until.elements(),
+        );
 
         // Collect all dependencies of the dataflow, and read holds on them at the `as_of`.
         let mut storage_dependencies = BTreeMap::new();
@@ -1618,6 +1631,7 @@ impl Instance {
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            class: dataflow.class,
         };
 
         if augmented_dataflow.is_transient() {
