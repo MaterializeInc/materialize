@@ -32,11 +32,11 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 Self-Managed deployments can now use advanced single sign-on (SSO). Users sign in to Materialize with your identity provider (IdP), such as Okta, instead of a separate Materialize password:
 
-- **Sign in with SAML or OIDC**, whichever protocol your IdP already uses.
-- **Provision users and groups with SCIM**, so users are created and deactivated in Materialize as they change in your IdP.
-- **Map IdP groups to Materialize roles**: roles follow a user's IdP groups every time they sign in, with no manual `GRANT` or `REVOKE` statements required.
+- **Sign in with [SAML](/self-managed-deployments/sso/advanced/identity-providers/#saml-via-polis) or [OIDC](/self-managed-deployments/sso/advanced/identity-providers/#direct-oidc)**, whichever protocol your IdP already uses.
+- **Provision users and groups with [SCIM](/self-managed-deployments/sso/advanced/identity-providers/#scim-via-polis)**, so users are created and deactivated in Materialize as they change in your IdP.
+- **[Map IdP groups to Materialize roles](/self-managed-deployments/sso/advanced/role-mapping/)**: roles follow a user's IdP groups every time they sign in, with no manual `GRANT` or `REVOKE` statements required.
 
-Advanced SSO is deployed with the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), either as part of a new installation or added to an existing one, and requires a license key with the advanced SSO entitlement. For more information, see [Advanced SSO (OIDC, SAML and SCIM)](/self-managed-deployments/sso/advanced/).
+Advanced SSO is deployed with the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) and requires a license key with the advanced SSO entitlement (see [Prerequisites](/self-managed-deployments/sso/advanced/prerequisites/)). You can deploy it as part of a new installation on [AWS](/self-managed-deployments/sso/advanced/install-on-aws/), [GCP](/self-managed-deployments/sso/advanced/install-on-gcp/), or [Azure](/self-managed-deployments/sso/advanced/install-on-azure/), or [add it to an existing installation](/self-managed-deployments/sso/advanced/existing-installation/). For more information, see [Advanced SSO (OIDC, SAML and SCIM)](/self-managed-deployments/sso/advanced/).
 
 ### SCIM group-to-role mapping is generally available on Materialize Cloud {#v26.44.1-scim-group-to-role-mapping}
 
