@@ -45,3 +45,23 @@ curl -fsSL \
         \"target_url\": \"https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/\",\
         \"context\": \"preview-docs\"\
     }"
+
+# Report how agent-friendly the preview is. Neither check fails the build.
+preview_url="https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST"
+
+ci_uncollapsed_heading "Checking the Markdown docs' sizes and links"
+if ! ../../ci/test/check-docs-markdown.py public/markdown-docs "$preview_url/markdown-docs/"; then
+    echo "check-docs-markdown found problems; see above. This check does not fail the build."
+fi
+
+# afdocs (https://afdocs.dev) scores the preview against the Agent-Friendly
+# Documentation Spec. It cannot map llms.txt's markdown-docs links back to
+# pages, so pass it every tenth page from llms.txt, as HTML URLs.
+ci_uncollapsed_heading "Scoring the preview with afdocs"
+urls=$(grep -o "($preview_url/markdown-docs/[^)]*)" public/llms.txt \
+    | awk 'NR % 10 == 1' \
+    | sed -e 's/^(//' -e 's/)$//' -e 's#/markdown-docs/#/#' -e 's#index\.md$##' \
+    | paste -sd, -)
+if ! npx --yes afdocs@0.22.2 check "$preview_url" --urls "$urls" --sampling deterministic --format scorecard; then
+    echo "afdocs reported failing checks; see above. This check does not fail the build."
+fi
