@@ -90,6 +90,7 @@ We've done this by offloading heavy `SELECT` queries onto separate threads. Prev
 - [Troubleshoot slow queries](/serve-results/troubleshooting/slow-queries/)
 - [Troubleshoot unresponsive queries](/serve-results/troubleshooting/unresponsive-queries/)
 - [Troubleshoot expensive queries](/serve-results/troubleshooting/expensive-queries/)
+- [Troubleshoot hydration failures](/clusters/troubleshoot-clusters/hydration-failures/)
 
 ### Bug Fixes {#v26.44.1-bug-fixes}
 - Fixed a panic in PostgreSQL sources when the replication stream carried messages committed before Materialize read a table's schema, which may have described an incompatible shape; each table now records the upstream LSN its schema was read at and ignores replication messages from before it.
