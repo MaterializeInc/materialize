@@ -433,8 +433,9 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 /// interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimestampOracleParameters {
-    /// Allows two fresh backing-read batches in flight instead of one.
-    pub pipelined_reads: Option<bool>,
+    /// Maximum fresh backing-read batches in flight per timeline.
+    /// Values are clamped to 1 through 8 to bound database connection use.
+    pub read_concurrency: Option<usize>,
     /// Configures `DynamicConfig::pg_connection_pool_max_size`.
     pub pg_connection_pool_max_size: Option<usize>,
     /// Configures `DynamicConfig::pg_connection_pool_max_wait`.
@@ -470,7 +471,7 @@ impl TimestampOracleParameters {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
         let Self {
-            pipelined_reads: self_pipelined_reads,
+            read_concurrency: self_read_concurrency,
             pg_connection_pool_max_size: self_pg_connection_pool_max_size,
             pg_connection_pool_max_wait: self_pg_connection_pool_max_wait,
             pg_connection_pool_ttl: self_pg_connection_pool_ttl,
@@ -483,7 +484,7 @@ impl TimestampOracleParameters {
             pg_statement_timeout: self_pg_statement_timeout,
         } = self;
         let Self {
-            pipelined_reads: other_pipelined_reads,
+            read_concurrency: other_read_concurrency,
             pg_connection_pool_max_size: other_pg_connection_pool_max_size,
             pg_connection_pool_max_wait: other_pg_connection_pool_max_wait,
             pg_connection_pool_ttl: other_pg_connection_pool_ttl,
@@ -495,8 +496,8 @@ impl TimestampOracleParameters {
             pg_connection_pool_keepalives_retries: other_pg_connection_pool_keepalives_retries,
             pg_statement_timeout: other_pg_statement_timeout,
         } = other;
-        if let Some(v) = other_pipelined_reads {
-            *self_pipelined_reads = Some(v);
+        if let Some(v) = other_read_concurrency {
+            *self_read_concurrency = Some(v);
         }
         if let Some(v) = other_pg_connection_pool_max_size {
             *self_pg_connection_pool_max_size = Some(v);
@@ -540,7 +541,7 @@ impl TimestampOracleParameters {
 
         // Deconstruct self so we get a compile failure if new fields are added.
         let Self {
-            pipelined_reads,
+            read_concurrency,
             pg_connection_pool_max_size,
             pg_connection_pool_max_wait,
             pg_connection_pool_ttl,
@@ -552,8 +553,8 @@ impl TimestampOracleParameters {
             pg_connection_pool_keepalives_retries,
             pg_statement_timeout,
         } = self;
-        if let Some(enabled) = pipelined_reads {
-            let limit = std::num::NonZeroUsize::new(if *enabled { 2 } else { 1 })
+        if let Some(requested) = read_concurrency {
+            let limit = std::num::NonZeroUsize::new((*requested).clamp(1, 8))
                 .expect("positive read concurrency");
             cfg.dynamic.read_concurrency.send_if_modified(|current| {
                 if *current == limit {
@@ -1153,25 +1154,49 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn pipelined_read_parameters_preserve_unset_values_and_apply_updates() {
+    fn read_concurrency_parameters_preserve_unset_values_and_apply_updates() {
         let config = PostgresTimestampOracleConfig::new(
             &SensitiveUrl::from_str("postgres://localhost").expect("test URL"),
             &MetricsRegistry::new(),
         );
         assert_eq!(config.dynamic.read_concurrency().get(), 1);
         let mut params = TimestampOracleParameters {
-            pipelined_reads: Some(true),
+            read_concurrency: Some(4),
             ..Default::default()
         };
         params.update(TimestampOracleParameters::default());
-        assert_eq!(params.pipelined_reads, Some(true));
+        assert_eq!(params.read_concurrency, Some(4));
         params.apply(&config);
-        assert_eq!(config.dynamic.read_concurrency().get(), 2);
+        assert_eq!(config.dynamic.read_concurrency().get(), 4);
         params.update(TimestampOracleParameters {
-            pipelined_reads: Some(false),
+            read_concurrency: Some(1),
             ..Default::default()
         });
         params.apply(&config);
         assert_eq!(config.dynamic.read_concurrency().get(), 1);
+    }
+
+    #[mz_ore::test]
+    fn read_concurrency_parameters_bound_database_connection_use() {
+        let config = PostgresTimestampOracleConfig::new(
+            &SensitiveUrl::from_str("postgres://localhost").expect("test URL"),
+            &MetricsRegistry::new(),
+        );
+        for (requested, expected) in [
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (4, 4),
+            (8, 8),
+            (9, 8),
+            (usize::MAX, 8),
+        ] {
+            TimestampOracleParameters {
+                read_concurrency: Some(requested),
+                ..Default::default()
+            }
+            .apply(&config);
+            assert_eq!(config.dynamic.read_concurrency().get(), expected);
+        }
     }
 }
