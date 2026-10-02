@@ -267,8 +267,6 @@ struct Connection<Out, In> {
 }
 
 impl<Out: Message, In: Message> Connection<Out, In> {
-    /// The interval with which keepalives are emitted on idle connections.
-    const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
     /// Start a new connection wrapping the given stream.
     async fn start(
         stream: Stream,
@@ -338,32 +336,16 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
-        loop {
-            let msg = tokio::select! {
-                // `mpsc::UnboundedReceiver::recv` is cancel safe.
-                msg = msg_rx.recv() => match msg {
-                    Some(msg) => {
-                        trace!(?msg, "ctp: sending message");
-                        Some(msg)
-                    }
-                    None => break,
-                },
-                // `tokio::time::sleep` is cancel safe.
-                _ = tokio::time::sleep(Self::KEEPALIVE_INTERVAL) => {
-                    trace!("ctp: sending keepalive");
-                    None
-                },
-            };
-
-            if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
+        // NOTE: This benchmark-only experiment does not emit idle keepalives.
+        while let Some(msg) = msg_rx.recv().await {
+            trace!(?msg, "ctp: sending message");
+            if let Err(error) = write_message(&mut writer, Some(&msg)).await {
                 warn!("ctp: send error: {error}");
                 error_tx.report(format!("send error: {error}"));
                 break;
             };
 
-            if let Some(msg) = &msg {
-                metrics.message_sent(msg);
-            }
+            metrics.message_sent(&msg);
         }
     }
 
