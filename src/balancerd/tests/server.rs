@@ -182,6 +182,8 @@ async fn test_balancer() {
         .add_root_certificate(ca_cert)
         // No pool so that connections are never re-used which can use old ssl certs.
         .pool_max_idle_per_host(0)
+        // HTTP/2 would multiplex requests over one connection, defeating the above.
+        .http1_only()
         .tls_info(true)
         .build()
         .unwrap();
@@ -306,8 +308,7 @@ async fn test_balancer() {
         assert_contains!(resp.text().await.unwrap(), "12234");
 
         // With `balancerd_https_enable_http2_alpn` set, balancerd offers h2 to
-        // clients that ask for it. reqwest's native-tls backend does not, hence
-        // the HTTP/1.1 responses either side of this.
+        // clients that ask for it.
         assert_eq!(
             alpn_selected(balancer_https_listen, b"\x02h2\x08http/1.1")
                 .await
@@ -321,16 +322,16 @@ async fn test_balancer() {
             Some(&b"http/1.1"[..])
         );
 
-        // HTTP/1.1-only clients are still served.
-        let http1_client = reqwest::Client::builder()
+        // A client that offers h2 (reqwest's default) is proxied to environmentd
+        // over HTTP/2 end to end.
+        let h2_client = reqwest::Client::builder()
             .add_root_certificate(
                 reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap(),
             )
             .pool_max_idle_per_host(0)
-            .http1_only()
             .build()
             .unwrap();
-        let resp = http1_client
+        let resp = h2_client
             .post(&https_url)
             .header("Content-Type", "application/json")
             .basic_auth(frontegg_user, Some(&frontegg_password))
@@ -338,7 +339,7 @@ async fn test_balancer() {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.version(), reqwest::Version::HTTP_11);
+        assert_eq!(resp.version(), reqwest::Version::HTTP_2);
         assert_contains!(resp.text().await.unwrap(), "12234");
 
         // Generate new certs. Install only the key, reload, and make sure the old cert is still in

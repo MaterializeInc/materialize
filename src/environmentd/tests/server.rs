@@ -4900,6 +4900,8 @@ async fn test_cert_reloading() {
         .add_root_certificate(ca_cert)
         // No pool so that connections are never re-used which can use old ssl certs.
         .pool_max_idle_per_host(0)
+        // HTTP/2 would multiplex requests over one connection, defeating the above.
+        .http1_only()
         .tls_info(true)
         .build()
         .unwrap();
@@ -7766,13 +7768,29 @@ async fn test_http2_tls() {
         Some(&b"http/1.1"[..])
     );
 
-    // reqwest's native-tls backend does not offer ALPN, so it is served over
-    // HTTP/1.1 exactly as before.
     let https_url = Url::parse(&format!("https://{addr}/api/sql")).unwrap();
     let json: serde_json::Value = serde_json::from_str(r#"{ "query": "SELECT 42;" }"#).unwrap();
     let ca_cert = reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap();
+
+    // reqwest offers h2 via ALPN by default, so it is served over HTTP/2.
+    let client = reqwest::Client::builder()
+        .add_root_certificate(ca_cert.clone())
+        .build()
+        .unwrap();
+    let response = client
+        .post(https_url.clone())
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.version(), reqwest::Version::HTTP_2);
+    assert!(response.status().is_success());
+    assert_contains!(response.text().await.unwrap(), "42");
+
+    // HTTP/1.1-only clients are still served.
     let client = reqwest::Client::builder()
         .add_root_certificate(ca_cert)
+        .http1_only()
         .build()
         .unwrap();
     let response = client.post(https_url).json(&json).send().await.unwrap();
