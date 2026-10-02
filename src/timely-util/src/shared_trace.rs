@@ -25,9 +25,8 @@
 //! holds against it, and [import](SharedReader::import_frontier_core) it as an arrangement. Their
 //! holds accumulate in the point as differential's `TraceBox` accumulates its agents' holds, and the
 //! writer applies the meet of its local `TraceBox` frontier and the readers' to the inner trace. A
-//! reader that moves a hold wakes the writer so the inner trace learns of it without waiting for
-//! the arrangement's next input. A [`SharedSnapshot`] is the hold-free alternative for a reader
-//! that only reads the chain it captured, and so neither registers a hold nor wakes the writer.
+//! reader that moves the meet of the holds wakes the writer so the inner trace learns of it
+//! without waiting for the arrangement's next input.
 //!
 //! Logical compaction decides which times stay distinguishable, physical compaction which batches
 //! may merge. A reader needs distinguishability at the times it reads, and a batch boundary at each
@@ -136,17 +135,6 @@ impl<B: BatchReader + Clone> Shared<B> {
     /// The published chain. Holding it pins its batches.
     pub fn chain(&self) -> Vec<B> {
         self.lock().chain.clone()
-    }
-
-    /// The published chain and frontiers, captured under one lock acquisition, as a reader that
-    /// registers no hold.
-    pub fn snapshot(&self) -> SharedSnapshot<B> {
-        let state = self.lock();
-        SharedSnapshot {
-            chain: state.chain.clone(),
-            logical: state.logical.clone(),
-            physical: state.upper.clone(),
-        }
     }
 }
 
@@ -744,54 +732,6 @@ where
         for batch in state.chain.iter() {
             f(batch);
         }
-    }
-}
-
-/// A chain and frontiers captured from a [`Shared`] point, readable without a hold.
-///
-/// The captured batches are immutable, so the capture stays readable however far the writer
-/// compacts or merges afterwards, and it reads accurately at every time at or beyond its logical
-/// compaction frontier, the published `since` at capture. It never moves the point's holds, so
-/// it never wakes the writer.
-pub struct SharedSnapshot<B: BatchReader> {
-    chain: Vec<B>,
-    logical: Antichain<B::Time>,
-    physical: Antichain<B::Time>,
-}
-
-impl<B> TraceReader for SharedSnapshot<B>
-where
-    B: BatchReader + Clone + 'static,
-    // See the `SharedReader` impl.
-    B::Time: TotalOrder,
-{
-    type Time = B::Time;
-    type Batch = B;
-
-    fn batches_through(&mut self, upper: AntichainRef<B::Time>) -> Option<Vec<B>> {
-        Some(chain_through(&self.chain, upper))
-    }
-
-    // The capture holds nothing the writer could learn of, so compaction requests only move what
-    // the getters report, joined as `SharedReader` joins them.
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
-        self.logical = self.logical.join(&frontier.to_owned());
-    }
-
-    fn get_logical_compaction(&mut self) -> AntichainRef<'_, B::Time> {
-        self.logical.borrow()
-    }
-
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, B::Time>) {
-        self.physical = self.physical.join(&frontier.to_owned());
-    }
-
-    fn get_physical_compaction(&mut self) -> AntichainRef<'_, B::Time> {
-        self.physical.borrow()
-    }
-
-    fn map_batches<F: FnMut(&B)>(&self, f: F) {
-        self.chain.iter().for_each(f);
     }
 }
 
