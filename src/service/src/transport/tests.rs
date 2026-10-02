@@ -9,7 +9,27 @@
 
 //! Unit tests for CTP internals. Protocol-level tests live in `tests/transport.rs`.
 
-use super::{CONNECTION_CLOSED, error_channel};
+use super::{CONNECTION_CLOSED, Connection, error_channel};
+
+#[mz_ore::test(tokio::test(start_paused = true))]
+async fn heartbeat_waits_for_first_tick_skips_missed_ticks_and_stops_with_receiver() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = mz_ore::task::spawn(
+        || "heartbeat-test",
+        Connection::<(), ()>::run_heartbeat_task(tx),
+    );
+    tokio::task::yield_now().await;
+    assert!(rx.try_recv().is_err());
+
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_eq!(rx.recv().await, Some(None));
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    assert_eq!(rx.recv().await, Some(None));
+    assert!(rx.try_recv().is_err());
+
+    drop(rx);
+    task.await;
+}
 
 #[mz_ore::test(tokio::test)]
 async fn error_channel_keeps_first_error() {
