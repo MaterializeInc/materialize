@@ -7,13 +7,173 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Chooses a global memory allocator based on Cargo features.
+//! Chooses a global memory allocator based on Cargo features and, when both
+//! jemalloc and mimalloc are compiled in, on the process name.
+//!
+//! Either allocator is wrapped in the sampling allocation tracker
+//! ([`mz_ore::alloc_track`]). With both compiled in, `environmentd` and
+//! `balancerd` use jemalloc and every other process uses mimalloc. The
+//! choice is per process because one `materialized` executable runs as
+//! either `environmentd` or `clusterd`, depending on the name it is invoked
+//! by. environmentd allocates and frees at a high rate across many tokio
+//! threads, which leaves mimalloc's per-thread pages partly empty: feature
+//! benchmarks measured 130 to 290 MB more memory in the `materialized`
+//! container than with jemalloc. clusterd uses less memory with mimalloc.
+
+#[cfg(all(feature = "jemalloc", not(miri)))]
+mod jemalloc_hooks;
+#[cfg(all(feature = "mimalloc", not(miri)))]
+mod mimalloc_hooks;
 
 use mz_ore::metrics::MetricsRegistry;
 
-#[cfg(all(feature = "jemalloc", not(feature = "mimalloc"), not(miri)))]
-#[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+/// An allocator the global allocator can delegate to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Allocator {
+    /// jemalloc.
+    Jemalloc,
+    /// mimalloc.
+    Mimalloc,
+}
+
+/// The allocator this process delegates to, or `None` if it uses the system
+/// allocator.
+#[cfg(any(miri, not(any(feature = "jemalloc", feature = "mimalloc"))))]
+pub fn allocator() -> Option<Allocator> {
+    None
+}
+
+/// The allocator this process delegates to, or `None` if it uses the system
+/// allocator.
+#[cfg(all(not(miri), feature = "jemalloc", not(feature = "mimalloc")))]
+#[inline]
+pub fn allocator() -> Option<Allocator> {
+    Some(Allocator::Jemalloc)
+}
+
+/// The allocator this process delegates to, or `None` if it uses the system
+/// allocator.
+#[cfg(all(not(miri), feature = "mimalloc", not(feature = "jemalloc")))]
+#[inline]
+pub fn allocator() -> Option<Allocator> {
+    Some(Allocator::Mimalloc)
+}
+
+/// The allocator this process delegates to, or `None` if it uses the system
+/// allocator.
+#[cfg(all(not(miri), feature = "jemalloc", feature = "mimalloc"))]
+#[inline]
+pub fn allocator() -> Option<Allocator> {
+    Some(selected::get())
+}
+
+#[cfg(all(not(miri), feature = "jemalloc", feature = "mimalloc"))]
+mod selected {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use crate::Allocator;
+
+    const UNDECIDED: u8 = 0;
+    const JEMALLOC: u8 = 1;
+    const MIMALLOC: u8 = 2;
+
+    static SELECTED: AtomicU8 = AtomicU8::new(UNDECIDED);
+
+    /// The allocator for this process. The first call decides, and must not
+    /// allocate, because it runs inside the first allocation. Racing first
+    /// calls decide identically.
+    #[inline]
+    pub(crate) fn get() -> Allocator {
+        match SELECTED.load(Ordering::Relaxed) {
+            JEMALLOC => Allocator::Jemalloc,
+            MIMALLOC => Allocator::Mimalloc,
+            _ => decide(),
+        }
+    }
+
+    #[cold]
+    fn decide() -> Allocator {
+        let allocator = if uses_jemalloc(process_name()) {
+            Allocator::Jemalloc
+        } else {
+            Allocator::Mimalloc
+        };
+        let value = match allocator {
+            Allocator::Jemalloc => JEMALLOC,
+            Allocator::Mimalloc => MIMALLOC,
+        };
+        SELECTED.store(value, Ordering::Relaxed);
+        allocator
+    }
+
+    fn uses_jemalloc(name: &[u8]) -> bool {
+        name.starts_with(b"environmentd") || name.starts_with(b"balancerd")
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn process_name() -> &'static [u8] {
+        unsafe extern "C" {
+            static program_invocation_short_name: *const std::ffi::c_char;
+        }
+        // SAFETY: glibc sets `program_invocation_short_name` to the basename
+        // of `argv[0]` before any user code runs, as a NUL-terminated string
+        // that lives as long as the process. Reading it does not allocate.
+        unsafe { std::ffi::CStr::from_ptr(program_invocation_short_name).to_bytes() }
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn process_name() -> &'static [u8] {
+        b""
+    }
+}
+
+/// Delegates to the allocator [`allocator`] selects.
+#[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
+#[derive(Debug)]
+pub struct Selected;
+
+#[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
+macro_rules! delegate {
+    ($method:ident($($arg:expr),*)) => {
+        match allocator() {
+            #[cfg(feature = "jemalloc")]
+            Some(Allocator::Jemalloc) => tikv_jemallocator::Jemalloc.$method($($arg),*),
+            #[cfg(feature = "mimalloc")]
+            Some(Allocator::Mimalloc) => mimalloc::MiMalloc.$method($($arg),*),
+            _ => unreachable!("an allocator is compiled in"),
+        }
+    };
+}
+
+// SAFETY: every method forwards to the same allocator for the whole process
+// lifetime, because `allocator` is fixed once decided, so memory is always
+// returned to the allocator that produced it.
+#[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
+unsafe impl std::alloc::GlobalAlloc for Selected {
+    #[inline]
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        // SAFETY: forwarded under the caller's contract.
+        unsafe { delegate!(alloc(layout)) }
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        // SAFETY: forwarded under the caller's contract.
+        unsafe { delegate!(alloc_zeroed(layout)) }
+    }
+
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: forwarded under the caller's contract.
+        unsafe { delegate!(dealloc(ptr, layout)) }
+    }
+
+    #[inline]
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: forwarded under the caller's contract.
+        unsafe { delegate!(realloc(ptr, layout, new_size)) }
+    }
+}
 
 // NOTE: The workspace builds mimalloc with `no_thp`, so it never advises its
 // arenas `MADV_HUGEPAGE`. With the advice, on hosts with transparent huge pages
@@ -22,181 +182,10 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 // is no substitute, because mimalloc implements it with
 // `prctl(PR_SET_THP_DISABLE)`, which also disables the huge pages the buffer
 // pool requests. Swap splits huge pages, which return as base pages on swap-in.
-#[cfg(all(feature = "mimalloc", not(miri)))]
+#[cfg(all(not(miri), any(feature = "jemalloc", feature = "mimalloc")))]
 #[global_allocator]
-static ALLOC: mz_ore::alloc_track::TrackingAlloc<mimalloc::MiMalloc> =
-    mz_ore::alloc_track::TrackingAlloc(mimalloc::MiMalloc);
-
-#[cfg(all(feature = "mimalloc", not(miri)))]
-mod mimalloc_hooks {
-    use std::ffi::{CStr, c_char, c_void};
-
-    use mz_ore::alloc_track::AllocatorHooks;
-
-    pub(crate) const HOOKS: AllocatorHooks = AllocatorHooks {
-        name: "mimalloc",
-        stats,
-        collect,
-    };
-
-    /// # Safety
-    ///
-    /// `msg` must be a NUL-terminated string and `arg` must point to a live
-    /// `String` with no other references.
-    unsafe extern "C" fn append(msg: *const c_char, arg: *mut c_void) {
-        // SAFETY: the function contract.
-        let (out, msg) = unsafe { (&mut *arg.cast::<String>(), CStr::from_ptr(msg)) };
-        out.push_str(&msg.to_string_lossy());
-    }
-
-    /// Per block-size bucket: pages, pages with no used block, page bytes,
-    /// and used block bytes.
-    type Buckets = [(usize, usize, usize, usize); BUCKET_BOUNDS.len()];
-    const BUCKET_BOUNDS: [usize; 7] = [
-        64,
-        1 << 10,
-        8 << 10,
-        64 << 10,
-        512 << 10,
-        8 << 20,
-        usize::MAX,
-    ];
-
-    struct Walk {
-        buckets: Buckets,
-        /// Block area start, capacity bytes, and reserved bytes per page.
-        /// Preallocated: the visitor must not allocate while mimalloc walks
-        /// its pages.
-        ranges: Vec<(usize, usize, usize)>,
-    }
-
-    /// # Safety
-    ///
-    /// `area` must point to a valid area and `arg` to a live `Walk` with no
-    /// other references.
-    unsafe extern "C" fn visit_area(
-        _heap: *const libmimalloc_sys::mi_heap_t,
-        area: *const libmimalloc_sys::mi_heap_area_t,
-        _block: *mut c_void,
-        _block_size: usize,
-        arg: *mut c_void,
-    ) -> bool {
-        // SAFETY: the function contract.
-        let (area, walk) = unsafe { (&*area, &mut *arg.cast::<Walk>()) };
-        let i = BUCKET_BOUNDS
-            .iter()
-            .position(|&b| area.block_size <= b)
-            .unwrap_or(BUCKET_BOUNDS.len() - 1);
-        let b = &mut walk.buckets[i];
-        b.0 += 1;
-        b.1 += usize::from(area.used == 0);
-        b.2 += area.committed;
-        b.3 += area.used * area.full_block_size;
-        if walk.ranges.len() < walk.ranges.capacity() {
-            walk.ranges
-                .push((area.blocks.addr(), area.committed, area.reserved));
-        }
-        true
-    }
-
-    /// Resident bytes in `[start, start + len)`, rounded out to pages.
-    fn resident(start: usize, len: usize) -> usize {
-        const PAGE: usize = 4096;
-        if len == 0 {
-            return 0;
-        }
-        let lo = start & !(PAGE - 1);
-        let hi = (start + len).next_multiple_of(PAGE);
-        let mut vec = vec![0u8; (hi - lo) / PAGE];
-        // SAFETY: `vec` holds one byte per page of the range, and mincore
-        // only reads the page tables of the range.
-        let rc = unsafe {
-            libc::mincore(
-                std::ptr::without_provenance_mut(lo),
-                hi - lo,
-                vec.as_mut_ptr(),
-            )
-        };
-        if rc != 0 {
-            return 0;
-        }
-        vec.iter().filter(|&&v| v & 1 != 0).count() * PAGE
-    }
-
-    fn stats() -> String {
-        use std::fmt::Write;
-        let mut out = String::new();
-        // SAFETY: `append` upholds the output function contract, and `out`
-        // outlives the call, which invokes `append` only synchronously.
-        unsafe { libmimalloc_sys::mi_stats_print_out(Some(append), (&raw mut out).cast()) };
-        // NOTE: mimalloc walks the pages assuming no concurrent mutation.
-        // Without visiting blocks it only reads page headers, so a racing
-        // thread makes the counts approximate, which is all this is for.
-        let mut walk = Walk {
-            buckets: Default::default(),
-            ranges: Vec::with_capacity(1 << 20),
-        };
-        // SAFETY: `visit_area` upholds the visitor contract, and `walk`
-        // outlives the synchronous walk. A null heap selects the main heap.
-        unsafe {
-            libmimalloc_sys::mi_heap_visit_blocks(
-                std::ptr::null_mut(),
-                false,
-                Some(visit_area),
-                (&raw mut walk).cast(),
-            );
-        }
-        writeln!(
-            out,
-            "\npage walk by block size: pages, empty pages, page MiB, used MiB"
-        )
-        .unwrap();
-        let mib = |b: usize| f64::from(u32::try_from(b >> 10).unwrap_or(u32::MAX)) / 1024.0;
-        let mut total = (0, 0, 0, 0);
-        for (i, b) in walk.buckets.into_iter().enumerate() {
-            let bound = BUCKET_BOUNDS[i];
-            writeln!(
-                out,
-                "  <= {bound:>20}: {:6} {:6} {:9.1} {:9.1}",
-                b.0,
-                b.1,
-                mib(b.2),
-                mib(b.3)
-            )
-            .unwrap();
-            total = (total.0 + b.0, total.1 + b.1, total.2 + b.2, total.3 + b.3);
-        }
-        writeln!(
-            out,
-            "  total                  : {:6} {:6} {:9.1} {:9.1}",
-            total.0,
-            total.1,
-            mib(total.2),
-            mib(total.3)
-        )
-        .unwrap();
-        let (mut in_capacity, mut beyond_capacity, mut reserved) = (0, 0, 0);
-        for &(start, committed, res) in &walk.ranges {
-            in_capacity += resident(start, committed);
-            beyond_capacity += resident(start + committed, res.saturating_sub(committed));
-            reserved += res;
-        }
-        writeln!(
-            out,
-            "page residency: {:.1} MiB within capacity, {:.1} MiB beyond capacity, {:.1} MiB reserved",
-            mib(in_capacity),
-            mib(beyond_capacity),
-            mib(reserved),
-        )
-        .unwrap();
-        out
-    }
-
-    fn collect() {
-        // SAFETY: no preconditions.
-        unsafe { libmimalloc_sys::mi_collect(true) };
-    }
-}
+static ALLOC: mz_ore::alloc_track::TrackingAlloc<Selected> =
+    mz_ore::alloc_track::TrackingAlloc(Selected);
 
 /// Registers metrics for the global allocator into the provided registry,
 /// and its introspection hooks with [`mz_ore::alloc_track`].
@@ -205,9 +194,17 @@ mod mimalloc_hooks {
 /// allocators that support metrics.
 #[allow(clippy::unused_async)]
 pub async fn register_metrics_into(registry: &MetricsRegistry) {
-    #[cfg(all(feature = "mimalloc", not(miri)))]
-    mz_ore::alloc_track::register_allocator(mimalloc_hooks::HOOKS);
-    #[cfg(all(feature = "jemalloc", not(miri)))]
-    mz_prof::jemalloc::JemallocMetrics::register_into(registry).await;
+    match allocator() {
+        #[cfg(all(feature = "jemalloc", not(miri)))]
+        Some(Allocator::Jemalloc) => {
+            mz_ore::alloc_track::register_allocator(jemalloc_hooks::HOOKS);
+            mz_prof::jemalloc::JemallocMetrics::register_into(registry).await;
+        }
+        #[cfg(all(feature = "mimalloc", not(miri)))]
+        Some(Allocator::Mimalloc) => {
+            mz_ore::alloc_track::register_allocator(mimalloc_hooks::HOOKS);
+        }
+        _ => {}
+    }
     let _ = registry;
 }

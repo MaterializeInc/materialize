@@ -78,5 +78,5 @@ For example, `mz_adapter::catalog::apply=trace,warn` would enable trace logging 
 
 ## Allocator
 
-On Linux, we link against mimalloc by default.
+On Linux, we link against jemalloc and mimalloc by default: `environmentd` and `balancerd` allocate with jemalloc, every other process with mimalloc, both wrapped in the allocation tracker.
 Compile with `--no-default-features` to use the system allocator.

@@ -525,6 +525,7 @@ termcolor = "1.4.1"
 thiserror = "2.0.18"
 tiberius = { version = "0.12", default-features = false, features = ["chrono", "native-tls", "sql-browser-tokio", "tds73"] }
 tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
+tikv-jemalloc-sys = "0.7"
 tikv-jemallocator = { version = "0.7", features = ["background_threads", "profiling", "stats"] }
 time = "0.3.17"
 timely = "0.31.0"

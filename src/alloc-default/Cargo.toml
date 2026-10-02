@@ -12,9 +12,9 @@ workspace = true
 [dependencies]
 mz-alloc = { path = "../alloc", default-features = false }
 
-# On non-macOS platforms, we use mimalloc. Rust allocations go through the
-# allocation tracker, which provides heap profiles, and mimalloc also replaces
-# `malloc` for C dependencies.
+# On non-macOS platforms, Rust allocations go through the allocation tracker,
+# which provides heap profiles, to jemalloc in environmentd and balancerd and
+# to mimalloc elsewhere. mimalloc also replaces `malloc` for C dependencies.
 #
 # However, on macOS, we default to the system allocator, as jemalloc is not well
 # supported on macOS [0][1][2]. The issues present as runaway latency on load
@@ -28,7 +28,7 @@ mz-alloc = { path = "../alloc", default-features = false }
 # Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
 # `heaptrack`, that only work with the system allocator on macOS.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-mz-alloc = { path = "../alloc", features = ["mimalloc"] }
+mz-alloc = { path = "../alloc", features = ["jemalloc", "mimalloc"] }
 
 [features]
 default = []

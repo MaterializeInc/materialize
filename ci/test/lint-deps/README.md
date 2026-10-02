@@ -30,8 +30,7 @@ However, note the specifics for `jemalloc` below.
 
 * `--no-default-features` unequivocally disables mimalloc and jemalloc, regardless of platform.
 * `--features=jemalloc` unequivocally enables jemalloc, regardless of platform.
-  On Linux, mimalloc stays the global allocator, because it takes precedence over jemalloc.
-* `--default-features` chooses the best allocator for the platform: the system allocator on macOS and mimalloc on Linux.
+* `--default-features` chooses the best allocators for the platform: the system allocator on macOS, and on Linux both jemalloc and mimalloc, which `mz-alloc` selects between by process name.
 
 To determine the validity of changes, ensure that the following files mention
 the mimalloc family of dependencies:
@@ -44,8 +43,10 @@ the mimalloc family of dependencies:
 That the following files mention the tikv-jemallocator family of dependencies:
 
   * aarch64-apple-darwin-jemalloc
+  * aarch64-unknown-linux-gnu-default
   * aarch64-unknown-linux-gnu-jemalloc
   * x86_64-apple-darwin-jemalloc
+  * x86_64-unknown-linux-gnu-default
   * x86_64-unknown-linux-gnu-jemalloc
 
 And that the following files mention neither:

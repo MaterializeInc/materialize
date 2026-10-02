@@ -20,17 +20,21 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
 tikv-jemallocator = { workspace = true, optional = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true }
+tikv-jemalloc-sys = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
 libmimalloc-sys = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 
 [features]
 default = []
-# Whether to use jemalloc instead of the system allocator for Rust allocations.
-jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
-# Whether to use mimalloc instead of the system allocator. Rust allocations go
-# through the sampling allocation tracker, and mimalloc also replaces `malloc`
-# for C dependencies. Takes precedence over `jemalloc`.
+# Whether to use jemalloc instead of the system allocator for Rust allocations,
+# through the sampling allocation tracker.
+jemalloc = ["tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys", "mz-prof", "mz-prof-http/jemalloc", "mz-ore/alloc-track", "mz-prof-http/alloc-track"]
+# Whether to use mimalloc instead of the system allocator for Rust allocations,
+# through the sampling allocation tracker. mimalloc also replaces `malloc` for C
+# dependencies. With `jemalloc` also enabled, the process name selects the
+# allocator for Rust allocations, see the crate documentation.
 mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys", "dep:libc", "mz-ore/alloc-track", "mz-prof-http/alloc-track"]
 
 [package.metadata.unused-deps]
