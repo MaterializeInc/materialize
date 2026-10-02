@@ -9,25 +9,20 @@
 
 //! Constant builtin views exposing information about builtin objects.
 
-use std::collections::BTreeMap;
-
 use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
-use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA};
-use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
+use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql::ast::Statement;
 use mz_sql::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql::catalog::{NameReference, ObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-use crate::builtin::{
-    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinView,
-    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
-};
+use crate::builtin::{Builtin, BuiltinView, PUBLIC_SELECT, assert_safe_builtin_name};
 
 /// Generate builtin views reporting the given builtins.
 ///
@@ -35,70 +30,58 @@ use crate::builtin::{
 pub(super) fn builtins(
     builtin_items: &[Builtin<NameReference>],
 ) -> impl Iterator<Item = Builtin<NameReference>> {
-    let source_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Source(x) => Some(*x),
-        _ => None,
-    });
-    let log_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Log(x) => Some(*x),
-        _ => None,
-    });
-    let mv_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::MaterializedView(x) => Some(*x),
-        _ => None,
-    });
-    let table_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::Table(x) => Some(*x),
-        _ => None,
-    });
-
-    let sources: &'static BuiltinView =
-        Box::leak(Box::new(make_builtin_sources(source_iter, log_iter)));
+    let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(builtin_items)));
     let materialized_views: &'static BuiltinView =
-        Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
-    let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
+        Box::leak(Box::new(make_builtin_materialized_views(builtin_items)));
+    let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(builtin_items)));
+    let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(builtin_items)));
+    let log_indexes: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_log_indexes(builtin_items)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
     // definitions. See `make_builtin_views`.
-    let view_iter = builtin_items.iter().filter_map(|b| match b {
-        Builtin::View(x) => Some(*x),
-        _ => None,
-    });
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
-        view_iter,
-        [sources, materialized_views, tables],
+        builtin_items,
+        [log_indexes, sources, materialized_views, tables, indexes],
     )));
 
-    [sources, materialized_views, tables, views]
-        .into_iter()
-        .map(Builtin::View)
+    // Creation order: `mz_builtin_sources` reads `mz_builtin_log_indexes`, so
+    // the latter has to exist first.
+    [
+        log_indexes,
+        sources,
+        materialized_views,
+        tables,
+        indexes,
+        views,
+    ]
+    .into_iter()
+    .map(Builtin::View)
 }
 
-fn make_builtin_sources(
-    source_iter: impl Iterator<Item = &'static BuiltinSource>,
-    log_iter: impl Iterator<Item = &'static BuiltinLog>,
-) -> BuiltinView {
+fn make_builtin_sources(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let source_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Source(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
-    let source_values = source_iter.map(|src| {
-        let privileges = make_privileges_sql(&src.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'source', {})",
-            src.oid, src.schema, src.name, privileges
-        )
-    });
-    let log_values = log_iter.map(|log| {
-        let privileges = make_privileges_sql(&log.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'log', {})",
-            log.oid, log.schema, log.name, privileges
-        )
-    });
-    let values = source_values.chain(log_values).join(",");
+    let source_values = source_iter
+        .map(|src| {
+            let privileges = make_privileges_sql(&src.access, &owner_priv);
+            format!(
+                "({}::oid, '{}', '{}', 'source', {})",
+                src.oid, src.schema, src.name, privileges
+            )
+        })
+        .join(",");
     let sql = format!(
         "
 SELECT oid, schema_name, name, type, privileges
-FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
+FROM (VALUES {source_values}) AS v(oid, schema_name, name, type, privileges)
+UNION ALL
+SELECT oid, schema_name, name, 'log', privileges
+FROM mz_internal.mz_builtin_log_indexes"
     );
 
     BuiltinView {
@@ -114,8 +97,6 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
-            .with_key(vec![0])
-            .with_key(vec![2])
             .finish(),
         column_comments: Default::default(),
         sql: Box::leak(sql.into_boxed_str()),
@@ -124,9 +105,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
     }
 }
 
-fn make_builtin_materialized_views<'a>(
-    iter: impl Iterator<Item = &'a BuiltinMaterializedView>,
-) -> BuiltinView {
+fn make_builtin_materialized_views(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::MaterializedView(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::MaterializedView, MZ_SYSTEM_ROLE_ID);
     let values = iter
         .map(|mv| {
@@ -188,7 +171,11 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
     }
 }
 
-fn make_builtin_tables(iter: impl Iterator<Item = &'static BuiltinTable>) -> BuiltinView {
+fn make_builtin_tables(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Table(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID);
     let values = iter
         .map(|table| {
@@ -232,6 +219,153 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
     }
 }
 
+/// Generates `mz_internal.mz_builtin_indexes`, which `mz_catalog.mz_indexes`
+/// reads to report builtin indexes.
+fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Index(x) => Some(*x),
+        _ => None,
+    });
+    let values = iter
+        .map(|index| {
+            assert_safe_builtin_name(index.name, "index");
+            let create_sql_str = index.create_sql();
+            let stmt = mz_sql::parse::parse(&create_sql_str)
+                .unwrap_or_else(|e| panic!("invalid sql for builtin index {}: {e}", index.name))
+                .into_element()
+                .ast;
+            let Statement::CreateIndex(idx_stmt) = stmt else {
+                panic!("expected CreateIndex for builtin index {}", index.name);
+            };
+            let mz_sql::ast::RawItemName::Name(on_name) = idx_stmt.on_name else {
+                panic!("expected Name for on_name in builtin index {}", index.name);
+            };
+            assert_eq!(
+                on_name.0.len(),
+                2,
+                "expected schema.name format for on_name in builtin index {}",
+                index.name
+            );
+            let on_schema = on_name.0[0].as_str();
+            let on_name_str = on_name.0[1].as_str();
+            assert_safe_builtin_name(on_schema, "index `on` schema");
+            assert_safe_builtin_name(on_name_str, "index `on` object");
+            let key_exprs = idx_stmt
+                .key_parts
+                .unwrap_or_else(|| {
+                    panic!("builtin index {} must have explicit key parts", index.name)
+                })
+                .iter()
+                .map(|e| e.to_ast_string_stable())
+                .join(", ");
+            // Unlike the identifier names above, key expressions are arbitrary
+            // SQL (column refs, casts, string literals) that can legitimately
+            // contain single quotes — so escape them rather than asserting
+            // them away with `assert_safe_builtin_name`.
+            let key_exprs_escaped = escaped_string_literal(&key_exprs);
+            format!(
+                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped})",
+                index.oid, index.schema, index.name, on_schema, on_name_str
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs
+FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("on_schema_name", SqlScalarType::String.nullable(false))
+            .with_column("on_name", SqlScalarType::String.nullable(false))
+            .with_column("key_exprs", SqlScalarType::String.nullable(false))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this).
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// Generates `mz_internal.mz_builtin_log_indexes`: per builtin log, the key of
+/// the introspection index each cluster maintains on it, and its privileges.
+/// `mz_catalog.mz_indexes` reads the keys to report those indexes, and
+/// `mz_builtin_sources` reads the privileges for its log rows. See
+/// `MZ_INDEXES` for what that means for migrations.
+fn make_builtin_log_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Log(x) => Some(*x),
+        _ => None,
+    });
+    // A log is a source for RBAC purposes; this is the owner privilege the
+    // catalog grants when it applies builtin logs.
+    let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
+    let values = iter
+        .map(|log| {
+            assert_safe_builtin_name(log.name, "log");
+            let desc = log.variant.desc();
+            let index_by = log.variant.index_by();
+            let col_list = index_by
+                .iter()
+                .map(|&i| match desc.get_unambiguous_name(i) {
+                    Some(name) => {
+                        assert_safe_builtin_name(name, "log column");
+                        format!("\"{}\"", name)
+                    }
+                    None => (i + 1).to_string(),
+                })
+                .join(", ");
+            let privileges = make_privileges_sql(&log.access, &owner_priv);
+            format!(
+                "({}::oid, '{}', '{}', '{}', {})",
+                log.oid, log.schema, log.name, col_list, privileges
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, col_list, privileges
+FROM (VALUES {values}) AS v(oid, schema_name, name, col_list, privileges)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_log_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_LOG_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("col_list", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this).
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
 /// Generates `mz_internal.mz_builtin_views`, listing every builtin view,
 /// including itself and the `generated` views.
 ///
@@ -250,10 +384,14 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
 /// view. The placeholder also embeds the view's qualified name so that the
 /// `definition` and `create_sql` columns stay unique across rows, which the
 /// declared keys rely on.
-fn make_builtin_views<'a>(
-    iter: impl Iterator<Item = &'a BuiltinView>,
-    generated: [&BuiltinView; 3],
+fn make_builtin_views(
+    builtin_items: &[Builtin<NameReference>],
+    generated: [&BuiltinView; 5],
 ) -> BuiltinView {
+    let iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::View(x) => Some(*x),
+        _ => None,
+    });
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 
     let make_row = |oid: u32, schema: &str, name: &str, access: &[MzAclItem], create_sql: &str| {
@@ -338,239 +476,4 @@ fn make_privileges_sql(privs: &[MzAclItem], owner_priv: &MzAclItem) -> String {
         )
     });
     format!("ARRAY[{}]", parts.join(","))
-}
-
-/// Generate the `mz_catalog.mz_sources` builtin materialized view with builtin
-/// source entries inlined as a VALUES clause.
-///
-/// Inlining the values means the MV's SQL fingerprint changes whenever a builtin
-/// source or log is added or removed, which forces a `MigrationStep::replacement`
-/// for `mz_sources` and guarantees stale data is never silently served.
-pub(super) fn make_mz_sources(
-    source_iter: impl Iterator<Item = &'static BuiltinSource>,
-    log_iter: impl Iterator<Item = &'static BuiltinLog>,
-) -> BuiltinMaterializedView {
-    let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
-    let source_values = source_iter.map(|src| {
-        let privileges = make_privileges_sql(&src.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'source', {})",
-            src.oid, src.schema, src.name, privileges
-        )
-    });
-    let log_values = log_iter.map(|log| {
-        let privileges = make_privileges_sql(&log.access, &owner_priv);
-        format!(
-            "({}::oid, '{}', '{}', 'log', {})",
-            log.oid, log.schema, log.name, privileges
-        )
-    });
-    let builtin_values = source_values.chain(log_values).join(",");
-
-    let sql = format!("
-IN CLUSTER mz_catalog_server
-WITH (
-    ASSERT NOT NULL id,
-    ASSERT NOT NULL oid,
-    ASSERT NOT NULL schema_id,
-    ASSERT NOT NULL name,
-    ASSERT NOT NULL type,
-    ASSERT NOT NULL owner_id,
-    ASSERT NOT NULL privileges
-) AS
-WITH
-    user_sources AS (
-        SELECT
-            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
-            (data->'value'->>'oid')::oid AS oid,
-            mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
-            data->'value'->>'name' AS name,
-            parsed->>'source_type' AS type,
-            parsed->>'connection_id' AS connection_id,
-            NULL AS size,
-            parsed->>'envelope_type' AS envelope_type,
-            parsed->>'key_format' AS key_format,
-            parsed->>'value_format' AS value_format,
-            COALESCE(
-                parsed->>'cluster_id',
-                (
-                    SELECT mz_internal.parse_catalog_create_sql(p.data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id'
-                    FROM mz_internal.mz_catalog_raw p
-                    WHERE
-                        p.data->>'kind' = 'Item' AND
-                        mz_internal.parse_catalog_id(p.data->'key'->'gid') = parsed->>'of_source_id'
-                )
-            ) AS cluster_id,
-            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
-            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
-            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
-            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
-        FROM
-            mz_internal.mz_catalog_raw
-            CROSS JOIN LATERAL (
-                SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
-            ) AS l(parsed)
-        WHERE
-            data->>'kind' = 'Item' AND
-            parsed->>'type' IN ('source', 'subsource')
-    ),
-    builtin_mappings AS (
-        SELECT
-            data->'key'->>'schema_name' AS schema_name,
-            data->'key'->>'object_name' AS name,
-            's' || (data->'value'->>'catalog_id') AS id
-        FROM mz_internal.mz_catalog_raw
-        WHERE
-            data->>'kind' = 'GidMapping' AND
-            data->'key'->>'object_type' = '2'
-    ),
-    builtin_sources AS (
-        SELECT
-            m.id,
-            src.oid,
-            s.id AS schema_id,
-            src.name,
-            src.type,
-            NULL AS connection_id,
-            NULL AS size,
-            NULL AS envelope_type,
-            NULL AS key_format,
-            NULL AS value_format,
-            NULL AS cluster_id,
-            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
-            src.privileges,
-            NULL AS create_sql,
-            NULL AS redacted_create_sql
-        FROM (VALUES {builtin_values}) AS src(oid, schema_name, name, type, privileges)
-        JOIN builtin_mappings m USING (schema_name, name)
-        JOIN mz_schemas s ON s.name = src.schema_name
-        WHERE s.database_id IS NULL
-    )
-SELECT * FROM user_sources
-UNION ALL
-SELECT * FROM builtin_sources");
-
-    BuiltinMaterializedView {
-        name: "mz_sources",
-        schema: MZ_CATALOG_SCHEMA,
-        oid: oid::MV_MZ_SOURCES_OID,
-        desc: RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_column("schema_id", SqlScalarType::String.nullable(false))
-            .with_column("name", SqlScalarType::String.nullable(false))
-            .with_column("type", SqlScalarType::String.nullable(false))
-            .with_column("connection_id", SqlScalarType::String.nullable(true))
-            .with_column("size", SqlScalarType::String.nullable(true))
-            .with_column("envelope_type", SqlScalarType::String.nullable(true))
-            .with_column("key_format", SqlScalarType::String.nullable(true))
-            .with_column("value_format", SqlScalarType::String.nullable(true))
-            .with_column("cluster_id", SqlScalarType::String.nullable(true))
-            .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_column(
-                "privileges",
-                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-            )
-            .with_column("create_sql", SqlScalarType::String.nullable(true))
-            .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-            .with_key(vec![0])
-            .with_key(vec![1])
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("id", "Materialize's unique ID for the source."),
-            ("oid", "A PostgreSQL-compatible OID for the source."),
-            (
-                "schema_id",
-                "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.",
-            ),
-            ("name", "The name of the source."),
-            (
-                "type",
-                "The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.",
-            ),
-            (
-                "connection_id",
-                "The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`.",
-            ),
-            ("size", "*Deprecated* The size of the source."),
-            (
-                "envelope_type",
-                "For old-syntax Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for new-syntax Kafka sources, whose envelopes are defined per source table (see `mz_kafka_source_tables`), and for other source types.",
-            ),
-            (
-                "key_format",
-                "For Kafka sources, the format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
-            ),
-            (
-                "value_format",
-                "For Kafka sources, the format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
-            ),
-            (
-                "cluster_id",
-                "The ID of the cluster maintaining the source. Corresponds to `mz_clusters.id`.",
-            ),
-            (
-                "owner_id",
-                "The role ID of the owner of the source. Corresponds to `mz_roles.id`.",
-            ),
-            ("privileges", "The privileges granted on the source."),
-            ("create_sql", "The `CREATE` SQL statement for the source."),
-            (
-                "redacted_create_sql",
-                "The redacted `CREATE` SQL statement for the source.",
-            ),
-        ]),
-        sql: Box::leak(sql.into_boxed_str()),
-        is_retained_metrics_object: true,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "source",
-            description: "An external data source ingested into Materialize (e.g., Kafka, Postgres)",
-            links: &const {
-                [
-                    OntologyLink {
-                        name: "in_schema",
-                        target: "schema",
-                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
-                    },
-                    OntologyLink {
-                        name: "owned_by",
-                        target: "role",
-                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
-                    },
-                    OntologyLink {
-                        name: "runs_on_cluster",
-                        target: "cluster",
-                        properties: LinkProperties::fk_nullable(
-                            "cluster_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                        ),
-                    },
-                    OntologyLink {
-                        name: "uses_connection",
-                        target: "connection",
-                        properties: LinkProperties::fk_nullable(
-                            "connection_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                        ),
-                    },
-                ]
-            },
-            column_semantic_types: &const {
-                [
-                    ("id", SemanticType::CatalogItemId),
-                    ("oid", SemanticType::OID),
-                    ("schema_id", SemanticType::SchemaId),
-                    ("type", SemanticType::SourceType),
-                    ("connection_id", SemanticType::CatalogItemId),
-                    ("cluster_id", SemanticType::ClusterId),
-                    ("owner_id", SemanticType::RoleId),
-                    ("create_sql", SemanticType::SqlDefinition),
-                    ("redacted_create_sql", SemanticType::RedactedSqlDefinition),
-                ]
-            },
-        }),
-    }
 }
