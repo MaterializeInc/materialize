@@ -37,8 +37,7 @@ use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
-use crate::server::ComputeRuntimeRole;
-use crate::sharing::ArrangementSharingRegistry;
+use crate::sharing::{Publisher, UnpublishToken};
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, RowRowAgent};
 
 /// Initialize logging dataflows.
@@ -52,8 +51,7 @@ pub fn initialize(
     metrics: LoggingMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
-    role: ComputeRuntimeRole,
-    sharing_registry: ArrangementSharingRegistry,
+    publisher: Publisher,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -80,8 +78,7 @@ pub fn initialize(
         metrics,
         worker_config,
         workers_per_process,
-        role,
-        sharing_registry,
+        publisher,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -121,11 +118,8 @@ struct LoggingContext<'a> {
     metrics: LoggingMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
-    /// This runtime's role. Only `Maintenance` publishes its logging indexes into the sharing
-    /// registry.
-    role: ComputeRuntimeRole,
-    /// The per-process registry maintenance publishes its logging indexes into.
-    sharing_registry: ArrangementSharingRegistry,
+    /// Publishes the logging indexes for the peer runtime.
+    publisher: Publisher,
 }
 
 pub(crate) struct LoggingTraces {
@@ -222,22 +216,17 @@ impl LoggingContext<'_> {
                 let traces = collections
                     .into_iter()
                     .map(|(log, collection)| {
-                        // Publish maintenance's logging index into the sharing registry so the
-                        // interactive runtime serves introspection peeks from it. Gated on the
-                        // Maintenance role inside the helper, so this is a no-op (adds no
-                        // operators) on Interactive and Solo.
-                        if let Some(&id) = self.config.index_logs.get(&log) {
+                        let publication = self.config.index_logs.get(&log).and_then(|&id| {
                             publish_logging_index(
-                                self.role,
-                                &self.sharing_registry,
+                                &self.publisher,
                                 &scope,
                                 id,
                                 &collection.trace,
                                 &errs,
-                            );
-                        }
+                            )
+                        });
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
-                            .with_drop(collection.token);
+                            .with_drop((collection.token, publication));
                         (log, bundle)
                     })
                     .collect();
@@ -456,32 +445,31 @@ impl ExtractTimestamp for (Timestamp, Subtime) {
     }
 }
 
-/// Publishes a maintenance logging index's `oks`/`errs` arrangements into the sharing registry so
-/// the interactive runtime serves introspection peeks from them.
-///
-/// Gated on the `Maintenance` role: Interactive reads maintenance's slot, and Solo has no registry
-/// peer.
+/// Publishes a logging index's `oks`/`errs` arrangements through `publisher`, so the peer runtime
+/// serves introspection peeks from them.
 fn publish_logging_index(
-    role: ComputeRuntimeRole,
-    registry: &ArrangementSharingRegistry,
+    publisher: &Publisher,
     scope: &timely::dataflow::Scope<'_, Timestamp>,
     id: GlobalId,
     oks_trace: &RowRowAgent<Timestamp, Diff>,
     errs_trace: &ErrAgent<Timestamp, Diff>,
-) {
-    if role != ComputeRuntimeRole::Maintenance {
-        return;
+) -> Option<UnpublishToken> {
+    match publisher {
+        Publisher::None => None,
+        Publisher::Registry(registry) => {
+            // The arrange streams are consumed inside the per-log construction regions, so only the
+            // trace handles survive here. Re-import them to give the publishers a live stream to
+            // attach to. The operators exist only where the runtime publishes, which is the same on
+            // all its workers, so the logging dataflow's shape agrees across them.
+            let oks = oks_trace
+                .clone()
+                .import_named(scope.clone(), &format!("PublishLog({id})"));
+            let errs = errs_trace
+                .clone()
+                .import_named(scope.clone(), &format!("PublishLogErr({id})"));
+            Some(registry.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace))
+        }
     }
-
-    // The arrange streams are consumed inside the per-log construction regions, so only the trace
-    // handles survive here. Re-import them to give the publishers a live stream to attach to.
-    let oks = oks_trace
-        .clone()
-        .import_named(scope.clone(), &format!("PublishLog({id})"));
-    let errs = errs_trace
-        .clone()
-        .import_named(scope.clone(), &format!("PublishLogErr({id})"));
-    registry.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
 }
 
 #[cfg(test)]

@@ -78,7 +78,7 @@ use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
-use crate::sharing::ArrangementSharingRegistry;
+use crate::sharing::{ArrangementSharingRegistry, Publisher};
 
 mod error_scan;
 mod peek_budget;
@@ -215,11 +215,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
-    /// A per-process registry of published index arrangements.
-    ///
-    /// Intentionally shared between all workers of the process, each of which publishes into its own
-    /// worker-ordinal slot. `Clone` shares the same underlying map.
-    pub sharing_registry: ArrangementSharingRegistry,
+    /// Publishes this runtime's indexes for its peer runtime.
+    pub(crate) publisher: Publisher,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -298,12 +295,6 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
-
-    /// Which of the process's compute runtimes this state belongs to.
-    ///
-    /// Only the maintenance runtime runs the non-idempotent process-global initializers. The
-    /// interactive runtime shares the same process and inherits those globals.
-    role: ComputeRuntimeRole,
 }
 
 impl ComputeState {
@@ -344,7 +335,11 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
-            sharing_registry,
+            publisher: match role {
+                // Only maintenance has a peer that reads its indexes.
+                ComputeRuntimeRole::Maintenance => Publisher::Registry(sharing_registry.clone()),
+                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => Publisher::None,
+            },
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -363,13 +358,7 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
-            role,
         }
-    }
-
-    /// Which of the process's compute runtimes this state serves.
-    pub(crate) fn role(&self) -> ComputeRuntimeRole {
-        self.role
     }
 
     /// Return a mutable reference to the identified collection.
@@ -1049,8 +1038,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.metrics.for_logging(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
-            self.compute_state.role(),
-            self.compute_state.sharing_registry.clone(),
+            self.compute_state.publisher.clone(),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
