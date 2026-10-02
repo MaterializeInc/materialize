@@ -26,6 +26,7 @@ use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
+use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
 use crate::typedefs::{ErrAgent, RowRowAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
@@ -233,27 +234,171 @@ where
     }
 }
 
+/// Defines a trace of an index that is either maintained by this runtime or published by the
+/// process's other compute runtime.
+///
+/// The two variants share their batch type, so cursors over either are the same and dispatch costs
+/// one branch per trace call, not per record.
+macro_rules! index_trace {
+    ($(#[$attr:meta])* $name:ident, $local:ty, $shared:ty) => {
+        $(#[$attr])*
+        #[derive(Clone)]
+        pub enum $name {
+            /// A trace this runtime maintains.
+            Local(PaddedTrace<$local>),
+            /// A trace the other runtime publishes. Its logical compaction is this runtime's hold
+            /// on the publication.
+            Shared($shared),
+        }
+
+        impl TraceReader for $name {
+            type Time = Timestamp;
+            type Batch = <$local as TraceReader>::Batch;
+
+            fn batches_through(
+                &mut self,
+                upper: AntichainRef<Timestamp>,
+            ) -> Option<Vec<Self::Batch>> {
+                match self {
+                    $name::Local(trace) => trace.batches_through(upper),
+                    $name::Shared(trace) => trace.batches_through(upper),
+                }
+            }
+
+            fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
+                match self {
+                    $name::Local(trace) => trace.set_logical_compaction(frontier),
+                    $name::Shared(trace) => trace.set_logical_compaction(frontier),
+                }
+            }
+
+            fn get_logical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
+                match self {
+                    $name::Local(trace) => trace.get_logical_compaction(),
+                    $name::Shared(trace) => trace.get_logical_compaction(),
+                }
+            }
+
+            fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Timestamp>) {
+                match self {
+                    $name::Local(trace) => trace.set_physical_compaction(frontier),
+                    $name::Shared(trace) => trace.set_physical_compaction(frontier),
+                }
+            }
+
+            fn get_physical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
+                match self {
+                    $name::Local(trace) => trace.get_physical_compaction(),
+                    $name::Shared(trace) => trace.get_physical_compaction(),
+                }
+            }
+
+            fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
+                match self {
+                    $name::Local(trace) => trace.map_batches(f),
+                    $name::Shared(trace) => trace.map_batches(f),
+                }
+            }
+        }
+
+        impl $name {
+            /// Imports the trace into `scope`, restricted to `[since, until)`.
+            ///
+            /// A local import comes with the button that shuts its operator down. A shared import
+            /// reads through a reader minted for it, never through this handle: the import holds the
+            /// publisher physically at the boundary it was seeded with, which this handle, a logical
+            /// hold only, does not.
+            pub fn import_frontier_core<'scope>(
+                &mut self,
+                scope: Scope<'scope, Timestamp>,
+                name: &str,
+                since: Antichain<Timestamp>,
+                until: Antichain<Timestamp>,
+            ) -> (
+                Arranged<'scope, TraceFrontier<$name>>,
+                Option<ShutdownButton<CapabilitySet<Timestamp>>>,
+            ) {
+                match self {
+                    $name::Local(trace) => {
+                        let (arranged, button) =
+                            trace.import_frontier_core(scope, name, since.clone(), until.clone());
+                        let trace = $name::Local(PaddedTrace::from(trace.unpadded().clone()));
+                        let arranged = Arranged {
+                            stream: arranged.stream,
+                            trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
+                        };
+                        (arranged, Some(button))
+                    }
+                    $name::Shared(handle) => {
+                        let reader = handle.fresh_reader();
+                        let arranged =
+                            reader.import_frontier_core(scope, name, since.clone(), until.clone());
+                        let trace = $name::Shared(reader);
+                        let arranged = Arranged {
+                            stream: arranged.stream,
+                            trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
+                        };
+                        (arranged, None)
+                    }
+                }
+            }
+        }
+    };
+}
+
+index_trace!(
+    /// The `oks` trace of an index.
+    OksTrace,
+    RowRowAgent<Timestamp, Diff>,
+    SharedOksHandle
+);
+index_trace!(
+    /// The `errs` trace of an index.
+    ErrsTrace,
+    ErrAgent<Timestamp, Diff>,
+    SharedErrsHandle
+);
+
 /// Bundles together traces for the successful computations (`oks`), the
 /// failed computations (`errs`), additional tokens that should share
 /// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-    errs: PaddedTrace<ErrAgent<Timestamp, Diff>>,
+    oks: OksTrace,
+    errs: ErrsTrace,
     to_drop: Option<Rc<dyn Any>>,
 }
 
 impl TraceBundle {
-    /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
+    /// Constructs a new trace bundle out of an `oks` trace and `errs` trace this runtime maintains.
     pub fn new<O, E>(oks: O, errs: E) -> TraceBundle
     where
         O: Into<PaddedTrace<RowRowAgent<Timestamp, Diff>>>,
         E: Into<PaddedTrace<ErrAgent<Timestamp, Diff>>>,
     {
         TraceBundle {
-            oks: oks.into(),
-            errs: errs.into(),
+            oks: OksTrace::Local(oks.into()),
+            errs: ErrsTrace::Local(errs.into()),
             to_drop: None,
+        }
+    }
+
+    /// Constructs a trace bundle over traces the process's other compute runtime publishes.
+    pub fn shared(oks: SharedOksHandle, errs: SharedErrsHandle) -> TraceBundle {
+        TraceBundle {
+            oks: OksTrace::Shared(oks),
+            errs: ErrsTrace::Shared(errs),
+            to_drop: None,
+        }
+    }
+
+    /// The traces this runtime maintains, if it maintains them.
+    pub fn local(&self) -> Option<(&RowRowAgent<Timestamp, Diff>, &ErrAgent<Timestamp, Diff>)> {
+        match (&self.oks, &self.errs) {
+            (OksTrace::Local(oks), ErrsTrace::Local(errs)) => {
+                Some((oks.unpadded(), errs.unpadded()))
+            }
+            _ => None,
         }
     }
 
@@ -268,23 +413,13 @@ impl TraceBundle {
         }
     }
 
-    /// Returns a reference to the `oks` trace.
-    pub fn oks(&self) -> &PaddedTrace<RowRowAgent<Timestamp, Diff>> {
-        &self.oks
-    }
-
-    /// Returns a reference to the `errs` trace.
-    pub fn errs(&self) -> &PaddedTrace<ErrAgent<Timestamp, Diff>> {
-        &self.errs
-    }
-
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+    pub fn oks_mut(&mut self) -> &mut OksTrace {
         &mut self.oks
     }
 
     /// Returns a mutable reference to the `errs` trace.
-    pub fn errs_mut(&mut self) -> &mut PaddedTrace<ErrAgent<Timestamp, Diff>> {
+    pub fn errs_mut(&mut self) -> &mut ErrsTrace {
         &mut self.errs
     }
 
@@ -293,12 +428,7 @@ impl TraceBundle {
     /// A reader of both, such as a peek that must rule out errors before it returns rows, cannot
     /// take them one at a time, because each of [`TraceBundle::oks_mut`] and
     /// [`TraceBundle::errs_mut`] borrows the whole bundle.
-    pub fn oks_errs_mut(
-        &mut self,
-    ) -> (
-        &mut PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-        &mut PaddedTrace<ErrAgent<Timestamp, Diff>>,
-    ) {
+    pub fn oks_errs_mut(&mut self) -> (&mut OksTrace, &mut ErrsTrace) {
         (&mut self.oks, &mut self.errs)
     }
 
@@ -321,10 +451,15 @@ impl TraceBundle {
     /// Note that the padded bundle represents a different TVC than the original one, it is unsound
     /// to use it to "uncompact" an existing TVC. The only valid use of the padded bundle is to
     /// initializa a new TVC.
+    ///
+    /// Panics on traces this runtime does not maintain, whose compaction its peer owns.
     pub fn into_padded(self) -> Self {
+        let (OksTrace::Local(oks), ErrsTrace::Local(errs)) = (self.oks, self.errs) else {
+            panic!("only a trace this runtime maintains can be padded");
+        };
         Self {
-            oks: self.oks.into_padded(),
-            errs: self.errs.into_padded(),
+            oks: OksTrace::Local(oks.into_padded()),
+            errs: ErrsTrace::Local(errs.into_padded()),
             to_drop: self.to_drop,
         }
     }
