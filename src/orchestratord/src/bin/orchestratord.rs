@@ -213,7 +213,11 @@ pub struct Args {
     /// The Teleport endpoint to register the environmentd Service against,
     /// e.g. `materialize.teleport.sh:443`. When unset, orchestratord writes
     /// no Teleport labels or annotations on the environmentd Service.
-    #[clap(long)]
+    #[clap(
+        long,
+        requires = "teleport_stack_type",
+        requires = "teleport_cluster_name"
+    )]
     teleport_endpoint: Option<String>,
     /// Required when `--teleport-endpoint` is set.
     #[clap(long)]
@@ -725,9 +729,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             disable_license_key_checks: args.disable_license_key_checks,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
-            teleport_endpoint: args.teleport_endpoint,
-            teleport_stack_type: args.teleport_stack_type,
-            teleport_cluster_name: args.teleport_cluster_name,
+            teleport: args.teleport_endpoint.map(|endpoint| {
+                controller::materialize::teleport::TeleportConfig {
+                    endpoint,
+                    stack_type: args
+                        .teleport_stack_type
+                        .expect("clap requires --teleport-stack-type with --teleport-endpoint"),
+                    cluster_name: args
+                        .teleport_cluster_name
+                        .expect("clap requires --teleport-cluster-name with --teleport-endpoint"),
+                }
+            }),
         };
         move || {
             k8s_controller::Controller::namespaced_all(

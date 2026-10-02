@@ -53,7 +53,7 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
 pub mod generation;
 pub mod global;
-mod teleport;
+pub mod teleport;
 
 #[derive(Clone)]
 pub struct Config {
@@ -132,14 +132,7 @@ pub struct Config {
     pub tracing: TracingCliArgs,
     pub orchestratord_namespace: String,
 
-    /// The Teleport endpoint the environmentd Service is registered
-    /// against, e.g. `materialize.teleport.sh:443`. When unset,
-    /// orchestratord writes no Teleport labels or annotations.
-    pub teleport_endpoint: Option<String>,
-    /// Required when `teleport_endpoint` is set.
-    pub teleport_stack_type: Option<String>,
-    /// Required when `teleport_endpoint` is set.
-    pub teleport_cluster_name: Option<String>,
+    pub teleport: Option<teleport::TeleportConfig>,
 }
 
 pub struct Context {
@@ -154,16 +147,6 @@ impl Context {
             assert!(
                 config.aws_account_id.is_some(),
                 "--aws-account-id is required when using --cloud-provider=aws"
-            );
-        }
-        if config.teleport_endpoint.is_some() {
-            assert!(
-                config.teleport_stack_type.is_some(),
-                "--teleport-stack-type is required when --teleport-endpoint is set"
-            );
-            assert!(
-                config.teleport_cluster_name.is_some(),
-                "--teleport-cluster-name is required when --teleport-endpoint is set"
             );
         }
 
