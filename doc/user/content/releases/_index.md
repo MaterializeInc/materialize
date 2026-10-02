@@ -20,6 +20,31 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.45.0
+*Released to Materialize Cloud: 2026-10-08* <br>
+*Released to Materialize Self-Managed: 2026-10-09* <br>
+
+### Improvements {#v26.45-improvements}
+- **`sum` and `avg` over `interval`**: `sum(interval)` and `avg(interval)` now work and return `interval`, matching PostgreSQL — `sum` accumulates months, days, and microseconds independently, so `interval '1 month' + interval '40 days'` sums to `1 mon 40 days` rather than being normalized, `avg` carries each fractional component down into the next finer one, and a grouped `sum` whose components exceed the `interval` field widths raises `interval out of range` instead of wrapping silently.
+- **Improved compatibility with PostgreSQL ODBC clients**: `expr OPERATOR(pg_catalog.=) expr` and the prefix form `OPERATOR(pg_catalog.-) 1` now parse, so queries psqlODBC routinely generates no longer fail with `Expected operator, found equals sign`; as in PostgreSQL, a function named `operator` must now be quoted.
+- **Lower memory for `MIN` and `MAX`**: A materialized view or index computing a single `MIN` or `MAX` over an input that receives updates or deletes no longer keeps an extra copy of its input in memory — for a `MAX` over 100,000 rows in 1,000 groups, the view's arrangements fell from 16.8 MB to 12.8 MB and the first reduction stage from 100,000 records to none under the default bucketing.
+- **Lower `SUBSCRIBE` and query latency from introspection logging**: The compute introspection logging dataflow now drains its input in bounded chunks rather than processing a whole interval of events in one uninterruptible call, which on a 4-worker replica serving 1,000 `SUBSCRIBE` timestamps per second took p99 latency for results waiting on the subscribe frontier from 78–86 ms to 9–14 ms and halved the worst per-second index `SELECT` latency.
+- **Stricter Kubernetes API server certificate verification in Self-Managed deployments**: The Materialize operator, `environmentd`, and `mz-debug` now verify the Kubernetes API server certificate with rustls rather than OpenSSL, which requires the certificate to carry a subject alternative name matching the address used to reach the API server and rejects a certificate that names the host only in its common name, so clusters with hand-issued API server certificates should confirm their subject alternative names before upgrading; EKS, GKE, AKS, and kind are unaffected.
+- **Schema registry and `COPY FROM` server certificates must carry a subject alternative name**: Confluent Schema Registry connections, `COPY FROM` URLs, and the OIDC issuer fetch now reject a server certificate that identifies its host only by common name, so reissue any such certificate with a matching subject alternative name before upgrading.
+- **Kubernetes events from the Materialize operator**: The operator now publishes Kubernetes events on `Materialize`, `Balancer`, and `Console` resources when it fails to reconcile them, and on each `Materialize` rollout phase, so `kubectl describe` shows why a resource is not progressing; its ClusterRole gains `create` and `patch` on `events.k8s.io` events.
+
+### Agent Skills {#v26.45-agent-skills}
+- **`mz-demo-data`**: A new skill that stands up continuously-updating, realistic synthetic data inside a running Materialize instance using nothing but views over `mz_now()` — no Kafka, no external load generator, and no seed scripts — in a dedicated `materialize_demo` schema that one `DROP SCHEMA` removes.
+
+### Bug Fixes {#v26.45-bug-fixes}
+- Fixed connection poolers losing track of session variables across `DISCARD ALL`, which now reports `ParameterStatus` for every reportable parameter whose value it changed, as `RESET` and PostgreSQL do; with pgbouncer and `server_reset_query_always=1` this had left every client's `application_name` empty.
+- Fixed hedged reads from object storage staying disabled for the lifetime of any process that started while the object store or its credential service was unavailable, which was observed during a regional AWS STS outage; the hedge connection is now opened in the background with retries, so it arms once the store recovers, and process startup no longer waits on it.
+- Fixed `Invalid Parquet file. Corrupt footer` crashes when reading a large object from an S3-compatible object store that does not return a part count on a part request, and added a length check that turns a short read from any store into a retried failure rather than corrupt data downstream.
+- Fixed cluster replicas from an earlier generation being left running during a zero-downtime deployment, where continuous DDL could repeatedly restart the read-only `environmentd` before it finished cleaning up orphaned replicas.
+- Fixed `environmentd` and `clusterd` aborting when a MySQL connection, including during connection purification and `VALIDATE CONNECTION`, reached a server that switched authentication to MariaDB `parsec`; the client panic is now returned as a connection error.
+- Fixed sporadic schema registry TLS failures caused by a stale OpenSSL error left on the worker thread after creating a Kafka client that reads certificates from `ssl.ca.pem`.
+- Fixed the Console reporting different cluster utilization on the cluster list, the cluster detail page, and the utilization charts, which now all show the most recent sample from the same view; fixed memory and CPU readings on multi-process replica sizes (`2xlarge` and larger), which were reported per process rather than merged across processes; and fixed a cluster metrics gauge labeled "Heap Utilization" that showed memory and `0 B` on deployments that run without a heap limit.
+
 ## v26.43.0
 *Released to Materialize Cloud: 2026-09-23* <br>
 *Released to Materialize Self-Managed: 2026-09-24* <br>
