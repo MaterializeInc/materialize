@@ -262,9 +262,7 @@ async fn check_ddl_changes(
     let mut new_replicas = Vec::new();
     for replica in tx.get_cluster_replicas() {
         current_replicas.insert(replica.replica_id);
-        if replica.replica_id.is_user()
-            && !initial_user_replicas.contains(&replica.replica_id)
-        {
+        if replica.replica_id.is_user() && !initial_user_replicas.contains(&replica.replica_id) {
             new_replicas.push(replica);
         }
     }
