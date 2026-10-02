@@ -1578,6 +1578,7 @@ impl CatalogState {
                     conn_id: None,
                     resolved_ids,
                     dependencies: DependencyIds(dependencies),
+                    security_barrier: view.security_barrier,
                 })
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {

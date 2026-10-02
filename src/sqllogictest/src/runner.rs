@@ -2950,6 +2950,7 @@ fn generate_view_sql(
         definition: ViewDefinition {
             name: name.clone(),
             columns: columns.clone(),
+            with_options: vec![],
             query,
         },
     })

@@ -29,6 +29,40 @@ use crate::ast::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ViewOptionName {
+    /// The `SECURITY BARRIER [=] <bool>` option.
+    SecurityBarrier,
+}
+
+impl AstDisplay for ViewOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ViewOptionName::SecurityBarrier => f.write_str("SECURITY BARRIER"),
+        }
+    }
+}
+
+impl WithOptionName for ViewOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ViewOptionName::SecurityBarrier => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ViewOption<T: AstInfo> {
+    pub name: ViewOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(ViewOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MaterializedViewOptionName {
     /// The `ASSERT NOT NULL [=] <ident>` option.
     AssertNotNull,

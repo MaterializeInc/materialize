@@ -179,6 +179,7 @@ impl Optimize<Index> for Optimizer {
             &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
+            df_builder.security_barriers(),
         );
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;

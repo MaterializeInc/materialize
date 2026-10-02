@@ -883,6 +883,13 @@ impl Pretty {
                 ")",
             ));
         }
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|o| self.doc_display_pass(o), &v.with_options),
+                ")",
+            ));
+        }
         docs.push(nest_title("AS", self.doc_query(&v.query)));
         RcDoc::intersperse(docs, Doc::line()).group()
     }
