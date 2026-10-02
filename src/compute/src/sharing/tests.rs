@@ -32,10 +32,10 @@ use super::*;
 
 /// Builds a tiny dataflow that arranges `rows` into a `RowRow` `oks` arrangement and an empty
 /// `errs` arrangement, publishes both, and returns a registry that holds them under `id`, with the
-/// token that keeps the publication. The dataflow runs to completion inside `execute_directly`. The published
-/// chain outlives the worker through its `Arc`s, and the standing hold keeps the published
-/// `since` at the minimum, so the snapshot reads below observe the sealed contents even after
-/// the publishing worker has torn down.
+/// token that keeps the publication. The dataflow runs to completion inside `execute_directly`.
+/// The published chain outlives the worker through its `Arc`s, and nothing compacts the trace, so
+/// the snapshot reads below observe the sealed contents even after the publishing worker has torn
+/// down.
 fn publish_index(
     id: GlobalId,
     rows: Vec<(Row, Row)>,
