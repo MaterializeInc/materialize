@@ -11895,7 +11895,7 @@ __metadata:
     react-refresh: "npm:^0.19.0"
     react-router-dom: "npm:^7.18.4"
     react-select: "npm:^5.10.2"
-    react-virtualized-auto-sizer: "npm:^1.0.24"
+    react-virtualized-auto-sizer: "npm:^2.0.3"
     react-window: "npm:^1.8.10"
     scroll-into-view-if-needed: "npm:^3.1.0"
     semver: "npm:^7.8.5"
@@ -13714,13 +13714,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-virtualized-auto-sizer@npm:^1.0.24":
-  version: 1.0.24
-  resolution: "react-virtualized-auto-sizer@npm:1.0.24"
+"react-virtualized-auto-sizer@npm:^2.0.3":
+  version: 2.0.3
+  resolution: "react-virtualized-auto-sizer@npm:2.0.3"
   peerDependencies:
-    react: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0
-    react-dom: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0
-  checksum: 10c0/d400489e5005a2ad0635228958379aa26b66fdae62a5b9fbf4dcb5fecd4e99454990b1cd59fe55ff277419b37bdf098c26e7185e0ef1b6ca775a477f913bb763
+    react: ^18.0.0 || ^19.0.0
+    react-dom: ^18.0.0 || ^19.0.0
+  checksum: 10c0/3788e77a696a696a0f5a72de8a43cab7bdf8b60476d18244802e0cd8ba6d3d83bebb3aa0c56a2f28a911b701056d0c323a6c965ed26ae413503528f028261c94
   languageName: node
   linkType: hard
 
