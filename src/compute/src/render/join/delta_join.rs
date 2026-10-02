@@ -404,7 +404,6 @@ where
             };
             (oks, errs2)
         }
-        // As `Trace`, over the trace type the interactive runtime imports.
         None => panic!("Arrangement promised by the planner is absent!"),
     }
 }
@@ -748,7 +747,6 @@ where
                 initial_closure,
             )
         }
-        // As `Trace`, over the trace type the interactive runtime imports.
         None => panic!("Arrangement promised by the planner is absent!"),
     }
 }
