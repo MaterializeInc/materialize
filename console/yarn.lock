@@ -3317,10 +3317,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@nodable/entities@npm:^3.0.0":
-  version: 3.0.0
-  resolution: "@nodable/entities@npm:3.0.0"
-  checksum: 10c0/5e57422ce08d9f83a7ad09d8f90953e2e63b3274c3f941bf7ddf64f290473e70d47acbd6c8b9e60169c2a8c5c2424c4131bdd99b937792413f55a4a146f76658
+"@nodable/entities@npm:^3.0.1":
+  version: 3.1.0
+  resolution: "@nodable/entities@npm:3.1.0"
+  checksum: 10c0/a1a2a081949a72da17846dc44962dc95a2bf5268867407fc4f6b686acda4dc5e9fd85f0398999969309b9f7fe0fbe85947a91c1ddac47eba8f9b58224c36f6fb
   languageName: node
   linkType: hard
 
@@ -5446,11 +5446,12 @@ __metadata:
   linkType: hard
 
 "@types/jsonwebtoken@npm:^9":
-  version: 9.0.7
-  resolution: "@types/jsonwebtoken@npm:9.0.7"
+  version: 9.0.10
+  resolution: "@types/jsonwebtoken@npm:9.0.10"
   dependencies:
+    "@types/ms": "npm:*"
     "@types/node": "npm:*"
-  checksum: 10c0/e1cd0e48fcae21b1d4378887a23453bd7212b480a131b11bcda2cdeb0687d03c9646ee5ba592e04cfaf76f7cc80f179950e627cdb3ebc90a5923bce49a35631a
+  checksum: 10c0/0688ac8fb75f809201cb7e18a12b9d80ce539cb9dd27e1b01e11807cb1a337059e899b8ee3abc3f2c9417f02e363a3069d9eab9ef9724b1da1f0e10713514f94
   languageName: node
   linkType: hard
 
@@ -9311,11 +9312,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"fast-xml-parser@npm:^5.11.1":
-  version: 5.11.1
-  resolution: "fast-xml-parser@npm:5.11.1"
+"fast-xml-parser@npm:^5.11.2":
+  version: 5.11.2
+  resolution: "fast-xml-parser@npm:5.11.2"
   dependencies:
-    "@nodable/entities": "npm:^3.0.0"
+    "@nodable/entities": "npm:^3.0.1"
     fast-xml-builder: "npm:^1.2.0"
     is-unsafe: "npm:^2.0.0"
     path-expression-matcher: "npm:^1.6.2"
@@ -9323,7 +9324,7 @@ __metadata:
     xml-naming: "npm:^0.3.0"
   bin:
     fxparser: src/cli/cli.js
-  checksum: 10c0/04a1cf600130c4fc146e9f5bcb0a0e88354c5b9725debfa849f9028afd90b77a3e4c9339a3a7f5d22d749b74ac78567428eb1385679319fabf4d6f03065248d6
+  checksum: 10c0/8e8f947b150c0ecc97fb2a7298faa3e9d3e6720a7773446f17bbadf6f6ef4aff5c3e6ef9b6df81dc9b0abe9480bbcbe13b2ce4b1a27098de31e9190681116312
   languageName: node
   linkType: hard
 
@@ -11858,7 +11859,7 @@ __metadata:
     eslint-plugin-simple-import-sort: "npm:^14.0.0"
     eslint-plugin-unicorn: "npm:^76.0.0"
     fast-deep-equal: "npm:^3.1.3"
-    fast-xml-parser: "npm:^5.11.1"
+    fast-xml-parser: "npm:^5.11.2"
     framer-motion: "npm:^12.38.0"
     globals: "npm:^17.12.0"
     intersection-observer: "npm:^0.12.2"
