@@ -28,7 +28,6 @@ pub(super) enum IndexTraces {
     /// holds nothing of the arrangement, so an unpublished slot registers no hold at the minimum.
     Shared {
         registry: ArrangementSharingRegistry,
-        worker_index: usize,
         /// The id the arrangement is published under. Differs from the peek's target when the
         /// target re-exports an imported shared arrangement, see `ComputeState::shared_reexports`.
         published: GlobalId,
@@ -50,10 +49,9 @@ impl IndexTraces {
             }
             IndexTraces::Shared {
                 registry,
-                worker_index,
                 published,
             } => registry
-                .snapshots(published, *worker_index)
+                .snapshots(published)
                 .map(|(oks, errs)| (PeekOks::Shared(oks), PeekErrs::Shared(errs))),
         }
     }
