@@ -148,10 +148,6 @@ pub enum AdapterNotice {
         cluster: String,
         sources: Vec<String>,
     },
-    /// An OIDC group has no matching Materialize role.
-    OidcGroupSyncUnmatchedGroup {
-        group: String,
-    },
     /// An OIDC group maps to a reserved role name (mz_/pg_ prefix).
     OidcGroupSyncReservedRole {
         group: String,
@@ -229,7 +225,6 @@ impl AdapterNotice {
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
-            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => Severity::Notice,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
             AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
         }
@@ -353,7 +348,6 @@ impl AdapterNotice {
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
-            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
             AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
         }
@@ -566,13 +560,6 @@ impl fmt::Display for AdapterNotice {
                     write!(f, ", and {} more", sources.len() - MAX_LISTED_SOURCES)?;
                 }
                 Ok(())
-            }
-            AdapterNotice::OidcGroupSyncUnmatchedGroup { group } => {
-                write!(
-                    f,
-                    "OIDC group \"{}\" has no matching Materialize role, skipping",
-                    group
-                )
             }
             AdapterNotice::OidcGroupSyncReservedRole { group } => {
                 write!(
