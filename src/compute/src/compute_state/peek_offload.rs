@@ -38,11 +38,8 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::compute_state::PeekRowIterationConfig;
-use crate::compute_state::error_scan::PeekErrsTrace;
 use crate::compute_state::peek_metrics::PeekWalkMetrics;
-use crate::compute_state::peek_scan::{
-    PeekOksTrace, PeekScan, RowBatch, ScanOutcome, rows_response,
-};
+use crate::compute_state::peek_scan::{IndexPeekScan, RowBatch, ScanOutcome, rows_response};
 use crate::compute_state::peek_stash::{StashTarget, StashUpload};
 
 /// The bound on how many offloaded peek walks run at once.
@@ -224,20 +221,15 @@ impl OffloadedPeek {
     ///
     /// The scan may already hold a full batch. This driver takes it, so offloading is how a peek
     /// too large to answer inline reaches the stash.
-    pub(super) fn start<Tr, ETr>(
+    pub(super) fn start(
         peek: Peek,
-        scan: PeekScan<Tr, ETr>,
+        scan: IndexPeekScan,
         stash: Option<StashTarget>,
         permits: Arc<PeekPermits>,
         config: OffloadConfig,
         metrics: PeekWalkMetrics,
         worker: Thread,
-    ) -> Self
-    where
-        Tr: PeekOksTrace,
-        ETr: PeekErrsTrace,
-        PeekScan<Tr, ETr>: Send + 'static,
-    {
+    ) -> Self {
         let (mut result_tx, result_rx) = oneshot::channel();
         permits.resize(config.permit_fraction.get());
 
@@ -313,19 +305,14 @@ impl OffloadedPeek {
     /// Drives the scan in `state` to the peek's answer, writing what it may not answer with inline
     /// to `stash`. `None` means the peek was cancelled, which is the one way the walk ends without
     /// an answer.
-    async fn walk<Tr, ETr>(
-        mut state: WalkState<Tr, ETr>,
+    async fn walk(
+        mut state: WalkState,
         peek_uuid: Uuid,
         stash: Option<StashTarget>,
         config: &OffloadConfig,
         metrics: &PeekWalkMetrics,
         order_by: Arc<[ColumnOrder]>,
-    ) -> (WalkState<Tr, ETr>, Option<PeekResponse>)
-    where
-        Tr: PeekOksTrace,
-        ETr: PeekErrsTrace,
-        PeekScan<Tr, ETr>: Send + 'static,
-    {
+    ) -> (WalkState, Option<PeekResponse>) {
         // Opened by the first batch the scan hands over, so a walk that never crosses the stash
         // threshold neither opens a shard nor writes a byte. Whether it is open is also what
         // decides how the peek is answered: an upload answers with a handle, and no upload means
@@ -449,23 +436,15 @@ impl OffloadedPeek {
 /// on a blocking thread that an abort cannot interrupt, and the permit accounts for that thread
 /// until the scan leaves it. Fields drop in declaration order, so the scan and its batches go
 /// before the permit that accounts for them.
-struct WalkState<Tr, ETr>
-where
-    Tr: PeekOksTrace,
-    ETr: PeekErrsTrace,
-{
-    scan: PeekScan<Tr, ETr>,
+struct WalkState {
+    scan: IndexPeekScan,
     _permit: WalkPermit,
     /// The sending end of the peek's result channel. Its receiver is dropped by cancellation and
     /// by nothing else, so a closed channel is the cancellation signal.
     result_tx: oneshot::Sender<(PeekResponse, Duration)>,
 }
 
-impl<Tr, ETr> WalkState<Tr, ETr>
-where
-    Tr: PeekOksTrace,
-    ETr: PeekErrsTrace,
-{
+impl WalkState {
     /// Steps the scan until it ends, offers a batch, or the peek is cancelled, whichever comes
     /// first. `None` is the cancellation.
     ///
