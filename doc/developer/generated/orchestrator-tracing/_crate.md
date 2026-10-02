@@ -1,6 +1,6 @@
 ---
 source: src/orchestrator-tracing/src/lib.rs
-revision: c56cae1594
+revision: bb5c454adc
 ---
 
 # mz-orchestrator-tracing
