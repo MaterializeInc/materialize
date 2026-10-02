@@ -100,6 +100,21 @@ pub async fn handle_get(
     }
 }
 
+/// Serves the live profile in pprof format, the tracker's equivalent of
+/// jemalloc's heap profile.
+pub async fn handle_get_live_pprof(
+    build_info: &'static BuildInfo,
+) -> Result<Response, (StatusCode, String)> {
+    handle_get(
+        Query(TrackedQuery {
+            view: Some("live".into()),
+            format: Some("pprof".into()),
+        }),
+        build_info,
+    )
+    .await
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AllocatorQuery {
     #[serde(default)]

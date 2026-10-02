@@ -9,13 +9,13 @@ tikv_jemalloc_ctl
 tikv_jemallocator
 0:mz_clusterd:default,jemalloc,mz-alloc-default,tokio-console
 1:mz_alloc:default,jemalloc,mz-prof,tikv-jemallocator
-2:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
+2:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats
 tikv_jemalloc_sys
 0:mz_clusterd:default,jemalloc,mz-alloc-default,tokio-console
 1:mz_alloc:default,jemalloc,mz-prof,tikv-jemallocator
 2:mz_prof:jemalloc,jemalloc_pprof,tikv-jemalloc-ctl
 3:jemalloc_pprof:
 4:tikv_jemalloc_ctl:default,stats,use_std
-5:tikv_jemalloc_sys:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
-2:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
-3:tikv_jemalloc_sys:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms (*)
+5:tikv_jemalloc_sys:background_threads,background_threads_runtime_support,default,profiling,stats
+2:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats
+3:tikv_jemalloc_sys:background_threads,background_threads_runtime_support,default,profiling,stats (*)
