@@ -10980,18 +10980,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jotai@npm:^2.9.3":
-  version: 2.9.3
-  resolution: "jotai@npm:2.9.3"
+"jotai@npm:^3.0.1":
+  version: 3.0.1
+  resolution: "jotai@npm:3.0.1"
   peerDependencies:
-    "@types/react": ">=17.0.0"
-    react: ">=17.0.0"
+    "@types/react": ">=18.0.0"
+    react: ">=18.0.0"
   peerDependenciesMeta:
     "@types/react":
       optional: true
     react:
       optional: true
-  checksum: 10c0/d7a2aedeebd84f332b930c5dc06f6827c11a70c3b6bae0817e0c778f7c34996f3a47d5c544ff1b7ed2662083feed55ea6d77b281adf2e0fba65ad93b1723d687
+  checksum: 10c0/84b6adac2e3c8f7e8fd27c52f3206ceb1b22f9b46dfb81100b3765f652134399e91bfaee49a15e2e25083adf5638b8168aeb338234074e9c80955d51c231b456
   languageName: node
   linkType: hard
 
@@ -11862,7 +11862,7 @@ __metadata:
     framer-motion: "npm:^12.38.0"
     globals: "npm:^17.12.0"
     intersection-observer: "npm:^0.12.2"
-    jotai: "npm:^2.9.3"
+    jotai: "npm:^3.0.1"
     jotai-devtools: "npm:^0.10.1"
     jsdom: "npm:^29.1.1"
     jsonwebtoken: "npm:^9.0.3"
