@@ -23,6 +23,7 @@
 //! cargo bench -p mz-compute --features bench --bench correction
 //! ```
 
+use mz_alloc_default as _;
 use std::hint::black_box;
 use std::time::Duration;
 

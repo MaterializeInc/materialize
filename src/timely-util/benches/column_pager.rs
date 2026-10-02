@@ -44,6 +44,7 @@
 //!
 //!     cargo bench -p mz-timely-util --bench column_pager
 
+use mz_alloc_default as _;
 use std::sync::Arc;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};

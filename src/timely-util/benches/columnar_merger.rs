@@ -32,6 +32,7 @@
 //! See `mz-compute/benches/columnar_merger_row.rs` for the `Row`-keyed
 //! companion bench (variable-length payload regime).
 
+use mz_alloc_default as _;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};

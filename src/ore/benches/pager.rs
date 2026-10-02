@@ -15,6 +15,7 @@
 
 #![cfg(feature = "pager")]
 
+use mz_alloc_default as _;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
