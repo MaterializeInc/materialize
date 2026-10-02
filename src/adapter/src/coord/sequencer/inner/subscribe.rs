@@ -277,6 +277,13 @@ impl Coordinator {
             ..
         } = &plan;
 
+        // Only a cluster with cell-scoped errors produces rows that carry errors.
+        if plan.inline_errors && !self.catalog().get_cluster(cluster_id).config.cell_errors() {
+            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "INLINE ERRORS requires a cluster created with cell-scoped errors"
+            )));
+        }
+
         // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(cluster_id)
@@ -300,7 +307,8 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-        );
+        )
+        .with_inline_errors(plan.inline_errors);
         let catalog = self.owned_catalog();
 
         let span = Span::current();
@@ -567,6 +575,7 @@ impl Coordinator {
             backlog_accounting: Arc::clone(&backlog_accounting),
             max_buffered_bytes,
             emit_progress: plan.emit_progress,
+            inline_errors: plan.inline_errors,
             as_of: df_desc
                 .as_of
                 .as_ref()

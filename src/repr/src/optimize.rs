@@ -99,6 +99,9 @@ optimizer_feature_flags!({
     enable_eq_classes_withholding_errors: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
+    // Bound from the cluster, which records `enable_compute_cell_errors` when it is created.
+    // Static evaluation must follow the error scope that the cluster's dataflows use.
+    enable_cell_errors: bool,
     // Enable Lattice-based fixpoint iteration on LetRec nodes in the
     // Analysis framework.
     enable_letrec_fixpoint_analysis: bool,

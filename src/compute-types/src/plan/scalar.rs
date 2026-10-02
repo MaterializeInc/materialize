@@ -403,7 +403,11 @@ impl Eval for LirScalarExpr {
     ) -> Result<Datum<'a>, EvalError> {
         use LirScalarExpr::*;
         match self {
-            Column(index, _name) => Ok(datums[*index]),
+            Column(index, _name) => match datums[*index] {
+                // Same contract as `MirScalarExpr`: reading a cell-scoped error raises it.
+                Datum::Error(err) => Err(EvalError::from_datum_error(err)),
+                datum => Ok(datum),
+            },
             Literal(res, _column_type) => match res {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),

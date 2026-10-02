@@ -627,6 +627,7 @@ fn datum_difference_with_column_type(
             }
             match (datum, scalar_type) {
                 (Datum::Dummy, _) => Ok(()), // allow dummys (unlike is_instance_of)
+                (Datum::Error(_), _) => Ok(()),
                 (Datum::Null, _) => Err(DatumTypeDifference::Null {
                     expected: scalar_type.clone(),
                 }),
