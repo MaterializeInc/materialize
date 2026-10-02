@@ -466,11 +466,19 @@ pub const PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Enables two fresh timestamp-oracle read batches in flight per timeline.
+/// Enables concurrent fresh timestamp-oracle read batches per timeline.
 pub const ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS: Config<bool> = Config::new(
     "enable_timestamp_oracle_pipelined_reads",
     false,
-    "Allow two fresh timestamp-oracle backing-read batches in flight per timeline instead of one.",
+    "Allow concurrent fresh timestamp-oracle backing-read batches in flight per timeline instead of one.",
+    ParameterScope::Environment,
+);
+
+/// Bounds fresh timestamp-oracle backing-read concurrency when pipelining is enabled.
+pub const TIMESTAMP_ORACLE_READ_CONCURRENCY: Config<usize> = Config::new(
+    "timestamp_oracle_read_concurrency",
+    2,
+    "Maximum fresh timestamp-oracle backing-read batches in flight per timeline when pipelining is enabled. Effective values are clamped to 1 through 8.",
     ParameterScope::Environment,
 );
 
@@ -619,5 +627,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
         .add(&ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS)
+        .add(&TIMESTAMP_ORACLE_READ_CONCURRENCY)
         .add(&FRONTEND_READ_THEN_WRITE)
 }

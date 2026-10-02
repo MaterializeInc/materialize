@@ -2517,6 +2517,7 @@ pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
         || name == CRDB_KEEPALIVES_RETRIES.name()
         || name == mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
         || name == mz_adapter_types::dyncfgs::ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name()
+        || name == mz_adapter_types::dyncfgs::TIMESTAMP_ORACLE_READ_CONCURRENCY.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config
@@ -2710,6 +2711,9 @@ mod reset_all_tests {
     fn oracle_pipelining_changes_notify_timestamp_oracle() {
         let name = mz_adapter_types::dyncfgs::ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name();
         assert!(is_timestamp_oracle_config_var(name));
+        assert!(is_timestamp_oracle_config_var(
+            mz_adapter_types::dyncfgs::TIMESTAMP_ORACLE_READ_CONCURRENCY.name()
+        ));
         assert!(is_timestamp_oracle_config_var(
             mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
         ));
