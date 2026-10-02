@@ -211,25 +211,6 @@ impl ArrangementSharingRegistry {
         }
     }
 
-    /// Advances the standing hold on `id`'s published slot, if one exists.
-    ///
-    /// Called from `handle_allow_compaction` on the runtime that may import `id` but does not host it,
-    /// which reaches it because the multiplexer broadcasts `AllowCompaction`. The publisher bounds its
-    /// logical compaction by this, so a frontier the importing runtime has not applied does not
-    /// compact the arrangement.
-    ///
-    /// A no-op for ids with no slot. Nothing has been published there, so no import can
-    /// have been built over it, and the frontier a later publisher seeds the hold with (its own
-    /// compaction frontier at adoption) is at or below every `as_of` the controller may offer for it.
-    /// Does not `notify`: compaction bookkeeping gives a waiting reader nothing new to serve.
-    pub(crate) fn note_standing_hold(&self, id: GlobalId, frontier: &Antichain<Timestamp>) {
-        let inner = self.lock();
-        if let Some(arr) = Self::slot(&inner, &id) {
-            arr.oks.note_standing_hold(frontier);
-            arr.errs.note_standing_hold(frontier);
-        }
-    }
-
     /// Marks `id` dirty for the interactive peer and unparks it.
     ///
     /// [`Self::publish`] calls this once a slot's publishers are installed, and each publisher calls
