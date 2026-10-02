@@ -63,14 +63,36 @@ struct Waker {
     dirty: BTreeSet<GlobalId>,
 }
 
-/// The registry's state: the published slots and one [`Waker`] per interactive worker index. One
-/// lock covers all of it. Every critical section is a few map operations, and the publisher takes
-/// it once per seal, not per record.
+/// The registry's state for one worker ordinal: the slots published there and the waker of the
+/// interactive worker that reads them.
+#[derive(Default)]
+struct WorkerSlots {
+    map: BTreeMap<GlobalId, Arc<SharedIndexArrangement>>,
+    /// `None` until the interactive worker with this ordinal registers its waker.
+    waker: Option<Waker>,
+}
+
+/// The registry's state, indexed by worker ordinal. One lock covers all of it. Every critical
+/// section is a few map operations, and the publisher takes it once per seal, not per record.
 #[derive(Default)]
 struct Inner {
-    map: BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>,
-    /// Indexed by worker ordinal; `None` until that interactive worker registers its waker.
-    wakers: Vec<Option<Waker>>,
+    workers: Vec<WorkerSlots>,
+}
+
+impl Inner {
+    /// The state of worker `worker_index`, growing the vector to at least `len` entries.
+    fn worker_mut(&mut self, worker_index: usize, len: usize) -> &mut WorkerSlots {
+        let len = std::cmp::max(len, worker_index + 1);
+        if self.workers.len() < len {
+            self.workers.resize_with(len, WorkerSlots::default);
+        }
+        &mut self.workers[worker_index]
+    }
+
+    /// The slot for `(id, worker_index)`, if published.
+    fn slot(&self, id: &GlobalId, worker_index: usize) -> Option<&Arc<SharedIndexArrangement>> {
+        self.workers.get(worker_index)?.map.get(id)
+    }
 }
 
 /// Per-process registry of published index arrangements.
@@ -101,7 +123,7 @@ impl ArrangementSharingRegistry {
     /// Whichever side touches `(id, worker_index)` first creates the slot; the other observes and
     /// shares the same `Arc`, so a point a reader already imported is backed in place by a later
     /// [`crate::shared_trace::adopt_trace`] rather than being overwritten by a second,
-    /// disconnected arrangement. Grows the slot vector to `peers` when `id` is not yet present.
+    /// disconnected arrangement. Grows the per-worker state to `peers` entries.
     ///
     /// An unbacked point carries no data, so this does not `notify`: there is nothing yet for a
     /// waiting reader to act on. [`Self::publish`] notifies once the publishers are installed.
@@ -112,16 +134,17 @@ impl ArrangementSharingRegistry {
         peers: usize,
     ) -> Arc<SharedIndexArrangement> {
         let mut inner = self.lock();
-        let slots = inner
+        let slot = inner
+            .worker_mut(worker_index, peers)
             .map
             .entry(id)
-            .or_insert_with(|| (0..peers).map(|_| None).collect());
-        Arc::clone(slots[worker_index].get_or_insert_with(|| {
-            Arc::new(SharedIndexArrangement {
-                oks: Published::new(),
-                errs: Published::new(),
-            })
-        }))
+            .or_insert_with(|| {
+                Arc::new(SharedIndexArrangement {
+                    oks: Published::new(),
+                    errs: Published::new(),
+                })
+            });
+        Arc::clone(slot)
     }
 
     /// Publishes index `id`'s `oks` and `errs` traces and wakes readers waiting on `id`. `worker`
@@ -158,13 +181,14 @@ impl ArrangementSharingRegistry {
     /// Removes all slots for `id`, called when the index drops.
     pub(crate) fn remove(&self, id: &GlobalId) {
         let mut inner = self.lock();
-        let Inner { map, wakers } = &mut *inner;
-        map.remove(id);
         // `remove` is not worker-specific: any interactive worker may have pending work on `id`, so
         // mark it dirty for every registered waker. A waiter re-checks and, finding the slot gone,
         // drops or keeps its item.
-        for waker in wakers.iter_mut().flatten() {
-            Self::mark(waker, *id);
+        for worker in &mut inner.workers {
+            worker.map.remove(id);
+            if let Some(waker) = &mut worker.waker {
+                Self::mark(waker, *id);
+            }
         }
     }
 
@@ -175,7 +199,7 @@ impl ArrangementSharingRegistry {
         worker_index: usize,
     ) -> Option<(SharedOksHandle, SharedErrsHandle)> {
         let inner = self.lock();
-        let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
+        let slot = inner.slot(id, worker_index)?;
         Some((slot.oks.handle(), slot.errs.handle()))
     }
 
@@ -191,21 +215,16 @@ impl ArrangementSharingRegistry {
         worker_index: usize,
     ) -> Option<Antichain<Timestamp>> {
         let inner = self.lock();
-        let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
+        let slot = inner.slot(id, worker_index)?;
         Some(slot.oks.logical_holds())
     }
 
-    /// Registers `worker` as interactive worker `worker_index`'s waker, growing the waker vector as
-    /// needed. Called once per interactive worker at startup, from that worker's own thread.
+    /// Registers `worker` as interactive worker `worker_index`'s waker. Called once per interactive worker at startup, from that worker's own thread.
     ///
     /// Overwrites any prior waker for that index, starting with an empty dirty set.
     pub(crate) fn register_waker(&self, worker_index: usize, worker: Thread) {
         let mut inner = self.lock();
-        let wakers = &mut inner.wakers;
-        if worker_index >= wakers.len() {
-            wakers.resize_with(worker_index + 1, || None);
-        }
-        wakers[worker_index] = Some(Waker {
+        inner.worker_mut(worker_index, 0).waker = Some(Waker {
             worker,
             dirty: BTreeSet::new(),
         });
@@ -219,7 +238,11 @@ impl ArrangementSharingRegistry {
     /// lost-wakeup window.
     pub(crate) fn take_dirty(&self, worker_index: usize) -> BTreeSet<GlobalId> {
         let mut inner = self.lock();
-        match inner.wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
+        match inner
+            .workers
+            .get_mut(worker_index)
+            .and_then(|w| w.waker.as_mut())
+        {
             Some(waker) => std::mem::take(&mut waker.dirty),
             None => BTreeSet::new(),
         }
@@ -243,12 +266,7 @@ impl ArrangementSharingRegistry {
         frontier: &Antichain<Timestamp>,
     ) {
         let inner = self.lock();
-        if let Some(arr) = inner
-            .map
-            .get(&id)
-            .and_then(|slots| slots.get(worker_index))
-            .and_then(|slot| slot.as_ref())
-        {
+        if let Some(arr) = inner.slot(&id, worker_index) {
             arr.oks.note_standing_hold(frontier);
             arr.errs.note_standing_hold(frontier);
         }
@@ -283,7 +301,11 @@ impl ArrangementSharingRegistry {
     /// guarantees is what makes the separate critical sections lost-wakeup-free.
     pub(crate) fn notify(&self, id: GlobalId, worker_index: usize) {
         let mut inner = self.lock();
-        if let Some(waker) = inner.wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
+        if let Some(waker) = inner
+            .workers
+            .get_mut(worker_index)
+            .and_then(|w| w.waker.as_mut())
+        {
             Self::mark(waker, id);
         }
     }
