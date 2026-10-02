@@ -17,12 +17,12 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::future;
 use mz_ore::assert_none;
-use mz_ore::netio::Listener;
+use mz_ore::netio::{Listener, Stream};
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 use mz_service::transport::{self, Message, NoopMetrics};
 use semver::Version;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -120,6 +120,55 @@ fn test_stalled_handshake_times_out() {
         .await
         .expect("a successful TCP connect must not leave the CTP handshake unbounded");
         assert!(result.unwrap_err().to_string().contains("timed out"));
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_reconnect_cancels_stalled_server_handshake() {
+    let mut sim = setup();
+    let (ready_tx, ready_rx) = oneshot::channel();
+
+    sim.host("server", move || async {
+        transport::serve(
+            "turmoil:0.0.0.0:7777".parse().unwrap(),
+            VERSION,
+            Some("server".into()),
+            Duration::MAX,
+            OneOutputHandler::new,
+            NoopMetrics,
+        )
+        .await?;
+        Ok(())
+    });
+
+    sim.client("old-client", async move {
+        let mut stream = Retry::default()
+            .retry_async(|_| Stream::connect("turmoil:server:7777"))
+            .await?;
+        // Receiving the server's magic proves that the first handshake has started.
+        // Never send our own magic or hello, leaving that handshake blocked.
+        stream.read_u64().await?;
+        ready_tx.send(()).unwrap();
+        let mut remaining_hello = Vec::new();
+        tokio::time::timeout(TIMEOUT, stream.read_to_end(&mut remaining_hello)).await??;
+        Ok(())
+    });
+
+    sim.client("new-client", async move {
+        ready_rx.await?;
+        let mut client = transport::Client::<i32, i32>::connect(
+            "turmoil:server:7777",
+            VERSION,
+            TIMEOUT,
+            Duration::from_secs(2),
+            NoopMetrics,
+        )
+        .await?;
+        assert_eq!(client.recv().await?, Some(123));
         Ok(())
     });
 
