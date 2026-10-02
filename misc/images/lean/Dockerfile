@@ -31,9 +31,9 @@ RUN apt-get update \
 COPY lean-toolchain /workspace/
 
 # NOTE: the toolchain is kept whole although checking proofs needs only part of
-# it. The static libraries and LLVM link executables, and Batteries, which
-# Aesop and Mathlib require, lists the `runLinter` executable in its default
-# targets, so the dependency build below fails without them.
+# it. Batteries, a dependency of Aesop and Mathlib, has the `runLinter`
+# executable among its default targets. Linking it needs the toolchain's static
+# libraries and LLVM, so removing them breaks the dependency build below.
 RUN case "$(uname -m)" in \
         x86_64) triple=x86_64-unknown-linux-gnu; sha256=42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63 ;; \
         aarch64) triple=aarch64-unknown-linux-gnu; sha256=05febd124d84ebf994b2e7479922a5650b1e950c17ae3bd1ddd776b65bb72bf9 ;; \
@@ -45,11 +45,12 @@ RUN case "$(uname -m)" in \
     && tar -C /tmp -xzf /tmp/elan.tar.gz \
     && /tmp/elan-init -y --no-modify-path --default-toolchain "$(cat /workspace/lean-toolchain)" \
     && rm /tmp/elan.tar.gz /tmp/elan-init \
+    && elan toolchain install "$(cat /workspace/lean-toolchain)" \
     && chmod -R a+rX "$ELAN_HOME" \
     && lean --version
 
-# Lake refuses dependency checkouts owned by a different uid than the one
-# running it, and re-clones them instead.
+# Git refuses repositories owned by a different uid than the one running it,
+# and Lake then re-clones the baked dependencies.
 RUN git config --system --add safe.directory '*'
 
 WORKDIR /workspace
