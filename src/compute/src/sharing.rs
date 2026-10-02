@@ -66,7 +66,7 @@ struct Inner {
 /// interactive peer.
 ///
 /// Cloning shares the same underlying map. A slot is an `Arc` held by its publisher, through an
-/// [`UnpublishToken`], and by its readers. The registry itself holds none, so a slot nobody holds
+/// `UnpublishToken`, and by its readers. The registry itself holds none, so a slot nobody holds
 /// is gone, and the publisher's trace detaches its points (`SharedSpine::detach_unreachable`).
 #[derive(Clone, Default)]
 pub struct ArrangementSharingRegistry {
@@ -204,8 +204,8 @@ pub(crate) struct UnpublishToken {
 
 impl Drop for UnpublishToken {
     fn drop(&mut self) {
-        // Released before the mark, so the reader that re-checks finds the slot gone unless it
-        // holds the slot itself.
+        // Dropped before the wake, so a woken reader finds the slot gone unless it holds the slot
+        // itself.
         drop(self.slot.take());
         self.registry.notify();
     }
