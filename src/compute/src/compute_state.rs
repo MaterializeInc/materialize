@@ -1096,10 +1096,7 @@ impl<'a> ActiveComputeState<'a> {
         // numbers under a second `role` label, so its series stays at zero: an extra zero leaves a
         // `sum` or a `max` over the label correct, where a duplicate would not.
         if self.compute_state.role() != ComputeRuntimeRole::Interactive {
-            let (gap, held) = self
-                .compute_state
-                .sharing_registry
-                .hold_gaps(self.timely_worker.index());
+            let (gap, held) = self.compute_state.sharing_registry.hold_gaps();
             self.compute_state
                 .metrics
                 .shared_arrangement_hold_gap_ms
