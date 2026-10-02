@@ -190,10 +190,10 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     let target = GlobalId::User(1);
     let reexport = GlobalId::User(2);
     let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(0, thread::current());
+    registry.register_waker(thread::current());
     // A reader bound the re-export's id first on this worker. Publishing backs its point the same
     // way as a point the publisher creates.
-    let _reader_slot = registry.get_or_create(reexport, 0, 1);
+    let _reader_slot = registry.get_or_create(reexport);
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
         let (oks, errs, mut oks_input, mut errs_input) =
@@ -226,7 +226,7 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
             registry_in.publish(reexport, scope.worker(), &oks, &errs);
         });
         assert_eq!(worker.peek_identifier() - before, empty);
-        let _ = registry_in.take_dirty(0);
+        let _ = registry_in.take_dirty();
 
         for (k, v) in test_rows() {
             oks_input.update((k, v), Diff::ONE);
@@ -238,15 +238,12 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         drop((oks_input, errs_input));
         while worker.step() {}
         // Each point signals its seals under its own id.
-        assert_eq!(
-            registry_in.take_dirty(0),
-            BTreeSet::from([target, reexport])
-        );
+        assert_eq!(registry_in.take_dirty(), BTreeSet::from([target, reexport]));
         drop((oks, errs));
     });
 
     for id in [target, reexport] {
-        let (oks, _) = registry.handles(&id, 0).expect("published");
+        let (oks, _) = registry.handles(&id).expect("published");
         assert_eq!(
             read_rows(&oks, Timestamp::from(0_u64)),
             expected_rows(&test_rows())
@@ -256,20 +253,20 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     // The two collections compact independently, so each point carries its own standing hold.
     let standing_hold = |id: &GlobalId| {
         registry
-            .published_diagnostics(id, 0)
+            .published_diagnostics(id)
             .expect("published")
             .standing_hold
     };
     let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
-    registry.note_standing_hold(target, 0, &at(5));
-    registry.note_standing_hold(reexport, 0, &at(10));
+    registry.note_standing_hold(target, &at(5));
+    registry.note_standing_hold(reexport, &at(10));
     assert_eq!(standing_hold(&target), at(5));
     assert_eq!(standing_hold(&reexport), at(10));
 
     // Dropping the index the re-export re-exports leaves the re-export's point readable.
     registry.remove(&target);
-    assert!(registry.handles(&target, 0).is_none());
-    assert!(registry.handles(&reexport, 0).is_some());
+    assert!(registry.handles(&target).is_none());
+    assert!(registry.handles(&reexport).is_some());
 }
 
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,

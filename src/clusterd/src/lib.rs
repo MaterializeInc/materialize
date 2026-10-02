@@ -434,9 +434,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
-    // The sharing registry is per process rather than per runtime: a reader on one runtime looks up
-    // the slot a publisher on another runtime filled, so both must hold the same registry.
-    let sharing_registry = ArrangementSharingRegistry::new();
+    // One sharing registry per local worker, rather than per runtime: a reader on one runtime looks
+    // up the slot its peer worker on another runtime filled, so both must hold the same registry.
+    let sharing_registries = ArrangementSharingRegistry::per_worker(compute_timely_config.workers);
 
     if args.unified_cluster {
         info!("running with a unified timely cluster");
@@ -446,7 +446,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ComputeRuntimeRole::Solo,
             &metrics_registry,
             persist_clients,
-            sharing_registry,
+            sharing_registries,
             txns_ctx,
             tracing_handle,
             ComputeInstanceContext {
@@ -533,7 +533,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ComputeRuntimeRole::Solo,
         &metrics_registry,
         persist_clients,
-        sharing_registry,
+        sharing_registries,
         txns_ctx,
         tracing_handle,
         ComputeInstanceContext {
