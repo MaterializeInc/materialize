@@ -401,7 +401,7 @@ const OrganizationMenuGroup = ({
       await switchTenant({ tenantId });
       // We want to force a full page reload to clear the query params and reset all in-memory JS state
       // after the tenant switch.
-      // eslint-disable-next-line react-compiler/react-compiler
+      // eslint-disable-next-line react-hooks/immutability
       window.location.href = window.location.href.split("?")[0];
     }
   };

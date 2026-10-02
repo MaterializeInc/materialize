@@ -12,13 +12,12 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, LiteralString
 
 import psycopg
 import yaml
 from psycopg.sql import SQL, Composable, Composed, Identifier, Literal
-from typing_extensions import LiteralString
 
 
 @contextmanager
@@ -195,7 +194,7 @@ def attach_source_statistics_internal(
             )
             WITH (PROGRESS) AS OF AT LEAST TIMESTAMP {}""").format(
             Literal(source_id),
-            Literal(datetime.fromtimestamp(start_time, tz=timezone.utc)),
+            Literal(datetime.fromtimestamp(start_time, tz=UTC)),
         )
         first_timestamp = None
         for (
@@ -213,7 +212,7 @@ def attach_source_statistics_internal(
                 continue
             if "bytes_total" not in source:
                 first_timestamp = datetime.fromtimestamp(
-                    int(mz_timestamp / 1000), tz=timezone.utc
+                    int(mz_timestamp / 1000), tz=UTC
                 )
                 source["bytes_total"] = int(bytes_received)
                 source["messages_total"] = int(messages_received)
@@ -221,7 +220,7 @@ def attach_source_statistics_internal(
                 assert "bytes_total" in source and "messages_total" in source
                 assert first_timestamp
                 duration = (
-                    datetime.fromtimestamp(int(mz_timestamp / 1000), tz=timezone.utc)
+                    datetime.fromtimestamp(int(mz_timestamp / 1000), tz=UTC)
                     - first_timestamp
                 ).total_seconds()
                 if duration:
@@ -287,7 +286,7 @@ def main() -> int:
         "--output",
         type=str,
         help="Path to write the workload.yml, - for stdout",
-        default=f"workload_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}.yml",
+        default=f"workload_{datetime.now(UTC).strftime('%Y-%m-%dT%H-%M-%S')}.yml",
     )
     parser.add_argument(
         "--time",
@@ -644,7 +643,7 @@ def main() -> int:
             conn,
             SQL(
                 "SELECT sql, cluster_name, database_name, search_path, statement_type, finished_status, params, transaction_isolation, session_id, transaction_id, began_at, finished_at - began_at, result_size FROM mz_internal.mz_recent_activity_log WHERE began_at > {} ORDER BY began_at ASC"
-            ).format(Literal(datetime.fromtimestamp(start_time, tz=timezone.utc))),
+            ).format(Literal(datetime.fromtimestamp(start_time, tz=UTC))),
         ):
             workload["queries"].append(
                 {

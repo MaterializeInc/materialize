@@ -568,8 +568,8 @@ impl Coordinator {
                         // must not be reordered to depend on a transaction
                         // commit: the transaction was just cleared above, so
                         // there is no commit left to promote a staged reset.
-                        ctx.session_mut().reset();
-                        Ok(ExecuteResponse::DiscardedAll)
+                        let params = ctx.session_mut().reset();
+                        Ok(ExecuteResponse::DiscardedAll { params })
                     } else {
                         Err(AdapterError::OperationProhibitsTransaction(
                             "DISCARD ALL".into(),

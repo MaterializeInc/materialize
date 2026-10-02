@@ -162,6 +162,8 @@ impl RawSourceCreationConfig {
 ///
 /// The `resume_stream` parameter will contain frontier updates whenever times are durably
 /// recorded which allows the ingestion to release upstream resources.
+///
+/// Alongside the reclocked exports this returns a no-data stream whose frontier is the remap upper.
 pub fn create_raw_source<'scope, 'root, C>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     root_scope: Scope<'root, ()>,
@@ -181,6 +183,7 @@ pub fn create_raw_source<'scope, 'root, C>(
         >,
     >,
     StreamVec<'root, (), HealthStatusMessage>,
+    StreamVec<'scope, mz_repr::Timestamp, ()>,
     Vec<PressOnDropButton>,
 )
 where
@@ -207,6 +210,13 @@ where
     // Need to broadcast the remap changes to all workers.
     let remap_collection = remap_collection.inner.broadcast().as_collection();
     tokens.push(remap_token);
+
+    // Drops the bidings, as this stream is only used to track the remap upper, which drives
+    // ceiling calculation in the persist sink during snapshots.
+    let remap_upper = remap_collection
+        .inner
+        .clone()
+        .flat_map::<Vec<()>, _, _>(|_| None::<()>);
 
     let committed_upper = reclock_committed_upper(
         remap_collection.clone(),
@@ -255,7 +265,7 @@ where
 
     tokens.extend(source_tokens);
 
-    (reclocked_exports, health, tokens)
+    (reclocked_exports, health, remap_upper, tokens)
 }
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a

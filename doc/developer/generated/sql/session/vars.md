@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 05fa578c92
+revision: dd5350d2ae
 ---
 
 # mz-sql::session::vars
@@ -19,5 +19,5 @@ Adding a new variant to `VarInput` or `OwnedVarInput` requires extending the `mz
 `SystemVars::enable_extended_protocol_implicit_transaction` returns the value of the `enable_extended_protocol_implicit_transaction` system variable.
 `SystemVars::disabled_metric_sinks` returns the list of curated metric sink names that are disabled, derived from the `disabled_metric_sinks` system variable.
 `is_timestamp_oracle_config_var` recognizes `mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT` in addition to the CRDB keepalive variables.
-`SessionVars::reset_all` durably resets all variables to their defaults immediately without staging a transaction; used by `DISCARD ALL`, which ends the transaction before resetting. System/role/startup defaults are preserved.
+`SessionVars::reset_all` durably resets all variables to their defaults immediately without staging a transaction; used by `DISCARD ALL`, which ends the transaction before resetting. System/role/startup defaults are preserved. Returns a `BTreeMap<&'static str, String>` of the parameters whose values changed, with their new values, so callers can announce `ParameterStatus` messages to clients.
 `SystemVars` supports a callback mechanism via `register_callback` and `notify_all_callbacks`; callbacks are idempotent reads of the current `SystemVars` state and fire at catalog commit boundaries when a system var was touched. A callback on a `feature_flags!` var does not observe the transient flip that `CatalogState::with_enable_for_item_parsing` performs during item parsing.

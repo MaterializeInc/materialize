@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import babel from "@rolldown/plugin-babel";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import react from "@vitejs/plugin-react";
 import browserslistToEsbuild from "browserslist-to-esbuild";
@@ -101,11 +102,10 @@ const plugins = [
     include: "**/*.svg?react",
   }),
   tsconfigPaths(),
-  react({
-    babel: {
-      plugins: ["@emotion"],
-      presets: ["jotai/babel/preset"],
-    },
+  react(),
+  babel({
+    plugins: ["@emotion"],
+    presets: ["jotai/babel/preset"],
   }),
 ];
 

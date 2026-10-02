@@ -210,6 +210,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
+use timely::PartialOrder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::progress::Antichain;
@@ -272,6 +273,12 @@ pub fn build_ingestion_dataflow(
                 Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
             };
 
+            // Only Postgres keeps its remap upper still through a snapshot, so only its ceiling
+            // ends near where the frontier lands when the pin lifts. MySQL and SQL Server tick
+            // through theirs, which would hold the shard upper at the as_of for the whole replay.
+            // TODO: include them once their snapshots run concurrently with CDC.
+            let oltp_source = matches!(connection, GenericSourceConnection::Postgres(_));
+
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
                 id: primary_source_id,
@@ -298,7 +305,7 @@ pub fn build_ingestion_dataflow(
                 busy_signal: Arc::clone(&busy_signal),
             };
 
-            let (outputs, source_health, source_tokens) = match connection {
+            let (outputs, source_health, remap_upper, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     root_scope,
@@ -372,6 +379,14 @@ pub fn build_ingestion_dataflow(
                     export_id,
                     primary_source_id
                 );
+
+                // An export snapshots when its resume upper is at or below the as_of. The
+                // controller uses the same test to hand the connector a minimum from-time resume
+                // upper.
+                let snapshotting = oltp_source
+                    && resume_uppers
+                        .get(&export_id)
+                        .is_some_and(|upper| PartialOrder::less_equal(upper, &as_of));
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
@@ -380,6 +395,9 @@ pub fn build_ingestion_dataflow(
                     storage_state,
                     metrics,
                     Arc::clone(&busy_signal),
+                    snapshotting.then(|| as_of.clone()),
+                    description.desc.timestamp_interval,
+                    remap_upper.clone(),
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);

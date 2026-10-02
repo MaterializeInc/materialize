@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action.rs
-revision: 84f88ca968
+revision: 1718310c06
 ---
 
 # testdrive::action

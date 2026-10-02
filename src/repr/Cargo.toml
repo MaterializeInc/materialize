@@ -57,7 +57,6 @@ mz-ore = { path = "../ore", features = [
 mz-persist-types = { path = "../persist-types", default-features = false }
 mz-pgtz = { path = "../pgtz", default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
-mz-sql-parser = { path = "../sql-parser", default-features = false }
 mz-timely-util = { path = "../timely-util", default-features = false }
 num-traits.workspace = true
 num_enum.workspace = true

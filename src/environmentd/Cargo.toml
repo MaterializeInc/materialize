@@ -72,6 +72,7 @@ mz-prof-http = { path = "../prof-http" }
 mz-prometheus-protobuf = { path = "../prometheus-protobuf" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-secrets-cli = { path = "../secrets-cli" }
 mz-segment = { path = "../segment" }
 mz-server-core = { path = "../server-core" }
 mz-service = { path = "../service" }

@@ -175,6 +175,12 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
 
+    if version >= MzVersion.parse_mz("v26.41.0-dev"):
+        # Exercise the source persist sink's grouping of a snapshotting export's
+        # updates while it defaults off in production. Several timestamp
+        # intervals, so the ceiling stays ahead of the data.
+        config["storage_persist_sink_description_lookahead"] = "5s"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 
@@ -278,8 +284,8 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_correction_v2_chunk_size",
-            "8192",
-            ["8192", "65536", "1048576"],
+            "2097152",
+            ["8192", "65536", "2097152"],
         ),
         VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
@@ -306,8 +312,8 @@ def get_variable_system_parameters(
         ),
         # Varied for the same reason, and because it reaches past the arrange
         # sites: it installs the process buffer pool and enables the column pager
-        # the MV sink's correction buffer and storage's upsert stash draw from, so
-        # defaulting it on would move several subsystems' memory behavior at once.
+        # storage's upsert stash draws from, so defaulting it on would move several
+        # subsystems' memory behavior at once.
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
         ),
@@ -315,6 +321,11 @@ def get_variable_system_parameters(
         # is off in production while it earns trust.
         VariableSystemParameter(
             "enable_columnar_accumulable_diff", "true", ["true", "false"]
+        ),
+        # On by default so CI exercises correction chunks spilling through the
+        # buffer pool, which is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
@@ -952,9 +963,7 @@ def _check_tcp(
         spawn.capture(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         ui.log_in_automation(
-            "wait-for-tcp ({}{}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                kind, host, port, ui.shell_quote(cmd), e, e.stdout, e.stderr
-            )
+            f"wait-for-tcp ({kind}{host}:{port}): error running {ui.shell_quote(cmd)}: {e}, stdout:\n{e.stdout}\nstderr:\n{e.stderr}"
         )
         raise
     return cmd

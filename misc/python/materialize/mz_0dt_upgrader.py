@@ -138,7 +138,7 @@ class Materialized0dtUpgrader:
                         f"Promoting {current_service_image}, retiring {previous_service_image}"
                     )
                     self.c.promote_mz(
-                        current_service.name, retire=previous_service.name
+                        current_service.name, retire_mz_service=previous_service.name
                     )
 
             return upgrade

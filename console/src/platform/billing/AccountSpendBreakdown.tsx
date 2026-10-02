@@ -13,9 +13,8 @@ import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { curveMonotoneX } from "@visx/curve";
 import { localPoint } from "@visx/event";
 import { Group } from "@visx/group";
-import ParentSize, {
-  ParentSizeProvidedProps,
-} from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize } from "@visx/responsive";
+import type { ParentSizeProvidedProps } from "@visx/responsive/lib/components/ParentSize";
 import { scaleBand, scaleLinear, scaleOrdinal } from "@visx/scale";
 import { BarStack, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";

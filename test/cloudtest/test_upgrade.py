@@ -14,7 +14,7 @@ import pytest
 
 from materialize import buildkite
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
-from materialize.checks.all_checks import *  # noqa: F401 F403
+from materialize.checks.all_checks import *  # noqa: F403
 from materialize.checks.all_checks.alter_connection import (
     AlterConnectionHost,
     AlterConnectionToNonSsh,

@@ -158,11 +158,10 @@ where
                 let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
-                    // The chain hands back chunks whose bodies load into a
-                    // `Column` already in the output's shape, so each one moves as
-                    // a container.
+                    // The chain hands back chunks whose bodies go back onto the
+                    // edge container as a move, so each one ships as a container.
                     for chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                        let mut column = chunk.into_column();
+                        let mut column = Column::from(chunk.into_body());
                         session.give_container(&mut column);
                     }
                 } else {
@@ -290,10 +289,9 @@ where
                     if let Some(cap) = cap.as_ref() {
                         let mut session = output.session_with_builder(cap);
                         for chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                            let column = chunk.into_column();
+                            let body = chunk.into_body();
                             session.give_iterator(
-                                column
-                                    .borrow()
+                                body.borrow()
                                     .into_index_iter()
                                     .map(<(D, T, mz_repr::Diff)>::into_owned),
                             );
@@ -385,7 +383,7 @@ where
         buffer.clear();
         while let Some(chunk) = self.chunker.extract() {
             self.inner
-                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
+                .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
         }
     }
 
@@ -394,7 +392,7 @@ where
         use timely::container::{ContainerBuilder as _, PushInto as _};
         while let Some(chunk) = self.chunker.finish() {
             self.inner
-                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
+                .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
         }
     }
 

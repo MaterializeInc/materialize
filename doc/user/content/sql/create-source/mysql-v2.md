@@ -107,7 +107,8 @@ MySQL service, see the integration guides.
 
 If Materialize tries to resume replication and finds GTID gaps due to missing
 binlog files, the source enters an errored state and you have to drop and
-recreate it.
+recreate it. See [Binlog files removed before the resume
+point](#binlog-files-removed-before-the-resume-point).
 
 {{< /warning >}}
 
@@ -159,6 +160,10 @@ database. For more information, see [Troubleshooting](/ops/troubleshooting/).
 ## Handling upstream operations
 
 {{% upstream-schema-change-behavior connector="mysql" %}}
+
+## Source failure states and recovery
+
+{{% include-headless "/headless/mysql-failure-states" %}}
 
 ## Example
 

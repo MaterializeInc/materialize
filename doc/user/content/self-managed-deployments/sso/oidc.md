@@ -1,12 +1,14 @@
 ---
-title: "Single sign-on (SSO)"
+title: "Simple SSO (OIDC)"
 description: "Configure OIDC-based single sign-on (SSO) for Self-Managed Materialize."
 menu:
   main:
-    parent: "authentication-sm"
-    name: "Single sign-on (SSO)"
+    parent: "sm-sso"
+    name: "Simple SSO (OIDC)"
     identifier: "sso-sm"
-    weight: 1
+    weight: 10
+aliases:
+  - /security/self-managed/sso/
 ---
 
 {{< public-preview />}}
@@ -28,7 +30,9 @@ separately using [role-based access control (RBAC)](/security/self-managed/acces
 
 - **SAML** authentication is not supported. Materialize supports OIDC only.
 - **SCIM** is not supported. Users are auto-provisioned on first SSO login (see [Auto-provisioning roles](#auto-provisioning-roles)), but removing a user from your IdP does not automatically deprovision their Materialize role.
-- **IdP group-to-role mapping** is not supported. Each user maps 1:1 to a single Materialize role via a JWT claim; privileges and group-based assignment are managed via [RBAC](/security/self-managed/access-control/).
+- **IdP group-to-role mapping** depends on your IdP including a groups claim in the token. With `oidc_group_role_sync_enabled` set, Materialize grants and revokes membership in existing roles whose names match the entries in that claim (`oidc_group_claim`, default `groups`). Some IdPs limit custom claims by plan. For example, Okta may require a plan that supports them.
+
+If you need SAML or SCIM, see [Advanced SSO (OIDC, SAML and SCIM)](/self-managed-deployments/sso/advanced/), which adds SAML, SCIM, and multi-IdP federation on top of the OIDC path documented here.
 {{</ note >}}
 
 ## Before you begin

@@ -11,7 +11,8 @@
 //! source tree for the user-facing metrics documentation.
 //!
 //! It walks the Rust AST with `syn`, visiting every `metric!` invocation
-//! outside of test code.
+//! outside of test code, and every construction of the reconciliation metrics
+//! that `k8s_controller::PrometheusMetrics` defines.
 //!
 //! Regenerate with `bin/gen-metrics-catalog`.
 
@@ -19,14 +20,16 @@ use std::process;
 
 use anyhow::{Context, bail};
 use mz_ore::metrics::{MetricTag, MetricVisibility};
+use prometheus::core::Collector as _;
+use prometheus::proto::MetricType;
 use quote::ToTokens;
 use serde::Serialize;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
 use syn::{
-    Attribute, Expr, Ident, ImplItemFn, ItemFn, ItemImpl, ItemMod, Lit, Macro, Token, braced,
-    bracketed,
+    Attribute, Expr, ExprCall, Ident, ImplItemFn, ItemFn, ItemImpl, ItemMod, Lit, Macro, Token,
+    braced, bracketed,
 };
 use walkdir::WalkDir;
 
@@ -269,6 +272,70 @@ impl MetricArgs {
     }
 }
 
+/// Documents the metrics that `k8s_controller::PrometheusMetrics` defines
+/// when constructed with `namespace`, by constructing it and reading back its
+/// metrics' descriptions.
+fn k8s_controller_docs(namespace: &str, source: &str) -> Vec<MetricDoc> {
+    let metrics = match k8s_controller::PrometheusMetrics::new(namespace) {
+        Ok(metrics) => metrics,
+        Err(e) => {
+            eprintln!("warn: failed to construct PrometheusMetrics in {source}: {e}");
+            return Vec::new();
+        }
+    };
+    let descs = metrics.desc();
+    metrics
+        .collect()
+        .into_iter()
+        .flat_map(|family| {
+            let mut labels = descs
+                .iter()
+                .find(|desc| desc.fq_name == family.name())
+                .map(|desc| desc.variable_labels.clone())
+                .unwrap_or_default();
+            labels.sort();
+            if family.get_field_type() == MetricType::HISTOGRAM {
+                into_histogram_docs(
+                    family.name(),
+                    family.help(),
+                    labels,
+                    source,
+                    MetricVisibility::Internal,
+                    Vec::new(),
+                )
+            } else {
+                vec![MetricDoc {
+                    name: family.name().to_owned(),
+                    help: family.help().to_owned(),
+                    labels,
+                    source: source.to_owned(),
+                    visibility: MetricVisibility::Internal,
+                    tags: Vec::new(),
+                }]
+            }
+        })
+        .collect()
+}
+
+/// If `call` is `PrometheusMetrics::new(<string literal>)`, returns the
+/// literal.
+fn prometheus_metrics_namespace(call: &ExprCall) -> Option<String> {
+    let Expr::Path(func) = &*call.func else {
+        return None;
+    };
+    let mut segments = func.path.segments.iter().rev();
+    if segments.next()?.ident != "new" || segments.next()?.ident != "PrometheusMetrics" {
+        return None;
+    }
+    match call.args.first()? {
+        Expr::Lit(lit) => match &lit.lit {
+            Lit::Str(s) => Some(s.value()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Renders a `subsystem` for use as a metric-name prefix: a string literal is
 /// used verbatim, while anything else (a runtime value like `component`) globs
 /// to `*`, since its concrete value is only known at runtime.
@@ -429,6 +496,14 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         }
         syn::visit::visit_macro(self, mac);
     }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Some(namespace) = prometheus_metrics_namespace(call) {
+            self.out
+                .extend(k8s_controller_docs(&namespace, self.source));
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
 }
 
 fn run() -> anyhow::Result<()> {
@@ -449,7 +524,7 @@ fn run() -> anyhow::Result<()> {
         if path.extension().map(|e| e == "rs").unwrap_or(false) {
             let content =
                 std::fs::read_to_string(path).with_context(|| format!("reading {path:?}"))?;
-            if !content.contains("metric!") {
+            if !content.contains("metric!") && !content.contains("PrometheusMetrics::new") {
                 continue;
             }
             let ast = match syn::parse_file(&content) {
@@ -997,5 +1072,53 @@ mod tests {
             names.is_empty(),
             "macro_rules! body must not be scraped, got {names:?}"
         );
+    }
+
+    #[mz_ore::test]
+    fn collects_k8s_controller_metrics() {
+        let file: syn::File = syn::parse_str(
+            r#"
+            fn register(registry: &MetricsRegistry) {
+                let reconcile = k8s_controller::PrometheusMetrics::new("operator").unwrap();
+                registry.register_collector(reconcile);
+            }
+            "#,
+        )
+        .expect("valid source");
+        let mut docs = Vec::new();
+        Collector {
+            source: "test.rs",
+            out: &mut docs,
+        }
+        .visit_file(&file);
+        let entries: Vec<_> = docs
+            .iter()
+            .map(|doc| (doc.name.as_str(), doc.labels.join(",")))
+            .collect();
+        for expected in [
+            ("operator_reconciliations_total", "controller,outcome,phase"),
+            (
+                "operator_reconciliation_duration_seconds_bucket",
+                "controller,le,phase",
+            ),
+            (
+                "operator_reconciliation_duration_seconds_count",
+                "controller,phase",
+            ),
+            (
+                "operator_reconciliation_steps_total",
+                "controller,outcome,step",
+            ),
+            (
+                "operator_reconciliation_step_duration_seconds_sum",
+                "controller,step",
+            ),
+        ] {
+            assert!(
+                entries.contains(&(expected.0, expected.1.to_owned())),
+                "missing {expected:?} in {entries:?}"
+            );
+        }
+        assert!(docs.iter().all(|doc| doc.source == "test.rs"));
     }
 }

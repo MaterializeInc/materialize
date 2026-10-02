@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics.rs
-revision: 6cef38c018
+revision: b462f89663
 ---
 
 # mz-ore::metrics

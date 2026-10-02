@@ -1332,7 +1332,7 @@ class Composition:
                         self.up("materialized")
                 else:
                     # The previous generation was killed above.
-                    self.promote_mz(retire=None)
+                    self.promote_mz(retire_mz_service=None)
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1800,18 +1800,20 @@ class Composition:
         )
 
     def promote_mz(
-        self, mz_service: str = "materialized", *, retire: str | None
+        self, mz_service: str = "materialized", *, retire_mz_service: str | None
     ) -> None:
         """Promote `mz_service` to leader and retire the generation it replaces.
 
-        `retire` names the service running the previous generation. Once
-        `mz_service` is leader, the `retire` service is killed with
+        `retire_mz_service` names the service running the previous generation.
+        Once `mz_service` is leader, `retire_mz_service` is killed with
         `kill_fenced_mz`, as the orchestrator removes an old generation after a
         promotion. Pass `None` only when no other generation runs, or when the
         caller handles the fenced generation itself, for example by observing
         it stop on its own or by calling `kill_fenced_mz` later.
         """
-        assert retire != mz_service, f"cannot retire the promoted {mz_service}"
+        assert (
+            retire_mz_service != mz_service
+        ), f"cannot retire the promoted {mz_service}"
         result = json.loads(
             self.exec(
                 mz_service,
@@ -1825,10 +1827,10 @@ class Composition:
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
 
-        if retire is not None:
+        if retire_mz_service is not None:
             # Kill the old generation only after the new one has fenced it.
             self.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
-            self.kill_fenced_mz(retire)
+            self.kill_fenced_mz(retire_mz_service)
 
     def kill_fenced_mz(self, mz_service: str) -> None:
         """Kill a Materialize service that a newer generation has fenced out.

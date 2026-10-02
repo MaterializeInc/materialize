@@ -58,8 +58,6 @@ mz-sql-server-util = { path = "../sql-server-util" }
 mz-timely-util = { path = "../timely-util" }
 mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
-native-tls.workspace = true
-openssl.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 prost.workspace = true

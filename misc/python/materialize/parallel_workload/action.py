@@ -3025,6 +3025,12 @@ class FlipFlagsAction(Action):
             "'1min'",
             "'120d'",
         ]
+        # "0s" turns committing a ceiling ahead of a pinned frontier off.
+        self.flags_with_values["storage_persist_sink_description_lookahead"] = [
+            "'0s'",
+            "'1s'",
+            "'30s'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
@@ -3057,7 +3063,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["compute_correction_v2_chunk_size"] = [
             "8192",
             "65536",
-            "1048576",
+            "2097152",
         ]
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3186,6 +3192,9 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_correction_v2_spill"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
@@ -5079,7 +5088,7 @@ class ZeroDowntimeDeployAction(Action):
             )
             self.composition.promote_mz(
                 mz_service,
-                retire=(
+                retire_mz_service=(
                     "materialized2" if mz_service == "materialized" else "materialized"
                 ),
             )
@@ -5880,7 +5889,7 @@ class HttpPostAction(Action):
 
             headers = {
                 header: (
-                    f"{datetime.datetime.now()}"
+                    f"{datetime.datetime.now(datetime.UTC)}"
                     if header == "timestamp"
                     else f'"{Text.random_value(self.rng)}"'.encode()
                 )

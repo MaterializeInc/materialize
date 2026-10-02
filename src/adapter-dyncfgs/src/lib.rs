@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use sentry_tracing::EventFilter;
+//! Dynamic configuration and lightweight types for the adapter.
+//!
+//! This crate depends only on `mz-dyncfg` and `mz-ore`, so consumers that need
+//! adapter configuration do not pull in `mz-repr`, `mz-storage-types` or
+//! `mz-compute-types`.
 
-pub fn mz_sentry_event_filter(meta: &tracing::Metadata<'_>) -> EventFilter {
-    // special cases
-    if meta.target() == "librdkafka" {
-        return EventFilter::Ignore;
-    }
-
-    // default case
-    sentry_tracing::default_event_filter(meta)
-}
+pub mod bootstrap_builtin_cluster_config;
+pub mod connection;
+pub mod dyncfgs;
+pub mod timestamp_oracle;

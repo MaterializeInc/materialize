@@ -21,7 +21,7 @@ from materialize.data_ingest.executor import (
     KafkaExecutor,
     MySqlExecutor,
 )
-from materialize.data_ingest.workload import *  # noqa: F401 F403
+from materialize.data_ingest.workload import *  # noqa: F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser

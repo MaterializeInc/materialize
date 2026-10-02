@@ -39,6 +39,7 @@ use mz_ore::tracing::{
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::resource::Resource;
+use sentry_tracing::EventFilter;
 
 /// Command line arguments for application tracing.
 ///
@@ -324,7 +325,7 @@ impl TracingCliArgs {
                     .chain(self.sentry_tag.iter().cloned())
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
-                event_filter: mz_service::tracing::mz_sentry_event_filter,
+                event_filter: mz_sentry_event_filter,
             }),
             build_version: build_info.version,
             build_sha: build_info.sha,
@@ -334,6 +335,16 @@ impl TracingCliArgs {
         })
         .await
     }
+}
+
+pub fn mz_sentry_event_filter(meta: &tracing::Metadata<'_>) -> EventFilter {
+    // special cases
+    if meta.target() == "librdkafka" {
+        return EventFilter::Ignore;
+    }
+
+    // default case
+    sentry_tracing::default_event_filter(meta)
 }
 
 /// The fields of [`TracingConfig`] that are not set by command-line arguments.

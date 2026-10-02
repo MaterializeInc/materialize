@@ -156,6 +156,16 @@ metrics:
   help: The time it takes to apply catalog implications.
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_arrangement_exert_policy_calls_total
+  help: Arrangement exertion policy evaluations.
+  source: src/cluster/src/client.rs
+  visibility: internal
+- name: mz_arrangement_exert_policy_grants_total
+  help: Arrangement exertion policy evaluations that returned effort, by reason.
+  labels:
+  - reason
+  source: src/cluster/src/client.rs
+  visibility: internal
 - name: mz_arrangement_maintenance_active_info
   help: Whether maintenance is currently occuring.
   labels:
@@ -520,6 +530,31 @@ metrics:
   - server_name
   source: src/service/src/transport/metrics.rs
   visibility: internal
+- name: mz_column_chunk_work_bytes_total
+  help: Uncompressed serialized bytes processed at instrumented columnar stages.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_calls_total
+  help: Columnar work operations, by stage.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_rows_total
+  help: Rows processed by columnar work, including repeated visits.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_size_total
+  help: Disjoint columnar operation row-size buckets, indexed by ceil(log2(rows)), the last bucket unbounded.
+  labels:
+  - log2_rows
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
 - name: mz_column_pager_budget_configured_bytes
   help: Most-recently-configured total budget for the column-pager tiered policy.
   source: src/timely-util/src/column_pager/metrics.rs
@@ -574,6 +609,10 @@ metrics:
   visibility: internal
 - name: mz_column_pool_admissions_steal_total
   help: Evicted chunks re-admitted by an admitting read stealing the slot of a clean backed victim of the same size class.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_direct_extent_inserts_total
+  help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_eager_backs_total
@@ -4351,6 +4390,66 @@ metrics:
   visibility: internal
 - name: orchestratord_is_leader
   help: Whether this operator replica holds the controller leadership lease, and is therefore the replica reconciling. Summed across the replicas this should be 1. A sustained 0 means no replica can take the lease, for instance because the service account lacks permission on leases, and the operator is reconciling nothing.
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_bucket
+  help: Time spent in one reconciliation pass.
+  labels:
+  - controller
+  - le
+  - phase
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_count
+  help: Time spent in one reconciliation pass.
+  labels:
+  - controller
+  - phase
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_sum
+  help: Time spent in one reconciliation pass.
+  labels:
+  - controller
+  - phase
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_bucket
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - le
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_count
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_sum
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_steps_total
+  help: Count of reconciliation steps, by controller, by step, and by what the step concluded. An outcome of `abandoned` means the step did not conclude, either because an error propagated out of it or because the pass was cancelled.
+  labels:
+  - controller
+  - outcome
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliations_total
+  help: Count of reconciliation passes, by controller, by the phase of the resource's lifecycle handled, and by what the pass concluded. An outcome of `failed` means the reconciler returned an error.
+  labels:
+  - controller
+  - outcome
+  - phase
   source: src/orchestratord/src/metrics.rs
   visibility: internal
 - name: outer_join_lowering_cases

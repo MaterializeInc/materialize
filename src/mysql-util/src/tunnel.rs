@@ -10,11 +10,14 @@
 use aws_types::SdkConfig;
 use mysql_async::{Conn, Opts, OptsBuilder};
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::time::Duration;
 
-use mz_ore::future::{InTask, TimeoutError};
+use mz_ore::future::{InTask, OreFutureExt, TimeoutError};
 use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
 use mz_repr::CatalogItemId;
@@ -390,11 +393,34 @@ impl Config {
         &self,
         opts_builder: OptsBuilder,
     ) -> Result<mysql_async::Conn, MySqlError> {
-        let connection_future = if let InTask::Yes = self.in_task {
-            Box::pin(spawn(|| "mysql_connect".to_string(), Conn::new(opts_builder)).abort_on_drop())
-        } else {
-            Conn::new(opts_builder)
+        // NOTE: mysql_async panics on some server-controlled handshake input, for example an
+        // auth switch to `parsec`, which is a bare `panic!` without mysql_common's
+        // `client_parsec` feature. Outside a catch scope the panic hook aborts the process, so a
+        // server we connect to could take down environmentd or clusterd. The catch scope is
+        // task-local, so it has to wrap `Conn::new` inside the spawned task.
+        let connect = async move {
+            match AssertUnwindSafe(Conn::new(opts_builder))
+                .ore_catch_unwind()
+                .await
+            {
+                Ok(result) => result.map_err(MySqlError::from),
+                Err(payload) => {
+                    let message = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    error!("mysql connection attempt panicked: {message}");
+                    Err(MySqlError::ConnectionPanicked(message))
+                }
+            }
         };
+        let connection_future: Pin<Box<dyn Future<Output = Result<Conn, MySqlError>> + Send>> =
+            if let InTask::Yes = self.in_task {
+                Box::pin(spawn(|| "mysql_connect".to_string(), connect).abort_on_drop())
+            } else {
+                Box::pin(connect)
+            };
 
         if let Some(connect_timeout) = self.mysql_timeout_config.connect_timeout {
             mz_ore::future::timeout(connect_timeout, connection_future)
@@ -402,10 +428,10 @@ impl Config {
                 .map_err(|err| match err {
                     // match instead of impl From<> for MySqlError so we can capture the timeout value
                     TimeoutError::DeadlineElapsed => MySqlError::ConnectionTimeout(connect_timeout),
-                    TimeoutError::Inner(e) => MySqlError::from(e),
+                    TimeoutError::Inner(e) => e,
                 })
         } else {
-            connection_future.await.map_err(MySqlError::from)
+            connection_future.await
         }
     }
 }

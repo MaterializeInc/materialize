@@ -451,6 +451,7 @@ fn test_special_keyword_function_name_display_roundtrip() {
         "row",
         "substring",
         "trim",
+        "operator",
         "case",
         "any",
         "all",
@@ -1169,6 +1170,15 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         // for a tighter quantified `*`: `~ a * ANY (...)` would bind the `* ANY`
         // into the `~`'s operand without the parens.
         "SELECT (~ a) * ANY (ARRAY[c])",
+        // An `Other`-level prefix operand needs parens exactly when its left
+        // spine exposes `Other` or looser, and not for tighter operators.
+        "SELECT ~ (a || b)",
+        "SELECT ~ (a < b)",
+        "SELECT ~ (a + b)",
+        "SELECT OPERATOR(pg_catalog.-) (a || b)",
+        "SELECT OPERATOR(pg_catalog.-) (a IS NULL)",
+        "SELECT OPERATOR(pg_catalog.-) (a OPERATOR(pg_catalog.+) b)",
+        "SELECT OPERATOR(pg_catalog.-) (a + b)",
     ] {
         let mut ast = mz_sql_parser::parser::parse_statements(sql)
             .unwrap()

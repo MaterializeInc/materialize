@@ -126,6 +126,7 @@ updates:
     - /misc/images/openssh-static
     - /misc/images/tini-static
     - /misc/images/distroless-prod-base
+    - /misc/dbt-materialize
     - /misc/mcp-materialize
     - /misc/mcp-materialize-agents
     - /ci/builder
@@ -318,9 +319,104 @@ updates:
     default-days: 3
   open-pull-requests-limit: 20
   labels: [A-dependencies]
+  # Packages that only work at matching versions share a group, so an update
+  # arrives as one PR instead of several that each fail on their own. A
+  # dependency joins the first group it matches, so the families come before
+  # `simple`. The families take major updates too, which is where they break
+  # apart. @storybook/react-vite peer-depends on vite across the storybook and
+  # vite groups, so a vite major can fail storybook until storybook catches up.
   groups:
+    # typescript-eslint peer-depends on both typescript and eslint, so the
+    # three move together.
+    typescript-and-eslint:
+      applies-to: version-updates
+      patterns:
+        - "typescript"
+        - "typescript-eslint"
+        - "@typescript-eslint/*"
+        - "eslint"
+        - "@eslint/*"
+        - "eslint-plugin-*"
+        - "eslint-config-*"
+        - "@tanstack/eslint-plugin-query"
+        - "globals"
+    vite:
+      applies-to: version-updates
+      patterns:
+        - "vite"
+        - "vitest"
+        - "@vitest/*"
+        - "@vitejs/*"
+        - "@rolldown/*"
+        - "vite-plugin-*"
+        - "vite-tsconfig-paths"
+        - "vite-bundle-analyzer"
+        - "jsdom"
+    forms:
+      applies-to: version-updates
+      patterns:
+        - "zod"
+        - "@hookform/resolvers"
+        - "react-hook-form"
+    codemirror:
+      applies-to: version-updates
+      patterns:
+        - "codemirror"
+        - "@codemirror/*"
+        - "@codemirror-toolkit/*"
+        - "@lezer/*"
+        - "style-mod"
+    kysely:
+      applies-to: version-updates
+      patterns:
+        - "kysely"
+        - "kysely-codegen"
+    tanstack-db:
+      applies-to: version-updates
+      patterns:
+        - "@tanstack/db"
+        - "@tanstack/react-db"
+    jotai:
+      applies-to: version-updates
+      patterns:
+        - "jotai"
+        - "jotai-*"
+    visx:
+      applies-to: version-updates
+      patterns:
+        - "@visx/*"
+    emotion:
+      applies-to: version-updates
+      patterns:
+        - "@emotion/*"
+    storybook:
+      applies-to: version-updates
+      patterns:
+        - "storybook"
+        - "@storybook/*"
+    react:
+      applies-to: version-updates
+      patterns:
+        - "react"
+        - "react-dom"
+        - "@types/react"
+        - "@types/react-dom"
+    tanstack-query:
+      applies-to: version-updates
+      patterns:
+        - "@tanstack/react-query*"
+    # msw, downshift, and @frontegg/* tighten types in minor releases that
+    # existing code relies on, and @intercom/* is on 0.0.x, where any release
+    # can break. Each comes as its own PR rather than breaking the whole group.
     simple:
       applies-to: version-updates
       update-types:
         - minor
         - patch
+      patterns:
+        - "*"
+      exclude-patterns:
+        - "msw"
+        - "downshift"
+        - "@frontegg/*"
+        - "@intercom/*"
