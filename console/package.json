@@ -165,7 +165,7 @@
     "eslint-plugin-react-refresh": "^0.5.7",
     "eslint-plugin-simple-import-sort": "^14.0.0",
     "eslint-plugin-unicorn": "^76.0.0",
-    "fast-xml-parser": "^5.11.1",
+    "fast-xml-parser": "^5.11.2",
     "globals": "^17.12.0",
     "intersection-observer": "^0.12.2",
     "jotai-devtools": "^0.10.1",
