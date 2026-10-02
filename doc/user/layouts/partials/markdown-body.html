@@ -1,6 +1,7 @@
 {{- /*
   Returns a page's body for the Markdown output: its .RenderShortcodes output,
-  with root-relative links made absolute, after a pointer to llms.txt.
+  without Hugo heading attributes and with root-relative links made absolute,
+  after a pointer to llms.txt.
 
   Source links are written relative to the docs root, such as
   "/sql/create-cluster/#syntax". The HTML pass resolves them in
@@ -23,7 +24,11 @@
   Usage:
     {{ partial "markdown-body.html" (dict "page" .) }}
 */ -}}
-{{- $content := .page.RenderShortcodes -}}
+{{- /*
+  Hugo heading attributes, such as "## Object Introspection (SHOW) { #show }",
+  are syntax for the HTML pass. Drop them from the Markdown, in both builds.
+*/ -}}
+{{- $content := replaceRE `(?m)^(#{1,6} .*?)[ \t]*\{[ \t]*[#.][^}\n]*\}[ \t]*$` "$1" .page.RenderShortcodes -}}
 {{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
 {{- if $basePath -}}
   {{- $content = printf "> For the complete documentation index, see [llms.txt](%s).\n\n%s" (partial "llms-txt-url.html" (dict "absolute" true)) $content -}}
