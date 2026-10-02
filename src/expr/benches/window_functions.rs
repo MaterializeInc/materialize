@@ -11,9 +11,9 @@ use std::hint::black_box;
 
 use chrono::DateTime;
 use criterion::{Criterion, criterion_group, criterion_main};
-use mz_expr::ColumnOrder;
+use mz_expr::{AggregateFunc, ColumnOrder, LagLeadType, NaiveOneByOneAggr};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, RowArena};
+use mz_repr::{Datum, Diff, RowArena};
 use rand::distr::{Distribution, Uniform};
 
 /// Microbenchmark to test an important part of window function evaluation.
@@ -113,5 +113,123 @@ fn order_aggregate_datums_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(window_function_benches, order_aggregate_datums_benchmark);
+/// Microbenchmark of a whole fused `lag` evaluation, the shape a `Reduce::Basic`
+/// re-runs for a window partition whenever any of its rows changes.
+///
+/// Four `lag(..) IGNORE NULLS` calls over one partition, which is what the SQL
+/// layer fuses several `lag`s over the same window into. Unlike
+/// `order_aggregate_datums` above, this covers the whole closure: the sort, the
+/// per-constituent argument unwrapping, the lag computation itself, and packing
+/// the results back out.
+fn fused_lag_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("window_function_benches");
+
+    // A partition, not a whole collection: the reduce re-runs per partition, so
+    // this is sized like a large-ish one rather than like a table.
+    let scale = 100_000;
+    let funcs = 4;
+
+    // One iteration is a whole partition evaluation, so keep the sample count
+    // and measurement window wide enough for the confidence interval to
+    // separate a real change from machine noise.
+    group.sample_size(50);
+    group.measurement_time(std::time::Duration::from_secs(30));
+    group.bench_function("fused_lag", |b| {
+        let mut rng = rand::rng();
+        let temp_storage = RowArena::new();
+
+        let order_by = vec![ColumnOrder {
+            column: 0,
+            desc: false,
+            nulls_last: true,
+        }];
+        let func = AggregateFunc::FusedValueWindowFunc {
+            funcs: (0..funcs)
+                .map(|_| AggregateFunc::LagLead {
+                    order_by: order_by.clone(),
+                    lag_lead: LagLeadType::Lag,
+                    ignore_nulls: true,
+                })
+                .collect(),
+            order_by: order_by.clone(),
+        };
+
+        // `row(row(row(<original row>), row(<args per call>..)), <order by>)`,
+        // where each call's args are `row(<value>, 1, null)`. Every value is a
+        // column of the original row, as it is for a `lag(<column>)`.
+        let millis = Uniform::new(0_i64, 1_000_000_000).expect("valid range");
+        let values_distr = Uniform::new(0_i32, 1_000_000_000).expect("valid range");
+        let mut datums = Vec::with_capacity(scale);
+        for _ in 0..scale {
+            let order_key = Datum::TimestampTz(
+                CheckedTimestamp::from_timestamplike(
+                    DateTime::from_timestamp_millis(millis.sample(&mut rng)).unwrap(),
+                )
+                .unwrap(),
+            );
+            // A null every eighth row, so the IGNORE NULLS skip tables are
+            // exercised rather than trivially empty.
+            let values: Vec<Datum> = (0..funcs)
+                .map(|i| {
+                    if values_distr.sample(&mut rng) % 8 == i {
+                        Datum::Null
+                    } else {
+                        Datum::Int32(values_distr.sample(&mut rng))
+                    }
+                })
+                .collect();
+
+            datums.push((
+                temp_storage.make_datum(|packer| {
+                    let original_row = temp_storage.make_datum(|packer| {
+                        packer.push(order_key);
+                        for value in &values {
+                            packer.push(*value);
+                        }
+                    });
+                    let args = temp_storage.make_datum(|packer| {
+                        packer.push_list_with(|packer| {
+                            for value in &values {
+                                packer.push(temp_storage.make_datum(|packer| {
+                                    packer.push_list_with(|packer| {
+                                        packer.push(*value);
+                                        packer.push(Datum::Int32(1));
+                                        packer.push(Datum::Null);
+                                    });
+                                }));
+                            }
+                        });
+                    });
+                    packer.push_list_with(|packer| {
+                        packer.push(temp_storage.make_datum(|packer| {
+                            packer.push_list_with(|packer| {
+                                packer.push(original_row);
+                                packer.push(args);
+                            });
+                        }));
+                        packer.push(order_key);
+                    });
+                }),
+                Diff::ONE,
+            ));
+        }
+
+        b.iter(|| {
+            let out = RowArena::new();
+            black_box(
+                func.eval_with_unnest_list::<_, NaiveOneByOneAggr>(
+                    black_box(datums.clone()),
+                    black_box(&out),
+                )
+                .count(),
+            );
+        })
+    });
+}
+
+criterion_group!(
+    window_function_benches,
+    order_aggregate_datums_benchmark,
+    fused_lag_benchmark
+);
 criterion_main!(window_function_benches);
