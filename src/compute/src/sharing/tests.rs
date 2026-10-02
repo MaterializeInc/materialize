@@ -31,15 +31,18 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 use super::*;
 
 /// Builds a tiny dataflow that arranges `rows` into a `RowRow` `oks` arrangement and an empty
-/// `errs` arrangement, publishes both, and returns a registry that holds them under `id` on
-/// worker 0 (of 1). The dataflow runs to completion inside `execute_directly`. The published
+/// `errs` arrangement, publishes both, and returns a registry that holds them under `id`, with the
+/// token that keeps the publication. The dataflow runs to completion inside `execute_directly`. The published
 /// chain outlives the worker through its `Arc`s, and the standing hold keeps the published
 /// `since` at the minimum, so the snapshot reads below observe the sealed contents even after
 /// the publishing worker has torn down.
-fn publish_index(id: GlobalId, rows: Vec<(Row, Row)>) -> ArrangementSharingRegistry {
+fn publish_index(
+    id: GlobalId,
+    rows: Vec<(Row, Row)>,
+) -> (ArrangementSharingRegistry, UnpublishToken) {
     let registry = ArrangementSharingRegistry::new();
-    publish_index_into(&registry, id, rows);
-    registry
+    let token = publish_index_into(&registry, id, rows);
+    (registry, token)
 }
 
 /// Like `publish_index`, but publishes into the given `registry` instead of a fresh one, so a
@@ -47,13 +50,17 @@ fn publish_index(id: GlobalId, rows: Vec<(Row, Row)>) -> ArrangementSharingRegis
 ///
 /// Routes through [`ArrangementSharingRegistry::publish`], the path the maintenance render side
 /// uses, so whatever slot already exists for `id` is the one that gets filled.
-fn publish_index_into(registry: &ArrangementSharingRegistry, id: GlobalId, rows: Vec<(Row, Row)>) {
+fn publish_index_into(
+    registry: &ArrangementSharingRegistry,
+    id: GlobalId,
+    rows: Vec<(Row, Row)>,
+) -> UnpublishToken {
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
         // The trace lives as long as an agent does, and the point closes when it drops, so the
         // agents must outlive the stepping that seals the batches. Production keeps them in the
         // trace manager. `execute_directly` steps only after this closure returns, so step here.
-        let keep = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (keep, token) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
             let oks = oks_collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -71,7 +78,8 @@ fn publish_index_into(registry: &ArrangementSharingRegistry, id: GlobalId, rows:
                 ErrSpine<_, _>,
             >("test errs");
 
-            registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
+            let token =
+                registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
 
             for (k, v) in rows {
                 oks_input.update((k, v), Diff::ONE);
@@ -80,11 +88,12 @@ fn publish_index_into(registry: &ArrangementSharingRegistry, id: GlobalId, rows:
             oks_input.flush();
             errs_input.advance_to(Timestamp::from(1_u64));
             errs_input.flush();
-            (oks.trace.clone(), errs.trace.clone())
+            ((oks.trace.clone(), errs.trace.clone()), token)
         });
         while worker.step() {}
         drop(keep);
-    });
+        token
+    })
 }
 
 fn test_rows() -> Vec<(Row, Row)> {
@@ -118,7 +127,7 @@ fn get_or_create_converges_on_one_slot() {
     assert!(Arc::ptr_eq(&slot, &republished));
 
     // Publisher adopts the same slot and fills it.
-    publish_index_into(&registry, id, test_rows());
+    let _token = publish_index_into(&registry, id, test_rows());
 
     assert_eq!(
         read_rows(&oks, Timestamp::from(0_u64)),
@@ -127,15 +136,35 @@ fn get_or_create_converges_on_one_slot() {
 }
 
 #[mz_ore::test]
-fn handles_available_after_insert_gone_after_remove() {
+fn handles_available_while_published_gone_after_unpublish() {
     let id = GlobalId::User(1);
-    let registry = publish_index(id, test_rows());
+    let (registry, token) = publish_index(id, test_rows());
 
     // A published index yields handles, and an unknown id none.
     assert!(registry.handles(&id).is_some());
     assert!(registry.handles(&GlobalId::User(2)).is_none());
 
-    registry.remove(&id);
+    drop(token);
+    assert!(registry.handles(&id).is_none());
+}
+
+#[mz_ore::test]
+fn a_reader_keeps_the_slot_after_unpublish() {
+    let id = GlobalId::User(1);
+    let (registry, token) = publish_index(id, test_rows());
+    let reader = registry.get_or_create(id);
+
+    drop(token);
+    assert!(
+        Arc::ptr_eq(&registry.get_or_create(id), &reader),
+        "the slot a reader holds is still the registered one"
+    );
+    let held = Arc::downgrade(&reader);
+    drop(reader);
+    assert!(
+        held.upgrade().is_none(),
+        "the registry holds no slot itself"
+    );
     assert!(registry.handles(&id).is_none());
 }
 
@@ -178,7 +207,7 @@ fn expected_rows(rows: &[(Row, Row)]) -> Vec<(Row, Row)> {
 fn minted_handle_snapshots_the_index_rows() {
     let id = GlobalId::User(1);
     let rows = test_rows();
-    let registry = publish_index(id, rows.clone());
+    let (registry, _token) = publish_index(id, rows.clone());
 
     // The rows were written at time 0 and sealed by advancing the input to 1.
     let (oks, _errs) = registry.handles(&id).expect("published");
@@ -195,7 +224,7 @@ fn cross_runtime_read_sees_published_rows() {
     let registry = ArrangementSharingRegistry::new();
 
     // Runtime A: a bare timely cluster that arranges and publishes the rows, then tears down.
-    publish_index_into(&registry, id, rows.clone());
+    let _token = publish_index_into(&registry, id, rows.clone());
 
     // Runtime B: read the published rows from a different thread than the one that ran A's
     // dataflow, exercising the `Send` handle across a runtime boundary.
@@ -220,23 +249,23 @@ fn insert_marks_dirty_and_take_drains() {
     registry.register_waker(thread::current());
 
     // Publication on worker 0 marks `id` dirty for worker 0.
-    publish_index_into(&registry, id, test_rows());
+    let _token = publish_index_into(&registry, id, test_rows());
     assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
     // A second drain returns nothing: `take_dirty` empties the inbox.
     assert!(registry.take_dirty().is_empty());
 }
 
 #[mz_ore::test]
-fn remove_dirties_the_reader() {
+fn unpublish_dirties_the_reader() {
     let id = GlobalId::User(1);
     let registry = ArrangementSharingRegistry::new();
     registry.register_waker(thread::current());
 
-    // Drain the publication signal so the remove signal is observed in isolation.
-    publish_index_into(&registry, id, test_rows());
+    // Drain the publication signal so the unpublish signal is observed in isolation.
+    let token = publish_index_into(&registry, id, test_rows());
     let _ = registry.take_dirty();
 
-    registry.remove(&id);
+    drop(token);
     assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
 }
 
@@ -337,11 +366,11 @@ fn publish_join_input(
             ErrSpine<_, _>,
         >("input errs");
 
-        registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
+        let token = registry_in.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace);
         (
             oks_input,
             errs_input,
-            (oks.trace.clone(), errs.trace.clone()),
+            (oks.trace.clone(), errs.trace.clone(), token),
         )
     });
 
@@ -723,10 +752,11 @@ fn bare_handle_read_upper_advances_cross_thread() {
                     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
                     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
                     publisher_registry.notify(id);
+                    // The slot is held here for the publisher's life, as `publish`'s token does.
                     (
                         oks_input,
                         errs_input,
-                        (oks.trace.clone(), errs.trace.clone()),
+                        (oks.trace.clone(), errs.trace.clone(), slot),
                     )
                 });
 

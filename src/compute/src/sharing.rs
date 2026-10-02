@@ -25,7 +25,7 @@
 #![expect(unused)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::Thread;
 
 use mz_repr::{Diff, GlobalId, Timestamp};
@@ -69,7 +69,9 @@ struct Waker {
 /// seal, not per record.
 #[derive(Default)]
 struct Inner {
-    map: BTreeMap<GlobalId, Arc<SharedIndexArrangement>>,
+    /// Weak, so an entry lives exactly as long as a publisher or a reader holds its slot. Dead
+    /// entries are pruned whenever a slot is created.
+    map: BTreeMap<GlobalId, Weak<SharedIndexArrangement>>,
     /// `None` until the interactive peer registers its waker.
     waker: Option<Waker>,
 }
@@ -77,8 +79,9 @@ struct Inner {
 /// A registry of published index arrangements, shared by one maintenance worker and its
 /// interactive peer.
 ///
-/// Cloning shares the same underlying map. A slot is an `Arc` so a reader can retain it for the
-/// life of its import while the map entry comes and goes.
+/// Cloning shares the same underlying map. A slot is an `Arc` held by its publisher, through an
+/// [`UnpublishToken`], and by its readers. The registry itself holds none, so a slot nobody holds
+/// is gone, and the publisher's trace detaches its points (`SharedSpine::detach_unreachable`).
 #[derive(Clone, Default)]
 pub struct ArrangementSharingRegistry {
     inner: Arc<Mutex<Inner>>,
@@ -112,13 +115,21 @@ impl ArrangementSharingRegistry {
     /// waiting reader to act on. [`Self::publish`] notifies once the publishers are installed.
     pub(crate) fn get_or_create(&self, id: GlobalId) -> Arc<SharedIndexArrangement> {
         let mut inner = self.lock();
-        let slot = inner.map.entry(id).or_insert_with(|| {
-            Arc::new(SharedIndexArrangement {
-                oks: Published::new(),
-                errs: Published::new(),
-            })
+        if let Some(slot) = inner.map.get(&id).and_then(Weak::upgrade) {
+            return slot;
+        }
+        let slot = Arc::new(SharedIndexArrangement {
+            oks: Published::new(),
+            errs: Published::new(),
         });
-        Arc::clone(slot)
+        inner.map.retain(|_, slot| slot.strong_count() > 0);
+        inner.map.insert(id, Arc::downgrade(&slot));
+        slot
+    }
+
+    /// The slot for `id`, if someone holds it.
+    fn slot(inner: &Inner, id: &GlobalId) -> Option<Arc<SharedIndexArrangement>> {
+        inner.map.get(id).and_then(Weak::upgrade)
     }
 
     /// Publishes index `id`'s `oks` and `errs` traces and wakes readers waiting on `id`. `worker`
@@ -132,35 +143,33 @@ impl ArrangementSharingRegistry {
     /// Every id gets its own publication point, including an index that re-exports another's
     /// arrangement. The point's writer frontier and standing hold are per collection, and the
     /// controller compacts two collections independently even when they share a trace.
+    ///
+    /// The publication lasts as long as the returned token.
+    #[must_use]
     pub(crate) fn publish(
         &self,
         id: GlobalId,
         worker: &Worker,
         oks: &RowRowAgent<Timestamp, Diff>,
         errs: &ErrAgent<Timestamp, Diff>,
-    ) {
+    ) -> UnpublishToken {
         let slot = self.get_or_create(id);
         let registry = self.clone();
         adopt_trace(oks, worker, &slot.oks, move || registry.notify(id));
         let registry = self.clone();
         adopt_trace(errs, worker, &slot.errs, move || registry.notify(id));
         self.notify(id);
-    }
-
-    /// Removes the slot for `id`, called when the index drops.
-    pub(crate) fn remove(&self, id: &GlobalId) {
-        let mut inner = self.lock();
-        inner.map.remove(id);
-        // The reader re-checks and, finding the slot gone, drops or keeps its item.
-        if let Some(waker) = &mut inner.waker {
-            Self::mark(waker, *id);
+        UnpublishToken {
+            registry: self.clone(),
+            id,
+            slot: Some(slot),
         }
     }
 
     /// Mints reader handles for `id`, if published.
     pub(crate) fn handles(&self, id: &GlobalId) -> Option<(SharedOksHandle, SharedErrsHandle)> {
         let inner = self.lock();
-        let slot = inner.map.get(id)?;
+        let slot = Self::slot(&inner, id)?;
         Some((slot.oks.handle(), slot.errs.handle()))
     }
 
@@ -172,7 +181,7 @@ impl ArrangementSharingRegistry {
     #[cfg(test)]
     pub(crate) fn published_logical_holds(&self, id: &GlobalId) -> Option<Antichain<Timestamp>> {
         let inner = self.lock();
-        let slot = inner.map.get(id)?;
+        let slot = Self::slot(&inner, id)?;
         Some(slot.oks.logical_holds())
     }
 
@@ -215,7 +224,7 @@ impl ArrangementSharingRegistry {
     /// Does not `notify`: compaction bookkeeping gives a waiting reader nothing new to serve.
     pub(crate) fn note_standing_hold(&self, id: GlobalId, frontier: &Antichain<Timestamp>) {
         let inner = self.lock();
-        if let Some(arr) = inner.map.get(&id) {
+        if let Some(arr) = Self::slot(&inner, &id) {
             arr.oks.note_standing_hold(frontier);
             arr.errs.note_standing_hold(frontier);
         }
@@ -261,6 +270,23 @@ impl ArrangementSharingRegistry {
         // `unpark` coalesces by itself: the thread keeps one token, and a wake while it runs costs
         // an atomic swap without a syscall.
         waker.worker.unpark();
+    }
+}
+
+/// The publisher's hold on a published slot. Dropping it ends the publication.
+pub(crate) struct UnpublishToken {
+    registry: ArrangementSharingRegistry,
+    id: GlobalId,
+    /// `Some` until dropped.
+    slot: Option<Arc<SharedIndexArrangement>>,
+}
+
+impl Drop for UnpublishToken {
+    fn drop(&mut self) {
+        // Released before the mark, so the reader that re-checks finds the slot gone unless it
+        // holds the slot itself.
+        drop(self.slot.take());
+        self.registry.notify(self.id);
     }
 }
 
