@@ -141,7 +141,7 @@ describe("ClusterDetail redesign preview", () => {
     });
 
     it("shows the cluster title and the redesigned tabs", async () => {
-      renderClusterDetail("/u1/default");
+      await renderClusterDetail("/u1/default");
 
       expect(
         await screen.findByRole("heading", { level: 1, name: "default" }),
@@ -157,9 +157,31 @@ describe("ClusterDetail redesign preview", () => {
       expect(screen.getByText("ClusterOverview component")).toBeVisible();
     });
 
+    it("tags an unmanaged cluster without replicas", async () => {
+      getStore().set(
+        allClusters,
+        mockSubscribeState({
+          data: [
+            buildClusterServerResponse(
+              { id: "u3", name: "adhoc", managed: false },
+              [],
+            ),
+          ],
+        }),
+      );
+      await renderClusterDetail("/u3/adhoc");
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "adhoc" }),
+      ).toBeVisible();
+      expect(screen.getByText("Unmanaged")).toBeVisible();
+      expect(screen.getByText("No replicas")).toBeVisible();
+      expect(screen.queryByText("small")).not.toBeInTheDocument();
+    });
+
     it("opens the Objects tab on its first object type", async () => {
       const user = userEvent.setup();
-      renderClusterDetail("/u1/default");
+      await renderClusterDetail("/u1/default");
 
       await user.click(await screen.findByRole("link", { name: "Objects" }));
 
@@ -171,7 +193,7 @@ describe("ClusterDetail redesign preview", () => {
 
     it("switches object types from the type tabs", async () => {
       const user = userEvent.setup();
-      renderClusterDetail("/u1/default/objects/materialized-views");
+      await renderClusterDetail("/u1/default/objects/materialized-views");
 
       await user.click(await screen.findByRole("tab", { name: "Indexes" }));
 
@@ -184,7 +206,7 @@ describe("ClusterDetail redesign preview", () => {
 
     it("returns to Metrics from a nested Objects URL", async () => {
       const user = userEvent.setup();
-      renderClusterDetail("/u1/default/objects/indexes");
+      await renderClusterDetail("/u1/default/objects/indexes");
 
       await user.click(await screen.findByRole("link", { name: "Metrics" }));
 
@@ -195,21 +217,21 @@ describe("ClusterDetail redesign preview", () => {
     });
 
     it("redirects classic tab URLs into the Objects tab", async () => {
-      renderClusterDetail("/u1/default/sinks");
+      await renderClusterDetail("/u1/default/sinks");
 
       await expectPathname("/u1/default/objects/sinks");
       expect(await screen.findByText("Sinks component")).toBeVisible();
     });
 
     it("redirects an unknown object type to the first type", async () => {
-      renderClusterDetail("/u1/default/objects/tables");
+      await renderClusterDetail("/u1/default/objects/tables");
 
       await expectPathname("/u1/default/objects/materialized-views");
     });
 
     it("keeps the current tab when switching clusters", async () => {
       const user = userEvent.setup();
-      renderClusterDetail("/u1/default/objects/indexes");
+      await renderClusterDetail("/u1/default/objects/indexes");
 
       await user.click(
         await screen.findByRole("button", { name: "Navigation actions" }),
@@ -226,7 +248,7 @@ describe("ClusterDetail redesign preview", () => {
 
     it("switches back to the classic page", async () => {
       const user = userEvent.setup();
-      renderClusterDetail("/u1/default");
+      await renderClusterDetail("/u1/default");
 
       await user.click(
         await screen.findByRole("button", {
@@ -241,12 +263,30 @@ describe("ClusterDetail redesign preview", () => {
         screen.queryByRole("heading", { level: 1, name: "default" }),
       ).not.toBeInTheDocument();
     });
+
+    it("keeps keyboard focus on the preview pill when it switches pages", async () => {
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default");
+
+      (
+        await screen.findByRole("button", {
+          name: /Show classic cluster details page/,
+        })
+      ).focus();
+      await user.keyboard("{Enter}");
+
+      expect(
+        await screen.findByRole("button", {
+          name: /Show the new cluster details page/,
+        }),
+      ).toHaveFocus();
+    });
   });
 
   describe("when not opted in", () => {
     it("offers the preview on the classic page when the flag is on", async () => {
       flags[redesignFlag] = true;
-      renderClusterDetail("/u1/default");
+      await renderClusterDetail("/u1/default");
 
       expect(
         await screen.findByRole("button", {
@@ -256,20 +296,35 @@ describe("ClusterDetail redesign preview", () => {
       expect(screen.getByRole("link", { name: "Overview" })).toBeVisible();
     });
 
+    it("opens the matching redesigned tab when opting in from a classic tab URL", async () => {
+      flags[redesignFlag] = true;
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default/indexes");
+
+      await user.click(
+        await screen.findByRole("button", {
+          name: /Show the new cluster details page/,
+        }),
+      );
+
+      await expectPathname("/u1/default/objects/indexes");
+      expect(await screen.findByText("IndexList component")).toBeVisible();
+    });
+
     it("sends an unknown object type to the classic overview", async () => {
-      renderClusterDetail("/u1/default/objects/tables");
+      await renderClusterDetail("/u1/default/objects/tables");
 
       await expectPathname("/u1/default");
     });
 
     it("opens the first classic object tab from a redesigned Objects tab link", async () => {
-      renderClusterDetail("/u1/default/objects");
+      await renderClusterDetail("/u1/default/objects");
 
       await expectPathname("/u1/default/materialized-views");
     });
 
     it("redirects redesigned Objects URLs to the classic tabs", async () => {
-      renderClusterDetail("/u1/default/objects/sinks");
+      await renderClusterDetail("/u1/default/objects/sinks");
 
       await expectPathname("/u1/default/sinks");
       expect(await screen.findByText("Sinks component")).toBeVisible();

@@ -24,7 +24,7 @@ import { SentryRoutes } from "~/sentry";
 import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
 import ClusterOverview from "./ClusterOverview";
 import { CLUSTER_OBJECT_TYPES } from "./ClusterPage/clusterObjectTypes";
-import ClusterPage from "./ClusterPage/ClusterPage";
+import ClusterPage, { ClusterPageHeader } from "./ClusterPage/ClusterPage";
 import ClusterReplicas from "./ClusterReplicas";
 import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
@@ -44,64 +44,61 @@ const ClassicObjectsRedirect = () => {
   return <Navigate to={isKnownType ? `../${objectType}` : ".."} replace />;
 };
 
+const CLASSIC_TABS: Tab[] = [
+  { label: "Overview", href: "..", end: true },
+  { label: "Replicas", href: "../replicas" },
+  { label: "Materialized Views", href: "../materialized-views" },
+  { label: "Indexes", href: "../indexes" },
+  { label: "Sources", href: "../sources" },
+  { label: "Sinks", href: "../sinks" },
+];
+
 const ClassicClusterDetailPage = () => {
   const { clusterName } = useParams<ClusterDetailParams>();
-
-  const breadcrumbs: Breadcrumb[] = React.useMemo(
-    () => [
-      { title: "Clusters", href: "../.." },
-      { title: clusterName ?? "", href: ".." },
-    ],
-    [clusterName],
-  );
-  const subnavItems: Tab[] = React.useMemo(
-    () => [
-      { label: "Overview", href: "..", end: true },
-      { label: "Replicas", href: "../replicas" },
-      { label: "Materialized Views", href: "../materialized-views" },
-      { label: "Indexes", href: "../indexes" },
-      { label: "Sources", href: "../sources" },
-      { label: "Sinks", href: "../sinks" },
-    ],
-    [],
-  );
 
   // Setting key on the route elements prevents any weird jank when you use the context
   // menu to switch between clusters.
   return (
-    <>
-      <PageHeader variant="compact" boxProps={{ mb: 0 }} sticky>
-        <VStack spacing={0} alignItems="flex-start" width="100%">
-          <ClusterDetailBreadcrumbs crumbs={breadcrumbs} />
-          <PageTabStrip tabData={subnavItems} />
-        </VStack>
-      </PageHeader>
-      <SentryRoutes>
-        <Route index path="/" element={<ClusterOverview key={clusterName} />} />
-        <Route
-          path="replicas"
-          element={<ClusterReplicas key={clusterName} />}
-        />
-        <Route
-          path="materialized-views"
-          element={<MaterializedViewsList key={clusterName} />}
-        />
-        <Route path="indexes" element={<IndexList key={clusterName} />} />
-        <Route path="sources" element={<Sources key={clusterName} />} />
-        <Route path="sinks" element={<Sinks key={clusterName} />} />
-        <Route path="objects" element={<ClassicObjectsRedirect />} />
-        <Route
-          path="objects/:objectType"
-          element={<ClassicObjectsRedirect />}
-        />
-      </SentryRoutes>
-    </>
+    <SentryRoutes>
+      <Route index path="/" element={<ClusterOverview key={clusterName} />} />
+      <Route path="replicas" element={<ClusterReplicas key={clusterName} />} />
+      <Route
+        path="materialized-views"
+        element={<MaterializedViewsList key={clusterName} />}
+      />
+      <Route path="indexes" element={<IndexList key={clusterName} />} />
+      <Route path="sources" element={<Sources key={clusterName} />} />
+      <Route path="sinks" element={<Sinks key={clusterName} />} />
+      <Route path="objects" element={<ClassicObjectsRedirect />} />
+      <Route path="objects/:objectType" element={<ClassicObjectsRedirect />} />
+    </SentryRoutes>
   );
 };
 
 const ClusterDetailPage = () => {
   const { isEnabled } = useUiPreview("clusterDetailsRedesign");
-  return isEnabled ? <ClusterPage /> : <ClassicClusterDetailPage />;
+  const { clusterName } = useParams<ClusterDetailParams>();
+  const breadcrumbs: Breadcrumb[] = [
+    { title: "Clusters", href: "../.." },
+    { title: clusterName ?? "", href: ".." },
+  ];
+  // Both pages share the header, so the preview pill in the breadcrumbs stays
+  // mounted, and keeps keyboard focus, when it switches between them.
+  return (
+    <>
+      <PageHeader variant="compact" boxProps={{ mb: 0 }} sticky>
+        <VStack spacing={0} alignItems="flex-start" width="100%">
+          <ClusterDetailBreadcrumbs crumbs={breadcrumbs} />
+          {isEnabled ? (
+            <ClusterPageHeader />
+          ) : (
+            <PageTabStrip tabData={CLASSIC_TABS} />
+          )}
+        </VStack>
+      </PageHeader>
+      {isEnabled ? <ClusterPage /> : <ClassicClusterDetailPage />}
+    </>
+  );
 };
 
 export default ClusterDetailPage;
