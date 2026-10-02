@@ -941,16 +941,21 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         // An empty frontier means there are no more valid times to read, so the collection goes.
         // For a peer, compaction moves this runtime's hold on the other runtime's publication.
-        match (self.compute_state.peers.contains(&id), frontier.is_empty()) {
-            (false, true) => self.drop_collection(id),
-            (true, true) => {
+        let hosted = self.compute_state.collections.contains_key(&id);
+        let peer = self.compute_state.peers.contains(&id);
+        match (hosted, peer, frontier.is_empty()) {
+            (true, _, true) => self.drop_collection(id),
+            (false, true, true) => {
                 self.compute_state.peers.remove(&id);
                 self.compute_state.traces.remove(&id);
             }
-            (_, false) => self
+            (true, _, false) | (false, true, false) => self
                 .compute_state
                 .traces
                 .allow_compaction(id, frontier.borrow()),
+            (false, false, _) => {
+                mz_ore::soft_panic_or_log!("allow compaction for unknown collection {id}")
+            }
         }
     }
 
