@@ -136,6 +136,13 @@ unsafe = true
     startLevel = 2
     endLevel = 4
 
+# hugo deploy sets each file's Content-Type from the first Hugo media type with
+# its suffix, and for ".xml" that is RSS, so the sitemap was served as
+# application/rss+xml. Matchers are tried in order; the first match wins.
+[[deployment.matchers]]
+pattern = "^(.+/)?sitemap\\.xml$"
+contentType = "application/xml"
+
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
