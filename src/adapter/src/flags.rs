@@ -210,35 +210,41 @@ mod timestamp_oracle_tests {
             VarInput::Flat("on"),
         )
         .expect("enable default pipelining");
+        vars.sync_dyncfgs();
         assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(2));
         vars.set(
             ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
             VarInput::Flat("off"),
         )
         .expect("disable pipelining");
+        vars.sync_dyncfgs();
         vars.set(
             TIMESTAMP_ORACLE_READ_CONCURRENCY.name(),
             VarInput::Flat("4"),
         )
         .expect("set concurrency");
+        vars.sync_dyncfgs();
         assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(1));
         vars.set(
             ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
             VarInput::Flat("on"),
         )
         .expect("enable pipelining");
+        vars.sync_dyncfgs();
         assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(4));
         vars.set(
             TIMESTAMP_ORACLE_READ_CONCURRENCY.name(),
             VarInput::Flat("2"),
         )
         .expect("set concurrency");
+        vars.sync_dyncfgs();
         assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(2));
         vars.set(
             ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
             VarInput::Flat("off"),
         )
         .expect("disable pipelining");
+        vars.sync_dyncfgs();
         assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(1));
     }
 }
