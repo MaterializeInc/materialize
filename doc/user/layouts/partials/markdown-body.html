@@ -1,0 +1,43 @@
+{{- /*
+  Returns a page's body for the Markdown output: its .RenderShortcodes output,
+  with root-relative links made absolute.
+
+  Source links are written relative to the docs root, such as
+  "/sql/create-cluster/#syntax". The HTML pass resolves them in
+  _markup/render-link.html, but .RenderShortcodes leaves Markdown links as
+  written, and the website serves the Markdown under <baseURL>/markdown-docs/,
+  where such a link does not resolve.
+
+  In the website build, a link to a page becomes the absolute URL of that
+  page's Markdown, keeping any #fragment, and any other root-relative link,
+  such as an image, becomes an absolute URL under the base path. The
+  bin/gen-claude-skill bundle has base path "/", and its links stay as written,
+  because there they name directories under the bundle root.
+
+  Arguments (dict):
+    page  (required) the Page whose body to render
+
+  Usage:
+    {{ partial "markdown-body.html" (dict "page" .) }}
+*/ -}}
+{{- $content := .page.RenderShortcodes -}}
+{{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
+{{- if $basePath -}}
+  {{- $origin := partial "site-origin.html" . -}}
+  {{- range uniq (findRE `\]\(/[^)\s]*` $content) -}}
+    {{- $target := strings.TrimPrefix "](" . -}}
+    {{- $path := index (split $target "#") 0 -}}
+    {{- $fragment := strings.TrimPrefix $path $target -}}
+    {{- /* Some data files write links that already include the base path. */ -}}
+    {{- $path = strings.TrimPrefix (printf "%s/" $basePath) $path | printf "/%s" | replaceRE `^//` "/" -}}
+    {{- $url := printf "%s%s%s%s" $origin $basePath $path $fragment -}}
+    {{- if not (path.Ext $path) -}}
+      {{- with site.GetPage (strings.TrimSuffix "/" $path) -}}
+        {{- $url = printf "%s%s" (partial "markdown-url.html" (dict "page" . "absolute" true)) $fragment -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $quoted := replaceRE `([\\.+*?()|\[\]{}^$])` `\$1` $target -}}
+    {{- $content = replaceRE (printf `\]\(%s([)\s])` $quoted) (printf "](%s$1" $url) $content -}}
+  {{- end -}}
+{{- end -}}
+{{- return $content -}}

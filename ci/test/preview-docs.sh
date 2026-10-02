@@ -23,8 +23,9 @@ cd doc/user
 # Build main docs to public/
 hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 
-# Build skill docs to public/markdown-docs/
-hugo --config config.toml,config.skill.toml --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
+# Build skill docs to public/markdown-docs/. --environment preview makes their
+# absolute links point at preview.materialize.com, like the HTML build above.
+hugo --config config.toml,config.skill.toml --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]

@@ -6,7 +6,7 @@
 {{ .Description }}
 {{ end }}
 
-{{ .RenderShortcodes }}
+{{ partial "markdown-body.html" (dict "page" .) }}
 
 {{- /*
   List the pages below this one rather than embedding their content. Each of
