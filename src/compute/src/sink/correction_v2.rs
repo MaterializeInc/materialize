@@ -278,6 +278,14 @@ pub struct CorrectionV2<D: Data> {
 /// path we expect to exercise. Lower it if restoration ever needs to interleave with other work.
 const RESTORE_FUEL: i64 = 1_000_000;
 
+/// The serialized size from which a read writes `emitted` one generation deep, see
+/// [`CorrectionV2::consolidate_before`].
+///
+/// A steady-state read emits a few timestamps' worth of updates, far below this. A hydration
+/// read emits the whole snapshot, about 74 GiB for 600M TPC-H `lineitem` rows, far above it.
+/// The value between is not tuned.
+const EMITTED_DEEP_BYTES: usize = 256 << 20;
+
 impl<D: Data> CorrectionV2<D> {
     /// Construct a new [`CorrectionV2`] instance.
     pub fn new(
@@ -532,12 +540,20 @@ impl<D: Data> CorrectionV2<D> {
         }
 
         // The merged chain becomes `emitted`, which the caller reads next and the next
-        // consolidation merges with the feedback retractions, so the chunks the merge writes are
-        // the youngest generation whatever the depth of their inputs. A lone input chain is
-        // reused as is and keeps its chunks' depths, since re-spilling them would cost a copy.
+        // consolidation merges with the feedback retractions. A small `emitted` is the youngest
+        // generation whatever the depth of its inputs. A large one, such as a hydration snapshot,
+        // rests in the buffer for as long as its feedback takes to arrive, so it is written one
+        // generation deeper, which lets the pool compress it. A lone input chain is reused as is
+        // and keeps its chunks' depths, since re-spilling them would cost a copy.
+        let lower_bytes: usize = lowers.iter().map(|c| c.size).sum();
+        let depth = if lower_bytes >= EMITTED_DEEP_BYTES {
+            1
+        } else {
+            0
+        };
         let merged = if stale_times == 0 {
             let cursors: Vec<_> = lowers.into_iter().filter_map(Chain::into_cursor).collect();
-            merge_cursors(cursors, 0)
+            merge_cursors(cursors, depth)
         } else if stale_times < MAX_STALE_RUNS {
             let mut runs = Vec::new();
             for chain in lowers {
@@ -545,7 +561,7 @@ impl<D: Data> CorrectionV2<D> {
                     runs.append(&mut cursor.advance_by(since_ts));
                 }
             }
-            merge_cursors(runs, 0)
+            merge_cursors(runs, depth)
         } else {
             let mut updates: Vec<_> = lowers.iter().flat_map(|c| c.iter()).collect();
             for (_, time, _) in &mut updates {
@@ -1660,8 +1676,9 @@ struct Chunk<D: Data> {
     first_time: Timestamp,
     /// Time of the last update, cached likewise.
     last_time: Timestamp,
-    /// The generational depth: 0 for chunks built from staged updates or written by a read,
-    /// one more than the deepest input for chunks written by a bucket's chain merge. The pool
+    /// The generational depth: 0 for chunks built from staged updates or written by a small
+    /// read, 1 for chunks written by a large read (see [`EMITTED_DEEP_BYTES`]), and one more
+    /// than the deepest input for chunks written by a bucket's chain merge. The pool
     /// treats deeper chunks as colder, and compresses them past the floor set by
     /// [`chunk::set_compress_min_depth`].
     depth: u8,
