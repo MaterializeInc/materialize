@@ -1255,7 +1255,7 @@ Explained Query:
     Map: record_get[0](#0)
       →Fused with Child Table Function unnest_list
         →Non-incremental GroupAggregate
-          Aggregation: lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0{x}, 3, "default")), (#0{x} || #0{x})))
+          Aggregation: lag[value=orig_row[0], offset=3, default="default", ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0)), (#0{x} || #0{x})))
         Key:
           Project: ()
         →Stream materialize.public.t1

@@ -703,28 +703,18 @@ impl Context {
                     if !matches!(func, TableFunc::UnnestList { .. }) {
                         break 'fusion None;
                     }
-                    // We might have a Project of a single col between the FlatMap and the
-                    // Reduce. (It projects away the grouping keys of the Reduce, and keeps the
-                    // result of the window function.)
-                    let (maybe_reduce, num_grouping_keys) = if let MirRelationExpr::Project {
+                    // We might have a Project between the FlatMap and the Reduce, keeping
+                    // the aggregate's column and whichever grouping keys are still read
+                    // above. `projection` maps each of the FlatMap's input columns to a
+                    // column of the `Reduce`'s output, identically when there is no Project.
+                    let (maybe_reduce, projection) = if let MirRelationExpr::Project {
                         input: project_input,
                         outputs: projection,
                     } = &**flat_map_input
                     {
-                        // We want this to be a single column, because we'll want to deal with only
-                        // one aggregation in the `Reduce`. (The aggregation of a window function
-                        // always stands alone currently: we plan them separately from other
-                        // aggregations, and Reduces are never fused. When window functions are
-                        // fused with each other, they end up in one aggregation. When there are
-                        // multiple window functions in the same SELECT, but can't be fused, they
-                        // end up in different Reduces.)
-                        if let &[single_col] = &**projection {
-                            (project_input, single_col)
-                        } else {
-                            break 'fusion None;
-                        }
+                        (project_input, Some(projection))
                     } else {
-                        (flat_map_input, 0)
+                        (flat_map_input, None)
                     };
                     if let MirRelationExpr::Reduce {
                         input,
@@ -734,23 +724,39 @@ impl Context {
                         expected_group_size,
                     } = &**maybe_reduce
                     {
-                        if group_key.len() != num_grouping_keys
-                            || aggregates.len() != 1
-                            || !aggregates[0].func.can_fuse_with_unnest_list()
+                        // We want a single aggregation in the `Reduce`. (The aggregation of a
+                        // window function always stands alone currently: we plan them
+                        // separately from other aggregations, and Reduces are never fused.
+                        // When window functions are fused with each other, they end up in one
+                        // aggregation. When there are multiple window functions in the same
+                        // SELECT, but can't be fused, they end up in different Reduces.)
+                        if aggregates.len() != 1 || !aggregates[0].func.can_fuse_with_unnest_list()
                         {
+                            break 'fusion None;
+                        }
+                        let num_grouping_keys = group_key.len();
+                        let reduce_output_arity = num_grouping_keys + 1;
+                        let projection: Vec<_> = match projection {
+                            Some(projection) => projection.clone(),
+                            None => (0..reduce_output_arity).collect(),
+                        };
+                        // The column the FlatMap unnests has to be the aggregate's.
+                        let &[MirScalarExpr::Column(list_col, _)] = &exprs[..] else {
+                            break 'fusion None;
+                        };
+                        if projection.get(list_col) != Some(&num_grouping_keys) {
                             break 'fusion None;
                         }
                         // At the beginning, `non_fused_mfp_above_flat_map` will be the original MFP
                         // above the FlatMap. Later, we'll mutate this to be the residual MFP that
                         // didn't get fused into the `Reduce`.
                         let non_fused_mfp_above_flat_map = &mut mfp;
-                        let reduce_output_arity = num_grouping_keys + 1;
                         // We are fusing away the list that the FlatMap would have been unnesting,
                         // so the column that had that list disappears, so we have to permute the
                         // MFP above the FlatMap with this column disappearance.
                         let tweaked_mfp = {
                             let mut mfp = non_fused_mfp_above_flat_map.clone();
-                            if mfp.demand().contains(&0) {
+                            if mfp.demand().contains(&list_col) {
                                 // I don't think this can happen currently that this MFP would
                                 // refer to the list column, because both the list column and the
                                 // MFP were constructed by the HIR-to-MIR lowering, so it's not just
@@ -758,17 +764,44 @@ impl Context {
                                 // to check this here for robustness against future code changes.
                                 break 'fusion None;
                             }
-                            let permutation: BTreeMap<_, _> =
-                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect();
-                            mfp.permute_fn(|c| permutation[&c], mfp.input_arity - 1);
+                            mfp.permute_fn(
+                                |c| {
+                                    // `permute_fn` visits only the columns the MFP refers to,
+                                    // and the check above established that the list column is
+                                    // not among them, so every column from there on moves down
+                                    // one and the unnested column lands in the list column's
+                                    // place.
+                                    assert_ne!(
+                                        c, list_col,
+                                        "MFP refers to the list column being fused away"
+                                    );
+                                    if c < list_col { c } else { c - 1 }
+                                },
+                                mfp.input_arity - 1,
+                            );
                             mfp
                         };
                         // We now put together the project that was before the FlatMap, and the
                         // tweaked version of the MFP that was after the FlatMap.
                         // (Part of this MFP might be fused into the Reduce.)
+                        //
+                        // The fused `Reduce` hands its `mfp_after` the grouping keys followed
+                        // by the unnested column, so the project names those, in the order the
+                        // tweaked MFP now expects its inputs: the FlatMap's input columns
+                        // without the list column, then the unnested column that came after
+                        // them.
+                        let unnested_col = projection.len();
                         let mut project_and_tweaked_mfp = {
                             let mut mfp = MapFilterProject::new(reduce_output_arity);
-                            mfp = mfp.project(vec![num_grouping_keys]);
+                            mfp = mfp.project((0..=unnested_col).filter(|c| *c != list_col).map(
+                                |c| {
+                                    if c == unnested_col {
+                                        num_grouping_keys
+                                    } else {
+                                        projection[c]
+                                    }
+                                },
+                            ));
                             mfp = MapFilterProject::compose(mfp, tweaked_mfp);
                             mfp
                         };
