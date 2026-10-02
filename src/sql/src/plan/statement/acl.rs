@@ -19,11 +19,12 @@ use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::ast::{Ident, UnresolvedDatabaseName};
 use crate::catalog::{
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ErrorMessageObjectDescription, ObjectType,
-    SystemObjectType,
+    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
+    ErrorMessageObjectDescription, ObjectType, SystemObjectType,
 };
 use crate::names::{
-    Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedRoleName, SchemaSpecifier, SystemObjectId,
+    Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedItemName, ResolvedObjectName,
+    ResolvedRoleName, SchemaSpecifier, SystemObjectId,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
@@ -361,10 +362,61 @@ pub fn plan_grant_privileges(
         privileges,
         target,
         roles,
+        through,
     }: GrantPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    // Resolve and validate `THROUGH <index>` before consuming `target`.
+    let through_index = plan_through_index(scx, through.as_ref(), &target)?;
     let plan = plan_update_privilege(scx, privileges, target, roles)?;
-    Ok(Plan::GrantPrivileges(plan.into()))
+    let mut plan: GrantPrivilegesPlan = plan.into();
+    plan.through_index = through_index;
+    Ok(Plan::GrantPrivileges(plan))
+}
+
+/// Resolves a `THROUGH <index>` clause to the index's [`CatalogItemId`], and
+/// validates that it names an index over the single object being granted.
+///
+/// Prototype restriction: the grant must target exactly one object, and the
+/// index must be an index on that object.
+fn plan_through_index(
+    scx: &StatementContext,
+    through: Option<&ResolvedItemName>,
+    target: &GrantTargetSpecification<Aug>,
+) -> Result<Option<mz_repr::CatalogItemId>, PlanError> {
+    let Some(through) = through else {
+        return Ok(None);
+    };
+    let index_id = *through.item_id();
+    let index = scx.catalog.get_item(&index_id);
+    if index.item_type() != CatalogItemType::Index {
+        sql_bail!(
+            "THROUGH requires an index, but {} is a {}",
+            through.full_name_str(),
+            index.item_type()
+        );
+    }
+
+    // The grant must target exactly one object, and the index must be on it.
+    let target_id = match target {
+        GrantTargetSpecification::Object {
+            object_spec_inner: GrantTargetSpecificationInner::Objects { names },
+            ..
+        } if names.len() == 1 => match &names[0] {
+            ResolvedObjectName::Item(name) => *name.item_id(),
+            _ => sql_bail!("THROUGH is only supported for a grant on a single relation"),
+        },
+        _ => sql_bail!("THROUGH is only supported for a grant on a single object"),
+    };
+    // An index's direct references are the object it is built over, so the
+    // target must be among them.
+    let on_target = index.references().items().any(|id| *id == target_id);
+    if !on_target {
+        sql_bail!(
+            "index {} is not an index on the object being granted",
+            through.full_name_str()
+        );
+    }
+    Ok(Some(index_id))
 }
 
 pub fn describe_revoke_privileges(
@@ -401,6 +453,7 @@ impl From<UpdatePrivilegesPlan> for GrantPrivilegesPlan {
         GrantPrivilegesPlan {
             update_privileges,
             grantees,
+            through_index: None,
         }
     }
 }

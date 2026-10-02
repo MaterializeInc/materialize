@@ -5775,6 +5775,11 @@ pub struct GrantPrivilegesStatement<T: AstInfo> {
     pub target: GrantTargetSpecification<T>,
     /// The roles that will granted the privileges.
     pub roles: Vec<T::RoleName>,
+    /// An index the grantee's access must be routed through. When present, the
+    /// grantee may read the target only via this index's arrangement, never by
+    /// inlining the target's definition. Prototype for `THROUGH <index>`;
+    /// meaningful only for a `SELECT` grant on a single object.
+    pub through: Option<T::ItemName>,
 }
 
 impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
@@ -5783,6 +5788,10 @@ impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
         f.write_node(&self.privileges);
         f.write_str(" ON ");
         f.write_node(&self.target);
+        if let Some(through) = &self.through {
+            f.write_str(" THROUGH ");
+            f.write_node(through);
+        }
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.roles));
     }

@@ -2061,6 +2061,14 @@ pub struct Coordinator {
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
 
+    /// `GRANT ... THROUGH <index>` bindings, keyed by `(grantee role, object)`
+    /// and mapping to the index the grantee's read must be routed through.
+    ///
+    /// Prototype storage: this is in-memory only and does not survive restart.
+    /// The production shape is a durable catalog collection, deferred here
+    /// because regenerating its protobuf needs `buf`, which is unavailable.
+    through_index_bindings: BTreeMap<(RoleId, CatalogItemId), CatalogItemId>,
+
     /// A client for persist. Initially, this is only used for reading stashed
     /// peek responses out of batches.
     persist_client: PersistClient,
@@ -5424,6 +5432,7 @@ pub fn serve(
                 let mut coord = Coordinator {
                     controller,
                     catalog,
+                    through_index_bindings: BTreeMap::new(),
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),

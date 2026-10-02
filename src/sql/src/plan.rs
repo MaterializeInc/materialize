@@ -1516,6 +1516,9 @@ pub struct GrantPrivilegesPlan {
     pub update_privileges: Vec<UpdatePrivilege>,
     /// The roles that will granted the privileges.
     pub grantees: Vec<RoleId>,
+    /// An index each grantee's read of the (single) target must be routed
+    /// through. `None` is an ordinary grant. Prototype for `THROUGH <index>`.
+    pub through_index: Option<CatalogItemId>,
 }
 
 #[derive(Debug)]
