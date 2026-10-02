@@ -127,7 +127,7 @@ impl ArrangementSharingRegistry {
     /// error is emitted, so an oks-only signal would leave that peek parked.
     ///
     /// Every id gets its own publication point, including an index that re-exports another's
-    /// arrangement. The point's writer frontier and standing hold are per collection, and the
+    /// arrangement. The point's writer frontier and peer holds are per collection, and the
     /// controller compacts two collections independently even when they share a trace.
     ///
     /// The publication lasts as long as the returned token.
