@@ -1,0 +1,21 @@
+{{- /*
+  Returns the URL that a link to a page should use inside the Markdown output.
+
+  The Markdown output is built twice. The website build (ci/deploy_website/website.sh)
+  passes a --baseURL with a path, such as "/docs", and publishes the result at
+  <baseURL>/markdown-docs/, so a link there must be an absolute URL to the
+  target's Markdown rendition. bin/gen-claude-skill passes no --baseURL, so the
+  base path is "/", and the result is a skill bundle in which a root-relative
+  path such as "/sql/create-source/" names a directory under the bundle root.
+
+  Arguments (dict):
+    page  (required) the Page to link to
+
+  Usage:
+    {{ partial "markdown-link-url.html" (dict "page" .) }}
+*/ -}}
+{{- $url := .page.RelPermalink -}}
+{{- if ne (urls.Parse site.BaseURL).Path "/" -}}
+  {{- $url = partial "markdown-url.html" (dict "page" .page "absolute" true) -}}
+{{- end -}}
+{{- return $url -}}

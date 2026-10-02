@@ -19,7 +19,11 @@
 */ -}}
 {{- $basePath := (urls.Parse site.BaseURL).Path -}}
 {{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
-{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath -}}
+{{- /*
+  In the Markdown pass, RelPermalink already ends in the skill format's
+  index.md; drop it so the URL is the same from either pass.
+*/ -}}
+{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
 {{- $url := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
 {{- if .absolute -}}
   {{- $parsed := urls.Parse site.BaseURL -}}
