@@ -536,7 +536,7 @@ fn snapshot_holds_nothing_and_outlives_compaction() {
         }
 
         let holds = (published.logical_holds(), published.physical_holds());
-        let mut snapshot = published.snapshot();
+        let mut snapshot = published.shared.snapshot();
         assert_eq!(
             (published.logical_holds(), published.physical_holds()),
             holds,
@@ -559,6 +559,7 @@ fn snapshot_holds_nothing_and_outlives_compaction() {
         );
         assert!(
             !published
+                .shared
                 .snapshot()
                 .get_logical_compaction()
                 .less_equal(&Timestamp::from(2_u64)),

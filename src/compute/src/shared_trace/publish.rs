@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Trace, TraceReader};
-use mz_timely_util::shared_trace::{Shared, SharedReader, SharedSnapshot, SharedSpine};
+use mz_timely_util::shared_trace::{Shared, SharedReader, SharedSpine};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::worker::Worker;
@@ -102,14 +102,6 @@ where
         as_of: &Antichain<Tr::Time>,
     ) -> Result<SharedReader<Tr::Batch>, Antichain<Tr::Time>> {
         self.shared.reader_at(as_of)
-    }
-
-    /// A capture of the published arrangement that registers no hold, see [`SharedSnapshot`].
-    pub(crate) fn snapshot(&self) -> SharedSnapshot<Tr::Batch>
-    where
-        Tr::Batch: Clone,
-    {
-        self.shared.snapshot()
     }
 
     /// The published `upper`.
