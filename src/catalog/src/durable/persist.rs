@@ -553,6 +553,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let updates_applied_before = self.updates_applied;
 
         // Reset the amortized consolidation tracker so it picks up the
         // current snapshot size as its baseline.
@@ -596,8 +597,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
-        // Always consolidate at the end to ensure the snapshot is clean.
-        self.consolidate();
+        // A sync that applied no updates finds the snapshot consolidated: every successful
+        // mutation leaves it consolidated, and a failed `apply_updates` has recorded a fence
+        // (`FenceableToken::maybe_fence`), after which every sync returns at `validate` above.
+        // NOTE: the fence loop in `open_inner` syncs on every attempt while the serving leader
+        // advances the upper on every group commit. On a large catalog a full consolidation per
+        // attempt outlasts that advance, and the fence starves until the leader stalls.
+        if self.updates_applied != updates_applied_before {
+            self.consolidate();
+        }
         Ok(())
     }
 
