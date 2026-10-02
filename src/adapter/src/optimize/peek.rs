@@ -342,6 +342,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
+            self.config.features.enable_cell_errors,
         ) {
             Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
             Err(OptimizerError::InternalUnsafeMfpPlan(_)) => {
@@ -377,6 +378,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
+            self.config.features.enable_cell_errors,
         )? {
             Some(plan) if !self.config.no_fast_path => {
                 if self.config.mode == OptimizeMode::Explain {

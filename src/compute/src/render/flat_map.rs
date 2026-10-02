@@ -14,7 +14,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::TableFunc;
-use mz_expr::{Eval, MfpPlan};
+use mz_expr::{ErrorScope, Eval, MfpPlan};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::Column;
@@ -60,7 +60,19 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             Some(key) => input.as_specific_collection(Some(key)),
         };
 
-        let (oks, errs) = flat_map_stage(edge.inner, scope, exprs, func, mfp_plan, until, budget);
+        // Table function arguments decide which rows exist, so their errors are row-scoped. The
+        // MFP after the table function keeps error datums in their cells.
+        let error_scope = self.error_scope();
+        let (oks, errs) = flat_map_stage(
+            edge.inner,
+            scope,
+            exprs,
+            func,
+            mfp_plan,
+            error_scope,
+            until,
+            budget,
+        );
 
         use differential_dataflow::AsCollection;
         let ok_collection = oks.as_collection();
@@ -89,6 +101,7 @@ fn flat_map_stage<'scope, T>(
     exprs: Vec<LirScalarExpr>,
     func: TableFunc,
     mfp_plan: MfpPlan<LirScalarExpr>,
+    error_scope: ErrorScope,
     until: Antichain<Timestamp>,
     budget: usize,
 ) -> (
@@ -138,6 +151,7 @@ where
                             &exprs,
                             &func,
                             &mfp_plan,
+                            error_scope,
                             &until,
                             &mut datums,
                             &mut datums_mfp,
@@ -168,6 +182,7 @@ fn process_flat_map_row<T>(
     exprs: &[LirScalarExpr],
     func: &TableFunc,
     mfp_plan: &MfpPlan<LirScalarExpr>,
+    error_scope: ErrorScope,
     until: &Antichain<Timestamp>,
     datums: &mut DatumVec,
     datums_mfp: &mut DatumVec,
@@ -213,6 +228,7 @@ fn process_flat_map_row<T>(
             datums_mfp,
             table_func_output,
             mfp_plan,
+            error_scope,
             until,
             ok_session,
             err_session,
@@ -232,6 +248,7 @@ fn drain_through_mfp<T>(
     datum_vec: &mut DatumVec,
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan<LirScalarExpr>,
+    error_scope: ErrorScope,
     until: &Antichain<Timestamp>,
     ok_output: &mut Session<'_, '_, T, FlatMapOk<T>, Capability<T>>,
     err_output: &mut Session<'_, '_, T, FlatMapErr<T>, Capability<T>>,
@@ -260,6 +277,7 @@ fn drain_through_mfp<T>(
             *diff * *input_diff,
             |time| !until.less_equal(time),
             &mut row_builder,
+            error_scope,
         );
 
         for result in results {
@@ -328,8 +346,16 @@ mod tests {
                 // so the fuel assertions below cover the shipped path.
                 let stream = vec_to_columnar(collection).inner;
                 let scope = stream.scope();
-                let (oks, _errs) =
-                    flat_map_stage(stream, scope, exprs, func, mfp, Antichain::new(), budget);
+                let (oks, _errs) = flat_map_stage(
+                    stream,
+                    scope,
+                    exprs,
+                    func,
+                    mfp,
+                    ErrorScope::Row,
+                    Antichain::new(),
+                    budget,
+                );
                 // Counted per container: a per-record `inspect` needs
                 // `&Container: IntoIterator`, which on macOS recurses through `objc2`'s
                 // blanket impls until the trait solver overflows.
@@ -392,6 +418,7 @@ mod tests {
                     exprs,
                     func,
                     mfp,
+                    ErrorScope::Row,
                     Antichain::new(),
                     usize::MAX,
                 );
@@ -470,6 +497,7 @@ mod tests {
                     exprs,
                     func,
                     mfp,
+                    ErrorScope::Row,
                     Antichain::new(),
                     usize::MAX,
                 );

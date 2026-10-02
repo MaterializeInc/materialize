@@ -47,14 +47,15 @@ impl crate::Transform for FoldConstants {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
+        let cell_errors = ctx.features.enable_cell_errors;
         let mut type_stack = Vec::new();
         let result = relation.try_visit_mut_post(&mut |e| -> Result<(), TransformError> {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
             let mut relation_type = e.typ_with_input_types(input_types);
-            self.action(e, &mut relation_type)?;
+            self.action(e, &mut relation_type, cell_errors)?;
             type_stack.truncate(type_stack.len() - num_inputs);
             type_stack.push(relation_type);
             Ok(())
@@ -70,10 +71,14 @@ impl FoldConstants {
     /// This transform will cease optimization if it encounters constant collections
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
     /// a constant input within the limit will be reduced to a `Constant` variant.
+    ///
+    /// With `cell_errors`, an error in a map expression is scoped to its cell, which a constant
+    /// row cannot hold. Such a `Map` stays unfolded, so that its evaluation matches a dataflow's.
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
         relation_type: &mut ReprRelationType,
+        cell_errors: bool,
     ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
@@ -206,6 +211,11 @@ impl FoldConstants {
                             .collect::<Result<_, _>>(),
                         Err(e) => Err(e.clone()),
                     };
+                    // A dataflow scopes the error to its cell, which a constant row cannot hold.
+                    // Leaving the `Map` lets demand drop the column, or evaluation scope the error.
+                    if cell_errors && new_rows.is_err() && rows.is_ok() {
+                        return Ok(());
+                    }
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation_type.clone(),
