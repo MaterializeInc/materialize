@@ -582,7 +582,28 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 as_of,
                 until,
                 optimize,
-                defer: flags.iter().any(|f| f == "defer"),
+            }
+        }
+        "declare-dataflow" => {
+            let DataflowBody {
+                name,
+                imports,
+                builds,
+                exports,
+                as_of,
+                until,
+                optimize,
+            } = parse_dataflow_body(&args, &flags, body)?;
+            Command::DeclareDataflow {
+                name: name.ok_or_else(|| {
+                    anyhow::anyhow!("declare-dataflow needs a name for the later submit-dataflow")
+                })?,
+                imports,
+                builds,
+                exports,
+                as_of,
+                until,
+                optimize,
             }
         }
         "submit-dataflow" => Command::SubmitDataflow {
@@ -798,7 +819,6 @@ mod tests {
                 as_of: 0,
                 until: None,
                 optimize: false,
-                defer: false,
             }
         );
 
@@ -1034,14 +1054,12 @@ mod tests {
         );
     }
 
-    /// `defer` on the directive line is picked up, and `submit-dataflow` names the deferred
-    /// dataflow.
     #[mz_ore::test]
-    fn parses_deferred_create_and_submit() {
-        let input = "create-dataflow name=d as-of=0 defer\n  import index=1001\n  build id=2000\n    Get u1000\n  export index=2001 on=2000 key=[0]";
+    fn parses_declare_and_submit() {
+        let input = "declare-dataflow name=d as-of=0\n  import index=1001\n  build id=2000\n    Get u1000\n  export index=2001 on=2000 key=[0]";
         assert!(matches!(
             parse_command(input).unwrap(),
-            Command::CreateDataflow { defer: true, .. }
+            Command::DeclareDataflow { .. }
         ));
         assert_eq!(
             parse_command("submit-dataflow name=d").unwrap(),

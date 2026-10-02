@@ -46,13 +46,13 @@ schedule id=2001
 ----
 ok
 
-# Registered but not submitted, so `import index=2002` below can reference it
+# Declared but not submitted, so `import index=2002` below can reference it
 # while nothing is published under that id yet.
-create-dataflow name=reexport as-of=0 defer
+declare-dataflow name=reexport as-of=0
   import index=2001
   export kind=index index=2002 on=2000 key=[0]
 ----
-deferred
+ok
 
 define-schema name=count_out
   count bigint

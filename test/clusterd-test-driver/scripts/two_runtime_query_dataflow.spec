@@ -15,8 +15,8 @@
 # transient id with `until = as_of + 1`, which is what the multiplexer routes to
 # the interactive runtime (`DataflowDescription::is_peek_dataflow`).
 #
-# The maintenance index is registered with `defer`, so the driver knows its shape
-# but has not submitted its dataflow. The interactive dataflow is then created and
+# The maintenance index is declared with `declare-dataflow`, so the driver knows
+# its shape but has not submitted its dataflow. The interactive dataflow is then created and
 # scheduled: its import finds no publication for the index, so it binds to an
 # unbacked publication point. Only then is the maintenance dataflow submitted and
 # scheduled, which adopts that point and wakes the import. The result peek then
@@ -40,16 +40,16 @@ write-rows shard=r ts=0
 ----
 wrote 3
 
-# The maintenance index over shard `r`, registered but not submitted, so
+# The maintenance index over shard `r`, declared but not submitted, so
 # `import index=2001` below can reference it while nothing is published yet.
-create-dataflow name=maint-index as-of=0 defer
+declare-dataflow name=maint-index as-of=0
   import source=1000 shard=r upper=1
   build id=2000
     Project (#0, #1)
       Get u1000
   export kind=index index=2001 on=2000 key=[0]
 ----
-deferred
+ok
 
 # A one-column schema for the count reduce's output (a single bigint).
 define-schema name=count_out

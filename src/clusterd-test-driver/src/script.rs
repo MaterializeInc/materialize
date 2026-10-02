@@ -454,9 +454,34 @@ pub enum Command {
         /// The shard's exclusive write upper (see `PersistSource::upper`).
         upper: u64,
     },
-    /// Submit a dataflow a prior `create-dataflow name=<name> defer` registered.
+    /// Register a dataflow's exported indexes without submitting it, so a later
+    /// dataflow can import them before `submit-dataflow` renders this one. Takes the
+    /// `create-dataflow` body.
+    DeclareDataflow {
+        /// The name the later `submit-dataflow` refers to.
+        name: String,
+        /// Collections to import (persist sources and/or existing indexes).
+        #[serde(default)]
+        imports: Vec<ImportSpec>,
+        /// MIR objects to compute, each bound to an id.
+        #[serde(default)]
+        builds: Vec<BuildSpec>,
+        /// Exports over imported or built ids.
+        #[serde(default)]
+        exports: Vec<ExportSpec>,
+        /// The dataflow's `as_of`.
+        as_of: u64,
+        /// The dataflow's `until`, if bounded.
+        #[serde(default)]
+        until: Option<u64>,
+        /// Run the MIR optimizer before lowering.
+        #[serde(default)]
+        optimize: bool,
+    },
+    /// Submit a dataflow a prior `declare-dataflow` registered. Each declaration is
+    /// submitted at most once, since a second submit would bind the same ids again.
     SubmitDataflow {
-        /// The `create-dataflow` name to submit.
+        /// The `declare-dataflow` name to submit.
         name: String,
     },
     /// Schedule a previously-submitted collection so it makes progress.
@@ -539,10 +564,6 @@ pub enum Command {
         /// default, so the caller's MIR is lowered faithfully.
         #[serde(default)]
         optimize: bool,
-        /// Register the dataflow's exports without submitting it, so a later dataflow
-        /// can import them before `submit-dataflow` renders this one.
-        #[serde(default)]
-        defer: bool,
     },
     /// Render a dataflow's lowered LIR plan as text, the output assertion being the
     /// plan shape itself. It submits nothing and records no index, subscribe, or
@@ -671,6 +692,8 @@ pub struct ScriptState {
     /// `create-dataflow` specs by name, so `explain ref=<name>` can render a declared
     /// dataflow's plan without repeating its body.
     dataflows: BTreeMap<String, DataflowSpec>,
+    /// `declare-dataflow` specs not yet submitted, by name.
+    declared: BTreeMap<String, DataflowSpec>,
     /// Next ephemeral id for the count sugar's dataflows.
     next_internal: u64,
 }
@@ -689,6 +712,7 @@ impl ScriptState {
             indexes: BTreeMap::new(),
             mv_outputs: BTreeMap::new(),
             dataflows: BTreeMap::new(),
+            declared: BTreeMap::new(),
             next_internal: INTERNAL_ID_BASE,
         })
     }
@@ -1130,11 +1154,9 @@ impl ScriptState {
                 as_of,
                 until,
                 optimize,
-                defer,
             } => {
                 // Record the spec under its name so `explain ref=<name>` can render
-                // this dataflow's plan later without repeating the body, and so
-                // `submit-dataflow` can submit a deferred one.
+                // this dataflow's plan later without repeating the body.
                 if let Some(name) = &name {
                     self.dataflows.insert(
                         name.clone(),
@@ -1148,38 +1170,62 @@ impl ScriptState {
                         },
                     );
                 }
-                if defer {
-                    anyhow::ensure!(
-                        name.is_some(),
-                        "`defer` needs a name for the later `submit-dataflow`"
-                    );
-                    // Only the index registrations, which is what a later import
-                    // resolves against. Everything else registers at submit.
-                    let (_builder, registrations) = self.configure_dataflow(
-                        name, imports, builds, exports, as_of, until, optimize,
-                    )?;
-                    for (index_id, entry) in registrations.indexes {
-                        self.indexes.insert(index_id, entry);
-                    }
-                    return Ok("deferred".to_string());
-                }
                 let (builder, registrations) = self
                     .configure_dataflow(name, imports, builds, exports, as_of, until, optimize)?;
                 self.submit(builder, registrations)?;
                 Ok("ok".to_string())
             }
+            Command::DeclareDataflow {
+                name,
+                imports,
+                builds,
+                exports,
+                as_of,
+                until,
+                optimize,
+            } => {
+                anyhow::ensure!(
+                    !self.declared.contains_key(&name),
+                    "dataflow {name:?} is already declared"
+                );
+                let spec = DataflowSpec {
+                    imports: imports.clone(),
+                    builds: builds.clone(),
+                    exports: exports.clone(),
+                    as_of,
+                    until,
+                    optimize,
+                };
+                self.dataflows.insert(name.clone(), spec.clone());
+                self.declared.insert(name.clone(), spec);
+                // Only the index registrations, which is what a later import resolves
+                // against. Everything else registers at submit.
+                let (_builder, registrations) = self.configure_dataflow(
+                    Some(name),
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    until,
+                    optimize,
+                )?;
+                for (index_id, entry) in registrations.indexes {
+                    self.indexes.insert(index_id, entry);
+                }
+                Ok("ok".to_string())
+            }
             Command::SubmitDataflow { name } => {
-                let spec = self.dataflows.get(&name).ok_or_else(|| {
+                let spec = self.declared.remove(&name).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "unknown dataflow {name:?}; declare it with \
-                         create-dataflow name={name} defer first"
+                        "no pending declaration {name:?}; declare it with \
+                         declare-dataflow name={name}, and submit it once"
                     )
                 })?;
                 let (builder, registrations) = self.configure_dataflow(
-                    Some(name.clone()),
-                    spec.imports.clone(),
-                    spec.builds.clone(),
-                    spec.exports.clone(),
+                    Some(name),
+                    spec.imports,
+                    spec.builds,
+                    spec.exports,
                     spec.as_of,
                     spec.until,
                     spec.optimize,
