@@ -535,6 +535,10 @@ impl<Tr: Trace> TraceReader for SharedSpine<Tr> {
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
+        // See `set_physical_compaction`.
+        if self.local_logical.borrow() == frontier {
+            return;
+        }
         self.local_logical = frontier.to_owned();
         self.apply_holds();
         self.publish_frontiers();
@@ -545,6 +549,14 @@ impl<Tr: Trace> TraceReader for SharedSpine<Tr> {
     }
 
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Self::Time>) {
+        // Compute's maintenance sets this on every trace every few milliseconds, mostly to the
+        // frontier it already has, and publishing then costs locks and clones per trace. The
+        // inner spine introduces pending batches on `insert` and on a frontier change, so an
+        // unchanged frontier leaves it nothing to do. A reader's moved hold reaches it through
+        // `exert`, which the hold's activation schedules.
+        if self.local_physical.borrow() == frontier {
+            return;
+        }
         self.local_physical = frontier.to_owned();
         self.apply_holds();
         // Physical compaction introduces pending batches and can complete merges.
