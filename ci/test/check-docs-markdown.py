@@ -18,11 +18,15 @@ Reads a built markdown-docs tree, the output of
   Agent-Friendly Documentation Spec (https://agentdocsspec.com/spec/web/);
 - links to another Markdown page, by the URL the page is served at, that name
   no file in the tree;
-- root-relative links, such as `/sql/create-cluster`, which do not resolve
-  once the Markdown is read away from the site.
+- root-relative links, such as `/sql/create-cluster`, and path-relative links,
+  such as `../create-role`, which do not resolve once the Markdown is read away
+  from the site.
 
-Prints a summary and exits 1 if any page is over 100,000 characters or any
-link is broken.
+Links are read from inline links, reference definitions, and href and src
+attributes, outside fenced code blocks.
+
+Prints a summary and exits 1 if any page is over 100,000 characters, or any
+link is broken or relative.
 
 Example usage:
 
@@ -38,7 +42,12 @@ from pathlib import Path
 WARN_CHARS = 50_000
 FAIL_CHARS = 100_000
 
-LINK_RE = re.compile(r"\]\(([^)\s]+)")
+LINK_RES = (
+    re.compile(r"\]\(([^)\s]+)"),
+    re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*([./]\S*)(?:[ \t]*$|[ \t]+[\"'(])"),
+    re.compile(r"(?:href|src)=\"([^\"]+)\""),
+)
+NOT_RELATIVE_RE = re.compile(r"^(#|//|<|[A-Za-z][A-Za-z0-9+.-]*:)")
 FENCE_RE = re.compile(r"^(```|~~~)")
 
 
@@ -51,7 +60,8 @@ def links(text: str) -> list[str]:
             fenced = not fenced
             continue
         if not fenced:
-            targets.extend(LINK_RE.findall(line))
+            for link_re in LINK_RES:
+                targets.extend(link_re.findall(line))
     return targets
 
 
@@ -68,7 +78,8 @@ def main() -> int:
     pages = sorted(args.root.rglob("*.md"))
     large: list[tuple[int, str]] = []
     broken: list[tuple[str, str]] = []
-    root_relative: dict[str, int] = {}
+    relative: dict[str, int] = {"root": 0, "path": 0}
+    relative_pages: set[str] = set()
     for page in pages:
         name = str(page.relative_to(args.root))
         text = page.read_text()
@@ -79,8 +90,9 @@ def main() -> int:
                 path = target[len(args.base_url) :].split("#", 1)[0]
                 if not (args.root / path).is_file():
                     broken.append((name, target))
-            elif target.startswith("/"):
-                root_relative[name] = root_relative.get(name, 0) + 1
+            elif not NOT_RELATIVE_RE.match(target):
+                relative["root" if target.startswith("/") else "path"] += 1
+                relative_pages.add(name)
 
     over_fail = [entry for entry in large if entry[0] > FAIL_CHARS]
     print(f"Markdown pages: {len(pages)}")
@@ -92,10 +104,10 @@ def main() -> int:
     for name, target in broken:
         print(f"  {name}: {target}")
     print(
-        f"Root-relative links: {sum(root_relative.values())},"
-        f" on {len(root_relative)} pages"
+        f"Relative links: {relative['root']} root-relative and {relative['path']}"
+        f" path-relative, on {len(relative_pages)} pages"
     )
-    return 1 if over_fail or broken else 0
+    return 1 if over_fail or broken or relative_pages else 0
 
 
 if __name__ == "__main__":
