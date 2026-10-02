@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use mz_adapter_types::dyncfgs::{
     ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS, PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT,
+    TIMESTAMP_ORACLE_READ_CONCURRENCY,
 };
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
@@ -170,7 +171,13 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
 
 pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
     TimestampOracleParameters {
-        pipelined_reads: Some(ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.get(config.dyncfgs())),
+        read_concurrency: Some(
+            if ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.get(config.dyncfgs()) {
+                TIMESTAMP_ORACLE_READ_CONCURRENCY.get(config.dyncfgs())
+            } else {
+                1
+            },
+        ),
         pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
         pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),
         pg_connection_pool_ttl: Some(config.pg_timestamp_oracle_connection_pool_ttl()),
@@ -186,6 +193,53 @@ pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters
         pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
         pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
         pg_statement_timeout: Some(PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.get(config.dyncfgs())),
+    }
+}
+
+#[cfg(test)]
+mod timestamp_oracle_tests {
+    use super::*;
+    use mz_sql::session::vars::VarInput;
+
+    #[mz_ore::test]
+    fn read_concurrency_respects_pipelining_gate_and_config_updates() {
+        let mut vars = SystemVars::new();
+        assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(1));
+        vars.set(
+            ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
+            VarInput::Flat("on"),
+        )
+        .expect("enable default pipelining");
+        assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(2));
+        vars.set(
+            ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
+            VarInput::Flat("off"),
+        )
+        .expect("disable pipelining");
+        vars.set(
+            TIMESTAMP_ORACLE_READ_CONCURRENCY.name(),
+            VarInput::Flat("4"),
+        )
+        .expect("set concurrency");
+        assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(1));
+        vars.set(
+            ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
+            VarInput::Flat("on"),
+        )
+        .expect("enable pipelining");
+        assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(4));
+        vars.set(
+            TIMESTAMP_ORACLE_READ_CONCURRENCY.name(),
+            VarInput::Flat("2"),
+        )
+        .expect("set concurrency");
+        assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(2));
+        vars.set(
+            ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.name(),
+            VarInput::Flat("off"),
+        )
+        .expect("disable pipelining");
+        assert_eq!(timestamp_oracle_config(&vars).read_concurrency, Some(1));
     }
 }
 
