@@ -97,6 +97,8 @@ struct State<B: BatchReader> {
     queues: Vec<Weak<ImportQueue<B>>>,
     /// Wakes the writer's arrange operator so a changed hold reaches the inner trace.
     writer_activator: Option<SyncActivator>,
+    /// Whether a writer has attached before.
+    had_writer: bool,
 }
 
 impl<B: BatchReader> State<B> {
@@ -162,6 +164,7 @@ impl<B: BatchReader> Shared<B> {
                 remote_physical: MutableAntichain::new(),
                 queues: Vec::new(),
                 writer_activator: None,
+                had_writer: false,
             }),
         }
     }
@@ -349,6 +352,14 @@ impl<Tr: Trace> SharedSpine<Tr> {
             // would need `&mut`, and they are equal.
             state.logical = self.local_logical.clone();
             state.physical = self.local_physical.clone();
+            // An importer seeded by an earlier writer has acknowledged that writer's frontiers, and
+            // this trace's chain regresses below them, which an importer cannot follow: a batch
+            // straddling its acknowledged frontier panics its capability downgrade. Such an
+            // importer reads a collection the earlier writer's dataflow maintained, so it is about
+            // to be dropped too, and it keeps what it has rather than mixing in this trace.
+            if std::mem::replace(&mut state.had_writer, true) {
+                state.queues.clear();
+            }
             state.live_queues()
         };
         for queue in live {
