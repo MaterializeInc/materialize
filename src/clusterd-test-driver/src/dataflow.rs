@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_compute_types::dataflows::{
-    BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
+    BuildDesc, DataflowClass, DataflowDescription, IndexDesc, IndexImport, SourceImport,
 };
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -425,6 +425,13 @@ impl DataflowBuilder {
     /// dropped). Defaults to the empty antichain (no bound).
     pub fn until(&mut self, t: Timestamp) -> &mut Self {
         self.mir.until = Antichain::from_elem(t);
+        self
+    }
+
+    /// Set the dataflow's class, which decides the runtime that renders it. Defaults to
+    /// [`DataflowClass::Maintained`].
+    pub fn class(&mut self, class: DataflowClass) -> &mut Self {
+        self.mir.class = class;
         self
     }
 
