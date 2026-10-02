@@ -114,6 +114,16 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// How often Kafka sources recommit offsets that have not changed, so that brokers do not expire
+/// them. Must stay well below the broker's `offsets.retention.minutes`. Zero disables it.
+pub const KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL: Config<Duration> = Config::new(
+    "kafka_offset_commit_refresh_interval",
+    Duration::from_secs(10 * 60),
+    "How often Kafka sources recommit offsets that have not changed, which must stay well below \
+    the broker's offsets.retention.minutes. Zero disables it.",
+    ParameterScope::Replica,
+);
+
 /// Whether to check the low watermark for Kafka sources and error if the start offset/resume
 /// upper has been compacted away.
 /// Environment-scoped because it decides whether a definite error is emitted.
@@ -562,6 +572,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
         .add(&KAFKA_LOW_WATERMARK_CHECK)
+        .add(&KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_RETRY_BACKOFF)
         .add(&KAFKA_RETRY_BACKOFF_MAX)
