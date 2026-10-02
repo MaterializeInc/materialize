@@ -359,7 +359,7 @@ impl ComputeState {
             },
             peer_traces: match role {
                 // Only maintenance publishes, for the interactive runtime.
-                ComputeRuntimeRole::Interactive => PeerTraces::Registry(sharing_registry.clone()),
+                ComputeRuntimeRole::Interactive => PeerTraces::reading(sharing_registry.clone()),
                 ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => PeerTraces::None,
             },
             peers: Default::default(),
