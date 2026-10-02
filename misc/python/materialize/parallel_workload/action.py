@@ -3400,6 +3400,7 @@ class FlipFlagsAction(Action):
             "wallclock_lag_history_retention_interval",
             "wallclock_global_lag_histogram_retention_interval",
             "kafka_client_id_enrichment_rules",
+            "kafka_offset_commit_refresh_interval",
             "kafka_poll_max_wait",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",

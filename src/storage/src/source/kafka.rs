@@ -700,17 +700,40 @@ fn render_reader<'scope>(
                 }
             }
 
+            let refresh_interval = mz_storage_types::dyncfgs::KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL
+                .get(config.config.config_set());
             let resume_uppers_process_loop = async move {
                 tokio::pin!(resume_uppers);
-                while let Some(uppers) = resume_uppers.next().await {
-                    if let Err(e) = offset_committer.process_frontier(&uppers).await {
-                        offset_commit_metrics.offset_commit_failures.inc();
-                        tracing::warn!(
-                            %e,
-                            "timely-{worker_id} source({source_id}) failed to commit offsets: {uppers}",
-                            worker_id = config.worker_id,
-                            source_id = config.id,
-                        );
+                // Zero disables the refresh. `interval` panics on a zero period, so the tick arm
+                // below is what honors it.
+                let mut refresh =
+                    tokio::time::interval(refresh_interval.max(Duration::from_millis(1)));
+                // A commit that outlasts a period must not be followed by a burst of recommits.
+                refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let report = |e: anyhow::Error, what: &dyn std::fmt::Display| {
+                    offset_commit_metrics.offset_commit_failures.inc();
+                    tracing::warn!(
+                        %e,
+                        "timely-{worker_id} source({source_id}) failed to commit offsets: {what}",
+                        worker_id = config.worker_id,
+                        source_id = config.id,
+                    );
+                };
+                loop {
+                    tokio::select! {
+                        uppers = resume_uppers.next() => match uppers {
+                            Some(uppers) => {
+                                if let Err(e) = offset_committer.process_frontier(&uppers).await {
+                                    report(e, &uppers);
+                                }
+                            }
+                            None => break,
+                        },
+                        _ = refresh.tick(), if !refresh_interval.is_zero() => {
+                            if let Err(e) = offset_committer.refresh().await {
+                                report(e, &"refresh");
+                            }
+                        }
                     }
                 }
                 // During dataflow shutdown this loop can end due to the general chaos caused by
@@ -1134,12 +1157,12 @@ fn render_reader<'scope>(
 }
 
 impl KafkaResumeUpperProcessor {
+    /// Reports each export's `offset_committed` and commits the source upper's offsets upstream
+    /// when they differ from the last successful commit.
     async fn process_frontier(
         &mut self,
         uppers: &ResumeUppers<KafkaTimestamp>,
     ) -> Result<(), anyhow::Error> {
-        use rdkafka::consumer::CommitMode;
-
         for (id, frontier) in &uppers.exports {
             if let Some(stat) = self.config.statistics.get(id) {
                 // Note that we do not subtract 1 from the frontier. Imagine
@@ -1160,22 +1183,40 @@ impl KafkaResumeUpperProcessor {
         let offsets: Vec<_> = self.responsible_offsets(frontier).collect();
         // `uppers` changes whenever any export's upper moves, usually leaving this worker's
         // offsets unchanged, and each commit is a synchronous round trip to the group coordinator.
-        if !offsets.is_empty() && offsets != self.committed_offsets {
-            let mut tpl = TopicPartitionList::new();
-            for (pid, offset) in &offsets {
-                let offset_to_commit =
-                    Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
-                tpl.add_partition_offset(&self.topic_name, *pid, offset_to_commit)
-                    .expect("offset known to be valid");
-            }
-            let consumer = Arc::clone(&self.consumer);
-            mz_ore::task::spawn_blocking(
-                || format!("source({}) kafka offset commit", self.config.id),
-                move || consumer.commit(&tpl, CommitMode::Sync),
-            )
-            .await?;
-            self.committed_offsets = offsets;
+        if offsets.is_empty() || offsets == self.committed_offsets {
+            return Ok(());
         }
+        self.commit(&offsets).await?;
+        self.committed_offsets = offsets;
+        Ok(())
+    }
+
+    /// Recommits the offsets of the last successful commit. The consumer only ever `assign`s, so
+    /// the broker treats its group as standalone and expires a partition's offset
+    /// `offsets.retention.minutes` after that partition's last commit, current or not.
+    async fn refresh(&self) -> Result<(), anyhow::Error> {
+        if self.committed_offsets.is_empty() {
+            return Ok(());
+        }
+        self.commit(&self.committed_offsets).await
+    }
+
+    async fn commit(&self, offsets: &[(PartitionId, MzOffset)]) -> Result<(), anyhow::Error> {
+        use rdkafka::consumer::CommitMode;
+
+        let mut tpl = TopicPartitionList::new();
+        for (pid, offset) in offsets {
+            let offset_to_commit =
+                Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
+            tpl.add_partition_offset(&self.topic_name, *pid, offset_to_commit)
+                .expect("offset known to be valid");
+        }
+        let consumer = Arc::clone(&self.consumer);
+        mz_ore::task::spawn_blocking(
+            || format!("source({}) kafka offset commit", self.config.id),
+            move || consumer.commit(&tpl, CommitMode::Sync),
+        )
+        .await?;
         Ok(())
     }
 
