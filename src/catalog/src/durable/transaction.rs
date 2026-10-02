@@ -55,8 +55,8 @@ use crate::durable::objects::{
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
     ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
+    IndexKey, IntrospectionSourceIndex, Item, ItemColumn, ItemKey, ItemValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
@@ -752,6 +752,8 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        columns: Option<Vec<ItemColumn>>,
+        index_keys: Option<Vec<IndexKey>>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
@@ -765,6 +767,8 @@ impl<'a> Transaction<'a> {
             privileges,
             versions,
             ephemeral_owner_session,
+            columns,
+            index_keys,
         )?;
         Ok(oid)
     }
@@ -781,6 +785,8 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
+        columns: Option<Vec<ItemColumn>>,
+        index_keys: Option<Vec<IndexKey>>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { id },
@@ -794,6 +800,8 @@ impl<'a> Transaction<'a> {
                 global_id,
                 extra_versions,
                 ephemeral_owner_session,
+                columns,
+                index_keys,
             },
             self.op_id,
         ) {

@@ -1154,9 +1154,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
-        Builtin::Table(&MZ_COLUMNS),
-        // mz_indexes is generated dynamically below with inlined builtin VALUES.
-        Builtin::Table(&MZ_INDEX_COLUMNS),
+        Builtin::MaterializedView(&MZ_COLUMNS),
+        // mz_indexes and mz_index_columns are generated dynamically below with
+        // inlined builtin VALUES and inserted directly before this entry.
         Builtin::MaterializedView(&MZ_TABLES),
         // mz_sources is generated dynamically below with inlined builtin VALUES.
         Builtin::MaterializedView(&MZ_SOURCE_REFERENCES),
@@ -1213,13 +1213,13 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::MaterializedView(&MZ_METRIC_SINKS),
-        Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
-        Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+        Builtin::MaterializedView(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+        Builtin::MaterializedView(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
-        Builtin::Table(&MZ_REPLACEMENTS),
+        Builtin::MaterializedView(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
@@ -1541,14 +1541,17 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_sources_ref));
     }
 
-    // Generate mz_indexes with builtin index/log entries inlined as VALUES so
-    // that its SQL fingerprint changes whenever a builtin index or log is added or
-    // removed, forcing an explicit MigrationStep::replacement.
+    // Generate mz_indexes and mz_index_columns with builtin index/log entries
+    // inlined as VALUES so that their SQL fingerprints change whenever a
+    // builtin index or log is added or removed, forcing an explicit
+    // MigrationStep::replacement.
     //
     // Must happen AFTER all builtin indexes and logs have been pushed into
-    // builtin_items, so that make_mz_indexes sees the complete set. Must happen
-    // BEFORE ontology::generate_views so the ontology generator sees mz_indexes
-    // as a materialized view participating in catalog ontology, rather than
+    // builtin_items, so that the generators see the complete set, and
+    // mz_index_columns also needs every indexed relation, mz_indexes and
+    // mz_sources included, to resolve the builtin index keys. Must happen
+    // BEFORE ontology::generate_views so the ontology generator sees both
+    // as materialized views participating in catalog ontology, rather than
     // being absent from builtin_items.
     {
         let index_iter = builtin_items.iter().filter_map(|b| match b {
@@ -1561,11 +1564,22 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         });
         let mz_indexes = mz_catalog::make_mz_indexes(index_iter, log_iter);
         let mz_indexes_ref: &'static BuiltinMaterializedView = Box::leak(Box::new(mz_indexes));
+        // Both go directly before mz_tables, in the order the static tables
+        // they replaced held there, to preserve stable IDs for all items
+        // that follow.
         let insert_pos = builtin_items
             .iter()
-            .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_index_columns"))
-            .expect("mz_index_columns must be present in builtin_items");
+            .position(|b| b.name() == "mz_tables")
+            .expect("mz_tables must be present in builtin_items");
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_indexes_ref));
+
+        let mz_index_columns = mz_catalog::make_mz_index_columns(&builtin_items);
+        let mz_index_columns_ref: &'static BuiltinMaterializedView =
+            Box::leak(Box::new(mz_index_columns));
+        builtin_items.insert(
+            insert_pos + 1,
+            Builtin::MaterializedView(mz_index_columns_ref),
+        );
     }
 
     // Generate mz_object_dependencies_raw, which inlines every builtin's
@@ -2472,6 +2486,62 @@ mod tests {
             fp_base,
             Fingerprint::fingerprint(&&mv_extra_log),
             "mz_indexes fingerprint must change when a builtin log is added"
+        );
+    }
+
+    /// Verifies that the `mz_index_columns` materialized view fingerprint
+    /// changes whenever a builtin index or log is added, the property
+    /// `make_mz_index_columns` provides by inlining the resolved keys of
+    /// every builtin and introspection source index as VALUES.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mz_index_columns_fingerprint_changes_with_new_builtin_index() {
+        let mv_base = mz_catalog::make_mz_index_columns(&BUILTINS_STATIC);
+        let fp_base = Fingerprint::fingerprint(&&mv_base);
+
+        let mz_index_columns_static = BUILTINS_STATIC
+            .iter()
+            .find_map(|b| match b {
+                Builtin::MaterializedView(mv) if mv.name == "mz_index_columns" => Some(*mv),
+                _ => None,
+            })
+            .expect("mz_index_columns must be present in BUILTINS_STATIC");
+        assert_eq!(
+            fp_base,
+            Fingerprint::fingerprint(&mz_index_columns_static),
+            "make_mz_index_columns fingerprint must match the BUILTINS_STATIC mz_index_columns fingerprint"
+        );
+
+        let extra_index = BUILTINS_STATIC
+            .iter()
+            .find(|b| matches!(b, Builtin::Index(_)))
+            .expect("a builtin index")
+            .clone();
+        let with_extra_index: Vec<_> = BUILTINS_STATIC
+            .iter()
+            .cloned()
+            .chain(std::iter::once(extra_index))
+            .collect();
+        assert_ne!(
+            fp_base,
+            Fingerprint::fingerprint(&&mz_catalog::make_mz_index_columns(&with_extra_index)),
+            "mz_index_columns fingerprint must change when a builtin index is added"
+        );
+
+        let extra_log = BUILTINS_STATIC
+            .iter()
+            .find(|b| matches!(b, Builtin::Log(_)))
+            .expect("a builtin log")
+            .clone();
+        let with_extra_log: Vec<_> = BUILTINS_STATIC
+            .iter()
+            .cloned()
+            .chain(std::iter::once(extra_log))
+            .collect();
+        assert_ne!(
+            fp_base,
+            Fingerprint::fingerprint(&&mz_catalog::make_mz_index_columns(&with_extra_log)),
+            "mz_index_columns fingerprint must change when a builtin log is added"
         );
     }
 

@@ -324,8 +324,8 @@ SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object 
 materialized_view_id  text  The␠ID␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_catalog.mz_materialized_views.id`
 type  text  `at`,␠`every`,␠or␠`on-commit`.␠Default:␠`on-commit`
 interval  interval  The␠refresh␠interval␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
-aligned_to  timestamp␠with␠time␠zone  The␠`ALIGNED␠TO`␠option␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
-at  timestamp␠with␠time␠zone  The␠time␠of␠a␠`REFRESH␠AT`,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`at`.
+aligned_to  timestamp␠with␠time␠zone  The␠`ALIGNED␠TO`␠option␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`␠or␠the␠time␠was␠not␠given␠as␠a␠literal.
+at  timestamp␠with␠time␠zone  The␠time␠of␠a␠`REFRESH␠AT`,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`at`␠or␠the␠time␠was␠not␠given␠as␠a␠literal.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
@@ -812,6 +812,8 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_builtin_columns
+mz_builtin_indexes
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables

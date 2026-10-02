@@ -189,6 +189,8 @@ NULL
 query T
 SELECT name FROM mz_views WHERE definition LIKE '%definition elided%' AND id LIKE 's%' ORDER BY name
 ----
+mz_builtin_columns
+mz_builtin_indexes
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables

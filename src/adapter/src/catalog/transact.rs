@@ -1753,6 +1753,7 @@ impl Catalog {
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
+                    let (columns, index_keys) = state.durable_item_metadata(&item);
                     let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
@@ -1765,6 +1766,8 @@ impl Catalog {
                         &temporary_oids,
                         versions,
                         Some(owner_session),
+                        columns,
+                        index_keys,
                     )?;
 
                     info!(
@@ -1799,6 +1802,7 @@ impl Catalog {
                     }
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
+                    let (columns, index_keys) = state.durable_item_metadata(&item);
                     let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
@@ -1811,6 +1815,8 @@ impl Catalog {
                         &temporary_oids,
                         versions,
                         None,
+                        columns,
+                        index_keys,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -3305,6 +3311,8 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        columns,
+        index_keys,
     } = state.durable_item(new_entry)?;
 
     tx.remove_item(id)?;
@@ -3319,6 +3327,8 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        columns,
+        index_keys,
     )?;
 
     Ok(())

@@ -11,37 +11,26 @@ mod notice;
 
 use bytesize::ByteSize;
 use ipnet::IpNet;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OPERATORS, MZ_PSEUDO_TYPES,
-    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_SESSIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
-use mz_catalog::memory::objects::{
-    CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table, TableDataSource, Type,
-};
-use mz_expr::MirScalarExpr;
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, Type};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::interval::Interval;
-use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
-};
-use mz_sql::ast::{CreateIndexStatement, Statement};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::SchemaSpecifier;
@@ -145,8 +134,7 @@ impl CatalogState {
         let owner_id = entry.owner_id();
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
-        let mut updates = match entry.item() {
-            CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
+        let updates = match entry.item() {
             CatalogItem::Source(source) => {
                 match &source.data_source {
                     DataSourceDesc::Webhook { .. } => {
@@ -163,9 +151,6 @@ impl CatalogState {
                     | DataSourceDesc::Catalog => vec![],
                 }
             }
-            CatalogItem::MaterializedView(mview) => {
-                self.pack_materialized_view_update(id, mview, diff)
-            }
             // mz_sinks, mz_kafka_sinks and mz_iceberg_sinks read create_sql
             // out of mz_catalog_raw, so there is nothing to pack here.
             CatalogItem::Sink(_) => vec![],
@@ -175,11 +160,14 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // Tables, views, and metric sinks are exposed through materialized
-            // views derived from `mz_catalog_raw`, and logs and secrets never
-            // had builtin-table rows, so none pack a row here.
+            // Tables, views, materialized views, indexes, and metric sinks
+            // are exposed through materialized views derived from
+            // `mz_catalog_raw`, and logs and secrets never had builtin-table
+            // rows, so none pack a row here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Index(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
             | CatalogItem::MetricSink(_) => vec![],
@@ -189,243 +177,6 @@ impl CatalogState {
             // mz_catalog_raw, so connections need no special packing here.
             CatalogItem::Connection(_) => vec![],
         };
-
-        // Always report the latest for an objects columns.
-        if let Some(desc) = entry.relation_desc_latest() {
-            let defaults = match entry.item() {
-                CatalogItem::Table(Table {
-                    data_source: TableDataSource::TableWrites { defaults },
-                    ..
-                }) => Some(defaults),
-                _ => None,
-            };
-            for (i, (column_name, column_type)) in desc.iter().enumerate() {
-                let default: Option<String> = defaults.map(|d| d[i].to_ast_string_stable());
-                let default: Datum = default
-                    .as_ref()
-                    .map(|d| Datum::String(d))
-                    .unwrap_or(Datum::Null);
-                let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
-                let (type_name, type_oid) = match &column_type.scalar_type {
-                    SqlScalarType::List {
-                        custom_id: Some(custom_id),
-                        ..
-                    }
-                    | SqlScalarType::Map {
-                        custom_id: Some(custom_id),
-                        ..
-                    }
-                    | SqlScalarType::Record {
-                        custom_id: Some(custom_id),
-                        ..
-                    } => {
-                        let entry = self.get_entry(custom_id);
-                        // NOTE(benesch): the `mz_columns.type text` field is
-                        // wrong. Types do not have a name that can be
-                        // represented as a single textual field. There can be
-                        // multiple types with the same name in different
-                        // schemas and databases. We should eventually deprecate
-                        // the `type` field in favor of a new `type_id` field
-                        // that can be joined against `mz_types`.
-                        //
-                        // For now, in the interest of pragmatism, we just use
-                        // the type's item name, and accept that there may be
-                        // ambiguity if the same type name is used in multiple
-                        // schemas. The ambiguity is mitigated by the OID, which
-                        // can be joined against `mz_types.oid` to resolve the
-                        // ambiguity.
-                        let name = &*entry.name().item;
-                        let oid = entry.oid();
-                        (name, oid)
-                    }
-                    _ => (pgtype.name(), pgtype.oid()),
-                };
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_COLUMNS,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String(column_name),
-                        Datum::UInt64(u64::cast_from(i + 1)),
-                        Datum::from(column_type.nullable),
-                        Datum::String(type_name),
-                        default,
-                        Datum::UInt32(type_oid),
-                        Datum::Int32(pgtype.typmod()),
-                    ]),
-                    diff,
-                ));
-            }
-        }
-
-        // Use initial lcw so that we can tell apart default from non-existent windows.
-        if let Some(cw) = entry.item().initial_logical_compaction_window() {
-            updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
-        }
-
-        updates
-    }
-
-    fn pack_history_retention_strategy_update(
-        &self,
-        id: CatalogItemId,
-        cw: CompactionWindow,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let cw: u64 = cw.comparable_timestamp().into();
-        let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
-            .expect("must serialize");
-        BuiltinTableUpdate::row(
-            &*MZ_HISTORY_RETENTION_STRATEGIES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                // FOR is the only strategy at the moment. We may introduce FROM or others later.
-                Datum::String("FOR"),
-                cw.into_row().into_element(),
-            ]),
-            diff,
-        )
-    }
-
-    fn pack_materialized_view_update(
-        &self,
-        id: CatalogItemId,
-        mview: &MaterializedView,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = Vec::new();
-
-        if let Some(refresh_schedule) = &mview.refresh_schedule {
-            // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
-            // empty `RefreshSchedule`.
-            assert!(!refresh_schedule.is_empty());
-            for RefreshEvery {
-                interval,
-                aligned_to,
-            } in refresh_schedule.everies.iter()
-            {
-                let aligned_to_dt = mz_ore::now::to_datetime(
-                    <&Timestamp as TryInto<u64>>::try_into(aligned_to).expect("undoes planning"),
-                );
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String("every"),
-                        Datum::Interval(
-                            Interval::from_duration(interval).expect(
-                                "planning ensured that this is convertible back to Interval",
-                            ),
-                        ),
-                        Datum::TimestampTz(aligned_to_dt.try_into().expect("undoes planning")),
-                        Datum::Null,
-                    ]),
-                    diff,
-                ));
-            }
-            for at in refresh_schedule.ats.iter() {
-                let at_dt = mz_ore::now::to_datetime(
-                    <&Timestamp as TryInto<u64>>::try_into(at).expect("undoes planning"),
-                );
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String("at"),
-                        Datum::Null,
-                        Datum::Null,
-                        Datum::TimestampTz(at_dt.try_into().expect("undoes planning")),
-                    ]),
-                    diff,
-                ));
-            }
-        } else {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String("on-commit"),
-                    Datum::Null,
-                    Datum::Null,
-                    Datum::Null,
-                ]),
-                diff,
-            ));
-        }
-
-        if let Some(target_id) = mview.replacement_target {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_REPLACEMENTS,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&target_id.to_string()),
-                ]),
-                diff,
-            ));
-        }
-
-        updates
-    }
-
-    fn pack_index_update(
-        &self,
-        id: CatalogItemId,
-        index: &Index,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = vec![];
-
-        let create_stmt = mz_sql::parse::parse(&index.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    index.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-
-        let key_sqls = match &create_stmt {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts
-                .as_ref()
-                .expect("key_parts is filled in during planning"),
-            _ => unreachable!(),
-        };
-
-        let on_entry = self.get_entry_by_global_id(&index.on);
-        let on_desc = on_entry
-            .relation_desc()
-            .expect("can only create indexes on items with a valid description");
-        let repr_col_types: Vec<ReprColumnType> = on_desc
-            .typ()
-            .column_types
-            .iter()
-            .map(ReprColumnType::from)
-            .collect();
-        for (i, key) in index.keys.iter().enumerate() {
-            let nullable = key.typ(&repr_col_types).nullable;
-            let seq_in_index = u64::cast_from(i + 1);
-            let key_sql = key_sqls
-                .get(i)
-                .expect("missing sql information for index key")
-                .to_ast_string_simple();
-            let (field_number, expression) = match key {
-                MirScalarExpr::Column(col, _) => {
-                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
-                }
-                _ => (Datum::Null, Datum::String(&key_sql)),
-            };
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_INDEX_COLUMNS,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::UInt64(seq_in_index),
-                    field_number,
-                    expression,
-                    Datum::from(nullable),
-                ]),
-                diff,
-            ));
-        }
 
         updates
     }

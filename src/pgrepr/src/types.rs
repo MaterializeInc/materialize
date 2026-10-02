@@ -534,6 +534,40 @@ impl Type {
         Type::from_oid_and_typmod(oid, -1)
     }
 
+    /// The name of the type with OID `oid`, as [`Type::name`] presents it, for
+    /// every OID that [`Type::oid`] can report.
+    ///
+    /// [`Type::from_oid`] only knows the PostgreSQL types. This adds
+    /// Materialize's own types and the list, map and record pseudo-types,
+    /// which an OID alone cannot reconstruct as a [`Type`] because it does not
+    /// carry their element or field types.
+    pub fn name_of_oid(oid: u32) -> Option<&'static str> {
+        let typ = match oid {
+            oid::TYPE_NAME_OID => Type::Name,
+            oid::TYPE_NAME_ARRAY_OID => Type::Array(Box::new(Type::Name)),
+            o if o == postgres_types::Type::ACLITEM.oid() => Type::AclItem,
+            o if o == postgres_types::Type::ACLITEM_ARRAY.oid() => {
+                Type::Array(Box::new(Type::AclItem))
+            }
+            oid::TYPE_UINT2_OID => Type::UInt2,
+            oid::TYPE_UINT2_ARRAY_OID => Type::Array(Box::new(Type::UInt2)),
+            oid::TYPE_UINT4_OID => Type::UInt4,
+            oid::TYPE_UINT4_ARRAY_OID => Type::Array(Box::new(Type::UInt4)),
+            oid::TYPE_UINT8_OID => Type::UInt8,
+            oid::TYPE_UINT8_ARRAY_OID => Type::Array(Box::new(Type::UInt8)),
+            oid::TYPE_MZ_TIMESTAMP_OID => Type::MzTimestamp,
+            oid::TYPE_MZ_TIMESTAMP_ARRAY_OID => Type::Array(Box::new(Type::MzTimestamp)),
+            oid::TYPE_MZ_ACL_ITEM_OID => Type::MzAclItem,
+            oid::TYPE_MZ_ACL_ITEM_ARRAY_OID => Type::Array(Box::new(Type::MzAclItem)),
+            oid::TYPE_RECORD_OID => Type::Record(vec![]),
+            oid::TYPE_RECORD_ARRAY_OID => Type::Array(Box::new(Type::Record(vec![]))),
+            oid::TYPE_LIST_OID => return Some(LIST.name()),
+            oid::TYPE_MAP_OID => return Some(MAP.name()),
+            _ => Type::from_oid(oid).ok()?,
+        };
+        Some(typ.name())
+    }
+
     /// Returns the `Type` corresponding to the provided OID and packed type
     /// modifier ("typmod").
     ///
@@ -1271,6 +1305,123 @@ impl From<&SqlScalarType> for Type {
                 element_type: Box::new(From::from(&**element_type)),
             },
             SqlScalarType::MzAclItem => Type::MzAclItem,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{ColumnName, SqlScalarBaseType, SqlScalarType};
+
+    use super::Type;
+
+    #[mz_ore::test]
+    fn name_of_oid_covers_every_presented_type() {
+        use SqlScalarType::*;
+        let record = Record {
+            fields: [(ColumnName::from("a"), Int32.nullable(true))].into(),
+            custom_id: None,
+        };
+        let range = |element_type: SqlScalarType| Range {
+            element_type: Box::new(element_type),
+        };
+        let base = vec![
+            Bool,
+            Int16,
+            Int32,
+            Int64,
+            UInt16,
+            UInt32,
+            UInt64,
+            Float32,
+            Float64,
+            Numeric { max_scale: None },
+            Date,
+            Time,
+            Timestamp { precision: None },
+            TimestampTz { precision: None },
+            Interval,
+            PgLegacyChar,
+            PgLegacyName,
+            Bytes,
+            String,
+            Char { length: None },
+            VarChar { max_length: None },
+            Jsonb,
+            Uuid,
+            Oid,
+            RegProc,
+            RegType,
+            RegClass,
+            Int2Vector,
+            MzTimestamp,
+            MzAclItem,
+            AclItem,
+            record,
+            range(Int32),
+            range(Int64),
+            range(Numeric { max_scale: None }),
+            range(Timestamp { precision: None }),
+            range(TimestampTz { precision: None }),
+            range(Date),
+        ];
+        let mut types = base.clone();
+        types.extend(base.iter().map(|t| Array(Box::new(t.clone()))));
+        types.push(List {
+            element_type: Box::new(Int32),
+            custom_id: None,
+        });
+        types.push(Map {
+            value_type: Box::new(Int32),
+            custom_id: None,
+        });
+        for scalar_type in &types {
+            // A new variant of `SqlScalarType` fails to compile here until it
+            // is listed, which is the reminder to add a sample of it above.
+            match SqlScalarBaseType::from(scalar_type) {
+                SqlScalarBaseType::Bool
+                | SqlScalarBaseType::Int16
+                | SqlScalarBaseType::Int32
+                | SqlScalarBaseType::Int64
+                | SqlScalarBaseType::UInt16
+                | SqlScalarBaseType::UInt32
+                | SqlScalarBaseType::UInt64
+                | SqlScalarBaseType::Float32
+                | SqlScalarBaseType::Float64
+                | SqlScalarBaseType::Numeric
+                | SqlScalarBaseType::Date
+                | SqlScalarBaseType::Time
+                | SqlScalarBaseType::Timestamp
+                | SqlScalarBaseType::TimestampTz
+                | SqlScalarBaseType::Interval
+                | SqlScalarBaseType::PgLegacyChar
+                | SqlScalarBaseType::PgLegacyName
+                | SqlScalarBaseType::Bytes
+                | SqlScalarBaseType::String
+                | SqlScalarBaseType::Char
+                | SqlScalarBaseType::VarChar
+                | SqlScalarBaseType::Jsonb
+                | SqlScalarBaseType::Uuid
+                | SqlScalarBaseType::Array
+                | SqlScalarBaseType::List
+                | SqlScalarBaseType::Record
+                | SqlScalarBaseType::Oid
+                | SqlScalarBaseType::Map
+                | SqlScalarBaseType::RegProc
+                | SqlScalarBaseType::RegType
+                | SqlScalarBaseType::RegClass
+                | SqlScalarBaseType::Int2Vector
+                | SqlScalarBaseType::MzTimestamp
+                | SqlScalarBaseType::Range
+                | SqlScalarBaseType::MzAclItem
+                | SqlScalarBaseType::AclItem => {}
+            }
+            let pg_type = Type::from(scalar_type);
+            assert_eq!(
+                Type::name_of_oid(pg_type.oid()),
+                Some(pg_type.name()),
+                "{scalar_type:?}"
+            );
         }
     }
 }

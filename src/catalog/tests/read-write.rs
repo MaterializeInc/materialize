@@ -456,6 +456,8 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             privileges: vec![],
             extra_versions: BTreeMap::new(),
             ephemeral_owner_session: None,
+            columns: None,
+            index_keys: None,
         },
         Item {
             id: CatalogItemId::User(200),
@@ -468,6 +470,8 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             privileges: vec![],
             extra_versions: BTreeMap::new(),
             ephemeral_owner_session: None,
+            columns: None,
+            index_keys: None,
         },
     ];
 
@@ -495,6 +499,8 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.privileges.clone(),
             item.extra_versions.clone(),
             item.ephemeral_owner_session,
+            None,
+            None,
         )
         .unwrap();
     }
@@ -573,6 +579,8 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
             vec![],
             BTreeMap::new(),
             owner_session,
+            None,
+            None,
         )
     };
 
@@ -593,6 +601,8 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
         vec![],
         BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(501))]),
         Some(session_a),
+        None,
+        None,
     )
     .unwrap();
 
@@ -939,6 +949,8 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
             RoleId::User(1),
             vec![],
             BTreeMap::new(),
+            None,
+            None,
             None,
         )
         .unwrap();
