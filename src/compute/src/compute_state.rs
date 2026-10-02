@@ -34,7 +34,7 @@ use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::EpochMillis;
@@ -348,10 +348,7 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
-            process_globals: match role {
-                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => ProcessGlobals::Apply,
-                ComputeRuntimeRole::Interactive => ProcessGlobals::Inherit,
-            },
+            process_globals: role.process_globals(),
             placement: match role {
                 ComputeRuntimeRole::Solo => Placement::All,
                 ComputeRuntimeRole::Maintenance => Placement::Maintained,
@@ -431,157 +428,10 @@ impl ComputeState {
         self.process_globals
             .apply_config(config, self.context.scratch_directory.as_ref());
 
-        // Pager backend selection follows scratch-directory availability:
-        // a scratch dir means the file backend; no scratch dir means swap.
-        // `set_scratch_dir` and `set_backend` are both idempotent, so calling
-        // on every `apply_worker_config` tick is safe. The pager module is
-        // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
-        #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
-            mz_ore::pager::set_scratch_dir(path.clone());
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
-        } else {
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
-        }
-
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
         // settings above, it is captured once at replica creation (see `handle_create_instance`
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
         // flipping the flag does not retroactively change arrangements on existing replicas.
-
-        // Apply column-pager configuration. The arrange batchers spill
-        // through the buffer pool below, so the consumers of this budget are
-        // the MV sink's correction buffer and storage's paged upsert stash
-        // flavor, which share one policy and one underlying `mz_ore::pager`.
-        // Routes through `apply_tiered_config`, which reuses a process-wide
-        // `TieredPolicy` singleton — operator-driven tunes mutate the
-        // existing atomics rather than installing a fresh policy with a
-        // fresh budget atomic that would orphan in-flight resident tickets.
-        //
-        // Backend selection mirrors the lower-level `mz_ore::pager`
-        // already configured above: file when a scratch directory is
-        // available, swap otherwise.
-        {
-            use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
-
-            let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
-            let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
-
-            // Budget derivation: fraction × announced memory limit, with a
-            // 128 MiB floor so the no-pressure case doesn't page per chunk.
-            // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
-            const MIB: usize = 1024 * 1024;
-            const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
-            let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
-            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
-
-            let backend = if self.context.scratch_directory.is_some() {
-                Backend::File
-            } else {
-                Backend::Swap
-            };
-
-            debug!(
-                enabled,
-                ?backend,
-                ?codec,
-                swap_pageout,
-                fraction,
-                mem_limit,
-                budget_bytes = total,
-                "column-paged batcher: applying tiered config",
-            );
-            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
-        }
-
-        // Install and retune the process-wide buffer pool that backs chunk
-        // spilling. Installation is the gate. The pool is constructed, and its
-        // MAP_NORESERVE address space reserved and spill threads spawned, only
-        // when a config apply runs with a spill gate on, so a process that
-        // never enables spilling never mmaps the pool. Config application
-        // reruns on every UpdateConfiguration, so flipping a gate on installs
-        // the pool on the next tick. The pool is a process singleton with no
-        // teardown: once installed it stays active for the life of the process.
-        // Turning every gate back off makes this block do nothing, so the pool
-        // keeps its last-applied budget rather than being uninstalled. Later
-        // ticks with a gate on retune the one instance in place.
-        //
-        // Storage's stash shares the singleton and gates only participation,
-        // so its spill gate installs the pool too. The worker config set is
-        // the full dyncfg aggregate, which is what makes the storage flag
-        // readable here.
-        {
-            use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
-
-            let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
-            let sink_spill = ENABLE_CORRECTION_V2_SPILL.get(config);
-            // Set compute's leg of the process-wide chunk spill gate. The
-            // gate ORs this leg with storage's, so chunks spill while either
-            // subsystem's flag is set. Storage's config application writes
-            // only its own leg, keeping the two flags from clobbering each
-            // other. The correction buffer has a gate of its own.
-            mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
-            mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
-            if !(compute_spill || storage_spill || sink_spill) {
-                debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
-            } else {
-                let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
-                let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
-
-                // Budget derivation: fraction of physical RAM, with a 128 MiB
-                // floor so the no-pressure case doesn't page per chunk.
-                // Resident budgets derive from RAM, never from the announced
-                // memory limit, which on swap-provisioned nodes deliberately
-                // includes swap for the memory limiter's purposes. Falls back
-                // to a 4 GiB assumption if detection fails.
-                const MIB: usize = 1024 * 1024;
-                const DEFAULT_RAM: usize = 4 * 1024 * MIB;
-                let ram = mz_ore::memory::physical_memory_bytes().unwrap_or(DEFAULT_RAM);
-                let of_ram =
-                    |fraction: f64| usize::cast_lossy(f64::cast_lossy(ram) * fraction.max(0.0));
-                let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config);
-                let total = of_ram(fraction).max(128 * MIB);
-                // No ordering is enforced between the target and the budget. A
-                // target at or below budget + warm cap leaves no compressed-tier
-                // headroom, which legally collapses the tier. Every backing
-                // write then pages out immediately, the pre-tier behavior.
-                let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
-
-                let applied = apply_pool_config(PoolPagerConfig {
-                    budget_bytes: total,
-                    spill_threads,
-                    eager_backing,
-                    rss_target_bytes: rss_target,
-                });
-                if applied {
-                    info!(
-                        compute_spill,
-                        storage_spill,
-                        fraction,
-                        ram,
-                        budget_bytes = total,
-                        spill_threads,
-                        eager_backing,
-                        rss_target_bytes = rss_target,
-                        "chunk spill: applying buffer-pool config",
-                    );
-                } else {
-                    warn!("chunk spill: buffer pool unavailable; chunks stay resident");
-                }
-            }
-
-            // The generational depth floor below which spilled bodies store
-            // uncompressed. Subsystem-independent, so applied here alongside
-            // the rest of the process-wide chunk configuration.
-            let compress_min_depth =
-                u8::try_from(COLUMN_CHUNK_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
-            mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
-        }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
