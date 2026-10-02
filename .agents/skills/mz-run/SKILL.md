@@ -76,7 +76,7 @@ Run `cargo clippy --all-targets -- -D warnings` to check for Rust-specific warni
 Set `MZ_LOG_FILTER` to a tracing-compatible filter expression.
 For example, `mz_adapter::catalog::apply=trace,warn` would enable trace logging for the `mz-adapter` crate's `catalog::apply` module, and `warn` for the rest of the system.
 
-## jemalloc
+## Allocator
 
-On Linux, we link against jemalloc by default.
+On Linux, we link against jemalloc and mimalloc by default: `environmentd` and `balancerd` allocate with jemalloc, every other process with mimalloc, both wrapped in the allocation tracker.
 Compile with `--no-default-features` to use the system allocator.

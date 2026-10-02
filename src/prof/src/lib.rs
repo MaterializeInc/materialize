@@ -27,6 +27,8 @@ use prost::Message;
 
 mod pprof_types;
 pub mod time;
+#[cfg(feature = "alloc-track")]
+pub mod tracking;
 
 #[cfg(feature = "jemalloc")]
 pub mod jemalloc;

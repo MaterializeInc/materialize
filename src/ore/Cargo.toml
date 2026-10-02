@@ -11,6 +11,7 @@ authors = ["Materialize, Inc."]
 workspace = true
 
 [dependencies]
+backtrace = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
@@ -96,6 +97,7 @@ libc = { workspace = true }
 anyhow.workspace = true
 criterion.workspace = true
 lz4_flex.workspace = true
+mimalloc.workspace = true
 mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true
@@ -155,10 +157,15 @@ proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
 pool = ["dep:bytemuck", "libc", "dep:tracing"]
+alloc-track = ["dep:backtrace"]
 
 [[test]]
 name = "future"
 required-features = ["async", "panic"]
+
+[[test]]
+name = "alloc_track"
+required-features = ["alloc-track", "pool"]
 
 [[test]]
 name = "panic"
@@ -176,6 +183,11 @@ harness = false
 name = "bytes"
 harness = false
 required-features = ["bytes", "region", "tracing"]
+
+[[bench]]
+name = "alloc_track"
+harness = false
+required-features = ["alloc-track"]
 
 [[bench]]
 name = "pager"

@@ -48,3 +48,5 @@ default = []
 dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["mz-prof/jemalloc", "jemalloc_pprof"]
+# Whether to serve profiles from the allocation tracker.
+alloc-track = ["mz-prof/alloc-track", "mz-ore/alloc-track", "mz-ore/async"]
