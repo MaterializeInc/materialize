@@ -263,14 +263,20 @@ fn chain_through<B: BatchReader + Clone>(chain: &[B], upper: AntichainRef<B::Tim
     out
 }
 
-/// Replaces the elements of `lower` with those of `upper` in `accumulated`.
+/// Replaces the elements of `lower` with those of `upper` in `accumulated`, and returns whether
+/// that moved the frontier.
+///
+/// The writer reads the readers' holds only when it runs, so a change that leaves the frontier in
+/// place gives it nothing to do and needs no wake.
 fn adjust<T: Timestamp>(
     accumulated: &mut MutableAntichain<T>,
     lower: &Antichain<T>,
     upper: &Antichain<T>,
-) {
+) -> bool {
+    let before = accumulated.frontier().to_owned();
     accumulated.update_iter(upper.iter().cloned().map(|time| (time, 1)));
     accumulated.update_iter(lower.iter().cloned().map(|time| (time, -1)));
+    accumulated.frontier() != before.borrow()
 }
 
 /// What a [`SharedSpine`] publishes into once attached.
@@ -632,13 +638,15 @@ impl<B: BatchReader> Clone for SharedReader<B> {
 impl<B: BatchReader> Drop for SharedReader<B> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.shared.state.lock() {
-            adjust(&mut state.remote_logical, &self.logical, &Antichain::new());
-            adjust(
+            let logical = adjust(&mut state.remote_logical, &self.logical, &Antichain::new());
+            let physical = adjust(
                 &mut state.remote_physical,
                 &self.physical,
                 &Antichain::new(),
             );
-            Shared::wake_writer(&state);
+            if logical || physical {
+                Shared::wake_writer(&state);
+            }
         }
     }
 }
@@ -670,8 +678,9 @@ where
         let next = self.logical.join(&frontier.to_owned());
         let previous = std::mem::replace(&mut self.logical, next);
         let mut state = self.shared.lock();
-        adjust(&mut state.remote_logical, &previous, &self.logical);
-        Shared::wake_writer(&state);
+        if adjust(&mut state.remote_logical, &previous, &self.logical) {
+            Shared::wake_writer(&state);
+        }
     }
 
     fn get_logical_compaction(&mut self) -> AntichainRef<'_, B::Time> {
@@ -684,8 +693,9 @@ where
         let next = self.physical.join(&frontier.to_owned());
         let previous = std::mem::replace(&mut self.physical, next);
         let mut state = self.shared.lock();
-        adjust(&mut state.remote_physical, &previous, &self.physical);
-        Shared::wake_writer(&state);
+        if adjust(&mut state.remote_physical, &previous, &self.physical) {
+            Shared::wake_writer(&state);
+        }
     }
 
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, B::Time> {
@@ -874,3 +884,6 @@ where
         Arranged { stream, trace }
     }
 }
+
+#[cfg(test)]
+mod tests;
