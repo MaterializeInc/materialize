@@ -9,6 +9,7 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use mz_adapter::catalog::{Catalog, Op};
+use mz_alloc_default as _;
 use mz_catalog::durable::test_bootstrap_args;
 use mz_persist_client::PersistClient;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;

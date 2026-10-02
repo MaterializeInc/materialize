@@ -29,6 +29,7 @@
 //! Two axes match the sister bench `columnar_merger.rs`:
 //! regime × size. See that file for axis rationale.
 
+use mz_alloc_default as _;
 use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::Arc;
