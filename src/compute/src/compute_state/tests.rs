@@ -937,6 +937,7 @@ fn to_render_dataflow(
         refresh_schedule: lowered.refresh_schedule,
         debug_name: lowered.debug_name,
         time_dependence: lowered.time_dependence,
+        class: lowered.class,
     }
 }
 
