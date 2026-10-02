@@ -16,7 +16,7 @@ use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -38,7 +38,7 @@ use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
 use crate::sharing::Publisher;
-use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, RowRowAgent};
+use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
