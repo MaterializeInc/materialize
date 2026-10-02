@@ -79,7 +79,7 @@ fn publish_index(
     let slot = registry.get_or_create(id);
     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-    registry.notify(id);
+    registry.notify();
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
@@ -232,7 +232,7 @@ fn publish_index_with_writer(
     let slot = registry.get_or_create(id);
     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-    registry.notify(id);
+    registry.notify();
 
     for (k, v) in rows {
         oks_input.update((k, v), Diff::ONE);
