@@ -24,7 +24,7 @@
 // registry's constructor is reachable yet, so the rest reads as dead.
 #![expect(unused)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::Thread;
 
@@ -46,34 +46,20 @@ pub struct SharedIndexArrangement {
     pub(crate) errs: Published<ErrSpine<Timestamp, Diff>>,
 }
 
-/// A per-interactive-worker wake channel: a handle to the worker's thread plus the set of ids
-/// marked dirty since the worker last drained.
-///
-/// The interactive worker parks in `step_or_park`; a publication, removal, or frontier advance on a
-/// dependency it is waiting for must push it back to work. `worker` unparks it, and `dirty` names
-/// the ids that changed so the worker re-examines only the affected pending work rather than
-/// rescanning everything.
-struct Waker {
-    /// The interactive worker's thread. Unparked rather than activated: every timely allocator's
-    /// `await_events` bottoms out in `std::thread::park`, and a root-path `SyncActivator` would
-    /// additionally mark the worker's dataflows schedulable, which is work this wake does not need.
-    /// Matches the peek-offload wake path.
-    worker: Thread,
-    /// Ids marked dirty (published, removed, or frontier-advanced) since the worker's last
-    /// `take_dirty`.
-    dirty: BTreeSet<GlobalId>,
-}
-
-/// The registry's state: the published slots and the interactive peer's [`Waker`]. One lock
-/// covers both. Every critical section is a few map operations, and the publisher takes it once per
+/// The registry's state: the published slots and the thread of the interactive peer that reads
+/// them. One lock covers both. Every critical section is a few map operations, and the publisher takes it once per
 /// seal, not per record.
 #[derive(Default)]
 struct Inner {
     /// Weak, so an entry lives exactly as long as a publisher or a reader holds its slot. Dead
     /// entries are pruned whenever a slot is created.
     map: BTreeMap<GlobalId, Weak<SharedIndexArrangement>>,
-    /// `None` until the interactive peer registers its waker.
-    waker: Option<Waker>,
+    /// `None` until the interactive peer registers itself.
+    ///
+    /// Unparked rather than activated: every timely allocator's `await_events` bottoms out in
+    /// `std::thread::park`, and a root-path `SyncActivator` would additionally mark the worker's
+    /// dataflows schedulable, which is work this wake does not need.
+    waker: Option<Thread>,
 }
 
 /// A registry of published index arrangements, shared by one maintenance worker and its
@@ -155,13 +141,12 @@ impl ArrangementSharingRegistry {
     ) -> UnpublishToken {
         let slot = self.get_or_create(id);
         let registry = self.clone();
-        adopt_trace(oks, worker, &slot.oks, move || registry.notify(id));
+        adopt_trace(oks, worker, &slot.oks, move || registry.notify());
         let registry = self.clone();
-        adopt_trace(errs, worker, &slot.errs, move || registry.notify(id));
-        self.notify(id);
+        adopt_trace(errs, worker, &slot.errs, move || registry.notify());
+        self.notify();
         UnpublishToken {
             registry: self.clone(),
-            id,
             slot: Some(slot),
         }
     }
@@ -185,79 +170,34 @@ impl ArrangementSharingRegistry {
         Some(slot.oks.logical_holds())
     }
 
-    /// Registers `worker` as the interactive peer's waker. Called once at startup, from that
+    /// Registers `worker` as the interactive peer to wake. Called once at startup, from that
     /// worker's own thread.
-    ///
-    /// Overwrites any prior waker, starting with an empty dirty set.
     pub(crate) fn register_waker(&self, worker: Thread) {
-        let mut inner = self.lock();
-        inner.waker = Some(Waker {
-            worker,
-            dirty: BTreeSet::new(),
-        });
+        self.lock().waker = Some(worker);
     }
 
-    /// Atomically drains and returns the interactive peer's dirty set. Returns empty if no waker is
-    /// registered.
+    /// Unparks the interactive peer, if one is registered.
     ///
-    /// Called by the interactive server loop on wake. See `notify` for why the loop MUST
-    /// call this before re-reading the map: draining before the map re-check is what closes the
-    /// lost-wakeup window.
-    pub(crate) fn take_dirty(&self) -> BTreeSet<GlobalId> {
-        let mut inner = self.lock();
-        match &mut inner.waker {
-            Some(waker) => std::mem::take(&mut waker.dirty),
-            None => BTreeSet::new(),
+    /// [`Self::publish`] calls this once a slot's publishers are installed, each publisher calls it
+    /// again on every seal, and an unpublication calls it once more, since a peek waiting on a
+    /// shared trace is re-examined only when its worker runs.
+    ///
+    /// No wake is lost. The publisher updates the point before it calls this, and the worker
+    /// re-reads every waiting peek's trace each time it runs, before it parks. A wake that lands
+    /// after that read is remembered by `unpark`, so the worker's next park returns at once and it
+    /// reads again.
+    pub(crate) fn notify(&self) {
+        if let Some(waker) = &self.lock().waker {
+            // `unpark` coalesces by itself: the thread keeps one token, and a wake while it runs
+            // costs an atomic swap without a syscall.
+            waker.unpark();
         }
-    }
-
-    /// Marks `id` dirty for the interactive peer and unparks it.
-    ///
-    /// [`Self::publish`] calls this once a slot's publishers are installed, and each publisher calls
-    /// it again on every seal, since a fast-path peek waiting on the shared trace's `upper` is
-    /// re-examined only when that advance marks `id` dirty.
-    ///
-    /// # Lost-wakeup contract
-    ///
-    /// The publication a mark announces and the mark itself are separate critical sections: a
-    /// publisher backs its slot (the point's own state lock, released before `on_seal` fires), then
-    /// calls this. On wake the interactive server loop runs `take_dirty` and only then re-reads the
-    /// slot via `handles`, again two acquisitions. Label the four steps: publisher P1 = slot write,
-    /// P2 = this mark+unpark; worker W1 = `take_dirty`, W2 = slot re-read. Program order gives
-    /// P1 -> P2 and W1 -> W2.
-    ///
-    /// P1 and W2 are totally ordered, so the worker's re-read either observes the slot or does not:
-    ///
-    /// * W2 observes P1's write: the worker serves the work immediately, no park, no lost wake.
-    /// * W2 precedes P1: the worker misses the slot and will park. Then W2 -> P1 combined with
-    ///   W1 -> W2 and P1 -> P2 gives W1 -> P2, so this mark lands in a dirty set the worker has
-    ///   ALREADY drained, and unparks. An unpark landing before the park is remembered, so the
-    ///   worker's next `step_or_park` returns at once (or never parks), it re-runs `take_dirty`
-    ///   and sees `id`, re-reads the slot (now past P1), and serves. No lost wake.
-    ///
-    /// The contradictory interleaving P2 -> W1 with W2 -> P1 is impossible: it would require
-    /// P1 -> P2 -> W1 -> W2 -> P1, a cycle. Hence the drain-before-re-read ordering the server loop
-    /// guarantees is what makes the separate critical sections lost-wakeup-free.
-    pub(crate) fn notify(&self, id: GlobalId) {
-        let mut inner = self.lock();
-        if let Some(waker) = &mut inner.waker {
-            Self::mark(waker, id);
-        }
-    }
-
-    /// Inserts `id` into `waker`'s dirty set and unparks the worker.
-    fn mark(waker: &mut Waker, id: GlobalId) {
-        waker.dirty.insert(id);
-        // `unpark` coalesces by itself: the thread keeps one token, and a wake while it runs costs
-        // an atomic swap without a syscall.
-        waker.worker.unpark();
     }
 }
 
 /// The publisher's hold on a published slot. Dropping it ends the publication.
 pub(crate) struct UnpublishToken {
     registry: ArrangementSharingRegistry,
-    id: GlobalId,
     /// `Some` until dropped.
     slot: Option<Arc<SharedIndexArrangement>>,
 }
@@ -267,7 +207,7 @@ impl Drop for UnpublishToken {
         // Released before the mark, so the reader that re-checks finds the slot gone unless it
         // holds the slot itself.
         drop(self.slot.take());
-        self.registry.notify(self.id);
+        self.registry.notify();
     }
 }
 
