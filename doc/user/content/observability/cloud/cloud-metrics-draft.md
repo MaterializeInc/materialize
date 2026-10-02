@@ -1,5 +1,5 @@
 ---
-title: "DO NOT MERGE - Metrics in Materialize Cloud"
+title: "Exporting Metrics from Materialize Cloud"
 description: "Query or scrape your Materialize Cloud metrics from Grafana, Prometheus, or Datadog."
 menu:
   main:
@@ -80,6 +80,10 @@ published by the curated metric sinks on every replica. The rest come from the
 [essential metrics](/observability/essential-metrics/) for self-managed; which of
 them Cloud exposes is not yet final. Replica level memory and CPU utilization and
 credit consumption are under consideration. Tell us what is missing.)
+
+Coming soon: the goal is to cover everything in
+[Essential metrics](/observability/essential-metrics/). If you need a specific
+metric, reach out to your Materialize representative.
 
 ## Prerequisites
 
