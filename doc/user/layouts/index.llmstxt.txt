@@ -9,10 +9,16 @@
   by the Apache License, Version 2.0.
 */ -}}
 {{- /*
-  Renders /llms.txt, an index of every docs page for LLM and agent consumers.
-  Format per https://llmstxt.org/: an H1, a `>` summary blockquote, a short
-  orienting note, then one H2 per top-level docs section listing
+  Renders /llms.txt, an index of the docs for LLM and agent consumers, and one
+  <section>/llms.txt per top-level docs section. Format per https://llmstxt.org/:
+  an H1, a `>` summary blockquote and a short orienting note. The root index
+  then lists the section indexes; each section index lists its pages as
   "- [Title](url): description" entries.
+
+  The pages are split across section indexes because one index of every page
+  passed 85,000 characters, over the Agent-Friendly Documentation Spec's
+  50,000. The section indexes are published from this template, with
+  resources.FromString, so that all of llms.txt is built in one place.
 
   Links point at each page's Markdown rendition rather than its HTML page, so a
   consumer fetches prose instead of site chrome.
@@ -115,17 +121,33 @@
 {{- with site.GetPage "/headless/materialize-intro/intro" -}}
   {{- $intro = trim (replaceRE `\s+` " " .RawContent) " " -}}
 {{- end -}}
+{{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop `markdown-docs/` from the URL and drop the\ntrailing `index.md`. Per-version release notes are not listed individually;\nsee the Releases section." -}}
+{{- $sections := slice -}}
+{{- range $groups -}}
+  {{- $items := sort (where $eligible "Section" .key) "RelPermalink" -}}
+  {{- if $items -}}
+    {{- $dir := .key | default (urlize .title) -}}
+    {{- $lines := slice (printf "# %s: %s\n\n> Pages in the %s section of the %s.\n\n%s\n" site.Title .title .title site.Title $note) -}}
+    {{- range $items -}}
+      {{- $line := printf "- [%s](%s)" .Title (partial "markdown-url.html" (dict "page" . "absolute" true)) -}}
+      {{- with .Description -}}{{- $d := trim (replaceRE `\s+` " " .) " " -}}{{- if $d -}}{{- $line = printf "%s: %s" $line $d -}}{{- end -}}{{- end -}}
+      {{- $lines = $lines | append $line -}}
+    {{- end -}}
+    {{- $index := resources.FromString (printf "%s/llms.txt" $dir) (printf "%s\n" (delimit $lines "\n")) -}}
+    {{- with $index.Publish -}}{{- end -}}
+    {{- $sections = $sections | append (dict "title" .title "url" (partial "llms-txt-url.html" (dict "section" $dir "absolute" true)) "count" (len $items)) -}}
+  {{- end -}}
+{{- end -}}
 # {{ site.Title }}
 
 > {{ $intro }}
 
-Every link below points at the Markdown source of a documentation page. For the
-HTML page instead, drop `markdown-docs/` from the URL and drop the trailing
-`index.md`. Per-version release notes are not listed individually; see the
-Releases section.
-{{ range $groups }}{{ $items := sort (where $eligible "Section" .key) "RelPermalink" }}{{ if $items }}
-## {{ .title }}
+Each link below points at the index of one documentation section. A section
+index lists every page in the section, with a link to its Markdown source and a
+one-line description.
 
-{{ range $items }}- [{{ .Title }}]({{ partial "markdown-url.html" (dict "page" . "absolute" true) }}){{ with .Description }}{{ $d := trim (replaceRE `\s+` " " .) " " }}{{ if $d }}: {{ $d }}{{ end }}{{ end }}
-{{ end }}{{ end }}{{ end -}}
+## Sections
+
+{{ range $sections }}- [{{ .title }}]({{ .url }}): {{ .count }} {{ cond (eq .count 1) "page" "pages" }}
+{{ end }}
 {{- end -}}

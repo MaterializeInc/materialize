@@ -56,9 +56,11 @@ fi
 
 # afdocs (https://afdocs.dev) scores the preview against the Agent-Friendly
 # Documentation Spec. It cannot map llms.txt's markdown-docs links back to
-# pages, so pass it every tenth page from llms.txt, as HTML URLs.
+# pages, so pass it every tenth page from the section llms.txt files, as HTML
+# URLs.
 ci_uncollapsed_heading "Scoring the preview with afdocs"
-urls=$(grep -o "($preview_url/markdown-docs/[^)]*)" public/llms.txt \
+urls=$(cat public/*/llms.txt \
+    | grep -o "($preview_url/markdown-docs/[^)]*)" \
     | awk 'NR % 10 == 1' \
     | sed -e 's/^(//' -e 's/)$//' -e 's#/markdown-docs/#/#' -e 's#index\.md$##' \
     | paste -sd, -)
