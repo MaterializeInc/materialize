@@ -36,12 +36,13 @@ where
     Tr: TraceReader<Time = T, Batch: Navigable> + Clone + 'static,
     // `KeyContainer` is pinned to the output spine's, so that `mz_reduce_abelian` can equate the
     // input and output keys.
-    BatchCursor<Tr>: Cursor<
+    for<'a> BatchCursor<Tr>: Cursor<
             Time = T,
             Diff = Diff,
             KeyContainer = <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::KeyContainer,
+            Key<'a> = DatumSeq<'a>,
+            Val<'a> = DatumSeq<'a>,
         >,
-    for<'a> BatchCursor<Tr>: Cursor<Key<'a> = DatumSeq<'a>, Val<'a> = DatumSeq<'a>>,
 {
     let logic = move |_key: DatumSeq<'_>, s: &[(DatumSeq<'_>, Diff)], t: &mut Vec<(Row, Diff)>| {
         for (record, count) in s.iter() {
