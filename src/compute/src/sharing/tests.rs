@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -255,63 +254,6 @@ fn cross_runtime_read_sees_published_rows() {
     .expect("reader thread panicked");
 
     assert_eq!(found, expected_rows(&rows));
-}
-
-#[mz_ore::test]
-fn insert_marks_dirty_and_take_drains() {
-    let id = GlobalId::User(1);
-    let registry = ArrangementSharingRegistry::new();
-    // These tests assert the dirty-set semantics, not that a mark wakes anyone, so the waker is
-    // the test's own thread. `unpark` on a thread that never parks is a no-op beyond leaving a
-    // token behind, and no test here parks.
-    registry.register_waker(thread::current());
-
-    // Publication on worker 0 marks `id` dirty for worker 0.
-    let _token = publish_index_into(&registry, id, test_rows());
-    assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
-    // A second drain returns nothing: `take_dirty` empties the inbox.
-    assert!(registry.take_dirty().is_empty());
-}
-
-#[mz_ore::test]
-fn unpublish_dirties_the_reader() {
-    let id = GlobalId::User(1);
-    let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(thread::current());
-
-    // Drain the publication signal so the unpublish signal is observed in isolation.
-    let token = publish_index_into(&registry, id, test_rows());
-    let _ = registry.take_dirty();
-
-    drop(token);
-    assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
-}
-
-#[mz_ore::test]
-fn seal_signal_dirties_its_worker() {
-    let id = GlobalId::User(1);
-    let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(thread::current());
-
-    // The seal signal marks the id dirty for its worker without requiring publication.
-    registry.notify(id);
-    assert_eq!(registry.take_dirty(), BTreeSet::from([id]));
-}
-
-#[mz_ore::test]
-fn notifications_accumulate_until_taken() {
-    let id1 = GlobalId::User(1);
-    let id2 = GlobalId::User(2);
-    let id3 = GlobalId::User(3);
-    let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(thread::current());
-
-    registry.notify(id1);
-    registry.notify(id2);
-    assert_eq!(registry.take_dirty(), BTreeSet::from([id1, id2]));
-
-    registry.notify(id3);
-    assert_eq!(registry.take_dirty(), BTreeSet::from([id3]));
 }
 
 /// An input update: `(key, value, time, diff)`. Keys and values are single-column rows, so a
@@ -769,7 +711,7 @@ fn bare_handle_read_upper_advances_cross_thread() {
                     let slot = publisher_registry.get_or_create(id);
                     adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
                     adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                    publisher_registry.notify(id);
+                    publisher_registry.notify();
                     // The slot is held here for the publisher's life, as `publish`'s token does.
                     (
                         oks_input,
