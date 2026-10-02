@@ -33,7 +33,9 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::arrangement::manager::TraceBundle;
-use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
+use crate::shared_trace::{Published, adopt_trace};
+#[cfg(test)]
+use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
@@ -115,6 +117,7 @@ impl ArrangementSharingRegistry {
     }
 
     /// The slot for `id`, if someone holds it.
+    #[cfg(test)]
     fn slot(inner: &Inner, id: &GlobalId) -> Option<Arc<SharedIndexArrangement>> {
         inner.map.get(id).and_then(Weak::upgrade)
     }
@@ -164,7 +167,9 @@ impl ArrangementSharingRegistry {
         TraceBundle::shared(oks, errs).with_drop(slot)
     }
 
-    /// Mints reader handles for `id`, if published.
+    /// Mints reader handles for `id`, if published. Test-only: production reads hold a slot through
+    /// [`Self::peer_bundle`].
+    #[cfg(test)]
     pub(crate) fn handles(&self, id: &GlobalId) -> Option<(SharedOksHandle, SharedErrsHandle)> {
         let inner = self.lock();
         let slot = Self::slot(&inner, id)?;
