@@ -364,6 +364,7 @@ pub fn create_statement(
             from: _,
             connection: _,
             format: _,
+            include_metadata: _,
             envelope: _,
             mode: _,
             with_options: _,

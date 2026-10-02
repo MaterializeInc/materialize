@@ -3581,6 +3581,7 @@ impl<'a> Parser<'a> {
             from,
             connection,
             format: None,
+            include_metadata: vec![],
             envelope: None,
             mode,
             if_not_exists,
@@ -3608,6 +3609,7 @@ impl<'a> Parser<'a> {
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => None,
         };
+        let include_metadata = self.parse_sink_include_metadata()?;
         let envelope = if self.parse_keyword(ENVELOPE) {
             Some(self.parse_sink_envelope()?)
         } else {
@@ -3629,6 +3631,7 @@ impl<'a> Parser<'a> {
             from,
             connection,
             format,
+            include_metadata,
             envelope,
             mode: None,
             if_not_exists,
@@ -5025,6 +5028,18 @@ impl<'a> Parser<'a> {
         } else {
             Ok(vec![])
         }
+    }
+
+    fn parse_sink_include_metadata(&mut self) -> Result<Vec<SinkIncludeMetadata>, ParserError> {
+        if !self.parse_keyword(INCLUDE) {
+            return Ok(vec![]);
+        }
+        self.parse_comma_separated(|parser| {
+            parser.expect_keywords(&[SINK, ID])?;
+            Ok(SinkIncludeMetadata::SinkId {
+                alias: parser.parse_alias()?,
+            })
+        })
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {

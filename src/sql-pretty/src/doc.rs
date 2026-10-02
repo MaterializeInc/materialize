@@ -373,6 +373,13 @@ impl Pretty {
             docs.push(self.doc_format_specifier(format));
         }
 
+        if !v.include_metadata.is_empty() {
+            docs.push(nest_title(
+                "INCLUDE",
+                comma_separate(|im| self.doc_display_pass(im), &v.include_metadata),
+            ));
+        }
+
         if let Some(envelope) = &v.envelope {
             docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
         }

@@ -236,6 +236,10 @@ impl KafkaSinkCompressionType {
     }
 }
 
+/// Prefix of the Kafka header keys reserved for headers that Materialize adds
+/// to sink messages.
+pub const KAFKA_SINK_RESERVED_HEADER_PREFIX: &str = "materialize-";
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: CatalogItemId,
@@ -247,6 +251,8 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     /// The index of the column containing message headers value, if any.
     pub headers_index: Option<usize>,
+    /// The key of the header that carries the sink's ID, if any.
+    pub sink_id_header: Option<String>,
     pub value_desc: RelationDesc,
     /// An expression that, if present, computes a hash value that should be
     /// used to determine the partition for each message.
@@ -343,6 +349,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             relation_key_indices,
             key_desc_and_indices,
             headers_index,
+            sink_id_header,
             value_desc,
             partition_by,
             topic,
@@ -369,6 +376,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
                 "key_desc_and_indices",
             ),
             (headers_index == &other.headers_index, "headers_index"),
+            (sink_id_header == &other.sink_id_header, "sink_id_header"),
             (value_desc == &other.value_desc, "value_desc"),
             (partition_by == &other.partition_by, "partition_by"),
             (topic == &other.topic, "topic"),
@@ -417,6 +425,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             relation_key_indices,
             key_desc_and_indices,
             headers_index,
+            sink_id_header,
             value_desc,
             partition_by,
             topic,
@@ -433,6 +442,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             relation_key_indices,
             key_desc_and_indices,
             headers_index,
+            sink_id_header,
             value_desc,
             partition_by,
             topic,

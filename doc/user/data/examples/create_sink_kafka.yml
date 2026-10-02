@@ -34,6 +34,7 @@
             [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
           )
         ]
+    [INCLUDE SINK ID [AS <header_key>]]
     [ENVELOPE DEBEZIUM | UPSERT]
     [WITH (SNAPSHOT = <snapshot>)]
   syntax_elements:
@@ -131,6 +132,9 @@
     - name: "**VALUE COMPATIBILITY LEVEL** `'<value_compatibility_level>'`"
       description: |
         Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`. With AWS Glue, the level is applied only when the sink creates the schema and maps to the [Glue equivalent](#avro).
+    - name: "**INCLUDE SINK ID** [**AS** `<header_key>`]"
+      description: |
+        Optional. Add a header containing the ID of the sink to each Kafka message emitted by the sink. The header key is `materialize-sink-id` unless you specify `<header_key>`. See [Headers](#headers) for details.
     - name: "**ENVELOPE** `<envelope>`"
       description: |
         Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
@@ -165,6 +169,7 @@
     [KEY ( <key_col1> [, ...] ) [NOT ENFORCED]]
     [HEADERS <headers_column>]
     FORMAT JSON
+    [INCLUDE SINK ID [AS <header_key>]]
     [ENVELOPE DEBEZIUM | UPSERT]
     [WITH (SNAPSHOT = <snapshot>)]
   syntax_elements:
@@ -216,6 +221,9 @@
     - name: "**FORMAT JSON**"
       description: |
         Encode messages using JSON format.
+    - name: "**INCLUDE SINK ID** [**AS** `<header_key>`]"
+      description: |
+        Optional. Add a header containing the ID of the sink to each Kafka message emitted by the sink. The header key is `materialize-sink-id` unless you specify `<header_key>`. See [Headers](#headers) for details.
     - name: "**ENVELOPE** `<envelope>`"
       description: |
         Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
@@ -248,6 +256,7 @@
       [, TOPIC CONFIG <topic_config>]
     )
     FORMAT TEXT | BYTES
+    [INCLUDE SINK ID [AS <header_key>]]
     [ENVELOPE DEBEZIUM | UPSERT]
     [WITH (SNAPSHOT = <snapshot>)]
   syntax_elements:
@@ -296,6 +305,9 @@
     - name: "**FORMAT BYTES**"
       description: |
         Encode messages as raw bytes. Only supports single-column encoding and scalar data types.
+    - name: "**INCLUDE SINK ID** [**AS** `<header_key>`]"
+      description: |
+        Optional. Add a header containing the ID of the sink to each Kafka message emitted by the sink. The header key is `materialize-sink-id` unless you specify `<header_key>`. See [Headers](#headers) for details.
     - name: "**ENVELOPE** `<envelope>`"
       description: |
         Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
@@ -350,6 +362,7 @@
     --     )
     -- ]
     -- | JSON | TEXT | BYTES
+    [INCLUDE SINK ID [AS <header_key>]]
     [ENVELOPE DEBEZIUM | UPSERT]
     [WITH (SNAPSHOT = <snapshot>)]
   syntax_elements:
@@ -404,6 +417,9 @@
     - name: "**VALUE FORMAT** `<value_format>`"
       description: |
         Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name>`, `JSON`, `TEXT`, `BYTES`.
+    - name: "**INCLUDE SINK ID** [**AS** `<header_key>`]"
+      description: |
+        Optional. Add a header containing the ID of the sink to each Kafka message emitted by the sink. The header key is `materialize-sink-id` unless you specify `<header_key>`. See [Headers](#headers) for details.
     - name: "**ENVELOPE** `<envelope>`"
       description: |
         Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:

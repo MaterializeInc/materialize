@@ -121,7 +121,8 @@ use mz_storage_types::dyncfgs::{
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
+    KAFKA_SINK_RESERVED_HEADER_PREFIX, KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope,
+    StorageSinkDesc,
 };
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::wire_format::WireFormat;
@@ -243,6 +244,8 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
 struct TransactionalProducer {
     /// The task name used for any blocking calls spawned onto the tokio threadpool.
     task_name: String,
+    /// The header carrying the sink's ID, attached to every data message if set.
+    sink_id_header: Option<KafkaHeader>,
     /// The topic where all the updates go.
     data_topic: String,
     /// The topic where all the upper frontiers go.
@@ -391,6 +394,10 @@ impl TransactionalProducer {
 
         let producer = Self {
             task_name,
+            sink_id_header: connection.sink_id_header.clone().map(|key| KafkaHeader {
+                key,
+                value: Some(sink_id.to_string().into_bytes()),
+            }),
             data_topic: connection.topic.clone(),
             partition_count,
             _partition_count_task: partition_count_task.abort_on_drop(),
@@ -495,13 +502,24 @@ impl TransactionalProducer {
             key: "materialize-timestamp",
             value: Some(time.to_string().as_bytes()),
         });
+        if let Some(header) = &self.sink_id_header {
+            headers = headers.insert(Header {
+                key: header.key.as_str(),
+                value: header.value.as_ref(),
+            });
+        }
         for header in &message.headers {
             // Headers that start with `materialize-` are reserved for our
             // internal use, so we silently drop any such user-specified
-            // headers. While this behavior is documented, it'd be a nicer UX to
-            // send a warning or error somewhere. Unfortunately sinks don't have
+            // headers, along with any that collide with the sink ID header.
+            // While this behavior is documented, it'd be a nicer UX to send a
+            // warning or error somewhere. Unfortunately sinks don't have
             // anywhere user-visible to send errors. See database-issues#5148.
-            if header.key.starts_with("materialize-") {
+            let collides_with_sink_id = self
+                .sink_id_header
+                .as_ref()
+                .is_some_and(|h| h.key == header.key);
+            if header.key.starts_with(KAFKA_SINK_RESERVED_HEADER_PREFIX) || collides_with_sink_id {
                 continue;
             }
 

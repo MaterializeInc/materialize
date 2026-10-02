@@ -69,6 +69,15 @@ Materialize always adds a header with key `materialize-timestamp` to each
 message emitted by the sink. The value of this header indicates the logical time
 at which the event described by the message occurred.
 
+The `INCLUDE SINK ID` option adds a header to each message whose value is the
+ID of the sink that emitted the message. The ID corresponds to
+[`mz_catalog.mz_sinks.id`](/sql/system-catalog/mz_catalog/#mz_sinks). The header
+key is `materialize-sink-id`, unless you specify a different key with
+`INCLUDE SINK ID AS <header_key>`. A key specified this way cannot start with
+`materialize-`. Because `<header_key>` is an identifier, a key that contains
+uppercase letters or characters like `-` must be double-quoted, as in
+`INCLUDE SINK ID AS "sink-id"`.
+
 The `HEADERS` option allows specifying the name of a column containing
 additional headers to add to each message emitted by the sink. When the option
 is unspecified, no additional headers are added. When specified, the named
@@ -76,7 +85,7 @@ column must be of type `map[text => text]` or `map[text => bytea]`.
 
 Header keys starting with `materialize-` are reserved for Materialize's internal
 use. Materialize will ignore any headers in the map whose key starts with
-`materialize-`.
+`materialize-` or matches the key of the `INCLUDE SINK ID` header.
 
 **Known limitations:**
   * Materialize does not permit adding multiple headers with

@@ -703,6 +703,28 @@ impl AstDisplay for SourceIncludeMetadata {
 }
 impl_display!(SourceIncludeMetadata);
 
+/// Metadata that a sink attaches to each message it emits.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SinkIncludeMetadata {
+    /// The sink's ID, attached as a header. `alias` overrides the default key.
+    SinkId { alias: Option<Ident> },
+}
+
+impl AstDisplay for SinkIncludeMetadata {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            SinkIncludeMetadata::SinkId { alias } => {
+                f.write_str("SINK ID");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+            }
+        }
+    }
+}
+impl_display!(SinkIncludeMetadata);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceErrorPolicy {
     Inline {

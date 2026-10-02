@@ -507,6 +507,7 @@ async fn purify_create_sink(
         in_cluster: _,
         if_not_exists: _,
         from,
+        include_metadata: _,
         envelope: _,
         mode: _,
     } = &mut create_sink_stmt;

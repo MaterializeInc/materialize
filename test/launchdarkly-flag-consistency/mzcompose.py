@@ -265,6 +265,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_frontend_subscribes
     enable_hydration_burst
     enable_introspection_subscribes
+    enable_kafka_sink_include_sink_id
     enable_less_reduce_in_eqprop
     enable_list_length_max
     enable_list_n_layers

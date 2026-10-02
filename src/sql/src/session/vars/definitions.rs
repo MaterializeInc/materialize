@@ -2235,6 +2235,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_kafka_sink_include_sink_id,
+        desc: "INCLUDE SINK ID for Kafka sinks",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_metric_sink,
         desc: "CREATE METRIC SINK",
         default: false,

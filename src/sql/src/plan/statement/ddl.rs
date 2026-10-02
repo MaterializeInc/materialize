@@ -79,19 +79,20 @@ use mz_sql_parser::ast::{
     NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
     ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
     RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    SetRoleVar, SinkIncludeMetadata, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
-    IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
-    SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
+    IcebergSinkConnection, KAFKA_SINK_RESERVED_HEADER_PREFIX, KafkaIdStyle, KafkaSinkConnection,
+    KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection,
+    iceberg_type_overrides,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -171,8 +172,8 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
     ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
-    VarInput,
+    ENABLE_KAFKA_SINK_INCLUDE_SINK_ID, ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -3270,6 +3271,7 @@ fn plan_sink(
         from,
         connection,
         format,
+        include_metadata,
         envelope,
         mode,
         if_not_exists,
@@ -3561,6 +3563,7 @@ fn plan_sink(
             relation_key_indices,
             key_desc_and_indices,
             headers_index,
+            include_metadata,
             desc.into_owned(),
             envelope,
             from.id(),
@@ -3831,6 +3834,7 @@ fn kafka_sink_builder(
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     headers_index: Option<usize>,
+    include_metadata: Vec<SinkIncludeMetadata>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     sink_from: CatalogItemId,
@@ -3850,6 +3854,26 @@ fn kafka_sink_builder(
     if commit_interval.is_some() {
         sql_bail!("COMMIT INTERVAL option is not supported with KAFKA sinks");
     }
+
+    if !include_metadata.is_empty() {
+        scx.require_feature_flag(&ENABLE_KAFKA_SINK_INCLUDE_SINK_ID)?;
+    }
+    let sink_id_header = match include_metadata.as_slice() {
+        [] => None,
+        [SinkIncludeMetadata::SinkId { alias: None }] => Some("materialize-sink-id".to_owned()),
+        [SinkIncludeMetadata::SinkId { alias: Some(alias) }] => {
+            let key = normalize::ident_ref(alias);
+            if key.starts_with(KAFKA_SINK_RESERVED_HEADER_PREFIX) {
+                sql_bail!(
+                    "INCLUDE SINK ID alias {} cannot start with {}, which is reserved for headers added by Materialize",
+                    key.quoted(),
+                    KAFKA_SINK_RESERVED_HEADER_PREFIX.quoted()
+                );
+            }
+            Some(key.to_owned())
+        }
+        _ => sql_bail!("INCLUDE SINK ID specified more than once"),
+    };
 
     let KafkaSinkConfigOptionExtracted {
         topic,
@@ -4221,6 +4245,7 @@ fn kafka_sink_builder(
         relation_key_indices,
         key_desc_and_indices,
         headers_index,
+        sink_id_header,
         value_desc,
         partition_by,
         compression_type,
