@@ -113,20 +113,7 @@ impl DocsField {
         types_map: &mut IndexMap<String, Vec<DocsField>>,
         processed_types: &mut IndexSet<String>,
     ) -> String {
-        // Check for $ref first
-        let ref_str_opt = props.get("$ref").and_then(|r| r.as_str()).or_else(|| {
-            // We assume there is only one non-null type in anyOf
-            props
-                .get("oneOf")
-                .or_else(|| props.get("anyOf"))
-                .and_then(|o| o.as_array())
-                .and_then(|arr| {
-                    arr.iter()
-                        .find_map(|v| v.get("$ref").and_then(|r| r.as_str()))
-                })
-        });
-
-        if let Some(ref_str) = ref_str_opt {
+        if let Some(ref_str) = field_ref(props) {
             let type_name = ref_str
                 .split('/')
                 .next_back()
@@ -177,6 +164,22 @@ impl DocsField {
             unknown => panic!("found unexpected type: {unknown}"),
         }
     }
+}
+
+// The type a field refers to, either directly or as the non-null variant of an
+// optional field.
+fn field_ref(props: &serde_json::Value) -> Option<&str> {
+    props.get("$ref").and_then(|r| r.as_str()).or_else(|| {
+        // We assume there is only one non-null type in anyOf
+        props
+            .get("oneOf")
+            .or_else(|| props.get("anyOf"))
+            .and_then(|o| o.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find_map(|v| v.get("$ref").and_then(|r| r.as_str()))
+            })
+    })
 }
 
 // Get type string as reported by the JSON schema
@@ -247,7 +250,7 @@ fn extract_required_fields(props: &serde_json::Value) -> IndexSet<String> {
 
 // Check if a resolved schema is an enum
 fn is_enum_type(resolved: &serde_json::Value) -> bool {
-    resolved.get("oneOf").is_some()
+    resolved.get("oneOf").is_some() || resolved.get("enum").is_some()
 }
 
 // Get enum description text for a field
@@ -256,7 +259,7 @@ fn get_enum_description(
     root_schema: &serde_json::Value,
     default: &Option<serde_json::Value>,
 ) -> Option<String> {
-    let resolved = resolve_ref(root_schema, field_props.get("$ref")?.as_str()?)?;
+    let resolved = resolve_ref(root_schema, field_ref(field_props)?)?;
     if is_enum_type(resolved) {
         return Some(format_enum_variants_from_json(resolved, default));
     }
@@ -277,27 +280,42 @@ fn format_enum_variants_from_json(
         .and_then(|d| d.as_str())
         .map(|s| s.to_string());
 
-    // Enums use oneOf array containing variant descriptions
-    let variants: IndexMap<String, Option<String>> = schema_json
-        .get("oneOf")
-        .expect("schemars uses oneOf with const values for enums")
-        .as_array()
-        .expect("oneOf is always an array")
-        .into_iter()
-        .map(|variant| {
-            let name = variant
-                .get("const")
-                .expect("we only handle const enums currently")
-                .as_str()
-                .expect("enum const values should always be strings")
-                .to_owned();
-            let description = variant
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(|d| d.to_owned());
-            (name, description)
-        })
-        .collect();
+    // schemars describes an enum as a oneOf of const values when its variants
+    // carry doc comments, and as a plain array of the values when they don't.
+    let variants: IndexMap<String, Option<String>> = match schema_json.get("oneOf") {
+        Some(one_of) => one_of
+            .as_array()
+            .expect("oneOf is always an array")
+            .into_iter()
+            .map(|variant| {
+                let name = variant
+                    .get("const")
+                    .expect("we only handle const enums currently")
+                    .as_str()
+                    .expect("enum const values should always be strings")
+                    .to_owned();
+                let description = variant
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .map(|d| d.to_owned());
+                (name, description)
+            })
+            .collect(),
+        None => schema_json
+            .get("enum")
+            .expect("is_enum_type checked for oneOf or enum")
+            .as_array()
+            .expect("enum is always an array")
+            .into_iter()
+            .map(|value| {
+                let name = value
+                    .as_str()
+                    .expect("enum values should always be strings")
+                    .to_owned();
+                (name, None)
+            })
+            .collect(),
+    };
 
     // Format variants
     for (variant_name, variant_description) in &variants {

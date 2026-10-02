@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { type SelfManagedAuthMode } from "./AppConfig";
+import { type ConsoleAppearance, parseConsoleAppearance } from "./appearance";
 
 const DEFAULT_APP_CONFIG = {
   auth: {
@@ -35,6 +36,7 @@ export function importAppConfig(): {
     mode: SelfManagedAuthMode;
   };
   balancerdDnsNames?: string[];
+  appearance?: ConsoleAppearance;
 } {
   if (process.env.NODE_ENV === "test") {
     return DEFAULT_APP_CONFIG;
@@ -45,9 +47,11 @@ export function importAppConfig(): {
       mode: SelfManagedAuthMode;
     };
     balancerd_dns_names?: string[];
+    appearance?: { displayName?: string; accentColor?: string };
   };
   return {
     auth: json.auth,
     balancerdDnsNames: json.balancerd_dns_names,
+    appearance: parseConsoleAppearance(json.appearance),
   };
 }

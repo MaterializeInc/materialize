@@ -22,9 +22,13 @@ import "~/sentry";
 import React from "react";
 import { createRoot } from "react-dom/client";
 
+import { appConfig } from "~/config/AppConfig";
+import { documentTitle } from "~/config/appearance";
 import { App } from "~/platform/App";
 
 import { addChunkLoadErrorListener } from "./utils/chunkLoadErrorHandler";
+
+document.title = documentTitle(appConfig.appearance);
 
 const rootEl = document.createElement("div");
 document.body.appendChild(rootEl);
