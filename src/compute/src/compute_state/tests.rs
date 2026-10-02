@@ -239,7 +239,6 @@ fn walk_local(
 /// the same fuel [`walk_local`] grants.
 fn walk_shared(
     registry: &ArrangementSharingRegistry,
-    worker_index: usize,
     peek: Peek,
     stash: StashBounds,
     metrics: &TestMetrics,
@@ -249,7 +248,6 @@ fn walk_shared(
         peek,
         traces: IndexTraces::Shared {
             registry: registry.clone(),
-            worker_index,
             published,
         },
         span: tracing::Span::none(),
@@ -303,10 +301,10 @@ fn publish_kv_index_into(
                 ErrSpine<_, _>,
             >("test errs");
 
-            let slot = registry_in.get_or_create(id, 0, 1);
+            let slot = registry_in.get_or_create(id);
             adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
             adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-            registry_in.notify(id, 0);
+            registry_in.notify(id);
 
             for (k, v) in rows {
                 oks_input.update((k, v), Diff::ONE);
@@ -343,7 +341,7 @@ fn interactive_shared_peek_matches_local_path() {
     // The interactive runtime's walk: publish the same rows and read them off the registry.
     let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
     let shared_response =
-        match walk_shared(&shared_registry, 0, make_peek(peek_ts), NO_STASH, &metrics) {
+        match walk_shared(&shared_registry, make_peek(peek_ts), NO_STASH, &metrics) {
             PeekStatus::Ready(response) => response,
             _ => panic!("a walk with fuel to spare must answer"),
         };
@@ -376,7 +374,6 @@ fn interactive_shared_peek_defers_over_threshold_result_to_the_stash() {
     let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
     let shared_scan = match walk_shared(
         &shared_registry,
-        0,
         make_peek(peek_ts),
         STASH_EVERYTHING,
         &metrics,
@@ -459,7 +456,7 @@ fn interactive_shared_peek_defers_until_published() {
     let peek = make_peek(Timestamp::new(0));
     assert!(
         matches!(
-            walk_shared(&registry, 0, peek.clone(), NO_STASH, &metrics),
+            walk_shared(&registry, peek.clone(), NO_STASH, &metrics),
             PeekStatus::NotReady,
         ),
         "an unpublished index must defer",
@@ -469,7 +466,7 @@ fn interactive_shared_peek_defers_until_published() {
     publish_kv_index_into(&registry, id, kv.clone());
     assert!(
         matches!(
-            walk_shared(&registry, 0, peek, NO_STASH, &metrics),
+            walk_shared(&registry, peek, NO_STASH, &metrics),
             PeekStatus::Ready(PeekResponse::Rows(_)),
         ),
         "a published index must resolve",
@@ -488,8 +485,6 @@ fn interactive_shared_peek_defers_until_sealed() {
         let metrics = TestMetrics::new();
         let registry = ArrangementSharingRegistry::new();
         let registry_in = registry.clone();
-        let worker_index = worker.index();
-        let peers = worker.peers();
 
         let (mut oks_input, mut errs_input, _keep) =
             worker.dataflow::<Timestamp, _, _>(move |scope| {
@@ -509,10 +504,10 @@ fn interactive_shared_peek_defers_until_sealed() {
                     ErrSpine<_, _>,
                 >("test errs");
 
-                let slot = registry_in.get_or_create(id, worker_index, peers);
+                let slot = registry_in.get_or_create(id);
                 adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
                 adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                registry_in.notify(id, worker_index);
+                registry_in.notify(id);
                 (
                     oks_input,
                     errs_input,
@@ -533,13 +528,7 @@ fn interactive_shared_peek_defers_until_sealed() {
         // upper {1} does not seal a peek at time 1: defer.
         assert!(
             matches!(
-                walk_shared(
-                    &registry,
-                    worker_index,
-                    make_peek(Timestamp::new(1)),
-                    NO_STASH,
-                    &metrics,
-                ),
+                walk_shared(&registry, make_peek(Timestamp::new(1)), NO_STASH, &metrics,),
                 PeekStatus::NotReady,
             ),
             "an unsealed peek must defer",
@@ -556,13 +545,7 @@ fn interactive_shared_peek_defers_until_sealed() {
 
         assert!(
             matches!(
-                walk_shared(
-                    &registry,
-                    worker_index,
-                    make_peek(Timestamp::new(1)),
-                    NO_STASH,
-                    &metrics,
-                ),
+                walk_shared(&registry, make_peek(Timestamp::new(1)), NO_STASH, &metrics,),
                 PeekStatus::Ready(PeekResponse::Rows(_)),
             ),
             "a sealed peek must resolve",
@@ -646,10 +629,10 @@ fn publish_index_current_worker(
             ErrSpine<_, _>,
         >("test errs");
 
-        let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
+        let slot = registry_in.get_or_create(id);
         adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
         adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-        registry_in.notify(id, scope.index());
+        registry_in.notify(id);
         (
             oks_input,
             errs_input,
@@ -693,7 +676,7 @@ fn interactive_peek_resolves_on_publication_not_on_bare_tick() {
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
         // Part A: register this interactive worker's waker, as startup does.
-        registry.register_waker(0, std::thread::current());
+        registry.register_waker(std::thread::current());
 
         let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -751,7 +734,7 @@ fn interactive_peek_resolves_on_publication_not_on_bare_tick() {
         );
 
         // The genuine wake: drain the dirty inbox (the id, marked by `insert`) and resolve.
-        let dirty = registry.take_dirty(0);
+        let dirty = registry.take_dirty();
         assert_eq!(
             dirty,
             BTreeSet::from([id]),
@@ -791,8 +774,7 @@ fn interactive_peek_resolves_on_seal_via_note_frontier() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let worker_index = worker.index();
-        registry.register_waker(worker_index, std::thread::current());
+        registry.register_waker(std::thread::current());
 
         let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -818,10 +800,10 @@ fn interactive_peek_resolves_on_seal_via_note_frontier() {
                     ErrSpine<_, _>,
                 >("test errs");
 
-                let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
+                let slot = registry_in.get_or_create(id);
                 adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
                 adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                registry_in.notify(id, scope.index());
+                registry_in.notify(id);
                 (
                     oks_input,
                     errs_input,
@@ -838,7 +820,7 @@ fn interactive_peek_resolves_on_seal_via_note_frontier() {
             worker.step();
         }
         // Drain the publication's dirty mark so the seal signal is observed in isolation.
-        let _ = registry.take_dirty(worker_index);
+        let _ = registry.take_dirty();
 
         // A peek at ts 1: published but not sealed (upper {1}). Enqueues.
         {
@@ -885,8 +867,8 @@ fn interactive_peek_resolves_on_seal_via_note_frontier() {
         );
 
         // The seal signal: `export_index`'s frontier hook calls `note_frontier`. Drive it.
-        registry.notify(id, worker_index);
-        let dirty = registry.take_dirty(worker_index);
+        registry.notify(id);
+        let dirty = registry.take_dirty();
         assert_eq!(dirty, BTreeSet::from([id]));
         {
             let mut active = ActiveComputeState {
@@ -1051,7 +1033,7 @@ fn interactive_build_is_immediate() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        registry.register_waker(0, std::thread::current());
+        registry.register_waker(std::thread::current());
         let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
@@ -1083,7 +1065,7 @@ fn interactive_build_is_immediate() {
                 active
                     .compute_state
                     .sharing_registry
-                    .handles(&index_id, 0)
+                    .handles(&index_id)
                     .is_some(),
                 "the interactive import created a placeholder slot for its dependency"
             );

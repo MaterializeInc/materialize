@@ -775,17 +775,13 @@ impl<'w> Worker<'w> {
             self.process_storage_guest();
 
             let role = self.role;
-            let worker_index = self.timely_worker.index();
             if let Some(mut compute_state) = self.activate_compute() {
                 if role == ComputeRuntimeRole::Interactive {
                     // Give a turn to the shared-index peeks whose dependency was marked dirty by a
                     // publication or a seal since the last drain. An empty dirty set means the
                     // worker woke for a command or its maintenance tick, and no peek waiting on an
                     // event is touched, so this costs what changed rather than what is pending.
-                    let dirty = compute_state
-                        .compute_state
-                        .sharing_registry
-                        .take_dirty(worker_index);
+                    let dirty = compute_state.compute_state.sharing_registry.take_dirty();
                     if !dirty.is_empty() {
                         compute_state.resolve_dirty(dirty);
                     }
@@ -986,8 +982,7 @@ impl<'w> Worker<'w> {
             // is what makes `current()` the right handle. Only the interactive runtime defers work
             // this way; the maintenance runtime keeps its poll.
             if self.role == ComputeRuntimeRole::Interactive {
-                self.sharing_registry
-                    .register_waker(self.timely_worker.index(), std::thread::current());
+                self.sharing_registry.register_waker(std::thread::current());
             }
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
