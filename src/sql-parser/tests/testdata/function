@@ -15,6 +15,13 @@ CREATE FUNCTION gcd(int4, int4) RETURNS int4 LANGUAGE wasm USING BASE64 'AGFzbQ=
 CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("gcd")]), if_not_exists: false, args: [FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], returns: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, language: Ident("wasm"), volatility: None, null_behavior: None, body: Base64("AGFzbQ=="), with_options: [] })
 
 parse-statement
+CREATE FUNCTION gcd(int, int) RETURNS int LANGUAGE wasm USING BASE64 $1 WITH (EXPORT = 'g')
+----
+CREATE FUNCTION gcd(int4, int4) RETURNS int4 LANGUAGE wasm USING BASE64 $1 WITH (EXPORT = 'g')
+=>
+CreateFunction(CreateFunctionStatement { name: UnresolvedItemName([Ident("gcd")]), if_not_exists: false, args: [FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, FunctionArg { name: None, data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], returns: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, language: Ident("wasm"), volatility: None, null_behavior: None, body: Base64Parameter(1), with_options: [CreateFunctionOption { name: Export, value: Some(Value(String("g"))) }] })
+
+parse-statement
 CREATE FUNCTION IF NOT EXISTS db.sch.f(a int, b double precision, character varying) RETURNS text LANGUAGE wasm USING BASE64 'AGFzbQ=='
 ----
 CREATE FUNCTION IF NOT EXISTS db.sch.f(a int4, b float8, varchar) RETURNS text LANGUAGE wasm USING BASE64 'AGFzbQ=='

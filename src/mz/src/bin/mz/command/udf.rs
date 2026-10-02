@@ -64,7 +64,7 @@ pub enum UdfSubcommand {
         #[clap(flatten)]
         limits: LimitArgs,
     },
-    /// Print the CREATE FUNCTION statement for a module's function.
+    /// Print the psql command (psql 16 or later) that creates a module's function.
     Sql {
         /// The WebAssembly module.
         module: PathBuf,

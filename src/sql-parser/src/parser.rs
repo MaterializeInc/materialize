@@ -4606,7 +4606,13 @@ impl<'a> Parser<'a> {
                 if body.is_some() {
                     return parser_err!(self, pos, "function body specified more than once");
                 }
-                body = Some(FunctionBody::Base64(self.parse_literal_string()?));
+                body = Some(match self.peek_token() {
+                    Some(Token::Parameter(n)) => {
+                        self.next_token();
+                        FunctionBody::Base64Parameter(n)
+                    }
+                    _ => FunctionBody::Base64(self.parse_literal_string()?),
+                });
             } else {
                 break;
             }

@@ -15,8 +15,8 @@ use base64::Engine;
 use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use mz_expr::func::{WasmLimits, WasmModuleHash};
-use mz_repr::SqlScalarType;
 use mz_repr::bytes::ByteSize;
+use mz_repr::{Datum, SqlScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateFunctionOption, CreateFunctionOptionName, CreateFunctionStatement, FunctionBody,
@@ -28,7 +28,7 @@ use crate::names::Aug;
 use crate::normalize;
 use crate::plan::query::scalar_type_from_sql;
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{CreateFunctionPlan, Function, Plan, PlanError, WasmFunction};
+use crate::plan::{CreateFunctionPlan, Function, Params, Plan, PlanError, WasmFunction};
 use crate::session::vars;
 
 generate_extracted_config!(
@@ -45,17 +45,35 @@ const BASE64: GeneralPurpose = GeneralPurpose::new(
 );
 
 pub fn describe_create_function(
-    _: &StatementContext,
-    _: CreateFunctionStatement<Aug>,
+    scx: &StatementContext,
+    stmt: CreateFunctionStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
+    if let FunctionBody::Base64Parameter(n) = stmt.body {
+        scx.param_types
+            .borrow_mut()
+            .insert(n, SqlScalarType::String);
+    }
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_function(
     scx: &StatementContext,
-    stmt: CreateFunctionStatement<Aug>,
+    mut stmt: CreateFunctionStatement<Aug>,
+    params: &Params,
 ) -> Result<Plan, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_WASM_FUNCTIONS)?;
+    // The catalog re-plans the function from `create_sql`, so the stored
+    // statement must carry the module itself rather than a parameter.
+    if let FunctionBody::Base64Parameter(n) = stmt.body {
+        let datum = n
+            .checked_sub(1)
+            .and_then(|i| params.datums.iter().nth(i))
+            .ok_or(PlanError::UnknownParameter(n))?;
+        let Datum::String(encoded) = datum else {
+            sql_bail!("USING BASE64 ${n} must be a non-null text value");
+        };
+        stmt.body = FunctionBody::Base64(encoded.to_owned());
+    }
     let create_sql = normalize::create_statement(scx, Statement::CreateFunction(stmt.clone()))?;
     let CreateFunctionStatement {
         name,
@@ -114,7 +132,9 @@ pub fn plan_create_function(
         ret: udf_type(&return_type)?,
     };
 
-    let FunctionBody::Base64(encoded) = body;
+    let FunctionBody::Base64(encoded) = body else {
+        unreachable!("parameters are bound above");
+    };
     let encoded: String = encoded
         .chars()
         .filter(|c| !c.is_ascii_whitespace())

@@ -364,7 +364,7 @@ pub fn plan(
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
-        Statement::CreateFunction(stmt) => ddl::plan_create_function(scx, stmt),
+        Statement::CreateFunction(stmt) => ddl::plan_create_function(scx, stmt, params),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateMetricSink(stmt) => ddl::plan_create_metric_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),

@@ -2413,11 +2413,19 @@ impl_display!(FunctionNullBehavior);
 pub enum FunctionBody {
     /// `USING BASE64 '...'`: a compiled module, base64-encoded.
     Base64(String),
+    /// `USING BASE64 $n`: a compiled module, base64-encoded and bound as a
+    /// parameter, which keeps it out of the statement text and its size
+    /// limit. Planning replaces it with [`FunctionBody::Base64`].
+    Base64Parameter(usize),
 }
 
 impl AstDisplay for FunctionBody {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            FunctionBody::Base64Parameter(n) => {
+                f.write_str("USING BASE64 $");
+                f.write_str(n);
+            }
             FunctionBody::Base64(module) => {
                 f.write_str("USING BASE64 ");
                 if f.redacted() {

@@ -117,8 +117,12 @@ fn sql_type_name(typ: &SqlScalarType) -> String {
     }
 }
 
-/// The `CREATE FUNCTION` statement that binds `name` to `sig` in `module`.
-fn create_function_sql(module: &Module, sig: &SqlSignature, name: &str, strict: bool) -> String {
+/// A psql command that runs the `CREATE FUNCTION` statement binding `name` to
+/// `sig` in `module`.
+///
+/// The module is sent as a bind parameter (`\bind`, psql 16 and later),
+/// because the statement text has a size limit that most modules exceed.
+fn create_function_psql(module: &Module, sig: &SqlSignature, name: &str, strict: bool) -> String {
     let args: Vec<_> = sig.args.iter().map(sql_type_name).collect();
     let mut sql = format!(
         "CREATE FUNCTION {}({}) RETURNS {} LANGUAGE wasm",
@@ -129,14 +133,17 @@ fn create_function_sql(module: &Module, sig: &SqlSignature, name: &str, strict: 
     if strict {
         sql.push_str(" STRICT");
     }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&module.bytes);
-    sql.push_str(&format!(" USING BASE64 '{encoded}'"));
+    sql.push_str(" USING BASE64 $1");
     if sig.sig.name != name {
         sql.push_str(&format!(
             " WITH (EXPORT = {})",
             Sql::literal(&sig.sig.name).as_str()
         ));
     }
+    // Base64 has no quote or backslash characters, so it needs no escaping
+    // inside a psql single-quoted argument.
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&module.bytes);
+    sql.push_str(&format!(" \\bind '{encoded}' \\g"));
     sql
 }
 
@@ -496,14 +503,14 @@ pub struct SqlArgs<'a> {
     pub strict: bool,
 }
 
-/// Prints the `CREATE FUNCTION` statement for a module's function.
+/// Prints the psql command that creates a module's function.
 pub fn sql(args: SqlArgs<'_>) -> Result<(), Error> {
     let module = Module::load(args.module)?;
     let sig = SqlSignature::new(module.signature(args.function)?);
     let name = args.name.unwrap_or(&sig.sig.name).to_string();
     println!(
-        "{};",
-        create_function_sql(&module, &sig, &name, args.strict)
+        "{}",
+        create_function_psql(&module, &sig, &name, args.strict)
     );
     Ok(())
 }
@@ -577,8 +584,8 @@ pub async fn create(cx: &RegionContext, args: CreateArgs<'_>) -> Result<(), Erro
             Sql::ident(schema).as_str()
         ));
     }
-    sql.push_str(&create_function_sql(&module, &sig, &name, args.strict));
-    sql.push_str(";\n");
+    sql.push_str(&create_function_psql(&module, &sig, &name, args.strict));
+    sql.push('\n');
 
     let spinner = cx
         .output_formatter()
