@@ -37,7 +37,7 @@ use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
-use crate::sharing::{Publisher, UnpublishToken};
+use crate::sharing::Publisher;
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, RowRowAgent};
 
 /// Initialize logging dataflows.
@@ -217,13 +217,8 @@ impl LoggingContext<'_> {
                     .into_iter()
                     .map(|(log, collection)| {
                         let publication = self.config.index_logs.get(&log).and_then(|&id| {
-                            publish_logging_index(
-                                &self.publisher,
-                                &scope,
-                                id,
-                                &collection.trace,
-                                &errs,
-                            )
+                            self.publisher
+                                .publish(id, scope.worker(), &collection.trace, &errs)
                         });
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
                             .with_drop((collection.token, publication));
@@ -445,32 +440,3 @@ impl ExtractTimestamp for (Timestamp, Subtime) {
     }
 }
 
-/// Publishes a logging index's `oks`/`errs` arrangements through `publisher`, so the peer runtime
-/// serves introspection peeks from them.
-fn publish_logging_index(
-    publisher: &Publisher,
-    scope: &timely::dataflow::Scope<'_, Timestamp>,
-    id: GlobalId,
-    oks_trace: &RowRowAgent<Timestamp, Diff>,
-    errs_trace: &ErrAgent<Timestamp, Diff>,
-) -> Option<UnpublishToken> {
-    match publisher {
-        Publisher::None => None,
-        Publisher::Registry(registry) => {
-            // The arrange streams are consumed inside the per-log construction regions, so only the
-            // trace handles survive here. Re-import them to give the publishers a live stream to
-            // attach to. The operators exist only where the runtime publishes, which is the same on
-            // all its workers, so the logging dataflow's shape agrees across them.
-            let oks = oks_trace
-                .clone()
-                .import_named(scope.clone(), &format!("PublishLog({id})"));
-            let errs = errs_trace
-                .clone()
-                .import_named(scope.clone(), &format!("PublishLogErr({id})"));
-            Some(registry.publish(id, oks.stream.scope().worker(), &oks.trace, &errs.trace))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests;
