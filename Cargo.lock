@@ -8252,7 +8252,6 @@ dependencies = [
  "mz-pgtz",
  "mz-proto",
  "mz-repr",
- "mz-sql-parser",
  "mz-timely-util",
  "num-traits",
  "num_enum 0.7.6",

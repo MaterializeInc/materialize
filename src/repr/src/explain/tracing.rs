@@ -12,12 +12,10 @@
 use std::fmt::{Debug, Display};
 use std::sync::Mutex;
 
-use mz_sql_parser::ast::NamedPlan;
 use tracing::{Level, span, subscriber};
 use tracing_core::{Interest, Metadata};
 use tracing_subscriber::{field, layer};
 
-use crate::explain::UsedIndexes;
 use smallvec::SmallVec;
 
 /// A tracing layer used to accumulate a sequence of explainable plans.
@@ -26,7 +24,7 @@ pub struct PlanTrace<T> {
     /// A specific concrete path to find in this trace. If present,
     /// [`PlanTrace::push`] will only collect traces if the current path is a
     /// prefix of find.
-    filter: Option<SmallVec<[NamedPlan; 4]>>,
+    filter: Option<SmallVec<[&'static str; 4]>>,
     /// A path of segments identifying the spans in the current ancestor-or-self
     /// chain. The current path is used when accumulating new `entries`.
     path: Mutex<String>,
@@ -230,7 +228,7 @@ where
 impl<T: 'static + Clone> PlanTrace<T> {
     /// Create a new trace for plans of type `T` that will only accumulate
     /// [`TraceEntry`] instances along the prefix of the given `path`.
-    pub fn new(filter: Option<SmallVec<[NamedPlan; 4]>>) -> Self {
+    pub fn new(filter: Option<SmallVec<[&'static str; 4]>>) -> Self {
         Self {
             filter,
             path: Mutex::new(String::with_capacity(256)),
@@ -306,7 +304,7 @@ impl<T: 'static + Clone> PlanTrace<T> {
         let path = path.as_str();
         match self.filter.as_ref() {
             Some(named_paths) => {
-                if named_paths.iter().any(|named| path == named.path()) {
+                if named_paths.contains(&path) {
                     Some(path.to_owned())
                 } else {
                     None
@@ -314,31 +312,6 @@ impl<T: 'static + Clone> PlanTrace<T> {
             }
             None => Some(path.to_owned()),
         }
-    }
-}
-
-impl PlanTrace<UsedIndexes> {
-    /// Get the [`UsedIndexes`] corresponding to the given `plan_path`.
-    ///
-    /// Note that the path under which a `UsedIndexes` entry is traced might
-    /// differ from the path of the `plan_path` of the plan that needs it.
-    pub fn used_indexes_for(&self, plan_path: &str) -> UsedIndexes {
-        // Compute the path from which we are going to lookup the `UsedIndexes`
-        // instance from the requested path.
-        let path = match NamedPlan::of_path(plan_path) {
-            Some(NamedPlan::Global) => Some(NamedPlan::Global),
-            Some(NamedPlan::Physical) => Some(NamedPlan::Global),
-            Some(NamedPlan::FastPath) => Some(NamedPlan::FastPath),
-            _ => None,
-        };
-        // Find the `TraceEntry` wrapping the `UsedIndexes` instance.
-        let entry = match path {
-            Some(path) => self.find(path.path()),
-            None => None,
-        };
-        // Either return the `UsedIndexes` wrapped by the found entry or a
-        // default `UsedIndexes` instance if such entry was not found.
-        entry.map_or_else(Default::default, |e| e.plan)
     }
 }
 
