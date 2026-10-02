@@ -30,7 +30,12 @@
 {{- $content := replaceRE `(?m)^(#{1,6} .*?)[ \t]*\{[ \t]*[#.][^}\n]*\}[ \t]*$` "$1" .page.RenderShortcodes -}}
 {{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
 {{- if $basePath -}}
-  {{- $content = printf "> For the complete documentation index, see [llms.txt](%s).\n\n%s" (partial "llms-txt-url.html" (dict "absolute" true)) $content -}}
+  {{- /*
+    The leading blank line separates the pointer from the description that
+    single.skill.md writes just before the body without a newline; without it
+    the pointer joins the description's line and is not a blockquote.
+  */ -}}
+  {{- $content = printf "\n\n> For the complete documentation index, see [llms.txt](%s).\n\n%s" (partial "llms-txt-url.html" (dict "absolute" true)) $content -}}
   {{- /*
     Three link forms, each as (prefix, target, end): inline links, reference
     definitions, and href or src attributes in HTML that shortcodes emit. A
