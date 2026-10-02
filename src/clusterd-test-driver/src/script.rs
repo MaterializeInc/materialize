@@ -455,36 +455,6 @@ pub enum Command {
         /// The shard's exclusive write upper (see `PersistSource::upper`).
         upper: u64,
     },
-    /// Register a dataflow's exported indexes without submitting it, so a later
-    /// dataflow can import them before `submit-dataflow` renders this one. Takes the
-    /// `create-dataflow` body.
-    DeclareDataflow {
-        /// The name the later `submit-dataflow` refers to.
-        name: String,
-        /// Collections to import (persist sources and/or existing indexes).
-        #[serde(default)]
-        imports: Vec<ImportSpec>,
-        /// MIR objects to compute, each bound to an id.
-        #[serde(default)]
-        builds: Vec<BuildSpec>,
-        /// Exports over imported or built ids.
-        #[serde(default)]
-        exports: Vec<ExportSpec>,
-        /// The dataflow's `as_of`.
-        as_of: u64,
-        /// The dataflow's `until`, if bounded.
-        #[serde(default)]
-        until: Option<u64>,
-        /// Run the MIR optimizer before lowering.
-        #[serde(default)]
-        optimize: bool,
-    },
-    /// Submit a dataflow a prior `declare-dataflow` registered. Each declaration is
-    /// submitted at most once, since a second submit would bind the same ids again.
-    SubmitDataflow {
-        /// The `declare-dataflow` name to submit.
-        name: String,
-    },
     /// Schedule a previously-submitted collection so it makes progress.
     Schedule {
         /// The collection's global id.
@@ -693,8 +663,6 @@ pub struct ScriptState {
     /// `create-dataflow` specs by name, so `explain ref=<name>` can render a declared
     /// dataflow's plan without repeating its body.
     dataflows: BTreeMap<String, DataflowSpec>,
-    /// `declare-dataflow` specs not yet submitted, by name.
-    declared: BTreeMap<String, DataflowSpec>,
     /// Next ephemeral id for the count sugar's dataflows.
     next_internal: u64,
 }
@@ -713,7 +681,6 @@ impl ScriptState {
             indexes: BTreeMap::new(),
             mv_outputs: BTreeMap::new(),
             dataflows: BTreeMap::new(),
-            declared: BTreeMap::new(),
             next_internal: INTERNAL_ID_BASE,
         })
     }
@@ -990,29 +957,6 @@ impl ScriptState {
         Ok((builder, registrations))
     }
 
-    /// Finishes and submits `builder`, then applies `registrations`.
-    ///
-    /// Registers only after a successful submit, so a rejected dataflow leaves no dangling
-    /// index entry or subscribe buffer.
-    fn submit(
-        &mut self,
-        builder: DataflowBuilder,
-        registrations: PendingRegistrations,
-    ) -> anyhow::Result<()> {
-        let df = builder.finish()?;
-        self.driver.submit_dataflow(df)?;
-        for (index_id, entry) in registrations.indexes {
-            self.indexes.insert(index_id, entry);
-        }
-        for sink_id in registrations.subscribes {
-            self.driver.register_subscribe(sink_id);
-        }
-        for (sink_id, metadata) in registrations.mv_outputs {
-            self.mv_outputs.insert(sink_id, metadata);
-        }
-        Ok(())
-    }
-
     /// Execute a single command, returning its golden output text.
     pub async fn execute(&mut self, cmd: Command) -> anyhow::Result<String> {
         match cmd {
@@ -1178,65 +1122,19 @@ impl ScriptState {
                 }
                 let (builder, registrations) = self
                     .configure_dataflow(name, imports, builds, exports, as_of, until, optimize)?;
-                self.submit(builder, registrations)?;
-                Ok("ok".to_string())
-            }
-            Command::DeclareDataflow {
-                name,
-                imports,
-                builds,
-                exports,
-                as_of,
-                until,
-                optimize,
-            } => {
-                anyhow::ensure!(
-                    !self.declared.contains_key(&name),
-                    "dataflow {name:?} is already declared"
-                );
-                let spec = DataflowSpec {
-                    imports: imports.clone(),
-                    builds: builds.clone(),
-                    exports: exports.clone(),
-                    as_of,
-                    until,
-                    optimize,
-                };
-                self.dataflows.insert(name.clone(), spec.clone());
-                self.declared.insert(name.clone(), spec);
-                // Only the index registrations, which is what a later import resolves
-                // against. Everything else registers at submit.
-                let (_builder, registrations) = self.configure_dataflow(
-                    Some(name),
-                    imports,
-                    builds,
-                    exports,
-                    as_of,
-                    until,
-                    optimize,
-                )?;
+                let df = builder.finish()?;
+                self.driver.submit_dataflow(df)?;
+                // Register only after a successful submit, so a rejected dataflow
+                // leaves no dangling index entry or subscribe buffer.
                 for (index_id, entry) in registrations.indexes {
                     self.indexes.insert(index_id, entry);
                 }
-                Ok("ok".to_string())
-            }
-            Command::SubmitDataflow { name } => {
-                let spec = self.declared.remove(&name).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "no pending declaration {name:?}; declare it with \
-                         declare-dataflow name={name}, and submit it once"
-                    )
-                })?;
-                let (builder, registrations) = self.configure_dataflow(
-                    Some(name),
-                    spec.imports,
-                    spec.builds,
-                    spec.exports,
-                    spec.as_of,
-                    spec.until,
-                    spec.optimize,
-                )?;
-                self.submit(builder, registrations)?;
+                for sink_id in registrations.subscribes {
+                    self.driver.register_subscribe(sink_id);
+                }
+                for (sink_id, metadata) in registrations.mv_outputs {
+                    self.mv_outputs.insert(sink_id, metadata);
+                }
                 Ok("ok".to_string())
             }
             Command::Explain { target } => {

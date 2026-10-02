@@ -584,31 +584,6 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 optimize,
             }
         }
-        "declare-dataflow" => {
-            let DataflowBody {
-                name,
-                imports,
-                builds,
-                exports,
-                as_of,
-                until,
-                optimize,
-            } = parse_dataflow_body(&args, &flags, body)?;
-            Command::DeclareDataflow {
-                name: name.ok_or_else(|| {
-                    anyhow::anyhow!("declare-dataflow needs a name for the later submit-dataflow")
-                })?,
-                imports,
-                builds,
-                exports,
-                as_of,
-                until,
-                optimize,
-            }
-        }
-        "submit-dataflow" => Command::SubmitDataflow {
-            name: req(&args, "name")?.to_string(),
-        },
         "explain" => {
             // `explain ref=<name>` renders a previously declared dataflow; otherwise
             // the dataflow is given inline with the `create-dataflow` body.
@@ -1051,21 +1026,6 @@ mod tests {
         assert_eq!(
             rewrite(&items, std::slice::from_ref(&stanza.expected)),
             content
-        );
-    }
-
-    #[mz_ore::test]
-    fn parses_declare_and_submit() {
-        let input = "declare-dataflow name=d as-of=0\n  import index=1001\n  build id=2000\n    Get u1000\n  export index=2001 on=2000 key=[0]";
-        assert!(matches!(
-            parse_command(input).unwrap(),
-            Command::DeclareDataflow { .. }
-        ));
-        assert_eq!(
-            parse_command("submit-dataflow name=d").unwrap(),
-            Command::SubmitDataflow {
-                name: "d".to_string()
-            }
         );
     }
 }

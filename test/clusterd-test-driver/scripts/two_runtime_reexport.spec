@@ -72,8 +72,8 @@ define-schema name=count_out
 ----
 ok
 
-# A query dataflow importing the re-export, routed to the interactive runtime by
-# `until = as_of + 1`.
+# A query dataflow importing the re-export, a one-shot read the interactive runtime
+# renders because `until = as_of + 1`.
 create-dataflow name=interactive-count as-of=0 until=1
   import index=2002
   build id=3000
