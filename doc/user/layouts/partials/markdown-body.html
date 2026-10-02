@@ -1,12 +1,15 @@
 {{- /*
   Returns a page's body for the Markdown output: its .RenderShortcodes output,
-  with root-relative links made absolute.
+  with root-relative links made absolute, after a pointer to llms.txt.
 
   Source links are written relative to the docs root, such as
   "/sql/create-cluster/#syntax". The HTML pass resolves them in
   _markup/render-link.html, but .RenderShortcodes leaves Markdown links as
   written, and the website serves the Markdown under <baseURL>/markdown-docs/,
   where such a link does not resolve.
+
+  The pointer is the llms.txt directive the Agent-Friendly Documentation Spec
+  recommends. The skill bundle has no llms.txt, so it gets no pointer.
 
   In the website build, a link to a page becomes the absolute URL of that
   page's Markdown, keeping any #fragment, and any other root-relative link,
@@ -23,6 +26,7 @@
 {{- $content := .page.RenderShortcodes -}}
 {{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
 {{- if $basePath -}}
+  {{- $content = printf "> For the complete documentation index, see [llms.txt](%s).\n\n%s" (partial "llms-txt-url.html" (dict "absolute" true)) $content -}}
   {{- $origin := partial "site-origin.html" . -}}
   {{- range uniq (findRE `\]\(/[^)\s]*` $content) -}}
     {{- $target := strings.TrimPrefix "](" . -}}

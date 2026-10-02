@@ -32,6 +32,20 @@ Apache License, Version 2.0. */}}
       }
     </script>
 
+    {{- /*
+      A pointer for agents that read the HTML, as the Agent-Friendly
+      Documentation Spec recommends: hidden on screen and from assistive
+      technology, and before the navigation so that agents reach it first.
+    */}}
+    {{- if partial "has-markdown.html" . }}
+    <div aria-hidden="true" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;">
+      For agents: an index of every documentation page is at
+      <a href="{{ partial "llms-txt-url.html" (dict) }}" tabindex="-1">llms.txt</a>,
+      and this page is available as
+      <a href="{{ partial "markdown-url.html" (dict "page" .) }}" tabindex="-1">Markdown</a>.
+    </div>
+    {{- end }}
+
     {{ partial "header.html" . }} {{ block "body" .}}
     <div class="content-wrapper">
       {{ partial "sidebar.html" . }}
