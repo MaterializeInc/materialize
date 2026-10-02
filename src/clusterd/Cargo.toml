@@ -48,6 +48,7 @@ custom-labels.workspace = true
 [features]
 default = ["tokio-console", "mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
+mimalloc = ["mz-alloc/mimalloc"]
 tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.unused-deps]

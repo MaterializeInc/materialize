@@ -22,6 +22,9 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "alloc-track")))]
+#[cfg(feature = "alloc-track")]
+pub mod alloc_track;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert-no-tracing")))]
 #[cfg(feature = "assert-no-tracing")]
 pub mod assert;

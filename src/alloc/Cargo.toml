@@ -20,11 +20,17 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
 tikv-jemallocator = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
+libmimalloc-sys = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 
 [features]
 default = []
 # Whether to use jemalloc instead of the system allocator.
 jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
+# Whether to use mimalloc, wrapped in the sampling allocation tracker, instead
+# of the system allocator. Takes precedence over `jemalloc`.
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys", "dep:libc", "mz-ore/alloc-track", "mz-prof-http/alloc-track"]
 
 [package.metadata.unused-deps]
 # The only reason we depend on mz-prof-http from this package is so that we can

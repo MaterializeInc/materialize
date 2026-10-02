@@ -36,6 +36,9 @@ cfg_if! {
     }
 }
 
+#[cfg(feature = "alloc-track")]
+mod tracked;
+
 static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
@@ -56,7 +59,7 @@ mz_http_util::make_handle_static!(
 
 /// Creates a router that serves the profiling endpoints.
 pub fn router(build_info: &'static BuildInfo) -> Router {
-    Router::new()
+    let router = Router::new()
         .route(
             "/",
             routing::get(move |query, headers| handle_get(query, headers, build_info)),
@@ -71,7 +74,22 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             routing::get(handle_get_mode).post(handle_post_mode),
         )
         .route("/heap", routing::get(handle_get_heap))
-        .route("/static/{*path}", routing::get(handle_static))
+        .route("/static/{*path}", routing::get(handle_static));
+    #[cfg(feature = "alloc-track")]
+    let router = router
+        .route(
+            "/tracked",
+            routing::get(move |query| tracked::handle_get(query, build_info)),
+        )
+        .route(
+            "/tracked/config",
+            routing::get(tracked::handle_get_config).post(tracked::handle_post_config),
+        )
+        .route(
+            "/tracked/allocator",
+            routing::get(tracked::handle_get_allocator),
+        );
+    router
 }
 
 static CPU_PROFILING_ACTIVE: AtomicBool = AtomicBool::new(false);
