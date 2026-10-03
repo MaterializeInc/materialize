@@ -3031,6 +3031,9 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'30s'",
         ]
+        self.flags_with_values["storage_source_snapshot_concurrent_replication"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [

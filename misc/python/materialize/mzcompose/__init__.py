@@ -181,6 +181,11 @@ def get_minimal_system_parameters(
         # intervals, so the ceiling stays ahead of the data.
         config["storage_persist_sink_description_lookahead"] = "5s"
 
+    if version >= MzVersion.parse_mz("v26.45.0-dev"):
+        # Exercise concurrent CDC replication during Postgres snapshots while it
+        # defaults off in production.
+        config["storage_source_snapshot_concurrent_replication"] = "true"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 
