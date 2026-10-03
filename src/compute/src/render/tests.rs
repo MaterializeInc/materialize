@@ -177,8 +177,11 @@ fn interactive_import_replays_rows_and_holds_at_as_of() {
         assert_eq!(errs_trace.get_logical_compaction(), as_of_in.borrow());
 
         // Drive both dataflows until the imported-and-reconstructed output has sealed time 0.
+        let mut steps = 0;
         while probe.less_than(&Timestamp::from(1_u64)) {
             worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "the import did not seal time 0");
         }
     });
 
@@ -280,22 +283,9 @@ fn tick(
 /// alive: once the importing dataflow drops, and with it every registration the import made, the
 /// trace is free to compact past `as_of`, which it could not do before the drop.
 ///
-/// Mirrors the differential-dataflow primitive's own `import_hold_pins_then_releases`
-/// (`differential-dataflow/tests/sharing.rs`), which demonstrates the identical pin-then-release
-/// contract one layer down, directly on a bare `SharedReader` with no compute-level
-/// wrapping. This test drives the same `ArrangementSharingRegistry::import` primitive that
-/// `import_index_shared` calls in production, rather than re-deriving the contract from
-/// scratch.
-///
-/// Staging this end-to-end through the real `ComputeState`/`TraceManager`, as the maintenance
-/// `import_index` path would, is not practical in this harness: there is no controller driving
-/// frontier advancement, so nothing would ever request compaction past `as_of` for real (the
-/// same limitation that keeps the since-gate tests elsewhere in this crate on
-/// `execute_directly` plus a directly-driven writer, rather than a full coordinator). The
-/// closest observable proxy is used instead: a writer-side compaction request advanced directly
-/// on the published trace, exactly as `import_hold_pins_then_releases` does, with the assertion
-/// made through `SharedReaderExt::snapshot_at` (a real read against the shared trace's actual
-/// `since`, not a count or a flag).
+/// The harness has no controller to request compaction past `as_of`, so the test requests it on
+/// the published writer trace directly and observes the trace's `since` through a read with
+/// `SharedReaderExt::snapshot_at`.
 #[mz_ore::test]
 fn interactive_import_hold_releases_on_drop() {
     let id = GlobalId::User(1);
@@ -391,7 +381,7 @@ fn interactive_import_holds_after_construction() {
     let id = GlobalId::User(1);
     let rows = test_rows();
     // `as_of` beyond the published seal, so the import cannot acknowledge past it and downgrade
-    // the hold away. That keeps the assertion about the hold's existence rather than its value.
+    // the hold away. That keeps the assertion about the hold's existence.
     let as_of = Antichain::from_elem(Timestamp::from(5_u64));
     let registry = ArrangementSharingRegistry::new();
 
@@ -549,8 +539,7 @@ fn import_reports_physical_within_chain_coverage() {
     });
 }
 
-/// A live import's hold can be downgraded, so the publisher compacts behind a long-lived reader
-/// rather than staying pinned at its `as_of` for the reader's whole life.
+/// A live import's hold can be downgraded, so the publisher compacts behind a long-lived reader.
 ///
 /// This is what a join on the interactive runtime does: `mz_join_core` calls
 /// `set_logical_compaction` on each input trace as the other input's frontier advances, and

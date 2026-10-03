@@ -1151,7 +1151,7 @@ fn shared_trace_import_feeds_join_and_reduce() {
 /// allows compaction to the read time, which is what raises the published `since` and lets the
 /// spine fold the batches below it together.
 ///
-/// The test asserts both halves of the shape rather than assuming them. A merge must have
+/// The test asserts both halves of the shape. A merge must have
 /// happened, so the import really does seed from a folded chain. And a batch must straddle the
 /// `as_of`, because that is the case being covered: an import does not cut at its `as_of`, it is
 /// seeded with the whole chain and wrapped in `TraceFrontier`, which advances times instead of

@@ -16,9 +16,11 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
+use differential_dataflow::trace::{Batch, TraceReader};
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_timely_util::shared_trace::SharedReader;
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
@@ -27,7 +29,7 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
 use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
-use crate::typedefs::{ErrAgent, RowRowAgent};
+use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -234,130 +236,132 @@ where
     }
 }
 
-/// Defines a trace of an index that is either maintained by this runtime or published by the
-/// process's other compute runtime.
+/// The trace of an index, either maintained by this runtime or published by the process's other
+/// compute runtime.
 ///
 /// The two variants share their batch type, so cursors over either are the same and dispatch costs
 /// one branch per trace call, not per record.
-macro_rules! index_trace {
-    ($(#[$attr:meta])* $name:ident, $local:ty, $shared:ty) => {
-        $(#[$attr])*
-        #[derive(Clone)]
-        pub enum $name {
-            /// A trace this runtime maintains.
-            Local(PaddedTrace<$local>),
-            /// A trace the other runtime publishes. Its logical compaction is this runtime's hold
-            /// on the publication.
-            Shared($shared),
-        }
-
-        impl TraceReader for $name {
-            type Time = Timestamp;
-            type Batch = <$local as TraceReader>::Batch;
-
-            fn batches_through(
-                &mut self,
-                upper: AntichainRef<Timestamp>,
-            ) -> Option<Vec<Self::Batch>> {
-                match self {
-                    $name::Local(trace) => trace.batches_through(upper),
-                    $name::Shared(trace) => trace.batches_through(upper),
-                }
-            }
-
-            fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
-                match self {
-                    $name::Local(trace) => trace.set_logical_compaction(frontier),
-                    $name::Shared(trace) => trace.set_logical_compaction(frontier),
-                }
-            }
-
-            fn get_logical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
-                match self {
-                    $name::Local(trace) => trace.get_logical_compaction(),
-                    $name::Shared(trace) => trace.get_logical_compaction(),
-                }
-            }
-
-            fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Timestamp>) {
-                match self {
-                    $name::Local(trace) => trace.set_physical_compaction(frontier),
-                    $name::Shared(trace) => trace.set_physical_compaction(frontier),
-                }
-            }
-
-            fn get_physical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
-                match self {
-                    $name::Local(trace) => trace.get_physical_compaction(),
-                    $name::Shared(trace) => trace.get_physical_compaction(),
-                }
-            }
-
-            fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
-                match self {
-                    $name::Local(trace) => trace.map_batches(f),
-                    $name::Shared(trace) => trace.map_batches(f),
-                }
-            }
-        }
-
-        impl $name {
-            /// Imports the trace into `scope`, restricted to `[since, until)`.
-            ///
-            /// A local import comes with the button that shuts its operator down. A shared import
-            /// reads through a reader minted for it, never through this handle: the import holds the
-            /// publisher physically at the boundary it was seeded with, which this handle, a logical
-            /// hold only, does not.
-            pub fn import_frontier_core<'scope>(
-                &mut self,
-                scope: Scope<'scope, Timestamp>,
-                name: &str,
-                since: Antichain<Timestamp>,
-                until: Antichain<Timestamp>,
-            ) -> (
-                Arranged<'scope, TraceFrontier<$name>>,
-                Option<ShutdownButton<CapabilitySet<Timestamp>>>,
-            ) {
-                match self {
-                    $name::Local(trace) => {
-                        let (arranged, button) =
-                            trace.import_frontier_core(scope, name, since.clone(), until.clone());
-                        let trace = $name::Local(PaddedTrace::from(trace.unpadded().clone()));
-                        let arranged = Arranged {
-                            stream: arranged.stream,
-                            trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
-                        };
-                        (arranged, Some(button))
-                    }
-                    $name::Shared(handle) => {
-                        let reader = handle.fresh_reader();
-                        let arranged =
-                            reader.import_frontier_core(scope, name, since.clone(), until.clone());
-                        let trace = $name::Shared(reader);
-                        let arranged = Arranged {
-                            stream: arranged.stream,
-                            trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
-                        };
-                        (arranged, None)
-                    }
-                }
-            }
-        }
-    };
+pub enum IndexTrace<Tr: TraceReader> {
+    /// A trace this runtime maintains.
+    Local(PaddedTrace<TraceAgent<Tr>>),
+    /// A trace the other runtime publishes. Its logical compaction is this runtime's hold on the
+    /// publication.
+    Shared(SharedReader<Tr::Batch>),
 }
 
-index_trace!(
-    /// The `oks` trace of an index.
-    OksTrace,
-    RowRowAgent<Timestamp, Diff>,
-    SharedOksHandle
-);
-index_trace!(
-    /// The `errs` trace of an index.
-    ErrsTrace,
-    ErrAgent<Timestamp, Diff>,
-    SharedErrsHandle
-);
+/// The `oks` trace of an index.
+pub type OksTrace = IndexTrace<RowRowSpine<Timestamp, Diff>>;
+/// The `errs` trace of an index.
+pub type ErrsTrace = IndexTrace<ErrSpine<Timestamp, Diff>>;
+
+impl<Tr: TraceReader> Clone for IndexTrace<Tr> {
+    fn clone(&self) -> Self {
+        match self {
+            IndexTrace::Local(trace) => IndexTrace::Local(trace.clone()),
+            IndexTrace::Shared(trace) => IndexTrace::Shared(trace.clone()),
+        }
+    }
+}
+
+impl<Tr> TraceReader for IndexTrace<Tr>
+where
+    Tr: TraceReader<Time = Timestamp>,
+    Tr::Batch: Clone + 'static,
+{
+    type Time = Timestamp;
+    type Batch = Tr::Batch;
+
+    fn batches_through(&mut self, upper: AntichainRef<Timestamp>) -> Option<Vec<Self::Batch>> {
+        match self {
+            IndexTrace::Local(trace) => trace.batches_through(upper),
+            IndexTrace::Shared(trace) => trace.batches_through(upper),
+        }
+    }
+
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
+        match self {
+            IndexTrace::Local(trace) => trace.set_logical_compaction(frontier),
+            IndexTrace::Shared(trace) => trace.set_logical_compaction(frontier),
+        }
+    }
+
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
+        match self {
+            IndexTrace::Local(trace) => trace.get_logical_compaction(),
+            IndexTrace::Shared(trace) => trace.get_logical_compaction(),
+        }
+    }
+
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Timestamp>) {
+        match self {
+            IndexTrace::Local(trace) => trace.set_physical_compaction(frontier),
+            IndexTrace::Shared(trace) => trace.set_physical_compaction(frontier),
+        }
+    }
+
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Timestamp> {
+        match self {
+            IndexTrace::Local(trace) => trace.get_physical_compaction(),
+            IndexTrace::Shared(trace) => trace.get_physical_compaction(),
+        }
+    }
+
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
+        match self {
+            IndexTrace::Local(trace) => trace.map_batches(f),
+            IndexTrace::Shared(trace) => trace.map_batches(f),
+        }
+    }
+}
+
+impl<Tr> IndexTrace<Tr>
+where
+    Tr: TraceReader<Time = Timestamp> + 'static,
+    Tr::Batch: Batch + Navigable + Clone + 'static,
+{
+    /// Imports the trace into `scope`, restricted to `[since, until)`.
+    ///
+    /// A local import comes with the button that shuts its operator down. A shared import reads
+    /// through a reader minted for it, never through this handle: the import holds the publisher
+    /// physically at the boundary it was seeded with, which this handle, a logical hold only, does
+    /// not.
+    pub fn import_frontier_core<'scope>(
+        &mut self,
+        scope: Scope<'scope, Timestamp>,
+        name: &str,
+        since: Antichain<Timestamp>,
+        until: Antichain<Timestamp>,
+    ) -> (
+        Arranged<'scope, TraceFrontier<Self>>,
+        Option<ShutdownButton<CapabilitySet<Timestamp>>>,
+    ) {
+        match self {
+            IndexTrace::Local(trace) => {
+                let (arranged, button) =
+                    trace.import_frontier_core(scope, name, since.clone(), until.clone());
+                // The import's trace is a clone of this agent. Its replacement is another, wrapped
+                // in this enum.
+                let trace = IndexTrace::Local(PaddedTrace::from(trace.unpadded().clone()));
+                let arranged = Arranged {
+                    stream: arranged.stream,
+                    trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
+                };
+                (arranged, Some(button))
+            }
+            IndexTrace::Shared(handle) => {
+                let reader = handle.fresh_reader();
+                let arranged =
+                    reader.import_frontier_core(scope, name, since.clone(), until.clone());
+                let trace = IndexTrace::Shared(reader);
+                let arranged = Arranged {
+                    stream: arranged.stream,
+                    trace: TraceFrontier::make_from(trace, since.borrow(), until.borrow()),
+                };
+                (arranged, None)
+            }
+        }
+    }
+}
 
 /// Bundles together traces for the successful computations (`oks`), the
 /// failed computations (`errs`), additional tokens that should share

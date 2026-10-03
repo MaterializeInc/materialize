@@ -1117,8 +1117,11 @@ fn dropped_writer_leaves_imports_at_its_last_upper() {
             arranged.stream.probe_with(&probe);
         });
         drop(handle);
+        let mut steps = 0;
         while probe.less_than(&Timestamp::from(1_u64)) {
             worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "the live import did not seal time 0");
         }
 
         // Drop the writer the way `drop_collection` does, the trace handle before the dataflow,
