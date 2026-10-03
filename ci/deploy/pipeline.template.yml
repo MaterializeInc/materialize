@@ -124,3 +124,47 @@ steps:
           limit: 2
     concurrency: 1
     concurrency_group: deploy/helm-charts
+
+  - id: deploy-mz-deploy-linux-x86_64
+    label: ":rocket: mz-deploy (Linux x86_64)"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz-deploy.linux
+    # This pipeline also runs on every push to main, where there is no tag to
+    # derive a version from.
+    if: build.tag != ""
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
+    concurrency: 1
+    concurrency_group: deploy/mz-deploy/linux/x86_64
+
+  - id: deploy-mz-deploy-linux-aarch64
+    label: ":rocket: mz-deploy (Linux aarch64)"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz-deploy.linux
+    if: build.tag != ""
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-aarch64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
+    concurrency: 1
+    concurrency_group: deploy/mz-deploy/linux/aarch64
+
+  - id: deploy-mz-deploy-macos-aarch64
+    label: ":rocket: mz-deploy (macOS aarch64)"
+    command: bin/pyactivate -m ci.deploy_mz-deploy.macos
+    if: build.tag != ""
+    timeout_in_minutes: 60
+    agents:
+      queue: mac-aarch64
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
+    concurrency: 1
+    concurrency_group: deploy/mz-deploy/macos/aarch64
