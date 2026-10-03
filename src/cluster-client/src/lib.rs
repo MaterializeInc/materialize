@@ -32,12 +32,11 @@ pub mod metrics;
 #[derive(Clone)]
 pub struct WallclockLagFn<T>(Arc<dyn Fn(T) -> Duration + Send + Sync>);
 
-impl<T: Into<mz_repr::Timestamp>> WallclockLagFn<T> {
+impl<T: Into<u64>> WallclockLagFn<T> {
     /// Create a new [`WallclockLagFn`].
     pub fn new(now: NowFn) -> Self {
         let inner = Arc::new(move |time: T| {
-            let time_ts: mz_repr::Timestamp = time.into();
-            let time_ms: u64 = time_ts.into();
+            let time_ms: u64 = time.into();
             let lag_ms = now().saturating_sub(time_ms);
             let lag_s = lag_ms.div_ceil(1000);
             Duration::from_secs(lag_s)

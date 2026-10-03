@@ -6713,7 +6713,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
- "mz-repr",
  "prometheus",
  "serde",
  "serde_json",
