@@ -17,6 +17,7 @@ import ClustersListPage from "~/platform/clusters/ClustersList";
 import { relativeClusterPath } from "~/platform/routeHelpers";
 import { SentryRoutes } from "~/sentry";
 import { useAllClusters } from "~/store/allClusters";
+import { useSubscribeToAllObjectsCollection } from "~/store/allObjectsCollection";
 
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
 import NewClusterForm from "./NewClusterForm";
@@ -27,6 +28,10 @@ export type ClusterDetailParams = {
 };
 
 const ClusterRoutes = () => {
+  // Feeds the objects collection the worker skew heatmap resolves names from.
+  // Reuses the app-wide `allObjects` subscribe rather than opening its own, so
+  // this adds no catalog_server load.
+  useSubscribeToAllObjectsCollection();
   return (
     <AppErrorBoundary message={CLUSTERS_FETCH_ERROR_MESSAGE}>
       <SentryRoutes>
