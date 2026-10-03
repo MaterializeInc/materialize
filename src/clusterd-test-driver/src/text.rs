@@ -433,13 +433,13 @@ struct DataflowBody {
     builds: Vec<BuildSpec>,
     exports: Vec<ExportSpec>,
     as_of: u64,
-    until: Option<u64>,
+    single_read: bool,
     optimize: bool,
 }
 
 /// Parse a dataflow body of `import`/`build`/`export` sub-commands, shared by
 /// `create-dataflow` and `explain`. The directive's bare flags carry the
-/// dataflow-level options (`optimize`).
+/// dataflow-level options (`optimize`, `single-read`).
 fn parse_dataflow_body(
     args: &BTreeMap<String, String>,
     flags: &[String],
@@ -447,8 +447,8 @@ fn parse_dataflow_body(
 ) -> anyhow::Result<DataflowBody> {
     let name = opt_string(args, "name");
     let as_of = req_u64(args, "as-of")?;
-    let until = opt_u64(args, "until")?;
     let optimize = flags.iter().any(|f| f == "optimize");
+    let single_read = flags.iter().any(|f| f == "single-read");
     let mut imports = Vec::new();
     let mut builds = Vec::new();
     let mut exports = Vec::new();
@@ -487,7 +487,7 @@ fn parse_dataflow_body(
         builds,
         exports,
         as_of,
-        until,
+        single_read,
         optimize,
     })
 }
@@ -571,7 +571,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 builds,
                 exports,
                 as_of,
-                until,
+                single_read,
                 optimize,
             } = parse_dataflow_body(&args, &flags, body)?;
             Command::CreateDataflow {
@@ -580,7 +580,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 builds,
                 exports,
                 as_of,
-                until,
+                single_read,
                 optimize,
             }
         }
@@ -600,7 +600,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                     builds,
                     exports,
                     as_of,
-                    until,
+                    single_read,
                     optimize,
                 } = parse_dataflow_body(&args, &flags, body)?;
                 ExplainTarget::Inline {
@@ -609,7 +609,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                     builds,
                     exports,
                     as_of,
-                    until,
+                    single_read,
                     optimize,
                 }
             };
@@ -792,7 +792,7 @@ mod tests {
                     key: vec![0]
                 }],
                 as_of: 0,
-                until: None,
+                single_read: false,
                 optimize: false,
             }
         );
@@ -843,7 +843,7 @@ mod tests {
                         key: vec![0],
                     }],
                     as_of: 0,
-                    until: None,
+                    single_read: false,
                     optimize: true,
                 }
             }

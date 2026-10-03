@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_compute_types::dataflows::{
-    BuildDesc, DataflowClass, DataflowDescription, IndexDesc, IndexImport, SourceImport,
+    BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
 };
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -428,10 +428,10 @@ impl DataflowBuilder {
         self
     }
 
-    /// Set the dataflow's class, which decides the runtime that renders it. Defaults to
-    /// [`DataflowClass::Maintained`].
-    pub fn class(&mut self, class: DataflowClass) -> &mut Self {
-        self.mir.class = class;
+    /// Bound the dataflow to the single read at its `as_of`, see
+    /// [`DataflowDescription::bound_to_single_read`]. Call after [`Self::as_of`].
+    pub fn single_read(&mut self) -> &mut Self {
+        self.mir.bound_to_single_read();
         self
     }
 

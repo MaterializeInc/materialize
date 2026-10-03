@@ -88,8 +88,8 @@ class Clusterd(Service):
 
         # When set, clusterd runs a second, interactive compute runtime alongside the
         # maintenance one (see `--interactive-compute-timely-config` in
-        # `src/clusterd/src/lib.rs`). It must span the same number of Timely peers as
-        # the maintenance compute config, so it reuses `process_names`/`workers`; its
+        # `src/clusterd/src/lib.rs`, which asserts the layout it must share with the
+        # maintenance compute config). It reuses `process_names`/`workers`, and its
         # addresses use a distinct port (2104) so the two runtimes don't collide.
         ports = [2100, 2101, 6878]
         if interactive_compute:

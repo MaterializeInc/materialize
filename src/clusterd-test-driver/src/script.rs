@@ -40,7 +40,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
-use mz_compute_types::dataflows::DataflowClass;
 use mz_dyncfg::{ConfigType, ConfigUpdates, ConfigVal};
 use mz_expr::visit::Visit;
 use mz_expr::{Id, MirRelationExpr};
@@ -195,9 +194,9 @@ pub enum ExplainTarget {
         exports: Vec<ExportSpec>,
         /// The dataflow's `as_of`.
         as_of: u64,
-        /// The dataflow's `until`, if bounded. `as_of + 1` makes the dataflow single-time.
+        /// Bound the dataflow to the single read at its `as_of`. Off by default.
         #[serde(default)]
-        until: Option<u64>,
+        single_read: bool,
         /// Run the MIR optimizer before lowering. Off by default.
         #[serde(default)]
         optimize: bool,
@@ -528,9 +527,9 @@ pub enum Command {
         exports: Vec<ExportSpec>,
         /// The dataflow's `as_of`.
         as_of: u64,
-        /// The dataflow's `until`, if bounded. `as_of + 1` makes the dataflow single-time.
+        /// Bound the dataflow to the single read at its `as_of`. Off by default.
         #[serde(default)]
-        until: Option<u64>,
+        single_read: bool,
         /// Run the MIR optimizer before lowering (needed for e.g. joins). Off by
         /// default, so the caller's MIR is lowered faithfully.
         #[serde(default)]
@@ -638,7 +637,7 @@ struct DataflowSpec {
     builds: Vec<BuildSpec>,
     exports: Vec<ExportSpec>,
     as_of: u64,
-    until: Option<u64>,
+    single_read: bool,
     optimize: bool,
 }
 
@@ -809,7 +808,7 @@ impl ScriptState {
         builds: Vec<BuildSpec>,
         exports: Vec<ExportSpec>,
         as_of: u64,
-        until: Option<u64>,
+        single_read: bool,
         optimize: bool,
     ) -> anyhow::Result<(DataflowBuilder, PendingRegistrations)> {
         let mut builder =
@@ -946,13 +945,8 @@ impl ScriptState {
             }
         }
         builder.as_of(Timestamp::from(as_of));
-        if let Some(until) = until {
-            builder.until(Timestamp::from(until));
-            // Mirrors the adapter, which marks a dataflow a one-shot read exactly where it bounds
-            // it one step past its `as_of`.
-            if Some(until) == as_of.checked_add(1) {
-                builder.class(DataflowClass::OneShotRead);
-            }
+        if single_read {
+            builder.single_read();
         }
         Ok((builder, registrations))
     }
@@ -1102,7 +1096,7 @@ impl ScriptState {
                 builds,
                 exports,
                 as_of,
-                until,
+                single_read,
                 optimize,
             } => {
                 // Record the spec under its name so `explain ref=<name>` can render
@@ -1115,13 +1109,20 @@ impl ScriptState {
                             builds: builds.clone(),
                             exports: exports.clone(),
                             as_of,
-                            until,
+                            single_read,
                             optimize,
                         },
                     );
                 }
-                let (builder, registrations) = self
-                    .configure_dataflow(name, imports, builds, exports, as_of, until, optimize)?;
+                let (builder, registrations) = self.configure_dataflow(
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    single_read,
+                    optimize,
+                )?;
                 let df = builder.finish()?;
                 self.driver.submit_dataflow(df)?;
                 // Register only after a successful submit, so a rejected dataflow
@@ -1140,16 +1141,16 @@ impl ScriptState {
             Command::Explain { target } => {
                 // Resolve the target to a dataflow body: either given inline, or the
                 // spec a prior `create-dataflow name=<name>` recorded.
-                let (name, imports, builds, exports, as_of, until, optimize) = match target {
+                let (name, imports, builds, exports, as_of, single_read, optimize) = match target {
                     ExplainTarget::Inline {
                         name,
                         imports,
                         builds,
                         exports,
                         as_of,
-                        until,
+                        single_read,
                         optimize,
-                    } => (name, imports, builds, exports, as_of, until, optimize),
+                    } => (name, imports, builds, exports, as_of, single_read, optimize),
                     ExplainTarget::Reference { name } => {
                         let spec = self.dataflows.get(&name).ok_or_else(|| {
                             anyhow::anyhow!(
@@ -1163,7 +1164,7 @@ impl ScriptState {
                             spec.builds.clone(),
                             spec.exports.clone(),
                             spec.as_of,
-                            spec.until,
+                            spec.single_read,
                             spec.optimize,
                         )
                     }
@@ -1172,8 +1173,15 @@ impl ScriptState {
                 // LIR plan instead of submitting it. The registrations are discarded:
                 // explain has no side effects, so it neither installs a dataflow nor
                 // records an index / subscribe / materialized-view output.
-                let (builder, _registrations) = self
-                    .configure_dataflow(name, imports, builds, exports, as_of, until, optimize)?;
+                let (builder, _registrations) = self.configure_dataflow(
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    single_read,
+                    optimize,
+                )?;
                 // The LIR render separates objects with blank lines; the `----` block
                 // preserves them via the doubled-separator form (see `crate::text`).
                 // Trim the trailing newline so the golden matches like every other

@@ -57,7 +57,7 @@ ok
 # The interactive query dataflow: `count(*)` over the maintenance index, exported
 # under a transient id and bounded one step past `as_of`, so the interactive
 # runtime renders it.
-create-dataflow name=interactive-count as-of=0 until=1
+create-dataflow name=interactive-count as-of=0 single-read
   import index=2001
   build id=3000
     Reduce aggregates=[count(*)]

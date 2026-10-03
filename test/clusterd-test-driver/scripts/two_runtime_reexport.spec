@@ -74,7 +74,7 @@ ok
 
 # A query dataflow importing the re-export, a one-shot read the interactive runtime
 # renders because `until = as_of + 1`.
-create-dataflow name=interactive-count as-of=0 until=1
+create-dataflow name=interactive-count as-of=0 single-read
   import index=2002
   build id=3000
     Reduce aggregates=[count(*)]

@@ -50,7 +50,7 @@ ok
 
 # Same collection, same key, exported under a transient id and bounded one step
 # past `as_of`, a one-shot read the interactive runtime renders.
-create-dataflow name=interactive-reexport as-of=0 until=1
+create-dataflow name=interactive-reexport as-of=0 single-read
   import index=2001
   export kind=index index=t3000 on=2000 key=[0]
 ----
