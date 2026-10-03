@@ -38,7 +38,6 @@ from typing import Any
 # merge effort, `arrangement_exert_proportionality`).
 from materialize.mzcompose.services.clusterd import (
     DEFAULT_COMPUTE_EXERT_PROPORTIONALITY,
-    DEFAULT_STORAGE_EXERT_PROPORTIONALITY,
     timely_config,
 )
 
@@ -167,9 +166,6 @@ def clusterd_command() -> list[str]:
     compute_tc = timely_config(
         ["127.0.0.1"], 2102, 1, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
     )
-    storage_tc = timely_config(
-        ["127.0.0.1"], 2103, 1, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
-    )
     return [
         *shlex.split(WRAPPER),
         str(ROOT / "target" / PROFILE_DIR / "clusterd"),
@@ -179,8 +175,6 @@ def clusterd_command() -> list[str]:
         STORAGE_ADDR,
         "--compute-timely-config",
         compute_tc,
-        "--storage-timely-config",
-        storage_tc,
         "--process",
         "0",
         "--environment-id",
