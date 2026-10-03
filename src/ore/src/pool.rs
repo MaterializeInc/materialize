@@ -58,6 +58,9 @@
 //! FIFOs banded by the caller-supplied generational depth ([`ChunkHints`]).
 
 mod extent;
+// TODO: remove the allowance once the pool selects the file store.
+#[allow(dead_code)]
+mod file;
 mod region;
 
 use std::collections::VecDeque;
