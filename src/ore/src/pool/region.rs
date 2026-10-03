@@ -94,7 +94,7 @@ pub(crate) struct Region {
 /// theirs released. Never-allocated slots beyond the high-water mark are
 /// untouched virtual space and fault on first write like cold ones.
 #[derive(Debug)]
-struct SlotAllocator {
+pub(crate) struct SlotAllocator {
     free_warm: Vec<u32>,
     free_cold: Vec<u32>,
     high_water: u32,
@@ -102,7 +102,7 @@ struct SlotAllocator {
 }
 
 impl SlotAllocator {
-    fn new(max_slots: u32) -> SlotAllocator {
+    pub(crate) fn new(max_slots: u32) -> SlotAllocator {
         SlotAllocator {
             free_warm: Vec::new(),
             free_cold: Vec::new(),
@@ -114,7 +114,7 @@ impl SlotAllocator {
     /// Allocates a slot index, or `None` when every slot is in use; the flag
     /// reports whether the slot came from the warm list. Warm slots are
     /// preferred, then cold, then never-touched bump slots.
-    fn alloc(&mut self) -> Option<(u32, bool)> {
+    pub(crate) fn alloc(&mut self) -> Option<(u32, bool)> {
         if let Some(slot) = self.free_warm.pop() {
             return Some((slot, true));
         }
@@ -130,13 +130,25 @@ impl SlotAllocator {
     }
 
     /// Returns a previously allocated slot to the warm or cold free list.
-    fn free(&mut self, slot: u32, warm: bool) {
+    pub(crate) fn free(&mut self, slot: u32, warm: bool) {
         crate::soft_assert_no_log!(slot < self.high_water);
         if warm {
             self.free_warm.push(slot);
         } else {
             self.free_cold.push(slot);
         }
+    }
+
+    /// Takes a slot from the warm free list only, or `None` when it is
+    /// empty.
+    pub(crate) fn pop_warm(&mut self) -> Option<u32> {
+        self.free_warm.pop()
+    }
+
+    /// Test hook: the number of allocated slots not on a free list.
+    #[cfg(test)]
+    pub(crate) fn in_use(&self) -> usize {
+        usize::cast_from(self.high_water) - self.free_warm.len() - self.free_cold.len()
     }
 }
 
