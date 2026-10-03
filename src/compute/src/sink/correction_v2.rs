@@ -147,13 +147,15 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicUsize};
+use std::sync::atomic::{self, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::bytes::indexed;
 use columnar::{Columnar, Index, Len, Ref};
 use itertools::Itertools;
-use mz_ore::cast::CastLossy;
+use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::metric;
+use mz_ore::metrics::{ComputedUIntGauge, MakeCollectorOpts, MetricsRegistry};
 use mz_ore::pool::ChunkHandle;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -1682,6 +1684,50 @@ struct Chunk<D: Data> {
     /// treats deeper chunks as colder, and compresses them past the floor set by
     /// [`chunk::set_compress_min_depth`].
     depth: u8,
+    /// Whether the pool declined the body at mint, which decides the heap gauge a resident body
+    /// counts toward.
+    heap_at_mint: bool,
+}
+
+/// Bytes of chunk bodies held on the heap because the pool declined them at mint, process-wide.
+static HEAP_MINTED_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Bytes of chunk bodies [`Chunk::body`] took out of the pool onto the heap, process-wide.
+static HEAP_MATERIALIZED_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Chunks [`Chunk::body`] took out of the pool, process-wide.
+static MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
+/// Bytes [`Chunk::with_view`] copied out of the pool for scoped reads, process-wide.
+static VIEW_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Install the correction buffer's heap residency metrics into `registry`. Idempotent.
+pub fn register_metrics(registry: &MetricsRegistry) {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        // Every name and help string is a literal at the `metric!` call so the metrics-catalog
+        // scanner, which reads the source rather than the expanded macro, can index them.
+        gauge(registry, metric!(name: "mz_compute_correction_heap_minted_bytes", help: "Bytes of MV sink correction chunks held on the heap because the buffer pool declined them at mint."), &HEAP_MINTED_BYTES);
+        gauge(registry, metric!(name: "mz_compute_correction_heap_materialized_bytes", help: "Bytes of MV sink correction chunks taken out of the buffer pool onto the heap by a merge or split read."), &HEAP_MATERIALIZED_BYTES);
+        gauge(registry, metric!(name: "mz_compute_correction_materializations_total", help: "MV sink correction chunks taken out of the buffer pool onto the heap."), &MATERIALIZATIONS);
+        gauge(registry, metric!(name: "mz_compute_correction_view_copy_bytes_total", help: "Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks."), &VIEW_COPY_BYTES);
+    });
+}
+
+/// Register one computed gauge reading `value` at scrape time.
+fn gauge(registry: &MetricsRegistry, opts: MakeCollectorOpts, value: &'static AtomicU64) {
+    let _gauge: ComputedUIntGauge =
+        registry.register_computed_gauge(opts, move || value.load(atomic::Ordering::Relaxed));
+}
+
+impl<D: Data> Drop for Chunk<D> {
+    fn drop(&mut self) {
+        if self.resident.get().is_some() {
+            let gauge = if self.heap_at_mint {
+                &HEAP_MINTED_BYTES
+            } else {
+                &HEAP_MATERIALIZED_BYTES
+            };
+            gauge.fetch_sub(u64::cast_from(self.size()), atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1730,9 +1776,14 @@ impl<D: Data> Chunk<D> {
                 if cell.set(ColumnBody::Words(words)).is_err() {
                     unreachable!("cell is fresh");
                 }
+                HEAP_MINTED_BYTES.fetch_add(
+                    u64::cast_from(body_words * std::mem::size_of::<u64>()),
+                    atomic::Ordering::Relaxed,
+                );
                 (Mutex::new(None), cell)
             }
         };
+        let heap_at_mint = resident.get().is_some();
         Self {
             pooled,
             body_words,
@@ -1741,6 +1792,7 @@ impl<D: Data> Chunk<D> {
             first_time,
             last_time,
             depth,
+            heap_at_mint,
         }
     }
 
@@ -1762,6 +1814,9 @@ impl<D: Data> Chunk<D> {
                 .expect("a chunk the pool declined is materialized at construction");
             let mut words = Vec::new();
             handle.take(&mut words);
+            MATERIALIZATIONS.fetch_add(1, atomic::Ordering::Relaxed);
+            HEAP_MATERIALIZED_BYTES
+                .fetch_add(u64::cast_from(self.size()), atomic::Ordering::Relaxed);
             ColumnBody::Words(words)
         })
     }
@@ -1779,7 +1834,13 @@ impl<D: Data> Chunk<D> {
         {
             let pooled = self.pooled.lock().expect("pool handle mutex poisoned");
             match pooled.as_ref() {
-                Some(handle) => handle.read_into(&mut words),
+                Some(handle) => {
+                    handle.read_into(&mut words);
+                    VIEW_COPY_BYTES.fetch_add(
+                        u64::cast_from(words.len() * std::mem::size_of::<u64>()),
+                        atomic::Ordering::Relaxed,
+                    );
+                }
                 // Materialized between the check above and the lock.
                 None => {
                     drop(pooled);

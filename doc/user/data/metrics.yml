@@ -825,6 +825,22 @@ metrics:
   - instance_id
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_correction_heap_materialized_bytes
+  help: Bytes of MV sink correction chunks taken out of the buffer pool onto the heap by a merge or split read.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
+- name: mz_compute_correction_heap_minted_bytes
+  help: Bytes of MV sink correction chunks held on the heap because the buffer pool declined them at mint.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
+- name: mz_compute_correction_materializations_total
+  help: MV sink correction chunks taken out of the buffer pool onto the heap.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
+- name: mz_compute_correction_view_copy_bytes_total
+  help: Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
 - name: mz_compute_logging_records_total
   help: The number of log records handed to the logging dataflow, by log.
   labels:
