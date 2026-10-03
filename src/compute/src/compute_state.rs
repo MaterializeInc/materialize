@@ -515,7 +515,7 @@ impl ComputeState {
         // the full dyncfg aggregate, which is what makes the storage flag
         // readable here.
         {
-            use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
+            use mz_timely_util::pool_config::{PoolBackend, PoolPagerConfig, apply_pool_config};
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
@@ -548,12 +548,35 @@ impl ComputeState {
                 // write then pages out immediately, the pre-tier behavior.
                 let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
-                let applied = apply_pool_config(PoolPagerConfig {
-                    budget_bytes: total,
-                    spill_threads,
-                    eager_backing,
-                    rss_target_bytes: rss_target,
-                });
+                // The closure runs on the first application only, so the
+                // directory is created at install and later flag flips or
+                // directory failures cannot change the backend. The file
+                // store lives in its own subdirectory so it cannot collide
+                // with other scratch users.
+                let scratch = self.context.scratch_directory.as_ref();
+                let file_extents = ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config);
+                let backend = || match scratch {
+                    Some(scratch) if file_extents => {
+                        let dir = scratch.join("pool");
+                        match std::fs::create_dir_all(&dir) {
+                            Ok(()) => PoolBackend::File { dir },
+                            Err(err) => {
+                                warn!(%err, ?dir, "chunk spill: cannot create pool directory, using swap");
+                                PoolBackend::Swap
+                            }
+                        }
+                    }
+                    _ => PoolBackend::Swap,
+                };
+                let applied = apply_pool_config(
+                    PoolPagerConfig {
+                        budget_bytes: total,
+                        spill_threads,
+                        eager_backing,
+                        rss_target_bytes: rss_target,
+                    },
+                    backend,
+                );
                 if applied {
                     info!(
                         compute_spill,

@@ -149,6 +149,7 @@ fn main() {
                 eager_backing: false,
                 rss_target_bytes: pool_rss,
             },
+            || mz_timely_util::pool_config::PoolBackend::Swap,
         );
         assert!(ok, "pool reservation failed");
         // Spilling is gated per subsystem on top of the installed pool.
