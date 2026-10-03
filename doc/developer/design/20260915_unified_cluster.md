@@ -97,7 +97,9 @@ loop gains per-iteration guest duties: accept new guest connections, drain
 guest commands, forward async worker responses, and report frontiers, status
 updates, and statistics on storage's existing intervals. Parking is capped
 while a guest is present so those duties run on time, with the cap derived
-from the storage maintenance and statistics intervals.
+from the storage maintenance and statistics intervals. Once the unified
+topology was the only one, storage frontier reporting moved onto the compute
+worker's maintenance tick, and the storage maintenance interval was removed.
 
 The topology was fixed at process start and gated by the
 `enable_unified_cluster` system parameter. The controller read the parameter

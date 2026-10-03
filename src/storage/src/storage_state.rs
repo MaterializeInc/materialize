@@ -79,7 +79,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use fail::fail_point;
 use mz_ore::now::NowFn;
@@ -97,7 +96,6 @@ use mz_storage_types::AlterCompatible;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
@@ -221,7 +219,6 @@ impl StorageState {
                 cluster_memory_limit,
             ),
             tracing_handle,
-            server_maintenance_interval: Duration::ZERO,
         };
 
         storage_state
@@ -332,10 +329,6 @@ pub struct StorageState {
 
     /// A process-global handle to tracing configuration.
     pub tracing_handle: Arc<TracingHandle>,
-
-    /// Interval at which to perform server maintenance tasks. Set to a zero interval to
-    /// perform maintenance with every `step_or_park` invocation.
-    pub server_maintenance_interval: Duration,
 }
 
 impl StorageState {
@@ -708,12 +701,6 @@ impl<'w> Worker<'w> {
                     .storage_configuration
                     .parameters
                     .dyncfg_updates = Default::default();
-
-                // Remember the maintenance interval locally to avoid reading it from the config set on
-                // every server iteration.
-                self.storage_state.server_maintenance_interval =
-                    STORAGE_SERVER_MAINTENANCE_INTERVAL
-                        .get(self.storage_state.storage_configuration.config_set());
 
                 // Apply storage's upsert spill flag to both stash flavors'
                 // mechanisms: the storage leg of the process-wide chunk

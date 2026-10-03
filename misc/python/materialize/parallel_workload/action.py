@@ -3413,7 +3413,6 @@ class FlipFlagsAction(Action):
             "storage_suspend_and_restart_delay",
             "storage_reclock_to_latest",
             "storage_use_continual_feedback_upsert",
-            "storage_server_maintenance_interval",
             "storage_sink_progress_search",
             "storage_sink_ensure_topic_config",
             "ore_overflowing_behavior",

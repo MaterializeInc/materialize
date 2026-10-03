@@ -476,14 +476,6 @@ pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// The interval at which the storage server performs maintenance tasks.
-pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
-    "storage_server_maintenance_interval",
-    Duration::from_millis(10),
-    "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
-    ParameterScope::Replica,
-);
-
 /// If set, iteratively search the progress topic for a progress record with increasing lookback.
 pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
     "storage_sink_progress_search",
@@ -587,7 +579,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD)
-        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
