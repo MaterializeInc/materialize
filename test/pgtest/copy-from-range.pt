@@ -108,3 +108,74 @@ ReadyForQuery
 ----
 ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
+
+#
+# Negative: a discrete step that overflows the element type is an error
+#
+
+send
+Query {"query": "COPY copy_range_t FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "[1,2147483647]\n"
+CopyDone
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+#
+# The step's width comes from the declared element type, so the bound that
+# overflows an int4range is fine in an int8range.
+#
+
+send
+Query {"query": "CREATE TABLE copy_range_t8 (r int8range)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY copy_range_t8 FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "[1,2147483647]\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SELECT r FROM copy_range_t8"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"r"}]}
+DataRow {"fields":["[1,2147483648)"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
