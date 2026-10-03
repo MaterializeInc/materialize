@@ -16,9 +16,8 @@
 //!
 //! Every command is forwarded to both runtimes, maintenance first, except `Peek` and `CancelPeek`,
 //! which go to the interactive runtime, because in a two-runtime process it serves every peek.
-//! Each runtime reads a `CreateDataflow`'s `DataflowClass`: the runtime that renders that class
-//! builds the dataflow, and the other one records its exports as peer collections. So both
-//! runtimes see the same command stream, and a command means the same thing on either.
+//! Each runtime decides from a `CreateDataflow`'s `DataflowClass` whether it renders the dataflow.
+//! So both runtimes see the same command stream, and a command means the same thing on either.
 //!
 //! The ordering invariant the controller relies on, that an index's `since` does not pass the
 //! `as_of` of a dataflow importing it, follows from the broadcast. The interactive runtime holds a

@@ -316,6 +316,23 @@ impl<P, S> DataflowDescription<P, S> {
         self.as_of = Some(as_of);
     }
 
+    /// Bounds the dataflow to the single read at its `as_of`, which makes it a
+    /// [`DataflowClass::OneShotRead`].
+    ///
+    /// Leaves the dataflow unchanged unless `as_of` is a single time with a successor. A read at
+    /// [`Timestamp::MAX`] has no finite `until`, so it is not single-time and stays maintained.
+    pub fn bound_to_single_read(&mut self) {
+        let until = self
+            .as_of
+            .as_ref()
+            .and_then(|as_of| as_of.as_option())
+            .and_then(Timestamp::try_step_forward);
+        if let Some(until) = until {
+            self.until = Antichain::from_elem(until);
+            self.class = DataflowClass::OneShotRead;
+        }
+    }
+
     /// Records the initial `as_of` of the storage collection associated with a materialized view.
     pub fn set_initial_as_of(&mut self, initial_as_of: Antichain<Timestamp>) {
         self.initial_storage_as_of = Some(initial_as_of);

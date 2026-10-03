@@ -14,12 +14,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::{DataflowClass, IndexDesc};
+use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -27,7 +27,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use mz_transform::{StatisticsOracle, TransformCtx};
-use timely::progress::Antichain;
 use tracing::debug_span;
 
 use crate::TimestampContext;
@@ -309,21 +308,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Use the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
-        //
-        // If `timestamp_ctx.antichain()` is empty, `timestamp_ctx.timestamp()`
-        // will return `None` and we use the default (empty) `until`. Otherwise,
-        // we expect to be able to set `until = as_of + 1` without an overflow, unless
-        // we query at the maximum timestamp. In this case, the default empty `until`
-        // is the correct choice.
-        if let Some(until) = timestamp_ctx
-            .timestamp()
-            .and_then(Timestamp::try_step_forward)
-        {
-            df_desc.until = Antichain::from_elem(until);
-            // The dataflow exists to answer this one read. Without a finite `until` it is not
-            // single-time and stays a maintained dataflow.
-            df_desc.class = DataflowClass::OneShotRead;
-        }
+        df_desc.bound_to_single_read();
 
         // Construct TransformCtx for global optimization.
         let mut transform_ctx = TransformCtx::global(
