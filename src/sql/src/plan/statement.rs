@@ -38,7 +38,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{Params, Plan, PlanContext, PlanKind, query};
+use crate::plan::{AnalyzedSelect, Params, Plan, PlanContext, PlanKind, SelectPlan, query};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -97,6 +97,16 @@ impl StatementDesc {
     }
 }
 
+/// A statement description and the reusable analysis that produced it.
+#[derive(Clone, Debug)]
+pub struct StatementAnalysis {
+    pub desc: StatementDesc,
+    /// Absent for statements that do not support retained SELECT analysis.
+    pub select: Option<AnalyzedSelect>,
+    /// SQL-function implementation dependencies for execution-time authorization.
+    pub sql_impl_ids: ResolvedIds,
+}
+
 /// Creates a description of the purified statement `stmt`.
 ///
 /// See the documentation of [`StatementDesc`] for details.
@@ -106,6 +116,27 @@ pub fn describe(
     stmt: Statement<Aug>,
     param_types_in: &[Option<SqlScalarType>],
 ) -> Result<StatementDesc, PlanError> {
+    Ok(describe_inner(pcx, catalog, stmt, param_types_in, false)?.desc)
+}
+
+/// Describes a statement while retaining its parameterized SELECT analysis.
+pub fn describe_analyzed(
+    pcx: &PlanContext,
+    catalog: &dyn SessionCatalog,
+    stmt: Statement<Aug>,
+    param_types_in: &[Option<SqlScalarType>],
+) -> Result<StatementAnalysis, PlanError> {
+    describe_inner(pcx, catalog, stmt, param_types_in, true)
+}
+
+fn describe_inner(
+    pcx: &PlanContext,
+    catalog: &dyn SessionCatalog,
+    stmt: Statement<Aug>,
+    param_types_in: &[Option<SqlScalarType>],
+    retain_analysis: bool,
+) -> Result<StatementAnalysis, PlanError> {
+    catalog.record_plan_operation(crate::catalog::PlanOperation::Describe);
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
         if let Some(ty) = ty {
@@ -121,6 +152,7 @@ pub fn describe(
         sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
+    let mut select = None;
     let desc = match stmt {
         // DDL statements.
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
@@ -244,6 +276,11 @@ pub fn describe(
         Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
+        Statement::Select(stmt) if retain_analysis => {
+            let (desc, analyzed) = dml::analyze_select(&scx, stmt)?;
+            select = analyzed;
+            desc
+        }
         Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
         Statement::Subscribe(stmt) => dml::describe_subscribe(&scx, stmt)?,
         Statement::Update(stmt) => dml::describe_update(&scx, stmt)?,
@@ -268,8 +305,108 @@ pub fn describe(
         }
     };
 
+    let mut sql_impl_ids = if retain_analysis {
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .clone()
+    } else {
+        ResolvedIds::empty()
+    };
     let desc = desc.with_params(scx.finalize_param_types()?);
-    Ok(desc)
+    if let Some(analyzed) = select.take() {
+        let inferred_parameters = desc
+            .param_types
+            .iter()
+            .enumerate()
+            .any(|(i, ty)| param_types_in.get(i).and_then(Option::as_ref) != Some(ty));
+        if inferred_parameters {
+            // Unknown parameters participate in overload resolution differently
+            // from typed parameters. Retain the execution planner's interpretation
+            // with finalized types, not the description pass's provisional HIR.
+            // If it fails, preserve Describe and let ordinary execution planning
+            // report the error at its existing protocol stage.
+            let mut typed_scx = StatementContext::new(Some(pcx), catalog);
+            *typed_scx.param_types.get_mut() = desc
+                .param_types
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(i, ty)| (i + 1, ty))
+                .collect();
+            if let Ok((typed_desc, typed_select)) = dml::analyze_select(&typed_scx, analyzed.select)
+            {
+                if typed_desc.with_params(desc.param_types.clone()) == desc {
+                    select = typed_select;
+                    sql_impl_ids = typed_scx
+                        .sql_impl_resolved_ids
+                        .lock()
+                        .expect("planning is single-threaded")
+                        .clone();
+                }
+            }
+        } else {
+            select = Some(analyzed);
+        }
+    }
+    Ok(StatementAnalysis {
+        desc,
+        select,
+        sql_impl_ids,
+    })
+}
+
+/// Binds a validated analyzed SELECT without reconstructing its typed query.
+///
+/// The caller must validate the analysis's catalog and semantic session context
+/// and authorize both its resolved names and SQL-function implementation IDs.
+/// The returned IDs supplement the analysis's implementation IDs with those
+/// discovered while binding, including in AS OF expressions.
+pub fn plan_analyzed_select(
+    pcx: &PlanContext,
+    catalog: &dyn SessionCatalog,
+    analyzed: &AnalyzedSelect,
+    params: &Params,
+    resolved_ids: &ResolvedIds,
+) -> Result<(SelectPlan, ResolvedIds), PlanError> {
+    let mut scx = StatementContext::new(Some(pcx), catalog);
+    *scx.param_types.get_mut() = params
+        .expected_types
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, ty)| (i + 1, ty))
+        .collect();
+    check_unsafe_functions(scx.catalog, resolved_ids)?;
+    // AS OF is planned at execution, just as on the uncached path. In particular,
+    // errors and execution-dependent expressions must not move into Describe.
+    let when = query::plan_as_of(&scx, analyzed.select.as_of.clone())?;
+    let plan = dml::bind_analyzed_select(&scx, analyzed.clone(), params, None, when)?;
+    let sql_impl_ids = scx
+        .sql_impl_resolved_ids
+        .lock()
+        .expect("planning is single-threaded")
+        .clone();
+    Ok((plan, sql_impl_ids))
+}
+
+/// Checks the execution-time feature gate for referenced unsafe functions.
+pub fn check_unsafe_functions(
+    catalog: &dyn SessionCatalog,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), PlanError> {
+    if resolved_ids
+        .items()
+        .filter_map(|id| catalog.try_get_item(id))
+        .any(|item| {
+            item.func().is_ok()
+                && item.name().qualifiers.schema_spec
+                    == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
+        })
+    {
+        vars::UNSAFE_ENABLE_UNSAFE_FUNCTIONS.require(catalog.system_vars())?;
+    }
+    Ok(())
 }
 
 /// Produces a [`Plan`] from the purified statement `stmt`.
@@ -296,6 +433,7 @@ pub fn plan(
     params: &Params,
     resolved_ids: &ResolvedIds,
 ) -> Result<(Plan, ResolvedIds), PlanError> {
+    catalog.record_plan_operation(crate::catalog::PlanOperation::Plan);
     let param_types = params
         // We need the `expected_types` here, not the `actual_types`! This is because
         // `expected_types` is how the parameter expression (e.g. `$1`) looks "from the outside":
@@ -317,18 +455,7 @@ pub fn plan(
         sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
-    if resolved_ids
-        .items()
-        // Filter out items that may not have been created yet, such as sub-sources.
-        .filter_map(|id| catalog.try_get_item(id))
-        .any(|item| {
-            item.func().is_ok()
-                && item.name().qualifiers.schema_spec
-                    == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
-        })
-    {
-        scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNSAFE_FUNCTIONS)?;
-    }
+    check_unsafe_functions(scx.catalog, resolved_ids)?;
 
     let plan = match stmt {
         // DDL statements.
