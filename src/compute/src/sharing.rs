@@ -16,13 +16,8 @@
 //! runtime can mint a `Send` `SharedReader` for the same arrangement.
 //!
 //! A process holds one registry per local worker ordinal, and each runtime's worker with that
-//! ordinal holds a clone of it. Pairing worker `i` of one runtime with worker `i` of the other is
-//! sound only because both runtimes run the same number of workers per process at the same process
-//! ordinal, so both sides shard keys by the same `key.hashed() % peers`.
-
-// TODO(CPU-215): drop once `crate::compute_state` serves peeks through this registry. Until then
-// some of its methods are called only from tests, so the expectation holds outside tests alone.
-#![cfg_attr(not(test), expect(unused))]
+//! ordinal holds a clone of it. `clusterd` asserts the runtime layout that makes this pairing
+//! sound.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -33,7 +28,9 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::arrangement::manager::TraceBundle;
-use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
+use crate::shared_trace::{Published, adopt_trace};
+#[cfg(test)]
+use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
@@ -117,6 +114,7 @@ impl ArrangementSharingRegistry {
     }
 
     /// The slot for `id`, if someone holds it.
+    #[cfg(test)]
     fn slot(inner: &Inner, id: &GlobalId) -> Option<Arc<SharedIndexArrangement>> {
         inner.map.get(id).and_then(Weak::upgrade)
     }
@@ -165,7 +163,9 @@ impl ArrangementSharingRegistry {
         TraceBundle::shared(oks, errs).with_drop(slot)
     }
 
-    /// Mints reader handles for `id`, if published.
+    /// Mints reader handles for `id`, if published. Test-only: production reads hold a slot through
+    /// [`Self::peer_bundle`].
+    #[cfg(test)]
     pub(crate) fn handles(&self, id: &GlobalId) -> Option<(SharedOksHandle, SharedErrsHandle)> {
         let inner = self.lock();
         let slot = Self::slot(&inner, id)?;
@@ -202,7 +202,8 @@ impl ArrangementSharingRegistry {
         );
     }
 
-    /// Attaches the current thread as the worker that reads here, which a publication unparks.
+    /// Attaches the current thread as the worker that reads here, which a publication unparks. A
+    /// peek waiting on a seal is served by the worker's next sweep, so the unpark is all it needs.
     ///
     /// # Panics
     ///

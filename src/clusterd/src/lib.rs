@@ -23,6 +23,8 @@ use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute::sharing::ArrangementSharingRegistry;
+use mz_compute_client::multiplex::Multiplexer;
+use mz_compute_client::service::ComputeClient;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -95,6 +97,13 @@ struct Args {
     /// Configuration for the compute Timely cluster.
     #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
     compute_timely_config: TimelyConfig,
+    /// Configuration for a second, interactive compute Timely cluster.
+    ///
+    /// When present, the process runs a second compute runtime alongside the maintenance runtime,
+    /// sharing the maintenance runtime's process ordinal and peer count but supplying its own
+    /// inter-worker addresses. When absent, the process runs exactly one compute runtime.
+    #[clap(long, env = "INTERACTIVE_COMPUTE_TIMELY_CONFIG")]
+    interactive_compute_timely_config: Option<TimelyConfig>,
     /// The index of the process in both Timely clusters.
     #[clap(long, env = "PROCESS")]
     process: usize,
@@ -186,6 +195,22 @@ struct Args {
 fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
     let ordinal = hostname.rsplit('-').next()?;
     ordinal.parse::<usize>().ok().map(|_| ordinal)
+}
+
+/// Fronts each controller connection's client of the maintenance runtime with a [`Multiplexer`]
+/// over a client of the interactive runtime, if one runs.
+fn multiplex_compute(
+    maintenance: impl Fn() -> Box<dyn ComputeClient> + Send + 'static,
+    interactive: Option<impl Fn() -> Box<dyn ComputeClient> + Send + 'static>,
+) -> Box<dyn Fn() -> Box<dyn ComputeClient> + Send> {
+    match interactive {
+        Some(interactive) => Box::new(move || {
+            let client: Box<dyn ComputeClient> =
+                Box::new(Multiplexer::new(maintenance(), interactive()));
+            client
+        }),
+        None => Box::new(maintenance),
+    }
 }
 
 pub fn main() {
@@ -434,16 +459,72 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
-    // One sharing registry per local worker, rather than per runtime: a reader on one runtime looks
-    // up the slot its peer worker on another runtime filled, so both must hold the same registry.
     let sharing_registries = ArrangementSharingRegistry::per_worker(compute_timely_config.workers);
+
+    // Both runtimes are the same process, so the interactive one takes the maintenance runtime's
+    // process ordinal. Each local worker shares an arrangement sharing registry with the worker of
+    // the same local ordinal on the other runtime, and reads are sound only because both then shard
+    // keys across the same peers, so the two must run equally many workers over equally many
+    // processes.
+    let interactive_compute_timely_config = args.interactive_compute_timely_config.map(
+        |mut interactive| {
+            interactive.process = args.process;
+            assert_eq!(
+                (
+                    compute_timely_config.workers,
+                    compute_timely_config.addresses.len()
+                ),
+                (interactive.workers, interactive.addresses.len()),
+                "interactive and maintenance compute runtimes must run equally many workers per \
+                 process over equally many processes",
+            );
+            interactive
+        },
+    );
+    let maintenance_role = if interactive_compute_timely_config.is_some() {
+        ComputeRuntimeRole::Maintenance
+    } else {
+        ComputeRuntimeRole::Solo
+    };
+
+    // NOTE: The interactive runtime starts before either branch below opens a listener. On a
+    // unified cluster the storage objects render on the maintenance runtime, whose compute logging
+    // the compute controller's `CreateInstance` installs, and a dataflow rendered before that
+    // never appears in compute introspection. A storage listener opened before the interactive
+    // runtime finishes starting gives a storage controller that whole startup to render first.
+    //
+    // Shared fate: the panic hook `main` installs covers both runtimes' threads, so a panic on
+    // either aborts the process. That bounds an interactive import's read hold to the life of the
+    // replica without a lease.
+    let interactive_compute_client_builder = match interactive_compute_timely_config {
+        Some(config) => {
+            let builder = mz_compute::server::serve(
+                config,
+                ComputeRuntimeRole::Interactive,
+                &metrics_registry,
+                Arc::clone(&persist_clients),
+                sharing_registries.clone(),
+                txns_ctx.clone(),
+                Arc::clone(&tracing_handle),
+                ComputeInstanceContext {
+                    scratch_directory: args.scratch_directory.clone(),
+                    worker_core_affinity: args.worker_core_affinity,
+                    connection_context: connection_context.clone(),
+                },
+            )
+            .await?;
+            info!("started interactive compute runtime");
+            Some(builder)
+        }
+        None => None,
+    };
 
     if args.unified_cluster {
         info!("running with a unified timely cluster");
 
         let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
             compute_timely_config,
-            ComputeRuntimeRole::Solo,
+            maintenance_role,
             &metrics_registry,
             persist_clients,
             sharing_registries,
@@ -488,7 +569,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 BUILD_INFO.semver_version(),
                 grpc_host,
                 Duration::MAX,
-                compute_client_builder,
+                multiplex_compute(compute_client_builder, interactive_compute_client_builder),
                 cluster_server_metrics.for_server("compute"),
             )
             .instrument(info_span!("ctp", name = "compute")),
@@ -530,7 +611,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
         compute_timely_config,
-        ComputeRuntimeRole::Solo,
+        maintenance_role,
         &metrics_registry,
         persist_clients,
         sharing_registries,
@@ -554,7 +635,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
             Duration::MAX,
-            compute_client_builder,
+            multiplex_compute(compute_client_builder, interactive_compute_client_builder),
             cluster_server_metrics.for_server("compute"),
         )
         .instrument(info_span!("ctp", name = "compute")),
@@ -580,7 +661,48 @@ fn is_connection_error(e: &std::io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
+
+    fn timely_config(workers: usize, addresses: &[&str]) -> TimelyConfig {
+        TimelyConfig {
+            workers,
+            process: 0,
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[mz_ore::test]
+    fn cli_parses_interactive_compute_timely_config() {
+        let cfg = timely_config(1, &["127.0.0.1:2102"]).to_string();
+        let base = |extra: Vec<&str>| {
+            let mut argv = vec![
+                "clusterd",
+                "--storage-timely-config",
+                &cfg,
+                "--compute-timely-config",
+                &cfg,
+                "--process",
+                "0",
+                "--environment-id",
+                "test-env",
+                "--secrets-reader=local-file",
+                "--secrets-reader-local-file-dir=/tmp",
+            ];
+            argv.extend(extra);
+            Args::try_parse_from(argv).expect("args parse")
+        };
+
+        // Absent flag leaves the interactive config unset, so the single-runtime path is taken.
+        assert!(base(vec![]).interactive_compute_timely_config.is_none());
+
+        // The new flag parses into an `Option<TimelyConfig>`.
+        let interactive = timely_config(1, &["127.0.0.1:2103"]).to_string();
+        let args = base(vec!["--interactive-compute-timely-config", &interactive]);
+        assert!(args.interactive_compute_timely_config.is_some());
+    }
 
     #[mz_ore::test]
     fn test_process_ordinal_from_hostname() {

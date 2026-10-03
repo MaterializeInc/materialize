@@ -25,7 +25,7 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::{DataflowClass, DataflowDescription};
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
@@ -34,7 +34,7 @@ use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::EpochMillis;
@@ -51,7 +51,6 @@ use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
@@ -76,6 +75,8 @@ use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
+use crate::placement::Placement;
+use crate::process_globals::ProcessGlobals;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
 use crate::sharing::ArrangementSharingRegistry;
@@ -217,6 +218,19 @@ pub struct ComputeState {
     pub persist_clients: Arc<PersistClientCache>,
     /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
     pub(crate) publisher: Option<ArrangementSharingRegistry>,
+    /// Whether this runtime applies the process-global settings.
+    process_globals: ProcessGlobals,
+    /// The dataflow classes this runtime renders.
+    placement: Placement,
+    /// Reads the indexes the process's other runtime publishes, if that runtime publishes them.
+    peer_traces: Option<ArrangementSharingRegistry>,
+    /// Collections a dataflow placed on the process's other runtime exports.
+    ///
+    /// Never in `collections`, which drives frontier reporting: the runtime that renders a
+    /// collection reports its frontiers, and a second report would race it. On a runtime that
+    /// reads its peer's indexes, a peer index also has a shared trace in `traces`, whose logical
+    /// compaction is this runtime's hold on it.
+    pub(crate) peers: BTreeSet<GlobalId>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -335,14 +349,17 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
-            publisher: match role {
-                // Only maintenance has a peer that reads its indexes.
-                ComputeRuntimeRole::Maintenance => {
-                    sharing_registry.attach_publisher();
-                    Some(sharing_registry.clone())
-                }
-                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => None,
-            },
+            process_globals: role.process_globals(),
+            placement: role.placement(),
+            peer_traces: role.reads_peer_indexes().then(|| {
+                sharing_registry.attach_reader();
+                sharing_registry.clone()
+            }),
+            peers: Default::default(),
+            publisher: role.publishes_indexes().then(|| {
+                sharing_registry.attach_publisher();
+                sharing_registry.clone()
+            }),
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -400,216 +417,17 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
-                let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
-                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
-                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
-                let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
-                info!(
-                    ?path,
-                    backgrund_interval=?interval,
-                    clear_bytes,
-                    eager_return,
-                    file_growth_dampener,
-                    local_buffer_bytes,
-                    "enabling lgalloc"
-                );
-                let background_worker_config = lgalloc::BackgroundWorkerConfig {
-                    interval,
-                    clear_bytes,
-                };
-                lgalloc::lgalloc_set_config(
-                    lgalloc::LgAlloc::new()
-                        .enable()
-                        .with_path(path.clone())
-                        .with_background_config(background_worker_config)
-                        .eager_return(eager_return)
-                        .file_growth_dampener(file_growth_dampener)
-                        .local_buffer_bytes(local_buffer_bytes),
-                );
-            } else {
-                debug!("not enabling lgalloc, scratch directory not specified");
-            }
-        } else {
-            info!("disabling lgalloc");
-            lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
-        }
-
-        // Pager backend selection follows scratch-directory availability:
-        // a scratch dir means the file backend; no scratch dir means swap.
-        // `set_scratch_dir` and `set_backend` are both idempotent, so calling
-        // on every `apply_worker_config` tick is safe. The pager module is
-        // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
-        #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
-            mz_ore::pager::set_scratch_dir(path.clone());
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
-        } else {
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
-        }
-
-        crate::memory_limiter::apply_limiter_config(config);
-
-        mz_ore::region::ENABLE_LGALLOC_REGION.store(
-            ENABLE_COLUMNATION_LGALLOC.get(config),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.process_globals
+            .apply_config(config, self.context.scratch_directory.as_ref());
 
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
         // settings above, it is captured once at replica creation (see `handle_create_instance`
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
         // flipping the flag does not retroactively change arrangements on existing replicas.
 
-        // Apply column-pager configuration. The arrange batchers spill
-        // through the buffer pool below, so the consumers of this budget are
-        // the MV sink's correction buffer and storage's paged upsert stash
-        // flavor, which share one policy and one underlying `mz_ore::pager`.
-        // Routes through `apply_tiered_config`, which reuses a process-wide
-        // `TieredPolicy` singleton — operator-driven tunes mutate the
-        // existing atomics rather than installing a fresh policy with a
-        // fresh budget atomic that would orphan in-flight resident tickets.
-        //
-        // Backend selection mirrors the lower-level `mz_ore::pager`
-        // already configured above: file when a scratch directory is
-        // available, swap otherwise.
-        {
-            use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
-
-            let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
-            let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
-
-            // Budget derivation: fraction × announced memory limit, with a
-            // 128 MiB floor so the no-pressure case doesn't page per chunk.
-            // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
-            const MIB: usize = 1024 * 1024;
-            const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
-            let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
-            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
-
-            let backend = if self.context.scratch_directory.is_some() {
-                Backend::File
-            } else {
-                Backend::Swap
-            };
-
-            debug!(
-                enabled,
-                ?backend,
-                ?codec,
-                swap_pageout,
-                fraction,
-                mem_limit,
-                budget_bytes = total,
-                "column-paged batcher: applying tiered config",
-            );
-            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
-        }
-
-        // Install and retune the process-wide buffer pool that backs chunk
-        // spilling. Installation is the gate. The pool is constructed, and its
-        // MAP_NORESERVE address space reserved and spill threads spawned, only
-        // when a config apply runs with a spill gate on, so a process that
-        // never enables spilling never mmaps the pool. Config application
-        // reruns on every UpdateConfiguration, so flipping a gate on installs
-        // the pool on the next tick. The pool is a process singleton with no
-        // teardown: once installed it stays active for the life of the process.
-        // Turning every gate back off makes this block do nothing, so the pool
-        // keeps its last-applied budget rather than being uninstalled. Later
-        // ticks with a gate on retune the one instance in place.
-        //
-        // Storage's stash shares the singleton and gates only participation,
-        // so its spill gate installs the pool too. The worker config set is
-        // the full dyncfg aggregate, which is what makes the storage flag
-        // readable here.
-        {
-            use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
-
-            let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
-            let sink_spill = ENABLE_CORRECTION_V2_SPILL.get(config);
-            // Set compute's leg of the process-wide chunk spill gate. The
-            // gate ORs this leg with storage's, so chunks spill while either
-            // subsystem's flag is set. Storage's config application writes
-            // only its own leg, keeping the two flags from clobbering each
-            // other. The correction buffer has a gate of its own.
-            mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
-            mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
-            if !(compute_spill || storage_spill || sink_spill) {
-                debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
-            } else {
-                let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
-                let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
-
-                // Budget derivation: fraction of physical RAM, with a 128 MiB
-                // floor so the no-pressure case doesn't page per chunk.
-                // Resident budgets derive from RAM, never from the announced
-                // memory limit, which on swap-provisioned nodes deliberately
-                // includes swap for the memory limiter's purposes. Falls back
-                // to a 4 GiB assumption if detection fails.
-                const MIB: usize = 1024 * 1024;
-                const DEFAULT_RAM: usize = 4 * 1024 * MIB;
-                let ram = mz_ore::memory::physical_memory_bytes().unwrap_or(DEFAULT_RAM);
-                let of_ram =
-                    |fraction: f64| usize::cast_lossy(f64::cast_lossy(ram) * fraction.max(0.0));
-                let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config);
-                let total = of_ram(fraction).max(128 * MIB);
-                // No ordering is enforced between the target and the budget. A
-                // target at or below budget + warm cap leaves no compressed-tier
-                // headroom, which legally collapses the tier. Every backing
-                // write then pages out immediately, the pre-tier behavior.
-                let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
-
-                let applied = apply_pool_config(PoolPagerConfig {
-                    budget_bytes: total,
-                    spill_threads,
-                    eager_backing,
-                    rss_target_bytes: rss_target,
-                });
-                if applied {
-                    info!(
-                        compute_spill,
-                        storage_spill,
-                        fraction,
-                        ram,
-                        budget_bytes = total,
-                        spill_threads,
-                        eager_backing,
-                        rss_target_bytes = rss_target,
-                        "chunk spill: applying buffer-pool config",
-                    );
-                } else {
-                    warn!("chunk spill: buffer pool unavailable; chunks stay resident");
-                }
-            }
-
-            // The generational depth floor below which spilled bodies store
-            // uncompressed. Subsystem-independent, so applied here alongside
-            // the rest of the process-wide chunk configuration.
-            let compress_min_depth =
-                u8::try_from(COLUMN_CHUNK_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
-            mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
-        }
-
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
-
-        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
-        match overflowing_behavior.parse() {
-            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
-            Err(err) => {
-                error!(
-                    err,
-                    overflowing_behavior, "Invalid value for ore_overflowing_behavior"
-                );
-            }
-        }
     }
 
     /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
@@ -728,18 +546,28 @@ impl<'a> ActiveComputeState<'a> {
         // Apply dictionary compression exactly once, here at instance creation, from the value the
         // controller captured when the replica was created. We deliberately do NOT re-apply it on
         // `handle_update_configuration`, so flipping the flag does not retroactively change this
-        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global and a replica process
-        // hosts a single instance, so this single store covers all of the replica's arrangements.
-        mz_row_spine::DICTIONARY_COMPRESSION.store(
-            config.arrangement_dictionary_compression,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        // replica's arrangements. Both runtimes of a process host a single instance, so the one
+        // store covers all arrangements.
+        self.compute_state
+            .process_globals
+            .apply_dictionary_compression(config.arrangement_dictionary_compression);
 
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);
         }
 
-        self.initialize_logging(config.logging);
+        // Logging dataflows are maintained work.
+        if self
+            .compute_state
+            .placement
+            .renders(DataflowClass::Maintained)
+        {
+            self.initialize_logging(config.logging);
+        } else {
+            let index_ids: Vec<_> = config.logging.index_logs.values().copied().collect();
+            let minimum = Antichain::from_elem(Timestamp::MIN);
+            self.record_peers(index_ids.clone().into_iter(), index_ids, &minimum);
+        }
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
@@ -782,6 +610,39 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
+        // A dataflow of a class this runtime does not render is the other runtime's, and this
+        // runtime records its exports as peers. Placement comes first, before anything allocates a
+        // dataflow index, so such a dataflow builds nothing here.
+        if self.compute_state.placement.renders(dataflow.class) {
+            self.render_dataflow(dataflow);
+        } else {
+            let as_of = dataflow.as_of.clone().expect("dataflow has an as_of");
+            let index_ids: Vec<_> = dataflow.index_exports.keys().copied().collect();
+            self.record_peers(dataflow.export_ids(), index_ids, &as_of);
+        }
+    }
+
+    /// Records collections the process's other runtime exports, holding each index among them at
+    /// `as_of` where this runtime reads that runtime's indexes.
+    fn record_peers(
+        &mut self,
+        export_ids: impl Iterator<Item = GlobalId>,
+        index_ids: impl IntoIterator<Item = GlobalId>,
+        as_of: &Antichain<Timestamp>,
+    ) {
+        for id in export_ids {
+            let fresh = self.compute_state.peers.insert(id);
+            mz_ore::soft_assert_or_log!(fresh, "peer collection {id} recorded twice");
+        }
+        if let Some(registry) = &self.compute_state.peer_traces {
+            for id in index_ids {
+                let bundle = registry.peer_bundle(id, as_of);
+                self.compute_state.traces.set(id, bundle);
+            }
+        }
+    }
+
+    fn render_dataflow(&mut self, dataflow: DataflowDescription<RenderPlan, CollectionMetadata>) {
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
@@ -903,6 +764,13 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
+        //
+        // A peer's dataflow runs on the other runtime, so its `Schedule` changes nothing here.
+        mz_ore::soft_assert_or_log!(
+            self.compute_state.collections.contains_key(&id)
+                || self.compute_state.peers.contains(&id),
+            "schedule for unknown collection {id}"
+        );
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
         drop(suspension_token);
 
@@ -914,13 +782,23 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
-        if frontier.is_empty() {
-            // Indicates that we may drop `id`, as there are no more valid times to read.
-            self.drop_collection(id);
-        } else {
-            self.compute_state
+        // An empty frontier means there are no more valid times to read, so the collection goes.
+        // For a peer, compaction moves this runtime's hold on the other runtime's publication.
+        let hosted = self.compute_state.collections.contains_key(&id);
+        let peer = self.compute_state.peers.contains(&id);
+        match (hosted, peer, frontier.is_empty()) {
+            (true, _, true) => self.drop_collection(id),
+            (false, true, true) => {
+                self.compute_state.peers.remove(&id);
+                self.compute_state.traces.remove(&id);
+            }
+            (true, _, false) | (false, true, false) => self
+                .compute_state
                 .traces
-                .allow_compaction(id, frontier.borrow());
+                .allow_compaction(id, frontier.borrow()),
+            (false, false, _) => {
+                mz_ore::soft_panic_or_log!("allow compaction for unknown collection {id}")
+            }
         }
     }
 
@@ -929,7 +807,20 @@ impl<'a> ActiveComputeState<'a> {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
+                let Some(trace_bundle) = self.compute_state.traces.get(id).cloned() else {
+                    // The controller sends a peek only after the index's `CreateDataflow`, and peeks
+                    // reach only a runtime that hosts the index or reads it as a peer, so a missing
+                    // trace is a protocol violation.
+                    soft_panic_or_log!("peek {} targets unknown index {id}", peek.uuid);
+                    self.send_compute_response(ComputeResponse::PeekResponse(
+                        peek.uuid,
+                        PeekResponse::Error(PeekError::unstructured(format!(
+                            "index {id} is not available on this replica"
+                        ))),
+                        OpenTelemetryContext::obtain(),
+                    ));
+                    return;
+                };
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
@@ -978,9 +869,10 @@ impl<'a> ActiveComputeState<'a> {
         // such as appending a batch or advancing the upper.
         self.compute_state.persist_clients.cfg().enable_compaction();
 
+        // A peer's writes happen on the other runtime.
         if let Some(collection) = self.compute_state.collections.get_mut(&id) {
             collection.allow_writes();
-        } else {
+        } else if !self.compute_state.peers.contains(&id) {
             soft_panic_or_log!("allow writes for unknown collection {id}");
         }
     }

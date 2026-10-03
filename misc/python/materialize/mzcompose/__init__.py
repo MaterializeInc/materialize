@@ -716,6 +716,8 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    # Not varied while the interactive runtime cannot serve index peeks.
+    "enable_compute_interactive_runtime",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
