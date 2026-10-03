@@ -1982,6 +1982,15 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    // A kill switch rather than a rollout gate: it is on by default, and it must not be
+    // forced on for item parsing, or turning it off could not rescue an environment whose
+    // stored views fail to re-plan under the stricter rules.
+    {
+        name: enable_zero_arity_alias_scoping,
+        desc: "zero-column relation aliases shadowing outer names and counting as duplicates",
+        default: true,
+        enable_for_item_parsing: false,
+    },
     {
         name: unsafe_enable_incomplete_view_column_lists,
         desc: "declaring a view with fewer column names than columns",
