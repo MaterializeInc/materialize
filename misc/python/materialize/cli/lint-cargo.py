@@ -69,23 +69,24 @@ def check_default_members(workspace: Workspace) -> bool:
 
 
 def check_workspace_dependencies(workspace: Workspace) -> bool:
-    """Checks that crates use workspace dependencies instead of specifying
-    versions inline when a workspace dependency is available."""
+    """Checks that crates declare every dependency that is not a path
+    dependency with `workspace = true`, so that its version and source live in
+    the root `[workspace.dependencies]`."""
 
     success = True
     for name, crate in sorted(workspace.crates.items()):
         for dep, dep_types in crate.non_workspace_deps.items():
-            if dep in workspace.workspace_dependencies:
-                print(
-                    f"{name}: {dep} should use `workspace = true` "
-                    f"(found in {', '.join(dep_types)})",
-                    file=sys.stderr,
-                )
-                success = False
+            print(
+                f"{name}: {dep} should use `workspace = true` "
+                f"(found in {', '.join(dep_types)})",
+                file=sys.stderr,
+            )
+            success = False
     if not success:
         print(
-            '\nhint: replace `dep = "version"` with `dep.workspace = true` '
-            "or `dep = { workspace = true, ... }` for the above dependencies",
+            "\nhint: declare the above dependencies in `[workspace.dependencies]` "
+            'of the root Cargo.toml if missing, and replace `dep = "version"` '
+            "with `dep.workspace = true` or `dep = { workspace = true, ... }`",
             file=sys.stderr,
         )
     return success
