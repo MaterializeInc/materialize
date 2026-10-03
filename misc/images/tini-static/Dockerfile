@@ -25,7 +25,7 @@
 
 # Pinned by rolling tag + multi-arch index digest, matching materialized-base,
 # so dependabot refreshes the digest for security fixes.
-FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS builder
+FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS builder
 
 ARG TINI_VERSION=v0.19.0
 

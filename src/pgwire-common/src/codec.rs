@@ -22,10 +22,10 @@ use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut};
 use mz_ore::cast::{CastFrom, u64_to_usize};
 use mz_ore::netio::{self};
+use mz_pgrepr_consts::Format;
 use tokio::io::{self, AsyncRead, AsyncReadExt};
 
 use crate::FrontendMessage;
-use crate::format::Format;
 use crate::message::{FrontendStartupMessage, VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL};
 
 pub const REJECT_ENCRYPTION: u8 = b'N';

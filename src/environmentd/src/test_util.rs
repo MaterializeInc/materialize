@@ -900,8 +900,8 @@ impl Listeners {
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                    secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                        secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                        secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
                         secrets_reader_aws_prefix: None,

@@ -349,7 +349,7 @@ pub fn plan_create_table(
                     }
                 }
                 ColumnOption::Versioned { action, version } => {
-                    let version = RelationVersion::from(*version);
+                    let version = normalize::relation_version(*version);
                     versioned = true;
 
                     let name = normalize::column_name(c.name.clone());
@@ -4483,7 +4483,7 @@ pub fn plan_create_index(
                 .map(|i| {
                     let name = on_desc.get_name(*i);
                     if name_counts.get(name).copied() == Some(1) {
-                        Expr::Identifier(vec![name.clone().into()])
+                        Expr::Identifier(vec![normalize::column_name_ident(name)])
                     } else {
                         Expr::Value(Value::Number((i + 1).to_string()))
                     }

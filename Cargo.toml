@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/alloc-default",
@@ -94,6 +95,7 @@ members = [
     "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
+    "src/secrets-cli",
     "src/segment",
     "src/server-core",
     "src/service",
@@ -130,6 +132,7 @@ members = [
 # from the workspace's default members.
 default-members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/arrow-util",
@@ -221,6 +224,7 @@ default-members = [
     "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
+    "src/secrets-cli",
     "src/segment",
     "src/server-core",
     "src/service",
@@ -478,6 +482,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.38"
+rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu = "1.0.23"
@@ -540,7 +545,7 @@ tonic = { version = "0.14.6", features = ["gzip", "transport"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-http = { version = "0.7.1", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.11", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
 tower-sessions = "0.15.0"
 tower-sessions-memory-store = "0.14.0"
@@ -566,6 +571,7 @@ uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
 which = "8"
+x509-cert = { version = "0.2.5", default-features = false }
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }

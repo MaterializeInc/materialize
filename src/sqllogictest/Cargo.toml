@@ -35,8 +35,8 @@ mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-secrets-cli = { path = "../secrets-cli" }
 mz-server-core = { path = "../server-core" }
-mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }

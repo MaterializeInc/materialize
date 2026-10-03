@@ -9,7 +9,7 @@
 
 # Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
 # digest for security fixes.
-FROM python:3.10.14@sha256:9c0e621579faf384d982986f2e0ba86bf09619076842cd0fbd2f24a3bf09f0bc
+FROM python:3.14.7@sha256:be8ccd085666c34273c9dc5607c9842f8b2e3116128aae45148ce164c07ce09d
 
 COPY . dbt-materialize/
 

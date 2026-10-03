@@ -83,8 +83,6 @@ skip = [
     { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # kube-client and reqwest still pull 0.6.
-    { name = "tower-http", version = "0.6.11" },
     # tokio-tungstenite still pulls 0.29.
     { name = "tungstenite", version = "0.29.0" },
     # libduckdb-sys still pulls 6.
