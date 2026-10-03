@@ -16,9 +16,8 @@
 //! runtime can mint a `Send` `SharedReader` for the same arrangement.
 //!
 //! A process holds one registry per local worker ordinal, and each runtime's worker with that
-//! ordinal holds a clone of it. Pairing worker `i` of one runtime with worker `i` of the other is
-//! sound only because both runtimes run the same number of workers per process at the same process
-//! ordinal, so both sides shard keys by the same `key.hashed() % peers`.
+//! ordinal holds a clone of it. `clusterd` asserts the runtime layout that makes this pairing
+//! sound.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -203,7 +202,8 @@ impl ArrangementSharingRegistry {
         );
     }
 
-    /// Attaches the current thread as the worker that reads here, which a publication unparks.
+    /// Attaches the current thread as the worker that reads here, which a publication unparks. A
+    /// peek waiting on a seal is served by the worker's next sweep, so the unpark is all it needs.
     ///
     /// # Panics
     ///
@@ -236,35 +236,6 @@ impl ArrangementSharingRegistry {
             // `unpark` coalesces by itself: the thread keeps one token, and a wake while it runs
             // costs an atomic swap without a syscall.
             reader.unpark();
-        }
-    }
-}
-
-/// Reads the indexes the process's other compute runtime publishes, or reads none where that runtime
-/// publishes none. Chosen once, when the runtime is built.
-#[derive(Clone)]
-pub(crate) enum PeerTraces {
-    /// The other runtime publishes nothing for this one.
-    None,
-    /// The other runtime publishes into the registry this runtime's worker shares with it.
-    Registry(ArrangementSharingRegistry),
-}
-
-impl PeerTraces {
-    /// Reads the indexes published into `registry`, and has a publication's seal unpark the current
-    /// thread, which must be the worker that reads them. A peek waiting on a seal is served by the
-    /// worker's next sweep, so the unpark is all it needs.
-    pub(crate) fn reading(registry: ArrangementSharingRegistry) -> Self {
-        registry.register_waker(std::thread::current());
-        PeerTraces::Registry(registry)
-    }
-
-    /// The bundle through which this runtime holds and reads index `id`, if its peer publishes it.
-    /// See [`ArrangementSharingRegistry::peer_bundle`].
-    pub(crate) fn bundle(&self, id: GlobalId, as_of: &Antichain<Timestamp>) -> Option<TraceBundle> {
-        match self {
-            PeerTraces::None => None,
-            PeerTraces::Registry(registry) => Some(registry.peer_bundle(id, as_of)),
         }
     }
 }

@@ -680,9 +680,8 @@ impl Controller {
     /// Provisions a replica with the service orchestrator.
     ///
     /// `interactive_runtime` says whether to launch a second, interactive compute timely runtime
-    /// alongside the primary one. The caller resolves it per replica rather than this function
-    /// reading it: the flag is replica-scoped, scoped overrides reach a replica only once it
-    /// exists, and this value is needed before that.
+    /// alongside the primary one. The caller resolves it per replica, see
+    /// `mz_controller_types::dyncfgs::ENABLE_COMPUTE_INTERACTIVE_RUNTIME`.
     fn provision_replica(
         &self,
         cluster_id: ClusterId,

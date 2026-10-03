@@ -459,8 +459,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
-    // One sharing registry per local worker, rather than per runtime: a reader on one runtime looks
-    // up the slot its peer worker on another runtime filled, so both must hold the same registry.
     let sharing_registries = ArrangementSharingRegistry::per_worker(compute_timely_config.workers);
 
     // Both runtimes are the same process, so the interactive one takes the maintenance runtime's

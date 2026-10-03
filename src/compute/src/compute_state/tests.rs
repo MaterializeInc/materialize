@@ -810,7 +810,7 @@ fn reduce_count_dataflow(
         },
         reduce_type,
     );
-    mir.class = DataflowClass::OneShotRead;
+    mir.bound_to_single_read();
     let lowered = LirRelationExpr::finalize_dataflow(mir, &OptimizerFeatures::default(), None)
         .expect("lowering the reduce dataflow");
     to_render_dataflow(lowered)
@@ -845,9 +845,6 @@ fn interactive_build_over_unpublished_peer_index_is_immediate() {
     let index_id = GlobalId::User(1);
     let on_id = GlobalId::User(2);
     let reduce_id = GlobalId::User(3);
-    // Transient with a non-empty `until`, matching the bounded-read contract the Multiplexer
-    // enforces for anything it routes to the interactive runtime (see the debug_assert in
-    // `handle_create_dataflow`).
     let out_index_id = GlobalId::Transient(4);
     let (_rt, persist_clients) = test_persist_clients();
 
@@ -858,8 +855,7 @@ fn interactive_build_over_unpublished_peer_index_is_immediate() {
         let mut response_tx = ResponseSender::for_test(tx);
 
         let as_of = Timestamp::new(0);
-        let mut dataflow = reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, as_of);
-        dataflow.until = Antichain::from_elem(as_of.step_forward());
+        let dataflow = reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, as_of);
 
         {
             let mut active = activate(worker, &mut compute_state, &mut response_tx);

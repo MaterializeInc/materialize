@@ -11,10 +11,7 @@
 
 use mz_compute_types::dataflows::DataflowClass;
 
-/// The dataflow classes a runtime renders. Chosen once, when the runtime is built.
-///
-/// A dataflow of a class the runtime does not render is the other runtime's, and the runtime
-/// records its exports as peers instead.
+/// The dataflow classes a runtime renders.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Placement {
     /// The runtime renders every class, as the only runtime of its process.
@@ -22,7 +19,7 @@ pub(crate) enum Placement {
     /// The runtime renders maintained dataflows, logging included.
     Maintained,
     /// The runtime renders one-shot reads.
-    OneShotReads,
+    OneShotRead,
 }
 
 impl Placement {
@@ -31,9 +28,9 @@ impl Placement {
         match (self, class) {
             (Placement::All, _) => true,
             (Placement::Maintained, DataflowClass::Maintained) => true,
-            (Placement::OneShotReads, DataflowClass::OneShotRead) => true,
+            (Placement::OneShotRead, DataflowClass::OneShotRead) => true,
             (Placement::Maintained, DataflowClass::OneShotRead)
-            | (Placement::OneShotReads, DataflowClass::Maintained) => false,
+            | (Placement::OneShotRead, DataflowClass::Maintained) => false,
         }
     }
 }

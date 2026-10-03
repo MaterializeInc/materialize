@@ -50,6 +50,7 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::placement::Placement;
 use crate::process_globals::ProcessGlobals;
 use crate::sharing::ArrangementSharingRegistry;
 
@@ -102,6 +103,24 @@ impl ComputeRuntimeRole {
         }
     }
 
+    /// The name of this runtime's tracing span.
+    ///
+    /// `Solo` and `Maintenance` keep compute's bare name so single-runtime logs are unchanged.
+    fn span_name(self) -> &'static str {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => Config::NAME,
+            ComputeRuntimeRole::Interactive => "compute-interactive",
+        }
+    }
+
+    /// The name prefix of this runtime's worker threads.
+    fn thread_name_prefix(self) -> &'static str {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => Config::NAME,
+            ComputeRuntimeRole::Interactive => "interactive",
+        }
+    }
+
     /// Whether this role applies the process-global settings or inherits them.
     ///
     /// An interactive runtime shares the process with maintenance and inherits the globals
@@ -111,6 +130,25 @@ impl ComputeRuntimeRole {
             ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => ProcessGlobals::Apply,
             ComputeRuntimeRole::Interactive => ProcessGlobals::Inherit,
         }
+    }
+
+    /// The dataflow classes this role renders.
+    pub(crate) fn placement(self) -> Placement {
+        match self {
+            ComputeRuntimeRole::Solo => Placement::All,
+            ComputeRuntimeRole::Maintenance => Placement::Maintained,
+            ComputeRuntimeRole::Interactive => Placement::OneShotRead,
+        }
+    }
+
+    /// Whether this role publishes its indexes for the process's other runtime to read.
+    pub(crate) fn publishes_indexes(self) -> bool {
+        matches!(self, ComputeRuntimeRole::Maintenance)
+    }
+
+    /// Whether this role reads the indexes the process's other runtime publishes.
+    pub(crate) fn reads_peer_indexes(self) -> bool {
+        matches!(self, ComputeRuntimeRole::Interactive)
     }
 }
 
@@ -541,24 +579,11 @@ impl ClusterSpec for Config {
     const NAME: &str = "compute";
 
     fn cluster_name(&self) -> std::borrow::Cow<'static, str> {
-        match self.role {
-            // The solo and maintenance runtimes keep the bare "compute" span name so single-runtime
-            // logs are unchanged. The interactive runtime gets a distinct name so the two runtimes
-            // of a two-runtime process are separable.
-            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => {
-                std::borrow::Cow::Borrowed(Self::NAME)
-            }
-            ComputeRuntimeRole::Interactive => std::borrow::Cow::Borrowed("compute-interactive"),
-        }
+        std::borrow::Cow::Borrowed(self.role.span_name())
     }
 
     fn thread_name_prefix(&self) -> std::borrow::Cow<'static, str> {
-        match self.role {
-            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => {
-                std::borrow::Cow::Borrowed(Self::NAME)
-            }
-            ComputeRuntimeRole::Interactive => std::borrow::Cow::Borrowed("interactive"),
-        }
+        std::borrow::Cow::Borrowed(self.role.thread_name_prefix())
     }
 
     fn run_worker(

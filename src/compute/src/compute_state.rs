@@ -79,7 +79,7 @@ use crate::placement::Placement;
 use crate::process_globals::ProcessGlobals;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
-use crate::sharing::{ArrangementSharingRegistry, PeerTraces};
+use crate::sharing::ArrangementSharingRegistry;
 
 mod error_scan;
 mod peek_budget;
@@ -222,13 +222,14 @@ pub struct ComputeState {
     process_globals: ProcessGlobals,
     /// The dataflow classes this runtime renders.
     placement: Placement,
-    /// Reads the indexes the process's other runtime publishes.
-    peer_traces: PeerTraces,
+    /// Reads the indexes the process's other runtime publishes, if that runtime publishes them.
+    peer_traces: Option<ArrangementSharingRegistry>,
     /// Collections a dataflow placed on the process's other runtime exports.
     ///
     /// Never in `collections`, which drives frontier reporting: the runtime that renders a
-    /// collection reports its frontiers, and a second report would race it. A peer index also has
-    /// a shared trace in `traces`, whose logical compaction is this runtime's hold on it.
+    /// collection reports its frontiers, and a second report would race it. On a runtime that
+    /// reads its peer's indexes, a peer index also has a shared trace in `traces`, whose logical
+    /// compaction is this runtime's hold on it.
     pub(crate) peers: BTreeSet<GlobalId>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
@@ -349,25 +350,16 @@ impl ComputeState {
             compute_logger: None,
             persist_clients,
             process_globals: role.process_globals(),
-            placement: match role {
-                ComputeRuntimeRole::Solo => Placement::All,
-                ComputeRuntimeRole::Maintenance => Placement::Maintained,
-                ComputeRuntimeRole::Interactive => Placement::OneShotReads,
-            },
-            peer_traces: match role {
-                // Only maintenance publishes, for the interactive runtime.
-                ComputeRuntimeRole::Interactive => PeerTraces::reading(sharing_registry.clone()),
-                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => PeerTraces::None,
-            },
+            placement: role.placement(),
+            peer_traces: role.reads_peer_indexes().then(|| {
+                sharing_registry.attach_reader();
+                sharing_registry.clone()
+            }),
             peers: Default::default(),
-            publisher: match role {
-                // Only maintenance has a peer that reads its indexes.
-                ComputeRuntimeRole::Maintenance => {
-                    sharing_registry.attach_publisher();
-                    Some(sharing_registry.clone())
-                }
-                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => None,
-            },
+            publisher: role.publishes_indexes().then(|| {
+                sharing_registry.attach_publisher();
+                sharing_registry.clone()
+            }),
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -564,8 +556,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.apply_expiration_offset(offset);
         }
 
-        // Logging dataflows are maintained work. A runtime that does not render it holds the
-        // other runtime's logging indexes as peers.
+        // Logging dataflows are maintained work.
         if self
             .compute_state
             .placement
@@ -619,8 +610,9 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        // Placement comes first, before anything allocates a dataflow index: a dataflow this
-        // runtime does not render builds nothing here.
+        // A dataflow of a class this runtime does not render is the other runtime's, and this
+        // runtime records its exports as peers. Placement comes first, before anything allocates a
+        // dataflow index, so such a dataflow builds nothing here.
         if self.compute_state.placement.renders(dataflow.class) {
             self.render_dataflow(dataflow);
         } else {
@@ -642,8 +634,9 @@ impl<'a> ActiveComputeState<'a> {
             let fresh = self.compute_state.peers.insert(id);
             mz_ore::soft_assert_or_log!(fresh, "peer collection {id} recorded twice");
         }
-        for id in index_ids {
-            if let Some(bundle) = self.compute_state.peer_traces.bundle(id, as_of) {
+        if let Some(registry) = &self.compute_state.peer_traces {
+            for id in index_ids {
+                let bundle = registry.peer_bundle(id, as_of);
                 self.compute_state.traces.set(id, bundle);
             }
         }
@@ -815,9 +808,9 @@ impl<'a> ActiveComputeState<'a> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let Some(trace_bundle) = self.compute_state.traces.get(id).cloned() else {
-                    // The controller sends a peek only after the index's `CreateDataflow`, which
-                    // every runtime of the replica answers by hosting the index or recording it as
-                    // a peer, so a missing trace is a protocol violation.
+                    // The controller sends a peek only after the index's `CreateDataflow`, and peeks
+                    // reach only a runtime that hosts the index or reads it as a peer, so a missing
+                    // trace is a protocol violation.
                     soft_panic_or_log!("peek {} targets unknown index {id}", peek.uuid);
                     self.send_compute_response(ComputeResponse::PeekResponse(
                         peek.uuid,

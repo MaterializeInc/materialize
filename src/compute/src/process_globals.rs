@@ -179,7 +179,7 @@ fn apply_column_pager(config: &ConfigSet, scratch_directory: Option<&PathBuf>) {
     // the MV sink's correction buffer and storage's paged upsert stash
     // flavor, which share one policy and one underlying `mz_ore::pager`.
     // Routes through `apply_tiered_config`, which reuses a process-wide
-    // `TieredPolicy` singleton — operator-driven tunes mutate the
+    // `TieredPolicy` singleton, so operator-driven tunes mutate the
     // existing atomics rather than installing a fresh policy with a
     // fresh budget atomic that would orphan in-flight resident tickets.
     //

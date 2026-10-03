@@ -2534,9 +2534,8 @@ impl CatalogState {
     /// Resolves `config`'s replica-local override for `replica_id`, falling back to its environment
     /// value when the replica has no override.
     ///
-    /// For configs consumed when a replica is provisioned rather than on the replica itself. Those
-    /// cannot read the value from their own `worker_config`, because the decision is made in
-    /// `environmentd` before the replica exists.
+    /// For configs consumed when a replica is provisioned, before the replica exists to read its
+    /// own `worker_config`.
     ///
     /// Parses through `ConfigType`, because a stored override is a var-format string. `bool`
     /// formats as `on`/`off`, which the value type's own `str::parse::<bool>()` rejects.
