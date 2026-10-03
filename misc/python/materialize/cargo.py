@@ -142,10 +142,12 @@ class Workspace:
         root: The path to the root of the workspace.
 
     Attributes:
+        root: The path to the root of the workspace.
         crates: A mapping from name to crate definition.
     """
 
     def __init__(self, root: Path):
+        self.root = root
         with open(root / "Cargo.toml") as f:
             config = toml.load(f)
 
