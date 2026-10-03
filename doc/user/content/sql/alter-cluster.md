@@ -131,7 +131,7 @@ requires the additional disk capacity that M.1 sizes provide.
 
 See also:
 
-- [cc to M.1 size mapping](/sql/m1-cc-mapping/).
+- [Materialize Cloud cluster sizes](/materialize-cloud/cluster-sizes/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
