@@ -121,8 +121,7 @@ impl ArrangementSharingRegistry {
     /// Publishes index `id`'s `oks` and `errs` traces and wakes readers waiting on `id`. `worker`
     /// must be the worker that maintains the traces.
     ///
-    /// Adopts the slot for `id` rather than inserting a fresh one, so a placeholder a reader has
-    /// already imported is backed in place. Each half signals its own seal: a peek whose result is
+    /// Adopts the slot for `id`, see [`Self::get_or_create`]. Each half signals its own seal: a peek whose result is
     /// an error carries its data on the errs arrangement, whose frontier is held back until the
     /// error is emitted, so an oks-only signal would leave that peek parked.
     ///

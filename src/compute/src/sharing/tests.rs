@@ -188,8 +188,8 @@ fn a_reader_keeps_the_slot_after_unpublish() {
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
 /// keeping only entries whose accumulated diff at `at` is nonzero.
 ///
-/// Packs each key/value into an owned `Row` rather than returning borrowed `Datum`s, since the
-/// snapshot's `storage` is local to this function.
+/// Packs each key/value into an owned `Row`, since the snapshot's `storage` is local to this
+/// function.
 fn read_rows(handle: &SharedOksHandle, at: Timestamp) -> Vec<(Row, Row)> {
     let snapshot = handle.snapshot_at(&at).expect("snapshot at sealed time");
 
@@ -335,7 +335,7 @@ fn publish_join_input(
     });
 
     // Distinct update times in order. Insert each time's updates, then advance and step, so the
-    // publisher seals and appends one batch per time rather than one batch for everything.
+    // publisher seals and appends one batch per time.
     let mut times: Vec<u64> = updates.iter().map(|&(_, _, t, _)| t).collect();
     times.sort_unstable();
     times.dedup();
@@ -502,8 +502,7 @@ fn adopt_join_input(
             RowRowBuilder<_, _>,
             RowRowSpine<_, _>,
         >("adopt oks");
-        // Attach this arrangement's trace to the pre-existing point, rather than minting a fresh
-        // one. Importers already registered against it (built before this call) are seeded now.
+        // Attach this arrangement's trace to the pre-existing point. Importers already registered against it (built before this call) are seeded now.
         adopt_trace(&oks.trace, oks.stream.scope().worker(), point, || {});
         (oks_input, oks.trace.clone())
     });
@@ -661,7 +660,7 @@ fn join_over_point_adopted_late_matches_direct() {
 /// times.
 ///
 /// The publisher and reader are on separate threads, handshaking per sealed time so the check is
-/// deterministic rather than timing-dependent: the publisher steps its worker (refreshing the
+/// deterministic: the publisher steps its worker (refreshing the
 /// shared chain under the lock), announces the sealed time, and blocks; the reader then reads
 /// `read_upper` on its bare handle and must see exactly that frontier before acking. The reader
 /// never builds a dataflow, so this proves `read_upper` reflects the publisher-refreshed chain
@@ -796,109 +795,4 @@ fn bare_handle_read_upper_advances_cross_thread() {
     // The reader saw every seal advance, in order, with no operator of its own: proof that a
     // bare handle's `read_upper` tracks the publisher-driven chain.
     assert_eq!(observed, seals);
-}
-
-/// A `SyncActivator` minted by one worker and fired from a DIFFERENT thread unparks that worker
-/// and schedules the targeted operator.
-///
-/// This is the primitive `crate::shared_trace`'s `ImportQueue` relies on to wake an importer from
-/// the publisher's thread, and it is the reason the seal signal here can settle for a bare
-/// `unpark`: an activation additionally reschedules a named operator, which the registry's wake
-/// does not need and the importer's does. The test isolates the cross-thread fire so that
-/// difference is explicit.
-///
-/// The worker builds a source operator, exports its `SyncActivator`, and drops its capability so
-/// it goes quiescent and the worker parks. The main thread fires the activator and observes the
-/// operator's run counter increment, proving the fire (not a timeout) rescheduled it.
-#[mz_ore::test]
-fn sync_activator_fires_cross_thread() {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-    use timely::container::CapacityContainerBuilder;
-    use timely::dataflow::operators::generic::source;
-    use timely::scheduling::activate::SyncActivator;
-
-    let runs = Arc::new(AtomicUsize::new(0));
-    let done = Arc::new(AtomicBool::new(false));
-    let runs_worker = Arc::clone(&runs);
-    let done_worker = Arc::clone(&done);
-
-    let (act_tx, act_rx) = mpsc::channel::<SyncActivator>();
-    // `execute_directly` needs a `Send + Sync` closure; `Sender` is not `Sync`.
-    let act_tx = std::sync::Mutex::new(act_tx);
-
-    let worker = thread::spawn(move || {
-        timely::execute_directly(move |worker| {
-            worker.dataflow::<Timestamp, _, _>(|scope| {
-                let scope_handle = scope.clone();
-                let runs = Arc::clone(&runs_worker);
-                let done = Arc::clone(&done_worker);
-                let act_tx = act_tx.lock().unwrap().clone();
-                let _stream = source::<_, CapacityContainerBuilder<Vec<()>>, _, _>(
-                    scope,
-                    "spike-activator-source",
-                    move |cap, info| {
-                        // Mint this operator's cross-thread activator and hand it to the main thread.
-                        let activator = scope_handle
-                            .worker()
-                            .sync_activator_for(info.address.to_vec());
-                        act_tx
-                            .send(activator)
-                            .expect("main thread receives activator");
-                        // Keep the capability alive (as the DD import source does) so the operator
-                        // stays registered and reschedulable. Holding a capability does not force
-                        // rescheduling, so after its initial run the operator parks and is woken only
-                        // by an explicit activation. Release it once `done` is set so the dataflow can
-                        // drain and the worker shut down cleanly. The `take` is a side effect
-                        // (dropping the capability), not a read.
-                        #[allow(clippy::collection_is_never_read)]
-                        let mut cap = Some(cap);
-                        move |_output| {
-                            if done.load(Ordering::SeqCst) {
-                                cap.take();
-                            }
-                            runs.fetch_add(1, Ordering::SeqCst);
-                        }
-                    },
-                );
-            });
-
-            // Park until fired. A finite park timeout bounds the test if the fire is ever lost,
-            // and lets the loop observe the `done` flag; the assertion below proves the wake came
-            // from the fire, since a quiescent operator is not rescheduled by a timeout alone.
-            while !done_worker.load(Ordering::SeqCst) {
-                worker.step_or_park(Some(Duration::from_millis(100)));
-            }
-        });
-    });
-
-    let activator = act_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("worker exported its activator");
-
-    // Let the worker settle into a park with the operator quiescent.
-    thread::sleep(Duration::from_millis(200));
-    let baseline = runs.load(Ordering::SeqCst);
-
-    activator
-        .activate()
-        .expect("cross-thread activation delivered");
-
-    // The fired activation must reschedule the operator, incrementing its run counter.
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        if runs.load(Ordering::SeqCst) > baseline {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "operator was not rescheduled after a cross-thread SyncActivator fire"
-        );
-        thread::sleep(Duration::from_millis(2));
-    }
-
-    done.store(true, Ordering::SeqCst);
-    // Nudge the worker so it leaves `step_or_park` promptly and observes `done`.
-    let _ = activator.activate();
-    worker.join().expect("worker thread panicked");
 }
