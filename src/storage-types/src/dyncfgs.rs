@@ -533,8 +533,9 @@ pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config:
 
 /// Whether source snapshot operators emit rewind requests as soon as the snapshot bound is
 /// known instead of after the snapshot completes. This lets the replication operator read
-/// the upstream stream while the snapshot runs. Replication data received during the
-/// snapshot is staged in the dataflow until the snapshot completes, so enabling this
+/// the upstream stream while the snapshot runs, and lets each export's frontier advance once
+/// it has no snapshot data left to emit. Replication data received for an export that is still
+/// snapshotting is staged in the dataflow until its snapshot completes, so enabling this
 /// trades cluster memory during hydration for concurrent progress on the stream.
 pub const STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION: Config<bool> = Config::new(
     "storage_source_snapshot_concurrent_replication",
