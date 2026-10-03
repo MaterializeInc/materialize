@@ -48,22 +48,22 @@ pub(crate) use visitor::NormalizingVisitor;
 
 use mz_sql_parser::ast::{CreateIndexStatement, Ident, Raw, RawClusterName};
 
-/// Transform cluster names in index statements for staging environments.
+/// Move external indexes onto the staging cluster for staging environments.
 ///
-/// This is a standalone function that transforms cluster references without
-/// needing a full `NormalizingVisitor`. Use this when you only need to rename
-/// clusters (e.g., `quickstart` -> `quickstart_staging`) without transforming
-/// object names.
+/// Used for indexes belonging to objects that are not being redeployed but whose
+/// cluster is staged. Each index's `IN CLUSTER` is suffixed onto the staging
+/// cluster, and the index's own name is suffixed too.
+///
+/// The name suffix matters: the index still targets the production relation
+/// (its `on_name` is unchanged), and Materialize derives a named index's schema
+/// from that target. Without renaming, the recreated index would collide with
+/// the production index of the same name in the same schema. The optimizer
+/// selects indexes by cluster and structure, not by name, so the renamed index
+/// still serves the staged objects.
 ///
 /// # Arguments
 /// * `indexes` - Slice of index statements to transform in place
-/// * `staging_suffix` - The suffix to append to cluster names (e.g., "_staging")
-///
-/// # Example
-/// ```rust,ignore
-/// transform_cluster_names_for_staging(&mut indexes, "_staging");
-/// // Transforms: IN CLUSTER quickstart -> IN CLUSTER quickstart_staging
-/// ```
+/// * `staging_suffix` - The suffix to append (e.g., "_staging")
 pub(crate) fn transform_cluster_names_for_staging(
     indexes: &mut [CreateIndexStatement<Raw>],
     staging_suffix: &str,
@@ -71,10 +71,14 @@ pub(crate) fn transform_cluster_names_for_staging(
     for index in indexes {
         if let Some(ref mut cluster_name) = index.in_cluster {
             if let RawClusterName::Unresolved(ident) = cluster_name {
-                let new_name = format!("{}{}", ident, staging_suffix);
+                let new_name = format!("{}{}", ident.as_str(), staging_suffix);
                 *cluster_name =
                     RawClusterName::Unresolved(Ident::new(&new_name).expect("valid cluster name"));
             }
+        }
+        if let Some(ref mut name) = index.name {
+            let new_name = format!("{}{}", name.as_str(), staging_suffix);
+            *name = Ident::new(&new_name).expect("valid index name");
         }
     }
 }
