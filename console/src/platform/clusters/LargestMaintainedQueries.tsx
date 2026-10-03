@@ -118,7 +118,23 @@ const LargestMaintainedQueriesError = ({
   );
 };
 
-const LargestMaintainedQueries = (props: LargestMaintainedQueriesProps) => {
+export interface LargestReplica {
+  name: string;
+  heapLimit: number;
+}
+
+/**
+ * Loads the cluster's largest replica and renders `children` with it, behind
+ * the loading and error states of the per-object memory insights. Renders
+ * nothing for a cluster without replicas.
+ */
+export const LargestReplicaBoundary = ({
+  clusterId,
+  children,
+}: {
+  clusterId: string;
+  children: (replica: LargestReplica) => React.ReactNode;
+}) => {
   return (
     <AppErrorBoundary
       renderFallback={({ error }) => (
@@ -126,15 +142,23 @@ const LargestMaintainedQueries = (props: LargestMaintainedQueriesProps) => {
       )}
     >
       <React.Suspense fallback={<LoadingContainer />}>
-        <LargestReplicaLoader {...props} />
+        <LargestReplicaLoader clusterId={clusterId}>
+          {children}
+        </LargestReplicaLoader>
       </React.Suspense>
     </AppErrorBoundary>
   );
 };
 
-const LargestReplicaLoader = (props: LargestMaintainedQueriesProps) => {
+const LargestReplicaLoader = ({
+  clusterId,
+  children,
+}: {
+  clusterId: string;
+  children: (replica: LargestReplica) => React.ReactNode;
+}) => {
   const { data: largestReplica } = useLargestClusterReplica({
-    clusterId: props.clusterId,
+    clusterId,
   });
 
   // Don't show anything if the cluster has no replicas
@@ -149,12 +173,25 @@ const LargestReplicaLoader = (props: LargestMaintainedQueriesProps) => {
         />
       )}
     >
-      <LargestMaintainedQueriesInner
-        {...props}
-        replicaName={largestReplica.name}
-        replicaHeapLimit={Number(largestReplica.heapLimit)}
-      />
+      {children({
+        name: largestReplica.name,
+        heapLimit: Number(largestReplica.heapLimit),
+      })}
     </AppErrorBoundary>
+  );
+};
+
+const LargestMaintainedQueries = (props: LargestMaintainedQueriesProps) => {
+  return (
+    <LargestReplicaBoundary clusterId={props.clusterId}>
+      {(replica) => (
+        <LargestMaintainedQueriesInner
+          {...props}
+          replicaName={replica.name}
+          replicaHeapLimit={replica.heapLimit}
+        />
+      )}
+    </LargestReplicaBoundary>
   );
 };
 
