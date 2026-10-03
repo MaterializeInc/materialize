@@ -141,6 +141,8 @@ fn main() {
         .expect("--pool-rss-mib")
         * 1024
         * 1024;
+    // A scratch directory selects the file-extent backend. It must be on a disk-backed filesystem.
+    let pool_scratch_dir = arg(&args, "--pool-scratch-dir", "");
     if pool_budget > 0 {
         let ok = mz_timely_util::pool_config::apply_pool_config(
             mz_timely_util::pool_config::PoolPagerConfig {
@@ -149,9 +151,26 @@ fn main() {
                 eager_backing: false,
                 rss_target_bytes: pool_rss,
             },
-            mz_timely_util::pool_config::ExtentBackend::Swap,
+            if pool_scratch_dir.is_empty() {
+                mz_timely_util::pool_config::ExtentBackend::Swap
+            } else {
+                mz_timely_util::pool_config::ExtentBackend::File {
+                    dir: std::path::PathBuf::from(&pool_scratch_dir),
+                    capacity_bytes: None,
+                }
+            },
         );
         assert!(ok, "pool reservation failed");
+        // A file store that cannot be used degrades to swap, which would make
+        // the run measure the wrong backend.
+        let kind = mz_timely_util::pool_config::active_pool()
+            .expect("pool installed")
+            .backend_kind();
+        println!("pool backend: {kind:?}");
+        if !pool_scratch_dir.is_empty() && kind == mz_ore::pool::BackendKind::Swap {
+            eprintln!("--pool-scratch-dir was given but the pool runs on swap");
+            std::process::exit(1);
+        }
         // Spilling is gated per subsystem on top of the installed pool.
         mz_timely_util::columnar::chunk::set_sink_spill_enabled(true);
     }
