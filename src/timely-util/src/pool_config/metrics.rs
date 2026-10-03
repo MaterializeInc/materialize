@@ -25,6 +25,7 @@ use std::sync::OnceLock;
 
 use mz_ore::metric;
 use mz_ore::metrics::{ComputedUIntGauge, MakeCollectorOpts, MetricsRegistry};
+use mz_ore::pool::{BackendKind, READ_LATENCY_BUCKETS};
 
 /// Install the buffer-pool metrics and the columnar chunk work counters into
 /// `registry`. Idempotent. Repeated calls after the first one are no-ops.
@@ -47,16 +48,16 @@ pub fn register(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_column_pool_inserts_total", help: "Chunks inserted into the buffer pool."), |s| s.inserts);
         gauge(registry, metric!(name: "mz_column_pool_frees_total", help: "Chunks freed from the buffer pool."), |s| s.frees);
         gauge(registry, metric!(name: "mz_column_pool_writes_elided_total", help: "Backing writes elided: chunks freed while unbacked or while queued for a spill thread, dead before their compression completed."), |s| s.writes_elided);
-        gauge(registry, metric!(name: "mz_column_pool_evictions_compress_total", help: "Evictions that compressed a chunk into a new swap-backed extent."), |s| s.evictions_compress);
+        gauge(registry, metric!(name: "mz_column_pool_evictions_compress_total", help: "Evictions that compressed a chunk into a new extent."), |s| s.evictions_compress);
         gauge(registry, metric!(name: "mz_column_pool_evictions_cheap_total", help: "Evictions of already-backed chunks: physical pages released with no compression or extent write."), |s| s.evictions_cheap);
-        gauge(registry, metric!(name: "mz_column_pool_extent_bytes_written_total", help: "Compressed bytes written into swap-backed extents."), |s| s.extent_bytes_written);
+        gauge(registry, metric!(name: "mz_column_pool_extent_bytes_written_total", help: "Compressed bytes written into extents."), |s| s.extent_bytes_written);
         gauge(registry, metric!(name: "mz_column_pool_spill_scheduled_total", help: "Evictions handed to buffer-pool spill threads."), |s| s.spill_scheduled);
         gauge(registry, metric!(name: "mz_column_pool_spill_cancelled_total", help: "Compressions cancelled by a concurrent free, whatever their origin (budget eviction or eager backing), so this can exceed the scheduled count."), |s| s.spill_cancelled);
         gauge(registry, metric!(name: "mz_column_pool_spill_in_flight", help: "Spill entries queued or being processed."), |s| s.spill_in_flight);
         gauge(registry, metric!(name: "mz_column_pool_admissions_budget_total", help: "Evicted chunks re-admitted to compressed-but-resident by an admitting read out of free budget headroom."), |s| s.admissions_budget);
         gauge(registry, metric!(name: "mz_column_pool_admissions_steal_total", help: "Evicted chunks re-admitted by an admitting read stealing the slot of a clean backed victim of the same size class."), |s| s.admissions_steal);
         gauge(registry, metric!(name: "mz_column_pool_admissions_denied_total", help: "Admitting reads that found neither budget headroom nor a clean victim and were served as a plain decompress instead."), |s| s.admissions_denied);
-        gauge(registry, metric!(name: "mz_column_pool_extent_pageout_incomplete_total", help: "Pageout passes whose residency observation found pages still resident. Climbing steadily means pages cannot reach the swap device."), |s| s.extent_pageout_incomplete);
+        gauge(registry, metric!(name: "mz_column_pool_extent_pageout_incomplete_total", help: "Pageout passes whose residency observation found pages still resident. Climbing steadily means pages cannot be moved out of RAM."), |s| s.extent_pageout_incomplete);
         gauge(registry, metric!(name: "mz_column_pool_extent_arena_fallbacks_total", help: "Extent writes that fell back to the heap because their extent-arena class had no free slot. Heap-backed extents are never paged out."), |s| s.extent_arena_fallbacks);
         gauge(registry, metric!(name: "mz_column_pool_slot_exhausted_fallbacks_total", help: "Inserts that fell back to unpageable heap chunks because their size class had no free slot."), |s| s.slot_exhausted_fallbacks);
         gauge(registry, metric!(name: "mz_column_pool_oversize_payloads_total", help: "Inserts that went to unpageable heap chunks because the payload was larger than the largest size class."), |s| s.oversize_payloads);
@@ -65,8 +66,23 @@ pub fn register(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_column_pool_warm_reuses_total", help: "Slot allocations served from the warm list: no page faults, no kernel page zeroing."), |s| s.warm_reuses);
         gauge(registry, metric!(name: "mz_column_pool_eager_backs_total", help: "Chunks eagerly compressed to compressed-but-resident by idle spill threads; their later eviction is a pure page release."), |s| s.eager_backs);
         gauge(registry, metric!(name: "mz_column_pool_extent_resident_bytes", help: "Allocation bytes of compressed extents currently resident (the compressed-but-resident tier), bounded by the pool RSS target."), |s| s.extent_resident_bytes);
-        gauge(registry, metric!(name: "mz_column_pool_extent_unreclaimable_bytes", help: "Allocation bytes of resident extents the RSS target cannot push out (retry-capped and heap-fallback extents). Climbing steadily means pages cannot reach the swap device."), |s| s.extent_unreclaimable_bytes);
-        gauge(registry, metric!(name: "mz_column_pool_extent_pageouts_total", help: "Extents pushed to the swap device by RSS-target enforcement."), |s| s.extent_pageouts);
+        gauge(registry, metric!(name: "mz_column_pool_extent_unreclaimable_bytes", help: "Allocation bytes of resident extents the RSS target cannot push out (retry-capped and heap-fallback extents). Climbing steadily means pages cannot be moved out of RAM."), |s| s.extent_unreclaimable_bytes);
+        gauge(registry, metric!(name: "mz_column_pool_extent_pageouts_total", help: "Extents pushed out of RAM by RSS-target enforcement, to the swap device or the file store."), |s| s.extent_pageouts);
+        gauge(registry, metric!(name: "mz_column_pool_extent_demotions_elided_total", help: "Extents freed while resident in a reclaimable arena slot, so the free needed no swap or file I/O."), |s| s.extent_demotions_elided);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_bytes", help: "Slot bytes of extents currently demoted to the file store."), |s| s.extent_file_bytes);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_capacity_bytes", help: "The file store's effective capacity in bytes."), |s| s.extent_file_capacity_bytes);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_writes_total", help: "Demotion writes to the file store that completed without error."), |s| s.extent_file_writes);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_writes_inline_total", help: "File store demotion writes run on threads other than spill threads."), |s| s.extent_file_writes_inline);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_write_bytes_identity_total", help: "Page-rounded bytes written to the file store by committed demotions of uncompressed extents."), |s| s.extent_file_write_bytes_identity);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_write_bytes_compressed_total", help: "Page-rounded bytes written to the file store by committed demotions of compressed extents."), |s| s.extent_file_write_bytes_compressed);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_reads_total", help: "Reads of extents demoted to the file store."), |s| s.extent_file_reads);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_read_bytes_total", help: "Page-rounded bytes transferred by file store reads."), |s| s.extent_file_read_bytes);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_repeat_reads_total", help: "File store reads of extents already read since their demotion."), |s| s.extent_file_repeat_reads);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_full_total", help: "Demotion passes that left an extent in RAM because the file store was full or had writes disabled."), |s| s.extent_file_full);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_write_errors_total", help: "File store I/O errors, after which demotion writes are disabled."), |s| s.extent_file_write_errors);
+        gauge(registry, metric!(name: "mz_column_pool_extent_file_holes_punched_bytes_total", help: "Bytes of free file store slots returned to the filesystem."), |s| s.extent_file_holes_punched_bytes);
+        read_latency_gauges(registry);
+        backend_gauges(registry);
     });
 }
 
@@ -83,4 +99,60 @@ fn gauge(
             .map(|pool| field(&pool.stats()))
             .unwrap_or(0)
     });
+}
+
+/// Registers the file store's read-latency histogram as one computed gauge
+/// per bucket, since the registry has no computed histogram. Each gauge
+/// carries an `le` label, the bucket's upper bound in seconds, and counts the
+/// reads at or below that bound, so the series aggregate like the buckets of a
+/// Prometheus histogram. Bucket `i` below the last holds reads under
+/// `32 µs << i`, and the last bucket is `+Inf`.
+fn read_latency_gauges(registry: &MetricsRegistry) {
+    const BOUNDS: [&str; READ_LATENCY_BUCKETS] = [
+        "0.000032", "0.000064", "0.000128", "0.000256", "0.000512", "0.001024", "0.002048",
+        "0.004096", "0.008192", "0.016384", "0.032768", "0.065536", "+Inf",
+    ];
+    for (bucket, le) in BOUNDS.into_iter().enumerate() {
+        let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
+            metric!(
+                name: "mz_column_pool_extent_file_read_latency_bucket",
+                help: "Cumulative count of file store reads that took at most `le` seconds.",
+                const_labels: {"le" => le}
+            ),
+            move || {
+                crate::pool_config::global_pool_peek()
+                    .map(|pool| {
+                        pool.stats().extent_file_read_latency[..=bucket]
+                            .iter()
+                            .sum()
+                    })
+                    .unwrap_or(0)
+            },
+        );
+    }
+}
+
+/// Registers `mz_column_pool_backend`, one gauge per backend kind that reads
+/// 1 for the kind the pool runs on and 0 otherwise, including before the pool
+/// exists.
+fn backend_gauges(registry: &MetricsRegistry) {
+    let kinds = [
+        ("swap", BackendKind::Swap),
+        ("file_direct", BackendKind::FileDirect),
+        ("file_buffered", BackendKind::FileBuffered),
+    ];
+    for (label, kind) in kinds {
+        let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
+            metric!(
+                name: "mz_column_pool_backend",
+                help: "The extent store the buffer pool runs on: 1 for the labeled backend, 0 for the others.",
+                const_labels: {"backend" => label}
+            ),
+            move || {
+                let active = crate::pool_config::global_pool_peek()
+                    .is_some_and(|pool| pool.backend_kind() == kind);
+                u64::from(active)
+            },
+        );
+    }
 }
