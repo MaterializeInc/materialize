@@ -366,7 +366,10 @@ fn snapshot_at_waits_until_upper_passes_time() {
         let deadline = Instant::now() + 2 * SNAPSHOT_TIMEOUT;
         while !done.load(Ordering::SeqCst) {
             worker.step();
-            assert!(Instant::now() < deadline, "reader did not finish its snapshot");
+            assert!(
+                Instant::now() < deadline,
+                "reader did not finish its snapshot"
+            );
         }
     });
 
