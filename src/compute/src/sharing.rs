@@ -185,7 +185,7 @@ impl ArrangementSharingRegistry {
     }
 
     /// How far the readers' holds keep the publishing runtime from compacting, over every
-    /// arrangement published here.
+    /// arrangement published here, `oks` and `errs` alike.
     ///
     /// Returns the largest gap in milliseconds between an arrangement's requested and applied
     /// logical compaction frontiers, and how many arrangements have any gap at all. Every
@@ -198,17 +198,20 @@ impl ArrangementSharingRegistry {
         let mut max_gap = 0;
         let mut held = 0;
         for slot in inner.map.values().filter_map(Weak::upgrade) {
-            let (applied, requested) = slot.oks.logical_frontiers();
-            match (applied.as_option(), requested.as_option()) {
-                (Some(applied), Some(requested)) => {
-                    let gap = u64::from(*requested).saturating_sub(u64::from(*applied));
-                    if gap > 0 {
-                        held += 1;
-                        max_gap = max_gap.max(gap);
+            for (applied, requested) in
+                [slot.oks.logical_frontiers(), slot.errs.logical_frontiers()]
+            {
+                match (applied.as_option(), requested.as_option()) {
+                    (Some(applied), Some(requested)) => {
+                        let gap = u64::from(*requested).saturating_sub(u64::from(*applied));
+                        if gap > 0 {
+                            held += 1;
+                            max_gap = max_gap.max(gap);
+                        }
                     }
+                    (Some(_), None) => held += 1,
+                    _ => {}
                 }
-                (Some(_), None) => held += 1,
-                _ => {}
             }
         }
         (max_gap, held)
