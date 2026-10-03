@@ -428,6 +428,13 @@ impl DataflowBuilder {
         self
     }
 
+    /// Bound the dataflow to the single read at its `as_of`, see
+    /// [`DataflowDescription::bound_to_single_read`]. Call after [`Self::as_of`].
+    pub fn single_read(&mut self) -> &mut Self {
+        self.mir.bound_to_single_read();
+        self
+    }
+
     /// Run the MIR dataflow optimizer in [`Self::finish`] before lowering.
     ///
     /// Off by default: the builder otherwise lowers the caller's MIR faithfully (the
