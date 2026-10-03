@@ -3087,13 +3087,7 @@ def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
 
 
 def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
-    """Verify a DDL-triggered restart of mz_new keeps its stability progress.
-
-    mz_new's replicas outlive the restart, and the stability gate reads their
-    hydration times from the replicas, so the period keeps counting from the
-    original hydration. Restarting the period would make mz_new ready no
-    earlier than the restart plus a full period.
-    """
+    """A follower restart preserves progress and a new replica gets an age cap."""
     period = 120
     ddl_after = 60
 
@@ -3124,11 +3118,46 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
 
     c.up("mz_new")
     time.sleep(ddl_after)
+
+    def stable_hydration_times() -> list:
+        with c.sql_cursor(service="mz_new", reuse_connection=False) as cursor:
+            cursor.execute("SET cluster = stable")
+            cursor.execute("SET cluster_replica = r1")
+            cursor.execute("SET transaction_isolation = serializable")
+            cursor.execute(
+                "SELECT export_id, worker_id, hydrated_at "
+                "FROM mz_introspection.mz_compute_hydration_times_per_worker "
+                "WHERE export_id IN (SELECT id FROM mz_indexes WHERE name = 'mv_idx' "
+                "UNION ALL SELECT id FROM mz_materialized_views WHERE name = 'mv') "
+                "ORDER BY export_id, worker_id"
+            )
+            return cursor.fetchall()
+
+    hydration_before = stable_hydration_times()
+    assert len(hydration_before) == 2 and all(
+        row[2] is not None for row in hydration_before
+    )
     environmentd = _pids(c, "mz_new", "environmentd")
     replicas = _pids(c, "mz_new", "clusterd")
 
-    # A table has no dataflow, so no replica gets a new export to hydrate.
-    c.sql("CREATE TABLE unrelated (a int)", service="mz_old")
+    created = time.time()
+    c.sql("CREATE CLUSTER young SIZE 'scale=1,workers=1'", service="mz_old")
+    young_replica = c.sql_query(
+        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+        "WHERE c.name = 'young'",
+        service="mz_old",
+    )[0][0]
+
+    # Rule out the leader-unhydrated exemption as the reason for early readiness.
+    deadline = time.time() + 30
+    while not c.sql_query(
+        "SELECT count(*) > 0 AND bool_and(time_ns IS NOT NULL) "
+        "FROM mz_internal.mz_compute_hydration_times "
+        f"WHERE replica_id = '{young_replica}' AND object_id NOT LIKE 't%'",
+        service="mz_old",
+    )[0][0]:
+        assert time.time() < deadline, "young leader replica did not hydrate"
+        time.sleep(0.5)
 
     deadline = time.time() + 60
     while True:
@@ -3137,17 +3166,20 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
             break
         assert time.time() < deadline, "the DDL did not restart mz_new"
         time.sleep(0.5)
-    restarted = time.time()
-
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    ready_after = time.time() - restarted
+    ready_after = time.time() - created
 
     assert (
-        _pids(c, "mz_new", "clusterd") == replicas
-    ), "mz_new's replicas did not survive its restart"
+        stable_hydration_times() == hydration_before
+    ), "stable dataflow rehydrated across the follower restart"
+
+    incoming_replicas = _pids(c, "mz_new", "clusterd")
+    assert (
+        replicas < incoming_replicas
+    ), "existing replicas restarted or the new replica never started"
     assert (
         ready_after < period
-    ), f"mz_new became ready {ready_after:.0f}s after its restart, so the restart reset the stability period"
+    ), f"mz_new became ready {ready_after:.0f}s after replica creation, so a replica waited a full new period"
 
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)

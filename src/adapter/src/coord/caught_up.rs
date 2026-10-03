@@ -28,7 +28,7 @@
 //! per-tick caught-up classification we therefore run a stability gate. A
 //! caught-up cluster is ready only once every replica is `Online` and every
 //! non-exempt replica has had its non-ignored collections hydrated for a
-//! configurable period.
+//! configurable period, capped for young replicas by [`observe_stability`].
 //!
 //! Each replica reports its hydration times in its
 //! `mz_compute_hydration_times_per_worker` introspection log. The log lives in
@@ -36,8 +36,8 @@
 //! environmentd reconciles with the same replica processes and they keep
 //! compatible dataflows, so a DDL-triggered restart does not restart the
 //! period. A dataflow that changed rehydrates and restarts it. The log dies
-//! with the process, so a restarted replica has to hydrate again and then wait
-//! out the full period, and a crash-looping replica never becomes ready.
+//! with the process, so a restarted replica must hydrate again and establish
+//! a new observation period, subject to the young-replica cap.
 //!
 //! Hydration times come from the replica's clock, while the period is measured
 //! against environmentd's. A replica clock that runs ahead only lengthens the
@@ -62,7 +62,8 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_catalog::builtin::{
-    MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY, MZ_COMPUTE_HYDRATION_TIMES,
+    MZ_CATALOG_SERVER_CLUSTER, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY,
+    MZ_COMPUTE_HYDRATION_TIMES,
 };
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
@@ -79,19 +80,14 @@ use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 
 use crate::PeekClient;
+use crate::command::{CatalogSnapshot, Command};
 use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
 
-/// How long a check waits for a replica to answer the hydration query.
+/// How long the stability gate waits for an internal query.
 ///
-/// A replica that does not answer in time counts as not hydrated for that
-/// check. Replicas are asked concurrently, so this also bounds how long a check
-/// waits for replicas.
-///
-/// The check drops a query that times out, with the leftovers documented at
-/// [`PeekClient::background_peek`]. We accept those: a stuck replica holds at
-/// most one peek per check, on a log index that barely changes, and an
-/// orphaned registration needs the coordinator to stall at exactly that point.
-const HYDRATION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout drops the query without canceling its peek. See
+/// [`PeekClient::background_peek`] for the lifetime of retained resources.
+const STABILITY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns a query for when a replica last finished hydrating an export.
 ///
@@ -222,12 +218,11 @@ struct StabilityObservation {
 
 /// Folds the health of a cluster's replicas into the gate's verdict.
 ///
-/// A cluster is stable since the latest of its replicas' healthy-since times.
-/// These can come from replica clocks, which may run ahead of `now`, so they
-/// are clamped to `now`. A replica clock running behind shortens the period by
-/// its skew.
+/// Each replica waits for the configured period, capped at its creation age
+/// when it hydrated. Missing or invalid creation evidence retains the full
+/// period. Replica clocks running behind shorten the wait by their skew.
 fn observe_stability(
-    replicas: &[ReplicaHealth],
+    replicas: &[(ReplicaHealth, Option<EpochMillis>)],
     now: EpochMillis,
     period_ms: u64,
 ) -> StabilityObservation {
@@ -235,13 +230,29 @@ fn observe_stability(
         stable_for_ms: None,
         blocked_by: Some(blocker),
     };
-    if replicas.is_empty() || replicas.contains(&ReplicaHealth::NotOnline) {
+    if replicas.is_empty()
+        || replicas
+            .iter()
+            .any(|(health, _)| *health == ReplicaHealth::NotOnline)
+    {
         return blocked(StabilityBlocker::NotOnline);
     }
     let mut stable_since = EpochMillis::MIN;
-    for health in replicas {
+    let mut within_period = false;
+    for (health, created_at) in replicas {
         match health {
-            ReplicaHealth::HealthySince(since) => stable_since = stable_since.max(*since),
+            ReplicaHealth::HealthySince(since) => {
+                stable_since = stable_since.max(*since);
+                // Freeze the age at hydration. Using its current age makes
+                // the required period grow as quickly as the observed period.
+                let required = match created_at {
+                    Some(created) if created <= since && *since <= now => {
+                        period_ms.min(since - created)
+                    }
+                    _ => period_ms,
+                };
+                within_period |= now.saturating_sub(*since) < required;
+            }
             ReplicaHealth::Exempt => {}
             ReplicaHealth::NotOnline | ReplicaHealth::NotHydrated => {
                 return blocked(StabilityBlocker::NotHydrated);
@@ -251,7 +262,7 @@ fn observe_stability(
     let stable_for_ms = now.saturating_sub(stable_since.min(now));
     StabilityObservation {
         stable_for_ms: Some(stable_for_ms),
-        blocked_by: (stable_for_ms < period_ms).then_some(StabilityBlocker::WithinPeriod),
+        blocked_by: within_period.then_some(StabilityBlocker::WithinPeriod),
     }
 }
 
@@ -259,11 +270,12 @@ fn observe_stability(
 /// for their hydration times and applies the stability gate.
 struct StabilityGate {
     client: PeekClient,
+    replica_created_at: BTreeMap<ReplicaId, EpochMillis>,
 }
 
 impl StabilityGate {
     /// Returns whether `snapshot` shows every cluster ready for promotion.
-    async fn ready(&self, snapshot: CaughtUpSnapshot) -> bool {
+    async fn ready(&mut self, snapshot: CaughtUpSnapshot) -> bool {
         fail::fail_point!("0dt_caught_up_check", |_| false);
         let CaughtUpSnapshot {
             now,
@@ -281,6 +293,17 @@ impl StabilityGate {
             return all_caught_up;
         }
 
+        // Missing evidence keeps the full period. Retry until every queried
+        // user replica has a creation time, since catalog views may hydrate late.
+        if caught_up_clusters.values().any(|cluster| {
+            cluster.replicas.iter().any(|(id, target)| {
+                id.is_user()
+                    && *target == ReplicaTarget::Ask
+                    && !self.replica_created_at.contains_key(id)
+            })
+        }) {
+            self.load_replica_creation_times().await;
+        }
         let answers = self.ask_replicas(&caught_up_clusters).await;
 
         let mut all_ready = true;
@@ -301,7 +324,10 @@ impl StabilityGate {
                 })
                 .collect();
 
-            let replica_health = health.values().copied().collect_vec();
+            let replica_health = health
+                .iter()
+                .map(|(id, health)| (*health, self.replica_created_at.get(id).copied()))
+                .collect_vec();
             let observation = observe_stability(&replica_health, now, stability_period_ms);
             if let Some(reason) = observation.blocked_by {
                 all_ready = false;
@@ -318,6 +344,49 @@ impl StabilityGate {
 
         tracing::info!(%all_ready, "checked caught-up status of clusters");
         all_ready
+    }
+
+    async fn load_replica_creation_times(&mut self) {
+        let query = async {
+            let CatalogSnapshot { catalog } = self
+                .client
+                .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+                .await?;
+            let cluster = catalog.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
+            let replica = cluster.replicas().next().ok_or_else(|| {
+                crate::AdapterError::Internal("catalog server has no replicas".into())
+            })?;
+            let (cluster_id, replica_id) = (cluster.id, replica.replica_id);
+            drop(catalog);
+            self.client.background_peek(
+                "SELECT replica_id, created_at FROM mz_internal.mz_cluster_replica_history WHERE dropped_at IS NULL",
+                cluster_id, replica_id,
+            ).await
+        };
+        match tokio::time::timeout(STABILITY_QUERY_TIMEOUT, query).await {
+            Ok(Ok(rows)) => {
+                for row in rows {
+                    let mut values = row.iter();
+                    let id = values.next().expect("replica_id");
+                    let created = values.next().expect("created_at");
+                    if id.is_null() || created.is_null() {
+                        continue;
+                    }
+                    if let (Ok(id), Ok(created)) = (
+                        id.unwrap_str().parse::<ReplicaId>(),
+                        u64::try_from(created.unwrap_timestamptz().timestamp_millis()),
+                    ) {
+                        self.replica_created_at.insert(id, created);
+                    }
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "replica creation query failed; retaining full stability period")
+            }
+            Err(_) => {
+                tracing::warn!("replica creation query timed out; retaining full stability period")
+            }
+        }
     }
 
     /// Asks every [`ReplicaTarget::Ask`] replica, concurrently, when it last
@@ -337,7 +406,7 @@ impl StabilityGate {
                     let sql = sql.clone();
                     async move {
                         let query = client.background_peek(&sql, cluster_id, replica_id);
-                        let answer = tokio::time::timeout(HYDRATION_QUERY_TIMEOUT, query).await;
+                        let answer = tokio::time::timeout(STABILITY_QUERY_TIMEOUT, query).await;
                         let health = match answer {
                             Ok(Ok(rows)) => replica_health(&rows),
                             Ok(Err(error)) => {
@@ -392,8 +461,9 @@ impl Coordinator {
         let period = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL
             .get(self.catalog().system_config().dyncfgs());
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let gate = StabilityGate {
+        let mut gate = StabilityGate {
             client: self.background_peek_client(&self.owned_catalog()),
+            replica_created_at: BTreeMap::new(),
         };
 
         task::spawn(|| "caught_up_check", async move {
@@ -1255,7 +1325,11 @@ mod tests {
     #[mz_ore::test]
     fn stable_since_latest_replica() {
         let period_ms = 1000;
-        let replicas = [HealthySince(100), HealthySince(500), Exempt];
+        let replicas = [
+            (HealthySince(100), None),
+            (HealthySince(500), None),
+            (Exempt, None),
+        ];
         let observation = observe_stability(&replicas, 1499, period_ms);
         assert_eq!(observation.stable_for_ms, Some(999));
         assert_eq!(observation.blocked_by, Some(StabilityBlocker::WithinPeriod));
@@ -1282,7 +1356,8 @@ mod tests {
             (vec![Exempt, NotHydrated], StabilityBlocker::NotHydrated),
         ] {
             // Even a zero period requires evidence from every replica.
-            let observation = observe_stability(&replicas, 10_000, 0);
+            let evidence = replicas.iter().map(|health| (*health, None)).collect_vec();
+            let observation = observe_stability(&evidence, 10_000, 0);
             assert_eq!(observation.blocked_by, Some(blocker), "{replicas:?}");
             assert_eq!(observation.stable_for_ms, None, "{replicas:?}");
         }
@@ -1290,9 +1365,55 @@ mod tests {
 
     #[mz_ore::test]
     fn replica_clock_ahead_is_clamped() {
-        let observation = observe_stability(&[HealthySince(2000)], 1000, 0);
+        let observation = observe_stability(&[(HealthySince(2000), None)], 1000, 0);
         assert_eq!(observation.stable_for_ms, Some(0));
         assert_eq!(observation.blocked_by, None);
+    }
+
+    #[mz_ore::test]
+    fn young_replica_has_a_fixed_deadline_until_it_rehydrates() {
+        let evidence = [(HealthySince(1010), Some(1000))];
+        assert_eq!(
+            observe_stability(&evidence, 1019, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+        assert_eq!(observe_stability(&evidence, 1020, 1000).blocked_by, None);
+
+        let restarted = [(HealthySince(1030), Some(1000))];
+        assert_eq!(
+            observe_stability(&restarted, 1059, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+        assert_eq!(observe_stability(&restarted, 1060, 1000).blocked_by, None);
+    }
+
+    #[mz_ore::test]
+    fn age_cap_does_not_waive_other_replicas_or_missing_health() {
+        let young = (HealthySince(1010), Some(1000));
+        for other in [
+            (HealthySince(1000), Some(0)),
+            (HealthySince(1000), None),
+            (HealthySince(1000), Some(1001)),
+        ] {
+            let replicas = [young, other];
+            assert_eq!(
+                observe_stability(&replicas, 1999, 1000).blocked_by,
+                Some(StabilityBlocker::WithinPeriod)
+            );
+            assert_eq!(observe_stability(&replicas, 2000, 1000).blocked_by, None);
+        }
+        assert_eq!(
+            observe_stability(&[young, (NotOnline, Some(1000))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::NotOnline)
+        );
+        assert_eq!(
+            observe_stability(&[young, (NotHydrated, Some(1000))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::NotHydrated)
+        );
+        assert_eq!(
+            observe_stability(&[(HealthySince(3000), Some(3001))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
     }
 
     #[mz_ore::test]
