@@ -1,0 +1,5 @@
+name = "mz-semantics"
+defaultTargets = ["MzCompute"]
+
+[[lean_lib]]
+name = "MzCompute"
