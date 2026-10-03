@@ -30,6 +30,7 @@ use columnar::{Borrow, BorrowedOf, Clear, Columnar, Container as _, FromBytes, I
 use timely::Accountable;
 use timely::container::{DrainContainer, PushInto};
 
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 use crate::columnar::{Column, at_serialized_capacity};
 
 /// A sorted, consolidated run of columnar records, typed while written and serialized once read
@@ -214,7 +215,7 @@ impl<C: Columnar> From<Column<C>> for ColumnBody<C> {
                 assert_eq!(bytes.len() % 8, 0);
                 ColumnBody::Words(bytemuck::allocation::pod_collect_to_vec(&bytes))
             }
-            Column::Align(words) => ColumnBody::Words(words),
+            Column::Align(words) => ColumnBody::Words(words.into_words()),
         }
     }
 }
@@ -224,7 +225,9 @@ impl<C: Columnar> From<ColumnBody<C>> for Column<C> {
     fn from(body: ColumnBody<C>) -> Self {
         match body {
             ColumnBody::Typed(typed) => Column::Typed(typed),
-            ColumnBody::Words(words) => Column::Align(words),
+            ColumnBody::Words(words) => {
+                Column::Align(AlignBuffer::from_words(Origin::Fetch, words))
+            }
         }
     }
 }
