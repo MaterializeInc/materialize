@@ -26,6 +26,7 @@ import { SentryRoutes } from "~/sentry";
 import { useAllObjects } from "~/store/allObjects";
 
 import { ObjectDetailsContainer, ObjectDetailsStrip } from "./detailComponents";
+import MvFreshnessPanel from "./MvFreshnessPanel";
 import { ObjectColumns } from "./ObjectColumns";
 import { ObjectIndexes } from "./ObjectIndexes";
 import { useObjectDetails } from "./queries";
@@ -78,9 +79,14 @@ export const SimpleObjectDetailsContent = ({
     databaseObject.type as ShowCreateObjectType,
   );
 
+  const isMaterializedView = databaseObject.type === "materialized-view";
+
   return (
     <MainContentContainer>
       <ObjectDetailsContainer>
+        {isMaterializedView && (
+          <MvFreshnessPanel objectId={databaseObject.id} />
+        )}
         <ObjectDetailsStrip
           {...databaseObject}
           sourceType={object?.sourceType}
