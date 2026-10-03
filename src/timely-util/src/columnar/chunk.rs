@@ -2846,13 +2846,15 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn spill_gates_compose() {
-        let installed =
-            crate::pool_config::apply_pool_config(crate::pool_config::PoolPagerConfig {
+        let installed = crate::pool_config::apply_pool_config(
+            crate::pool_config::PoolPagerConfig {
                 budget_bytes: 32 << 20,
                 spill_threads: 1,
                 eager_backing: false,
                 rss_target_bytes: 16 << 20,
-            });
+            },
+            || crate::pool_config::PoolBackend::Swap,
+        );
         assert!(installed, "pool reservation failed");
         // A body at the spill floor, so the gates alone decide.
         let (col, _) = column_at_spill_floor();

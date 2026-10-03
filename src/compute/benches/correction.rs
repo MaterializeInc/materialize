@@ -154,12 +154,15 @@ impl Spill {
             Self::Budget(mib) => mib * 1024 * 1024,
         };
         mz_timely_util::columnar::chunk::set_sink_spill_enabled(true);
-        let applied = pool_config::apply_pool_config(pool_config::PoolPagerConfig {
-            budget_bytes,
-            spill_threads: 2,
-            eager_backing: false,
-            rss_target_bytes: 0,
-        });
+        let applied = pool_config::apply_pool_config(
+            pool_config::PoolPagerConfig {
+                budget_bytes,
+                spill_threads: 2,
+                eager_backing: false,
+                rss_target_bytes: 0,
+            },
+            || pool_config::PoolBackend::Swap,
+        );
         assert!(applied, "pool reservation failed");
     }
 }
