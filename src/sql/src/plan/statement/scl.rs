@@ -41,6 +41,29 @@ pub fn describe_set_variable(
     Ok(StatementDesc::new(None))
 }
 
+/// A variable name as planned from its identifier.
+pub(crate) struct PlannedVariableName {
+    /// The name lowercased, matching the lexer's lowercasing of unquoted
+    /// identifiers, so quoted spellings like `"TIMEZONE"` behave identically to
+    /// unquoted ones. The normalization matters beyond lookup (which is
+    /// case-insensitive anyway): the name is also used as a case-sensitive key
+    /// in durable state, namely the system configuration and the role vars map,
+    /// and in case-sensitive comparisons in the sequencer.
+    pub name: String,
+    /// The name as written, which an unrecognized-parameter error echoes, as in
+    /// PostgreSQL.
+    pub written: String,
+}
+
+/// Extracts a variable name from its identifier.
+pub(crate) fn plan_variable_name(variable: Ident) -> PlannedVariableName {
+    let written = variable.into_string();
+    PlannedVariableName {
+        name: written.to_lowercase(),
+        written,
+    }
+}
+
 pub fn plan_set_variable(
     scx: &StatementContext,
     SetVariableStatement {
@@ -50,7 +73,10 @@ pub fn plan_set_variable(
     }: SetVariableStatement,
 ) -> Result<Plan, PlanError> {
     let value = plan_set_variable_to(to)?;
-    let name = variable.into_string();
+    let PlannedVariableName {
+        name,
+        written: written_name,
+    } = plan_variable_name(variable);
 
     // Gate feature-flagged isolation levels at plan time. The same check runs in
     // `SessionVars::set`, which also covers `ALTER ROLE ... SET` and connection
@@ -63,7 +89,12 @@ pub fn plan_set_variable(
         )?;
     }
 
-    Ok(Plan::SetVariable(SetVariablePlan { name, value, local }))
+    Ok(Plan::SetVariable(SetVariablePlan {
+        name,
+        written_name,
+        value,
+        local,
+    }))
 }
 
 pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanError> {
@@ -95,8 +126,10 @@ pub fn plan_reset_variable(
     _: &StatementContext,
     ResetVariableStatement { variable }: ResetVariableStatement,
 ) -> Result<Plan, PlanError> {
+    let PlannedVariableName { name, written } = plan_variable_name(variable);
     Ok(Plan::ResetVariable(ResetVariablePlan {
-        name: variable.to_string(),
+        name,
+        written_name: written,
     }))
 }
 
@@ -110,13 +143,13 @@ pub fn describe_show_variable(
             .with_column("setting", SqlScalarType::String.nullable(false))
             .with_column("description", SqlScalarType::String.nullable(false))
             .finish()
-    } else if variable.as_str() == SCHEMA_ALIAS {
-        RelationDesc::builder()
-            .with_column(variable.as_str(), SqlScalarType::String.nullable(true))
-            .finish()
     } else {
+        let nullable = variable.as_str() == SCHEMA_ALIAS;
         RelationDesc::builder()
-            .with_column(variable.as_str(), SqlScalarType::String.nullable(false))
+            .with_column(
+                plan_variable_name(variable).name,
+                SqlScalarType::String.nullable(nullable),
+            )
             .finish()
     };
     Ok(StatementDesc::new(Some(desc)))
@@ -129,8 +162,10 @@ pub fn plan_show_variable(
     if variable.as_str() == UncasedStr::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
+        let PlannedVariableName { name, written } = plan_variable_name(variable);
         Ok(Plan::ShowVariable(ShowVariablePlan {
-            name: variable.to_string(),
+            name,
+            written_name: written,
         }))
     }
 }
