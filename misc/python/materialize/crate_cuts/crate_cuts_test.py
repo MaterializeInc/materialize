@@ -12,21 +12,26 @@
 The split tests use a synthetic workspace: crate `a` has modules `a/base.rs`
 and `a/heavy.rs`, where only `heavy.rs` references the external crate `big`.
 Crate `b` uses only `base.rs`, crate `c` uses both.
+
+The golden test runs the whole analysis on `testdata/facts.json`, a synthetic
+workspace, and compares the reports with the checked-in ones. Rewrite them
+with `REWRITE=1 bin/pytest misc/python/materialize/crate_cuts` and review the
+diff.
 """
 
+import json
+import os
 from collections import Counter
 from pathlib import Path
 
-from materialize import scip
-from materialize.cli.crate_cuts import (
-    Model,
-    Module,
-    Package,
-    candidate_cuts,
-    metrics,
-    module_reach,
-    pin_impl,
-)
+from materialize.crate_cuts import scip
+from materialize.crate_cuts.extract import pin_impl
+from materialize.crate_cuts.facts import Facts, Module, Package
+from materialize.crate_cuts.model import Model, metrics, module_reach
+from materialize.crate_cuts.report import render, report_json
+from materialize.crate_cuts.search import analyze, candidate_cuts
+
+TESTDATA = Path(__file__).parent / "testdata"
 
 
 def test_impl_header() -> None:
@@ -99,7 +104,7 @@ def test_read_documents() -> None:
 
 def _model() -> Model:
     def pkg(name: str, deps: set[str], workspace: bool = True) -> Package:
-        return Package(name, name, "0", Path(name), workspace, True, deps=deps)
+        return Package(name, name, workspace, deps=frozenset(deps))
 
     packages = {
         "big": pkg("big", set(), workspace=False),
@@ -120,7 +125,7 @@ def _model() -> Model:
         "b/lib.rs": Module("b/lib.rs", "b", "lib", 10, refs=Counter({"a/base.rs": 1})),
         "c/lib.rs": Module("c/lib.rs", "c", "lib", 10, refs=Counter({"a/heavy.rs": 1})),
     }
-    return Model(packages, modules)
+    return Model(Facts(packages, modules))
 
 
 def test_split_rewires_consumers() -> None:
@@ -133,10 +138,11 @@ def test_split_rewires_consumers() -> None:
     assert cuts == [(["big"], {"a/base.rs"})]
 
     core = model.split("a", {"a/base.rs"})
-    assert model.packages[core].deps == set()
-    assert model.packages["b"].deps == {core}, "b only uses core"
-    assert model.packages["c"].deps == {"a"}, "c uses rest"
-    assert model.packages["a"].deps == {"big", core}
+    assert model.crates[core].deps == set()
+    assert model.crates["b"].deps == {core}, "b only uses core"
+    assert model.crates["c"].deps == {"a"}, "c uses rest"
+    assert model.crates["a"].deps == {"big", core}
+    assert model.facts.packages["b"].deps == {"a"}, "facts are unchanged"
 
     after = metrics(model)
     # b no longer reaches `big` or `a`, c reaches the new core through a.
@@ -151,8 +157,8 @@ def test_snapshot_restore() -> None:
     model.split("a", {"a/base.rs"})
     model.restore(snap)
     assert metrics(model) == before
-    assert set(model.packages) == {"big", "a", "b", "c"}
-    assert model.modules["a/base.rs"].package == "a"
+    assert set(model.crates) == {"big", "a", "b", "c"}
+    assert model.owner["a/base.rs"] == "a"
 
 
 def test_pins_keep_impls_with_their_type() -> None:
@@ -163,3 +169,19 @@ def test_pins_keep_impls_with_their_type() -> None:
     # The pin drags `base.rs` along with `heavy.rs`, so no split remains.
     assert module_reach(model, "a")["a/base.rs"] == {"big"}
     assert list(candidate_cuts(model, "a")) == []
+
+
+def test_golden_reports() -> None:
+    facts = Facts.from_json(json.loads((TESTDATA / "facts.json").read_text()))
+    assert Facts.from_json(facts.to_json()) == facts, "facts round-trip"
+    model = Model(facts)
+    results = analyze(model, rounds=10, objective="pairs")
+    outputs = {
+        "report.json": json.dumps(report_json(model, results), indent=1) + "\n",
+        "report.md": render(model, results, top=40),
+    }
+    for name, actual in outputs.items():
+        path = TESTDATA / name
+        if os.environ.get("REWRITE"):
+            path.write_text(actual)
+        assert actual == path.read_text(), f"{name} changed, see the module doc"

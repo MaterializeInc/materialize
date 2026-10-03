@@ -148,6 +148,7 @@ steps:
           - target/crate-cuts/report.md
           - target/crate-cuts/report.json
           - target/crate-cuts/modules.json
+          - target/crate-cuts/facts.json
           - target/crate-cuts/crates.dot
           - target/crate-cuts/rust-analyzer.log
 
