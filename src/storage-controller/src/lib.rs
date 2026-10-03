@@ -1687,10 +1687,10 @@ impl StorageController for Controller {
             id,
             description: StorageSinkDesc {
                 from: from_id,
-                from_desc: new_description.sink.from_desc,
-                connection: new_description.sink.connection,
+                from_desc: new_description.sink.from_desc.clone(),
+                connection: new_description.sink.connection.clone(),
                 envelope: new_description.sink.envelope,
-                as_of: new_description.sink.as_of,
+                as_of: new_description.sink.as_of.clone(),
                 version: new_description.sink.version,
                 from_storage_metadata,
                 with_snapshot,
@@ -1709,6 +1709,19 @@ impl StorageController for Controller {
             })?;
 
         instance.send(StorageCommand::RunSink(Box::new(cmd)));
+
+        // alter_export_connections rebuilds the sink from this description and
+        // checks new connections against it with alter_compatible, so it must
+        // describe the sink we just told the cluster to run.
+        let state = self
+            .collections
+            .get_mut(&id)
+            .expect("export known to exist");
+        let DataSource::Sink { desc } = &mut state.data_source else {
+            panic!("export known to exist")
+        };
+        *desc = new_description;
+
         Ok(())
     }
 
