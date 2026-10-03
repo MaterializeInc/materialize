@@ -816,12 +816,9 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
 
                 // Borrows the arrangements, so it must precede moving their traces into the
                 // `TraceBundle` below.
-                let publication = compute_state.publisher.publish(
-                    idx_id,
-                    oks.stream.scope().worker(),
-                    &oks.trace,
-                    &errs.trace,
-                );
+                let publication = compute_state.publisher.as_ref().map(|publisher| {
+                    publisher.publish(idx_id, oks.stream.scope().worker(), &oks.trace, &errs.trace)
+                });
 
                 compute_state.traces.set(
                     idx_id,
@@ -832,12 +829,14 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                let publication = compute_state.publisher.publish(
-                    idx_id,
-                    self.scope.worker(),
-                    trace.oks().unpadded(),
-                    trace.errs().unpadded(),
-                );
+                let publication = compute_state.publisher.as_ref().map(|publisher| {
+                    publisher.publish(
+                        idx_id,
+                        self.scope.worker(),
+                        trace.oks().unpadded(),
+                        trace.errs().unpadded(),
+                    )
+                });
                 let to_drop = trace.to_drop().clone();
                 compute_state
                     .traces
@@ -936,12 +935,9 @@ where
 
                 // Borrows the arrangements, so it must precede moving their traces into the
                 // `TraceBundle` below.
-                let publication = compute_state.publisher.publish(
-                    idx_id,
-                    oks.stream.scope().worker(),
-                    &oks.trace,
-                    &errs.trace,
-                );
+                let publication = compute_state.publisher.as_ref().map(|publisher| {
+                    publisher.publish(idx_id, oks.stream.scope().worker(), &oks.trace, &errs.trace)
+                });
 
                 compute_state.traces.set(
                     idx_id,
@@ -952,12 +948,14 @@ where
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                let publication = compute_state.publisher.publish(
-                    idx_id,
-                    outer.worker(),
-                    trace.oks().unpadded(),
-                    trace.errs().unpadded(),
-                );
+                let publication = compute_state.publisher.as_ref().map(|publisher| {
+                    publisher.publish(
+                        idx_id,
+                        outer.worker(),
+                        trace.oks().unpadded(),
+                        trace.errs().unpadded(),
+                    )
+                });
                 let to_drop = trace.to_drop().clone();
                 compute_state
                     .traces

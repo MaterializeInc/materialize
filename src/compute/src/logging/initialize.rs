@@ -37,7 +37,7 @@ use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
-use crate::sharing::Publisher;
+use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
@@ -51,7 +51,7 @@ pub fn initialize(
     metrics: LoggingMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
-    publisher: Publisher,
+    publisher: Option<ArrangementSharingRegistry>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -118,8 +118,8 @@ struct LoggingContext<'a> {
     metrics: LoggingMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
-    /// Publishes the logging indexes for the peer runtime.
-    publisher: Publisher,
+    /// Publishes the logging indexes for the peer runtime, if that runtime reads them.
+    publisher: Option<ArrangementSharingRegistry>,
 }
 
 pub(crate) struct LoggingTraces {
@@ -217,8 +217,8 @@ impl LoggingContext<'_> {
                     .into_iter()
                     .map(|(log, collection)| {
                         let publication = self.config.index_logs.get(&log).and_then(|&id| {
-                            self.publisher
-                                .publish(id, scope.worker(), &collection.trace, &errs)
+                            let publisher = self.publisher.as_ref()?;
+                            Some(publisher.publish(id, scope.worker(), &collection.trace, &errs))
                         });
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
                             .with_drop((collection.token, publication));

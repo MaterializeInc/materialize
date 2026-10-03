@@ -121,9 +121,9 @@ struct Config {
     pub role: ComputeRuntimeRole,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
-    /// One registry of published index arrangements per local worker ordinal. Each worker takes
-    /// its own at startup, after which only `None`s remain.
-    pub sharing_registries: Arc<Mutex<Vec<Option<ArrangementSharingRegistry>>>>,
+    /// One registry of published index arrangements per local worker ordinal, shared with the
+    /// worker of the same ordinal on the process's other compute runtime.
+    pub sharing_registries: Vec<ArrangementSharingRegistry>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -168,17 +168,17 @@ pub struct StorageGuestConfig {
     shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
-/// Wraps one registry per local worker for the workers to take at startup.
+/// Checks that `registries` holds one registry per local worker.
 fn sharing_registries_config(
     registries: Vec<ArrangementSharingRegistry>,
     workers_per_process: usize,
-) -> Arc<Mutex<Vec<Option<ArrangementSharingRegistry>>>> {
+) -> Vec<ArrangementSharingRegistry> {
     assert_eq!(
         registries.len(),
         workers_per_process,
         "one sharing registry per local worker"
     );
-    Arc::new(Mutex::new(registries.into_iter().map(Some).collect()))
+    registries
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
@@ -547,9 +547,7 @@ impl ClusterSpec for Config {
 
         let local_index = worker_id % self.workers_per_process;
 
-        let sharing_registry = self.sharing_registries.lock().expect("poisoned")[local_index]
-            .take()
-            .expect("each worker takes its sharing registry exactly once");
+        let sharing_registry = self.sharing_registries[local_index].clone();
 
         // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.

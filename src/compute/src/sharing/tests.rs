@@ -190,7 +190,7 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     let target = GlobalId::User(1);
     let reexport = GlobalId::User(2);
     let registry = ArrangementSharingRegistry::new();
-    registry.register_waker(thread::current());
+    registry.attach_reader();
     // A reader bound the re-export's id first on this worker. Publishing backs its point the same
     // way as a point the publisher creates.
     let _reader_slot = registry.get_or_create(reexport);

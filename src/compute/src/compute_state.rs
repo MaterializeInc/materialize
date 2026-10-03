@@ -78,7 +78,7 @@ use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
-use crate::sharing::{ArrangementSharingRegistry, Publisher};
+use crate::sharing::ArrangementSharingRegistry;
 
 mod error_scan;
 mod peek_budget;
@@ -215,8 +215,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
-    /// Publishes this runtime's indexes for its peer runtime.
-    pub(crate) publisher: Publisher,
+    /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
+    pub(crate) publisher: Option<ArrangementSharingRegistry>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -337,8 +337,11 @@ impl ComputeState {
             persist_clients,
             publisher: match role {
                 // Only maintenance has a peer that reads its indexes.
-                ComputeRuntimeRole::Maintenance => Publisher::Registry(sharing_registry.clone()),
-                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => Publisher::None,
+                ComputeRuntimeRole::Maintenance => {
+                    sharing_registry.attach_publisher();
+                    Some(sharing_registry.clone())
+                }
+                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => None,
             },
             txns_ctx,
             command_history,
