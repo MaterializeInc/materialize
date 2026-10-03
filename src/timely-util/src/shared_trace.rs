@@ -264,7 +264,7 @@ fn chain_through<B: BatchReader + Clone>(chain: &[B], upper: AntichainRef<B::Tim
         if !batch.is_empty() {
             assert!(
                 PartialOrder::less_equal(&batch.upper().borrow(), &upper),
-                "batches_through: upper straddles batch"
+                "chain_through: upper straddles batch"
             );
             out.push(batch.clone());
         }
@@ -344,7 +344,7 @@ impl<Tr: Trace> SharedSpine<Tr> {
             // this trace's chain regresses below them, which an importer cannot follow: a batch
             // straddling its acknowledged frontier panics its capability downgrade. Such an
             // importer reads a collection the earlier writer's dataflow maintained, so it is about
-            // to be dropped too, and it keeps what it has rather than mixing in this trace.
+            // to be dropped too, and it keeps what it has.
             if std::mem::replace(&mut state.had_writer, true) {
                 state.queues.clear();
             }
@@ -509,7 +509,7 @@ impl<Tr: Trace> SharedSpine<Tr> {
         let physical = self.local_physical.meet(&remote_physical);
         // The spine refuses to rewind its physical frontier. A reader registers its physical hold
         // at the chain coverage it was seeded with, which is at or beyond the spine's frontier, so
-        // the meet cannot regress. The guard documents that rather than trusting it.
+        // the meet cannot regress. The guard checks it.
         if self.inner.get_physical_compaction() != physical.borrow()
             && PartialOrder::less_equal(&self.inner.get_physical_compaction(), &physical.borrow())
         {
@@ -845,7 +845,7 @@ where
                         Replay::Batch(batch) => {
                             // The writer enqueues a batch under the lock that publishes the chain
                             // containing it, so a batch in the seed cannot also arrive live. This
-                            // guards the invariant rather than trusting it: emitting a covered batch
+                            // guards the invariant: emitting a covered batch
                             // twice would double count it under a capability already moved past.
                             if !draining_seed
                                 && PartialOrder::less_equal(&batch.upper().borrow(), &seed.borrow())

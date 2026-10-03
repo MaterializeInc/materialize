@@ -63,8 +63,8 @@ pub(crate) type SharedOksEnter<TEnter> = TraceEnter<SharedOksFrontier, TEnter>;
 /// A [`SharedErrsFrontier`] entered into a render scope whose timestamp is `TEnter`.
 pub(crate) type SharedErrsEnter<TEnter> = TraceEnter<SharedErrsFrontier, TEnter>;
 
-// `pub(crate)`: sibling test modules reach the probes here rather than duplicating them. The peek
-// and render tests in `crate::render` and `crate::sharing` read a published arrangement through
-// `SharedReaderExt::snapshot_at` and inspect holds through `Published::logical_holds`.
+// `pub(crate)` for sibling test modules. The peek and render tests in `crate::render` and
+// `crate::sharing` read a published arrangement through `SharedReaderExt::snapshot_at` and inspect
+// holds through `Published::logical_holds`.
 #[cfg(test)]
 pub(crate) mod tests;

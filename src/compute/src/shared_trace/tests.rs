@@ -33,8 +33,7 @@ use super::*;
 /// How long [`SharedReaderExt::snapshot_at`] waits for a seal before failing the test.
 ///
 /// Generous, because it only has to exceed the time a correct publisher takes to step. A test that
-/// hits it has wedged, and the assertion reports which frontier stalled rather than leaving the
-/// harness to kill a silent hang.
+/// hits it has wedged, and the assertion reports which frontier stalled.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// An owned, consistent snapshot of a published arrangement: an immutable chain.
@@ -104,8 +103,7 @@ impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
     ///
     /// Returns `None` when compaction has advanced `since` beyond `time`, so the accumulation at
     /// `time` is no longer accurate. The gate mirrors the single-runtime peek path, which errors
-    /// when the compaction frontier is beyond the read time rather than returning coalesced
-    /// results.
+    /// when the compaction frontier is beyond the read time.
     ///
     /// Panics once the wait exceeds [`SNAPSHOT_TIMEOUT`], naming the frontiers it was waiting on.
     fn snapshot_at(&self, time: &B::Time) -> Option<TraceSnapshot<B>>
@@ -119,7 +117,7 @@ impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
             // `upper` not less-equal `time` means all updates at `time` are sealed.
             if !upper.less_equal(time) {
                 // `since` beyond `time` means times at `time` have been coalesced and a read
-                // there would be inaccurate. Fail to `None` rather than serve stale data.
+                // there would be inaccurate.
                 if !since.less_equal(time) {
                     return None;
                 }
@@ -297,7 +295,7 @@ fn quiet_seal_advances_upper() {
 /// `snapshot_from_another_thread`. Unlike `crate::sharing`'s cross-runtime coverage, which reads
 /// only after the publishing worker has already torn down, this keeps the publisher stepping
 /// concurrently on its own thread so the reader genuinely waits for a seal that has not happened
-/// yet, rather than observing an already-sealed chain.
+/// yet.
 #[mz_ore::test]
 fn snapshot_at_waits_until_upper_passes_time() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -365,8 +363,10 @@ fn snapshot_at_waits_until_upper_passes_time() {
 
         // Step until the reader has taken its snapshot. The publisher advances `upper` as it
         // steps, which unblocks the reader's `snapshot_at`.
+        let deadline = Instant::now() + 2 * SNAPSHOT_TIMEOUT;
         while !done.load(Ordering::SeqCst) {
             worker.step();
+            assert!(Instant::now() < deadline, "reader did not finish its snapshot");
         }
     });
 
@@ -704,8 +704,7 @@ fn reader_at_mints_at_as_of_or_refuses() {
     });
 }
 
-/// A consumer forwarding an empty input frontier releases its hold rather than recording an
-/// empty one.
+/// A consumer forwarding an empty input frontier releases its hold.
 ///
 /// The empty antichain permits compaction everywhere, so a handle that reaches it has released and
 /// must stop appearing as a hold. The reduce operator forwards exactly this on every dataflow whose
@@ -747,7 +746,7 @@ fn empty_logical_request_releases_the_hold() {
 
         assert!(
             published.logical_holds().is_empty(),
-            "an empty request must release the hold rather than record it"
+            "an empty request must release the hold"
         );
     });
 }
@@ -962,7 +961,7 @@ fn clone_registers_at_its_sources_physical_frontier() {
 ///
 /// The import's own read hold is the only registration a consumer that keeps the stream leaves
 /// behind, so if that hold never rises the accumulated physical frontier never rises either, and
-/// the spine stops merging for the life of the import. The cost is unbounded rather than constant:
+/// the spine stops merging for the life of the import. The cost is unbounded:
 /// one stranded batch per seal, whose retractions never consolidate, and a `CursorList` over all of
 /// them on every `cursor_through`.
 ///
