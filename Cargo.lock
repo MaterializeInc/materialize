@@ -7711,6 +7711,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sysinfo",
+ "tempfile",
  "tokio",
  "tracing",
 ]
