@@ -156,6 +156,11 @@ where
         }
         self
     }
+
+    /// The wrapped trace, which does not report the padding.
+    pub fn unpadded(&self) -> &Tr {
+        &self.trace
+    }
 }
 
 impl<Tr> TraceReader for PaddedTrace<Tr>
@@ -261,6 +266,16 @@ impl TraceBundle {
             to_drop: Some(Rc::new(Box::new(to_drop))),
             ..self
         }
+    }
+
+    /// Returns a reference to the `oks` trace.
+    pub fn oks(&self) -> &PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+        &self.oks
+    }
+
+    /// Returns a reference to the `errs` trace.
+    pub fn errs(&self) -> &PaddedTrace<ErrAgent<Timestamp, Diff>> {
+        &self.errs
     }
 
     /// Returns a mutable reference to the `oks` trace.

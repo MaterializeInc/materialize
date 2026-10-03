@@ -26,7 +26,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-use std::thread::Thread;
+use std::thread::{Thread, ThreadId};
 
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::progress::Antichain;
@@ -46,20 +46,22 @@ pub struct SharedIndexArrangement {
     pub(crate) errs: Published<ErrSpine<Timestamp, Diff>>,
 }
 
-/// The registry's state: the published slots and the thread of the interactive peer that reads
-/// them. One lock covers both. Every critical section is a few map operations, and the publisher takes it once per
+/// The registry's state: the published slots and the two workers attached to them. One lock covers
+/// all three. Every critical section is a few map operations, and the publisher takes it once per
 /// seal, not per record.
 #[derive(Default)]
 struct Inner {
     /// Weak, so an entry lives exactly as long as a publisher or a reader holds its slot. Dead
     /// entries are pruned whenever a slot is created.
     map: BTreeMap<GlobalId, Weak<SharedIndexArrangement>>,
-    /// `None` until the interactive peer registers itself.
+    /// The worker that publishes here, `None` until it attaches.
+    publisher: Option<ThreadId>,
+    /// The worker that reads here and is woken on a publication, `None` until it attaches.
     ///
     /// Unparked rather than activated: every timely allocator's `await_events` bottoms out in
     /// `std::thread::park`, and a root-path `SyncActivator` would additionally mark the worker's
     /// dataflows schedulable, which is work this wake does not need.
-    waker: Option<Thread>,
+    reader: Option<Thread>,
 }
 
 /// A registry of published index arrangements, shared by one maintenance worker and its
@@ -126,7 +128,7 @@ impl ArrangementSharingRegistry {
     /// error is emitted, so an oks-only signal would leave that peek parked.
     ///
     /// Every id gets its own publication point, including an index that re-exports another's
-    /// arrangement. The point's writer frontier and standing hold are per collection, and the
+    /// arrangement. The point's writer frontier and peer holds are per collection, and the
     /// controller compacts two collections independently even when they share a trace.
     ///
     /// The publication lasts as long as the returned token.
@@ -169,13 +171,43 @@ impl ArrangementSharingRegistry {
         Some(slot.oks.logical_holds())
     }
 
-    /// Registers `worker` as the interactive peer to wake. Called once at startup, from that
-    /// worker's own thread.
-    pub(crate) fn register_waker(&self, worker: Thread) {
-        self.lock().waker = Some(worker);
+    /// Attaches the current thread as the worker that publishes here.
+    ///
+    /// Worker `i` of each runtime holds registry `i`, and both sides must be a single worker. Two
+    /// publishing workers hold different shards of an index and would back one slot with both, and
+    /// a second reader would take over the wake, so the first one's waiting peeks never wake.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another thread attached as the publisher.
+    pub(crate) fn attach_publisher(&self) {
+        let current = std::thread::current().id();
+        let previous = self.lock().publisher.replace(current);
+        assert!(
+            previous.is_none_or(|previous| previous == current),
+            "a sharing registry has one publishing worker"
+        );
     }
 
-    /// Unparks the interactive peer, if one is registered.
+    /// Attaches the current thread as the worker that reads here, which a publication unparks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another thread attached as the reader, see [`Self::attach_publisher`].
+    pub(crate) fn attach_reader(&self) {
+        let current = std::thread::current();
+        let mut inner = self.lock();
+        if let Some(previous) = &inner.reader {
+            assert_eq!(
+                previous.id(),
+                current.id(),
+                "a sharing registry has one reading worker"
+            );
+        }
+        inner.reader = Some(current);
+    }
+
+    /// Unparks the reading worker, if one is attached.
     ///
     /// [`Self::publish`] calls this once a slot's publishers are installed, each publisher calls it
     /// again on every seal, and an unpublication calls it once more, since a peek waiting on a
@@ -186,10 +218,10 @@ impl ArrangementSharingRegistry {
     /// after that read is remembered by `unpark`, so the worker's next park returns at once and it
     /// reads again.
     pub(crate) fn notify(&self) {
-        if let Some(waker) = &self.lock().waker {
+        if let Some(reader) = &self.lock().reader {
             // `unpark` coalesces by itself: the thread keeps one token, and a wake while it runs
             // costs an atomic swap without a syscall.
-            waker.unpark();
+            reader.unpark();
         }
     }
 }

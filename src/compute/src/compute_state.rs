@@ -77,7 +77,8 @@ use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
-use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
+use crate::sharing::ArrangementSharingRegistry;
 
 mod error_scan;
 mod peek_budget;
@@ -214,6 +215,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    /// Publishes this runtime's indexes for its peer runtime, if that runtime reads them.
+    pub(crate) publisher: Option<ArrangementSharingRegistry>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -305,7 +308,9 @@ impl ComputeState {
 
     /// Construct a new `ComputeState`.
     pub fn new(
+        role: ComputeRuntimeRole,
         persist_clients: Arc<PersistClientCache>,
+        sharing_registry: ArrangementSharingRegistry,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -330,6 +335,14 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            publisher: match role {
+                // Only maintenance has a peer that reads its indexes.
+                ComputeRuntimeRole::Maintenance => {
+                    sharing_registry.attach_publisher();
+                    Some(sharing_registry.clone())
+                }
+                ComputeRuntimeRole::Solo | ComputeRuntimeRole::Interactive => None,
+            },
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -1028,6 +1041,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.metrics.for_logging(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
+            self.compute_state.publisher.clone(),
         );
 
         let dataflow_index = Rc::new(dataflow_index);

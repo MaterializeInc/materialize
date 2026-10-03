@@ -50,6 +50,7 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::sharing::ArrangementSharingRegistry;
 
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
@@ -84,16 +85,6 @@ pub enum ComputeRuntimeRole {
     Maintenance,
     /// The interactive runtime of a two-runtime process. Shares the process globals owned by
     /// maintenance and serves reads.
-    ///
-    /// Test-only until the interactive runtime exists to construct it. It is present because the
-    /// `role` label's entire purpose is that two named roles register into one process registry
-    /// without colliding, and nothing else can express that: `Solo` registers the same metric names
-    /// with no `role` label, so prometheus rejects it alongside a named role for differing label
-    /// dimensions rather than treating it as a second series. Verifying non-collision therefore
-    /// needs a second *named* role.
-    ///
-    /// TODO: drop the `cfg` when the interactive runtime lands and constructs this.
-    #[cfg(test)]
     Interactive,
 }
 
@@ -106,7 +97,6 @@ impl ComputeRuntimeRole {
         match self {
             ComputeRuntimeRole::Solo => None,
             ComputeRuntimeRole::Maintenance => Some("maintenance"),
-            #[cfg(test)]
             ComputeRuntimeRole::Interactive => Some("interactive"),
         }
     }
@@ -116,9 +106,6 @@ impl ComputeRuntimeRole {
     /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
     /// inherits the globals maintenance installs, so re-running them would either double-apply a
     /// non-idempotent effect or race maintenance.
-    ///
-    /// NOTE: every role a release build can construct owns the globals, so this is constantly true
-    /// outside tests. The distinction becomes load-bearing when the interactive runtime lands.
     pub fn owns_process_globals(self) -> bool {
         matches!(
             self,
@@ -130,8 +117,13 @@ impl ComputeRuntimeRole {
 /// Configures the server with compute-specific metrics.
 #[derive(Clone)]
 struct Config {
+    /// Which of the process's compute runtimes this is.
+    pub role: ComputeRuntimeRole,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// One registry of published index arrangements per local worker ordinal, shared with the
+    /// worker of the same ordinal on the process's other compute runtime.
+    pub sharing_registries: Vec<ArrangementSharingRegistry>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -176,19 +168,35 @@ pub struct StorageGuestConfig {
     shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
+/// Checks that `registries` holds one registry per local worker.
+fn sharing_registries_config(
+    registries: Vec<ArrangementSharingRegistry>,
+    workers_per_process: usize,
+) -> Vec<ArrangementSharingRegistry> {
+    assert_eq!(
+        registries.len(),
+        workers_per_process,
+        "one sharing registry per local worker"
+    );
+    registries
+}
+
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
     timely_config: TimelyConfig,
     role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
+    sharing_registries: Vec<ArrangementSharingRegistry>,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let workers_per_process = timely_config.workers;
     let config = Config {
+        role,
         persist_clients,
+        sharing_registries: sharing_registries_config(sharing_registries, workers_per_process),
         txns_ctx,
         tracing_handle,
         metrics: ComputeMetrics::register_with(metrics_registry, role),
@@ -212,6 +220,7 @@ pub async fn serve_unified(
     role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
+    sharing_registries: Vec<ArrangementSharingRegistry>,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
@@ -246,7 +255,9 @@ pub async fn serve_unified(
     };
 
     let config = Config {
+        role,
         persist_clients,
+        sharing_registries: sharing_registries_config(sharing_registries, workers_per_process),
         txns_ctx,
         tracing_handle,
         metrics: ComputeMetrics::register_with(metrics_registry, role),
@@ -419,6 +430,8 @@ impl ResponseSender {
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
 struct Worker<'w> {
+    /// Which of the process's compute runtimes this worker belongs to.
+    role: ComputeRuntimeRole,
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
@@ -431,6 +444,8 @@ struct Worker<'w> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// The registry this worker shares with its peer on the process's other compute runtime.
+    sharing_registry: ArrangementSharingRegistry,
     /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -532,6 +547,8 @@ impl ClusterSpec for Config {
 
         let local_index = worker_id % self.workers_per_process;
 
+        let sharing_registry = self.sharing_registries[local_index].clone();
+
         // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.
         let mut storage_lane_input = None;
@@ -587,12 +604,14 @@ impl ClusterSpec for Config {
         });
 
         Worker {
+            role: self.role,
             timely_worker,
             command_rx: CommandReceiver::new(cmd_rx, worker_id),
             response_tx: ResponseSender::new(resp_tx, worker_id),
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
+            sharing_registry,
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
@@ -905,7 +924,9 @@ impl<'w> Worker<'w> {
     fn handle_command(&mut self, cmd: ComputeCommand) {
         if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
             self.compute_state = Some(ComputeState::new(
+                self.role,
                 Arc::clone(&self.persist_clients),
+                self.sharing_registry.clone(),
                 self.txns_ctx.clone(),
                 self.metrics.clone(),
                 Arc::clone(&self.tracing_handle),
