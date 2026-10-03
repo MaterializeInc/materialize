@@ -1459,6 +1459,7 @@ mod tests {
                 from: VIEW,
                 from_desc: RelationDesc::new(SqlRelationType::from_repr(&typ()), ["c"]),
                 connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                    ignore_errors: false,
                     output: Vec::new(),
                 }),
                 with_snapshot: true,

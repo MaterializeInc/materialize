@@ -144,6 +144,7 @@ pub(crate) fn index_peek(
         .with_column("value", SqlScalarType::UInt64.nullable(false))
         .finish();
     Peek {
+        ignore_errors: false,
         target: PeekTarget::Index { id: TARGET_ID },
         result_desc,
         literal_constraints,
@@ -315,7 +316,10 @@ pub(crate) fn row_collection(rows: impl IntoIterator<Item = Row>) -> RowCollecti
 
 /// The answer a peek gives when its walk completes over `rows`.
 pub(crate) fn rows_answer(rows: impl IntoIterator<Item = Row>) -> PeekResponse {
-    PeekResponse::Rows(vec![row_collection(rows)])
+    PeekResponse::Rows {
+        rows: vec![row_collection(rows)],
+        ignored_error: None,
+    }
 }
 
 /// A peek whose scan runs to completion is answered with the rows it accumulated, and reports

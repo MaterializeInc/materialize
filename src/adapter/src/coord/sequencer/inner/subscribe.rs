@@ -273,6 +273,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan {
             with_snapshot,
+            ignore_errors,
             up_to,
             ..
         } = &plan;
@@ -296,6 +297,7 @@ impl Coordinator {
             view_id,
             sink_id,
             *with_snapshot,
+            *ignore_errors,
             *up_to,
             debug_name,
             optimizer_config,
@@ -508,6 +510,7 @@ impl Coordinator {
         emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
         let conn_id = ctx.session.conn_id().clone();
         let session_uuid = ctx.session().uuid();
+        let notice_tx = ctx.session().retain_notice_transmitter();
         let txn_read_holds = self
             .txn_read_holds
             .remove(&conn_id)
@@ -523,6 +526,7 @@ impl Coordinator {
                 session_uuid,
                 txn_read_holds,
                 plan,
+                notice_tx,
             )
             .await?;
         // Wait for the `mz_subscriptions` bookkeeping write off the coordinator
@@ -551,6 +555,7 @@ impl Coordinator {
         session_uuid: Uuid,
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
         let sink_id = df_desc.sink_id();
 
@@ -564,6 +569,7 @@ impl Coordinator {
                 session_uuid,
             },
             channel: tx,
+            notice_tx: Some(notice_tx),
             backlog_accounting: Arc::clone(&backlog_accounting),
             max_buffered_bytes,
             emit_progress: plan.emit_progress,

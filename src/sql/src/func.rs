@@ -444,7 +444,11 @@ fn sql_impl_table_func_inner(
         .expect_element(|| "static function definition must have exactly one statement")
         .ast
     {
-        Statement::Select(SelectStatement { query, as_of: None }) => query,
+        Statement::Select(SelectStatement {
+            query,
+            options,
+            as_of: None,
+        }) if options.is_empty() => query,
         _ => panic!("static function definition expected SELECT statement"),
     };
     let invoke = move |qcx: &QueryContext, types: Vec<SqlScalarType>| {

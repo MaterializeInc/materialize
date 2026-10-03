@@ -45,8 +45,8 @@ use crate::ast::display::{AstDisplay, escaped_string_literal};
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
-    SelectStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement,
-    UpdateStatement,
+    SelectStatement, SelectStatementOption, SelectStatementOptionName, SubscribeOption,
+    SubscribeOptionName, SubscribeRelation, SubscribeStatement, UpdateStatement,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
@@ -220,6 +220,10 @@ fn plan_select_inner(
 ) -> Result<(SelectPlan, RelationDesc), PlanError> {
     let when = query::plan_as_of(scx, select.as_of.clone())?;
     let lifetime = QueryLifetime::OneShot;
+    let SelectStatementOptionExtracted { ignore_errors, .. } = select.options.clone().try_into()?;
+    if ignore_errors {
+        scx.require_feature_flag(&vars::ENABLE_IGNORE_ERRORS)?;
+    }
     let query::PlannedRootQuery {
         mut expr,
         desc,
@@ -273,6 +277,7 @@ fn plan_select_inner(
 
     let plan = SelectPlan {
         source: expr,
+        ignore_errors,
         when,
         finishing: RowSetFinishing {
             limit,
@@ -1537,7 +1542,14 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
+generate_extracted_config!(SelectStatementOption, (IgnoreErrors, bool, Default(false)));
+
+generate_extracted_config!(
+    SubscribeOption,
+    (Snapshot, bool),
+    (Progress, bool),
+    (IgnoreErrors, bool, Default(false))
+);
 
 pub fn describe_subscribe(
     scx: &StatementContext,
@@ -1809,10 +1821,17 @@ pub fn plan_subscribe(
     };
 
     let SubscribeOptionExtracted {
-        progress, snapshot, ..
+        progress,
+        snapshot,
+        ignore_errors,
+        ..
     } = options.try_into()?;
+    if ignore_errors {
+        scx.require_feature_flag(&vars::ENABLE_IGNORE_ERRORS)?;
+    }
     Ok(Plan::Subscribe(SubscribePlan {
         from,
+        ignore_errors,
         when,
         up_to,
         with_snapshot: snapshot.unwrap_or(true),
@@ -2208,7 +2227,11 @@ pub fn plan_copy(
                         limit: None,
                         offset: None,
                     };
-                    SelectStatement { query, as_of: None }
+                    SelectStatement {
+                        query,
+                        options: vec![],
+                        as_of: None,
+                    }
                 }
                 CopyRelation::Select(stmt) => {
                     if !stmt.query.order_by.is_empty() {

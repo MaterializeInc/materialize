@@ -309,10 +309,51 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
     }
 }
 
+/// An option on a `SELECT` statement.
+///
+/// Distinct from [`crate::ast::SelectOptionName`], which attaches to an inner `Select` and
+/// carries planner hints. These options describe the statement as a whole, so a subquery
+/// cannot carry them.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SelectStatementOptionName {
+    IgnoreErrors,
+}
+
+impl AstDisplay for SelectStatementOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            SelectStatementOptionName::IgnoreErrors => "IGNORE ERRORS",
+        })
+    }
+}
+impl_display!(SelectStatementOptionName);
+
+impl WithOptionName for SelectStatementOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            SelectStatementOptionName::IgnoreErrors => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectStatementOption<T: AstInfo> {
+    pub name: SelectStatementOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(SelectStatementOption);
+impl_display_t!(SelectStatementOption);
+
 /// `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectStatement<T: AstInfo> {
     pub query: Query<T>,
+    pub options: Vec<SelectStatementOption<T>>,
     pub as_of: Option<AsOf<T>>,
 }
 
@@ -330,6 +371,11 @@ impl<T: AstInfo> AstDisplay for SelectStatement<T> {
         }
         f.write_node(&self.query);
         if parenthesize_show {
+            f.write_str(")");
+        }
+        if !self.options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.options));
             f.write_str(")");
         }
         if let Some(as_of) = &self.as_of {
@@ -4042,6 +4088,7 @@ impl_display!(RollbackStatement);
 pub enum SubscribeOptionName {
     Snapshot,
     Progress,
+    IgnoreErrors,
 }
 
 impl AstDisplay for SubscribeOptionName {
@@ -4049,6 +4096,7 @@ impl AstDisplay for SubscribeOptionName {
         match self {
             SubscribeOptionName::Snapshot => f.write_str("SNAPSHOT"),
             SubscribeOptionName::Progress => f.write_str("PROGRESS"),
+            SubscribeOptionName::IgnoreErrors => f.write_str("IGNORE ERRORS"),
         }
     }
 }
@@ -4062,7 +4110,9 @@ impl WithOptionName for SubscribeOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            SubscribeOptionName::Snapshot | SubscribeOptionName::Progress => false,
+            SubscribeOptionName::Snapshot
+            | SubscribeOptionName::Progress
+            | SubscribeOptionName::IgnoreErrors => false,
         }
     }
 }

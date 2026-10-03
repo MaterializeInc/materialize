@@ -55,6 +55,7 @@ use tokio::sync::oneshot;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
+use crate::AdapterNotice;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
@@ -709,6 +710,8 @@ impl crate::coord::Coordinator {
         target_replica: Option<ReplicaId>,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
+        ignore_errors: bool,
+        notice_tx: tokio::sync::mpsc::UnboundedSender<AdapterNotice>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
@@ -723,6 +726,12 @@ impl crate::coord::Coordinator {
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
             let mut rows = match rows {
                 Ok(rows) => rows,
+                Err(e) if ignore_errors => {
+                    let _ = notice_tx.send(AdapterNotice::IgnoredErrors {
+                        error: e.to_string(),
+                    });
+                    Vec::new()
+                }
                 Err(e) => return Err(e.into()),
             };
             // Consolidate down the results to get correct totals.
@@ -956,6 +965,7 @@ impl crate::coord::Coordinator {
                 peek_result_desc,
                 finishing.clone(),
                 map_filter_project,
+                ignore_errors,
                 read_hold,
                 target_replica,
                 rows_tx,
@@ -1016,6 +1026,7 @@ impl crate::coord::Coordinator {
             persist_client,
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            notice_tx,
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
@@ -1038,6 +1049,7 @@ impl crate::coord::Coordinator {
         mut persist_client: mz_persist_client::PersistClient,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        notice_tx: tokio::sync::mpsc::UnboundedSender<AdapterNotice>,
     ) -> impl futures::Stream<Item = PeekResponseUnary> {
         async_stream::stream!({
             let result = rows_rx.await;
@@ -1050,8 +1062,16 @@ impl crate::coord::Coordinator {
                 }
             };
 
+            // Reported before the rows, so a client that stops reading at the first row
+            // still learns the answer is degraded.
+            if let Some(error) = rows.ignored_error() {
+                let _ = notice_tx.send(AdapterNotice::IgnoredErrors {
+                    error: error.to_string(),
+                });
+            }
+
             match rows {
-                PeekResponse::Rows(rows) => {
+                PeekResponse::Rows { rows, .. } => {
                     let rows = RowCollection::merge_sorted(&rows, &finishing.order_by);
                     match finishing.finish(
                         rows,
@@ -1362,6 +1382,8 @@ impl crate::coord::Coordinator {
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
+        ignore_errors: bool,
+        notice_tx: tokio::sync::mpsc::UnboundedSender<AdapterNotice>,
         watch_set: Option<WatchSetCreation>,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Install watch sets for statement lifecycle logging if enabled.
@@ -1401,6 +1423,8 @@ impl crate::coord::Coordinator {
                 target_replica,
                 max_result_size,
                 max_query_result_size,
+                ignore_errors,
+                notice_tx,
             )
             .await;
         // On error `implement_peek_plan` left the guard's contents intact (see

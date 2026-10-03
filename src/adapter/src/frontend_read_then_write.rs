@@ -1273,8 +1273,9 @@ impl PeekClient {
             compute_instance,
             view_id,
             sink_id,
-            true, // with_snapshot
-            None, // up_to
+            true,  // with_snapshot
+            false, // ignore_errors
+            None,  // up_to
             debug_name,
             optimizer_config,
             self.optimizer_metrics.clone(),

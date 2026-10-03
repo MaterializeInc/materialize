@@ -1491,7 +1491,7 @@ Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("fo
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
-error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
+error: Expected one of PROGRESS or SNAPSHOT or IGNORE, found identifier "timestamps"
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
                                           ^
 
@@ -3924,3 +3924,24 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })
+
+parse-statement
+SUBSCRIBE t WITH (IGNORE ERRORS)
+----
+SUBSCRIBE t WITH (IGNORE ERRORS)
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: IgnoreErrors, value: None }], as_of: None, up_to: None, output: Diffs })
+
+parse-statement
+SUBSCRIBE t WITH (SNAPSHOT = false, IGNORE ERRORS)
+----
+SUBSCRIBE t WITH (SNAPSHOT = false, IGNORE ERRORS)
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }, SubscribeOption { name: IgnoreErrors, value: None }], as_of: None, up_to: None, output: Diffs })
+
+parse-statement
+SUBSCRIBE t WITH (IGNORE ERRORS) AS OF 5
+----
+SUBSCRIBE t WITH (IGNORE ERRORS) AS OF 5
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: IgnoreErrors, value: None }], as_of: Some(At(Value(Number("5")))), up_to: None, output: Diffs })

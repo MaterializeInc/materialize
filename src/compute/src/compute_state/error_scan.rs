@@ -34,6 +34,13 @@ pub(super) struct ErrorScan {
     row_iteration_tracker: PeekRowIterationTracker,
     /// Worker time spent walking, summed over the calls the walk was sliced into.
     pub(super) scan_time: Duration,
+    /// Whether an error the walk meets answers the peek or is discarded.
+    ignore_errors: bool,
+    /// The first error the walk discarded, kept only under `ignore_errors`.
+    ///
+    /// A sample, not a tally: the walk never counts errors, because collapsing multiplicities
+    /// and collection-wide errors both leave a count meaning something other than affected rows.
+    ignored_error: Option<PeekError>,
 }
 
 /// The outcome of a fueled [`ErrorScan::step`].
@@ -53,10 +60,10 @@ impl ErrorScan {
     ///
     /// The walk starts without a row-iteration limit. The limit in effect is the caller's to
     /// supply through [`ErrorScan::set_row_iteration_limit`] before each step.
-    pub(super) fn new(errs: &mut ErrsHandle) -> Self {
+    pub(super) fn new(errs: &mut ErrsHandle, ignore_errors: bool) -> Self {
         let scan_start = Instant::now();
         let (cursor, storage) = errs.cursor();
-        let mut scan = Self::from_cursor(cursor, storage);
+        let mut scan = Self::from_cursor(cursor, storage, ignore_errors);
         scan.scan_time = scan_start.elapsed();
         scan
     }
@@ -65,13 +72,21 @@ impl ErrorScan {
     pub(super) fn from_cursor(
         cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
         storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+        ignore_errors: bool,
     ) -> Self {
         Self {
             cursor,
             storage,
             row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
             scan_time: Duration::ZERO,
+            ignore_errors,
+            ignored_error: None,
         }
+    }
+
+    /// The first error this walk discarded, if any.
+    pub(super) fn take_ignored_error(&mut self) -> Option<PeekError> {
+        self.ignored_error.take()
     }
 
     /// Adopts the row-iteration limit that is in effect, without forgetting the rows the walk has
@@ -128,15 +143,19 @@ impl ErrorScan {
                     target = %target_id, diff = %copies, %error,
                     "index peek encountered negative multiplicities in error trace",
                 );
-                break ErrorScanStep::Finished(Err(PeekError::unstructured(format!(
-                    "Invalid data in source errors, \
-                    saw retractions ({}) for row that does not exist: {}",
-                    -copies, error,
-                ))));
-            }
-            if copies.is_positive() {
+                if !self.ignore_errors {
+                    break ErrorScanStep::Finished(Err(PeekError::unstructured(format!(
+                        "Invalid data in source errors, \
+                        saw retractions ({}) for row that does not exist: {}",
+                        -copies, error,
+                    ))));
+                }
+            } else if copies.is_positive() {
                 let error = self.cursor.key(&self.storage).deserialize();
-                break ErrorScanStep::Finished(Err(error.into()));
+                if !self.ignore_errors {
+                    break ErrorScanStep::Finished(Err(error.into()));
+                }
+                self.ignored_error.get_or_insert_with(|| error.into());
             }
             self.cursor.step_key(&self.storage);
         };

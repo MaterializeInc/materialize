@@ -42,7 +42,11 @@ pub(super) type IndexPeekScan = PeekScan<
 pub(super) type RowBatch = Vec<(Row, NonZeroI64)>;
 
 /// Builds the peek's answer out of the rows a completed walk produced, sorted by `order_by`.
-pub(super) fn rows_response(rows: RowBatch, order_by: &[ColumnOrder]) -> PeekResponse {
+pub(super) fn rows_response(
+    rows: RowBatch,
+    order_by: &[ColumnOrder],
+    ignored_error: Option<PeekError>,
+) -> PeekResponse {
     let rows = rows
         .into_iter()
         .map(|(row, copies)| {
@@ -50,7 +54,10 @@ pub(super) fn rows_response(rows: RowBatch, order_by: &[ColumnOrder]) -> PeekRes
             (row, copies)
         })
         .collect();
-    PeekResponse::Rows(vec![RowCollection::new(rows, order_by)])
+    PeekResponse::Rows {
+        rows: vec![RowCollection::new(rows, order_by)],
+        ignored_error,
+    }
 }
 
 /// The byte size of a row's count, as an answer built from a [`RowBatch`] stores it.
@@ -155,6 +162,9 @@ where
     /// The collection the peek reads, for logging.
     target_id: GlobalId,
     error_phase: ErrorPhase,
+    /// The first error the error walk discarded under `Peek::ignore_errors`, taken off that
+    /// walk when it ends. `None` for a peek that does not ignore errors.
+    ignored_error: Option<PeekError>,
     /// The walk over the ok trace, reached only once the error walk reports the error trace
     /// clean. Its cursor is opened with the scan, and nothing advances it before then.
     oks: PeekResultIterator<Tr>,
@@ -218,7 +228,7 @@ where
         max_result_size: u64,
         stash: StashBounds,
     ) -> Self {
-        let error_scan = ErrorScan::new(errs_handle);
+        let error_scan = ErrorScan::new(errs_handle, peek.ignore_errors);
         let error_scan_time = error_scan.scan_time;
 
         let cursor_setup_start = Instant::now();
@@ -242,6 +252,7 @@ where
             peek_timestamp: peek.timestamp,
             target_id: peek.target.id(),
             error_phase: ErrorPhase::Scanning(error_scan),
+            ignored_error: None,
             oks,
             ended: None,
             results: Vec::new(),
@@ -258,6 +269,13 @@ where
             thinning_time: Duration::ZERO,
             rows_thinned: 0,
         }
+    }
+
+    /// The first error the scan discarded under `Peek::ignore_errors`, if any.
+    ///
+    /// Empty until the error walk ends, and empty for a peek that does not ignore errors.
+    pub(super) fn take_ignored_error(&mut self) -> Option<PeekError> {
+        self.ignored_error.take()
     }
 
     /// Advances the scan until it has an answer for the peek, the accumulated rows make a full
@@ -406,6 +424,9 @@ where
                 // The rows the error walk examined count against the peek's limit, so the ok walk
                 // continues that count. Runs once per scan, since `Clean` never steps the walk.
                 self.oks.add_rows_iterated(rows_iterated);
+                // The walk is about to be dropped with the phase change, so anything it
+                // discarded has to be taken off it now.
+                self.ignored_error = scan.take_ignored_error();
                 self.error_phase = ErrorPhase::Clean;
                 None
             }

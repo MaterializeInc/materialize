@@ -346,6 +346,7 @@ impl OffloadedPeek {
                     let phases = scan.phases();
                     metrics.observe_error_phase(&phases);
                     metrics.observe_ok_phase(&phases);
+                    let ignored_error = scan.take_ignored_error();
                     let response = match upload {
                         // Onto the blocking pool for the same reason the walk runs there:
                         // building the answer sorts and copies the whole row set, and a
@@ -357,14 +358,19 @@ impl OffloadedPeek {
                                 || "peek_offload::answer",
                                 move || {
                                     let start = Instant::now();
-                                    (rows_response(rows, &order_by), start.elapsed())
+                                    (
+                                        rows_response(rows, &order_by, ignored_error),
+                                        start.elapsed(),
+                                    )
                                 },
                             )
                             .await;
                             metrics.observe_row_collection(elapsed);
                             response
                         }
-                        Some(upload) => stashed_answer(peek_uuid, upload, rows).await,
+                        Some(upload) => {
+                            stashed_answer(peek_uuid, upload, rows, ignored_error).await
+                        }
                     };
                     return (state, Some(response));
                 }
@@ -478,14 +484,19 @@ impl WalkState {
 /// rows inline: the tail can hold up to the batch size, and the controller merges every worker's
 /// inline rows into one response that environmentd holds whole. It rides the flush the upload
 /// pays anyway.
-async fn stashed_answer(peek_uuid: Uuid, mut upload: StashUpload, tail: RowBatch) -> PeekResponse {
+async fn stashed_answer(
+    peek_uuid: Uuid,
+    mut upload: StashUpload,
+    tail: RowBatch,
+    ignored_error: Option<PeekError>,
+) -> PeekResponse {
     if !tail.is_empty() {
         if let Err(error) = upload.push(tail).await {
             warn!(%peek_uuid, %error, "peek stash rejected a batch");
             return PeekResponse::Error(PeekError::unstructured(error.to_string()));
         }
     }
-    match upload.finish().await {
+    match upload.finish(ignored_error).await {
         Ok(response) => response,
         // A defect in the upload rather than a blip, like a rejected push. The parts stay behind,
         // see `StashUpload::finish`.

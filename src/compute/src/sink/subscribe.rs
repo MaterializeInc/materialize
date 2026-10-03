@@ -53,6 +53,8 @@ impl<'scope> SinkRender<'scope> for SubscribeSinkConnection {
             prev_upper: Antichain::from_elem(Timestamp::minimum()),
             output: self.output.clone(),
             poison: None,
+            ignore_errors: self.ignore_errors,
+            reported_ignored_error: false,
         })));
         let subscribe_protocol_weak = Rc::downgrade(&subscribe_protocol_handle);
         let sinked_collection = sinked_collection
@@ -174,6 +176,10 @@ struct SubscribeProtocol {
     pub subscribe_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>>,
     pub prev_upper: Antichain<Timestamp>,
     pub output: Vec<ColumnOrder>,
+    /// Whether an error discards instead of poisoning the subscribe.
+    ignore_errors: bool,
+    /// Whether a discarded error has already ridden out on a batch.
+    reported_ignored_error: bool,
     /// The error poisoning this subscribe, if any.
     ///
     /// As soon as a subscribe has encountered an error, it is poisoned: It will only return the
@@ -253,10 +259,20 @@ impl SubscribeProtocol {
         let (keep_errors, ship_errors) = errors.drain(..).partition(|u| upper.less_equal(&u.0));
         *errors = keep_errors;
 
+        let mut ignored_error = None;
         let updates = match (&self.poison, ship_errors.first()) {
             (Some(error), _) => {
                 // The subscribe is poisoned; keep sending the same error.
                 Err(error.clone())
+            }
+            (None, Some((_, error, _))) if self.ignore_errors => {
+                // Discarded rather than poisoning, and reported on this batch alone so that a
+                // continuously erroring stream does not report on every batch.
+                if !self.reported_ignored_error {
+                    self.reported_ignored_error = true;
+                    ignored_error = Some(error.to_string());
+                }
+                Ok(vec![ship_rows])
             }
             (None, Some((_, error, _))) => {
                 // The subscribe encountered its first error; poison it.
@@ -281,6 +297,7 @@ impl SubscribeProtocol {
                 lower: self.prev_upper.clone(),
                 upper: upper.clone(),
                 updates,
+                ignored_error,
             }),
         ));
 

@@ -16,7 +16,10 @@ use mz_repr::Row;
 
 #[mz_ore::test]
 fn pending_peek_response_precedence() {
-    let rows = PeekResponse::Rows(vec![RowCollection::default()]);
+    let rows = PeekResponse::Rows {
+        rows: vec![RowCollection::default()],
+        ignored_error: None,
+    };
     let error = PeekResponse::Error(PeekError::unstructured("dataflow error"));
     let row_limit = |limit| PeekResponse::Error(PeekError::RowIterationLimitExceeded { limit });
 
@@ -45,7 +48,10 @@ fn pending_peek_response_precedence() {
 #[mz_ore::test]
 fn peek_max_size_wins_over_row_iteration_limit_in_every_order() {
     let row = RowCollection::new(vec![(Row::default(), NonZeroUsize::new(1).unwrap())], &[]);
-    let rows = PeekResponse::Rows(vec![row]);
+    let rows = PeekResponse::Rows {
+        rows: vec![row],
+        ignored_error: None,
+    };
     let max_result_size = u64::try_from(rows.inline_byte_len()).unwrap();
     let responses = [
         rows.clone(),
