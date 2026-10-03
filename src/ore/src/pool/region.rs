@@ -262,6 +262,15 @@ impl Region {
             .free(slot, warm);
     }
 
+    /// Test hook: the number of slots currently allocated.
+    #[cfg(test)]
+    pub(crate) fn slots_in_use(&self) -> usize {
+        self.slots
+            .lock()
+            .expect("region allocator poisoned")
+            .in_use()
+    }
+
     /// Moves warm free slots to the cold list, releasing their physical
     /// pages, until at least `want_bytes` have been cooled or no warm slot
     /// remains. Returns the bytes cooled. The caller owns the warm-bytes

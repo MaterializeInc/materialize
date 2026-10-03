@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The extent type and the swap-backed arena: the backing store for the
-//! buffer pool on nodes whose whole disk is provisioned as swap.
+//! The extent type and the arena that holds extents in memory, the first
+//! home of every extent whatever the pool's backend.
 //!
 //! An extent is a slot in the pool-owned [`ExtentArena`] holding the stored
 //! bytes of one chunk, produced by the chunk's [`ExtentCodec`] (lz4 in
@@ -44,12 +44,18 @@
 //! observation reads pagemap present bits rather than `mincore`, which
 //! would count the clean swap-cache copies of successfully reclaimed pages
 //! as resident.
+//!
+//! On a pool with a file store, enforcement demotes an arena extent to a
+//! file slot instead of advising it out: the extent's home moves from
+//! `Arena` through `Demoting` (written without the chunk lock) to `File`,
+//! which is terminal, and reads go to the file.
 
 use std::alloc::Layout;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::pool::file::{self, AlignedBuf, FileSlot, FileStore, WriteError};
 use crate::pool::region::{self, Region};
 use crate::pool::{ExtentCodec, max_stored_len};
 
@@ -136,6 +142,12 @@ impl ExtentArena {
         self.fallbacks.load(Ordering::Relaxed)
     }
 
+    /// Test hook: the number of slots currently allocated across classes.
+    #[cfg(test)]
+    pub(crate) fn slots_in_use(&self) -> usize {
+        self.regions.iter().map(Region::slots_in_use).sum()
+    }
+
     /// Allocates a slot fitting a compressed payload of `comp_len` bytes,
     /// or `None` when the class is exhausted (the caller degrades to the
     /// heap).
@@ -156,14 +168,19 @@ pub(crate) struct Extent {
     comp_len: usize,
     /// Whether the extent's pages are (engine-)resident: set at write and by
     /// [`Extent::read_into`], cleared by a [`Extent::pageout`] whose
-    /// residency observation found the whole range gone. Drives the pool's
-    /// `extent_resident_bytes` accounting; mutated only under the owning
-    /// chunk's state mutex.
+    /// residency observation found the whole range gone. Meaningful only in
+    /// the `Arena` and `Heap` homes, see [`Extent::is_resident`]. Mutated
+    /// only under the owning chunk's state mutex.
     resident: bool,
     /// Consecutive pageout passes whose observation found pages still
     /// resident. Reset by [`Extent::read_into`]. At
     /// [`PAGEOUT_RETRY_CAP`] the extent stops being advised out.
     incomplete_passes: u8,
+    /// Checksum of the first `comp_len` stored bytes, set when a demotion
+    /// commits and verified by every file read.
+    crc: u32,
+    /// Whether the extent was read from its file since its demotion.
+    read_since_demotion: bool,
     home: Home,
 }
 
@@ -182,13 +199,83 @@ enum Home {
     /// freed ranges for the allocator to recycle into unrelated
     /// allocations, which is the failure the arena exists to avoid.
     Heap { ptr: *mut u8, layout: Layout },
+    /// File mode, transient: the arena slot still holds the bytes, which
+    /// are immutable and readable while a demoter writes them to
+    /// `file_slot` without the chunk lock. The demoter owns the transition
+    /// out of this home, so nothing else may drop the extent.
+    Demoting {
+        arena: Arc<ExtentArena>,
+        class: usize,
+        slot: u32,
+        ptr: *mut u8,
+        file_slot: FileSlot,
+    },
+    /// File mode: the bytes live only in `slot` of `store`. Terminal until
+    /// the extent is dropped, so a reader may use the location without the
+    /// chunk lock.
+    File {
+        store: Arc<FileStore>,
+        slot: FileSlot,
+    },
 }
 
 impl Home {
-    fn ptr(&self) -> *mut u8 {
+    /// The in-memory copy of the stored bytes, `None` for a file home.
+    fn ptr(&self) -> Option<*mut u8> {
         match self {
-            Home::Arena { ptr, .. } | Home::Heap { ptr, .. } => *ptr,
+            Home::Arena { ptr, .. } | Home::Heap { ptr, .. } | Home::Demoting { ptr, .. } => {
+                Some(*ptr)
+            }
+            Home::File { .. } => None,
         }
+    }
+}
+
+/// Where a `File`-home extent's bytes live, captured under the chunk lock
+/// so the read can run without it.
+#[derive(Debug)]
+pub(crate) struct FileLocation {
+    store: Arc<FileStore>,
+    slot: FileSlot,
+    comp_len: usize,
+    crc: u32,
+}
+
+/// The arena bytes of a `Demoting` extent, captured under the chunk lock
+/// for the demoter's unlocked write.
+#[derive(Debug)]
+pub(crate) struct DemotionSource {
+    ptr: *const u8,
+    comp_len: usize,
+    alloc_size: usize,
+    file_slot: FileSlot,
+}
+
+impl DemotionSource {
+    /// Checksums the stored bytes and writes them to the file slot,
+    /// returning the checksum and the write's result.
+    ///
+    /// # Safety
+    ///
+    /// The extent this was captured from must stay in its `Demoting` home
+    /// for the duration of the call: not dropped, and not moved to another
+    /// home.
+    pub(crate) unsafe fn write(&self, store: &FileStore) -> (u32, Result<(), WriteError>) {
+        // The write covers whole pages. Extent classes are page multiples,
+        // so the arena slot spans at least the rounded length.
+        let len = self.comp_len.next_multiple_of(region::page_size());
+        assert!(len <= self.alloc_size, "write overruns the arena slot");
+        // SAFETY: the arena slot is `alloc_size >= len` bytes of mapped
+        // memory owned by the extent, which the caller keeps `Demoting`, so
+        // the slot is neither freed nor reused. Its bytes are immutable in
+        // that home: nothing writes an extent's slot after `Extent::write`,
+        // and concurrent readers only read. Bytes past `comp_len` within the
+        // last page are initialized memory of the mapping with unspecified
+        // contents. Reads consume only `comp_len` bytes and the checksum
+        // covers only those, so the tail's contents do not matter.
+        let bytes = unsafe { std::slice::from_raw_parts(self.ptr, len) };
+        let crc = file::crc(&bytes[..self.comp_len]);
+        (crc, store.write(self.file_slot, bytes, self.comp_len))
     }
 }
 
@@ -206,10 +293,13 @@ pub(crate) enum Scratch {
     Shrink,
 }
 
-// SAFETY: the extent exclusively owns its backing (an arena slot handed out
-// by the region allocator, or a heap allocation); nothing else holds a
-// pointer into it, so moving the owner across threads is sound. All access
-// goes through the owning chunk's state mutex.
+// SAFETY: the extent owns its backing (an arena slot handed out by the
+// region allocator, a heap allocation, or a file slot), so moving the owner
+// across threads is sound. Access goes through the owning chunk's state
+// mutex, except for a `Demoting` extent's arena slot, which the demoter
+// reads through its `DemotionSource` without the mutex. Those bytes are
+// immutable while `Demoting`, the demoter is the only reader outside the
+// mutex, and the slot is freed only after the demoter's write finishes.
 unsafe impl Send for Extent {}
 
 /// lz4 codec for the pool's own tests, mirroring the production codec that
@@ -316,7 +406,11 @@ impl Extent {
             // sized to it). The source is the scratch buffer, which cannot
             // alias a fresh allocation.
             unsafe {
-                std::ptr::copy_nonoverlapping(buf.as_ptr(), home.ptr(), comp_len);
+                std::ptr::copy_nonoverlapping(
+                    buf.as_ptr(),
+                    home.ptr().expect("fresh extent is in memory"),
+                    comp_len,
+                );
             }
             if scratch == Scratch::Shrink {
                 buf.clear();
@@ -330,13 +424,17 @@ impl Extent {
                 comp_len,
                 resident: true,
                 incomplete_passes: 0,
+                crc: 0,
+                read_since_demotion: false,
                 home,
             }
         })
     }
 
+    /// The in-memory copy of the stored bytes. Panics for a `File` extent,
+    /// which has none.
     fn ptr(&self) -> *mut u8 {
-        self.home.ptr()
+        self.home.ptr().expect("extent has an in-memory copy")
     }
 
     /// The byte size of the extent's allocation: the granule the resident
@@ -346,9 +444,139 @@ impl Extent {
     }
 
     /// Whether the extent's pages are engine-resident (not pushed to the
-    /// device since the last write or read).
+    /// device since the last write or read). A `Demoting` extent is
+    /// resident until its demotion commits, and a `File` extent never is.
     pub(crate) fn is_resident(&self) -> bool {
-        self.resident
+        match self.home {
+            Home::Arena { .. } | Home::Heap { .. } => self.resident,
+            Home::Demoting { .. } => true,
+            Home::File { .. } => false,
+        }
+    }
+
+    /// Whether the extent sits in an arena slot, resident and not
+    /// retry-capped: the state RSS-target enforcement acts on, and the one
+    /// in which freeing the extent avoids a device write.
+    pub(crate) fn is_reclaimable_arena(&self) -> bool {
+        matches!(self.home, Home::Arena { .. }) && self.is_resident() && !self.pageout_capped()
+    }
+
+    /// Whether a demoter currently owns the extent.
+    pub(crate) fn is_demoting(&self) -> bool {
+        matches!(self.home, Home::Demoting { .. })
+    }
+
+    /// The file slot's size for a `File` extent, `None` otherwise.
+    pub(crate) fn file_bytes(&self) -> Option<usize> {
+        match &self.home {
+            Home::File { store, slot } => Some(store.class_size(slot.class)),
+            Home::Arena { .. } | Home::Heap { .. } | Home::Demoting { .. } => None,
+        }
+    }
+
+    /// The file location of a `File` extent, `None` otherwise.
+    pub(crate) fn file_location(&self) -> Option<FileLocation> {
+        match &self.home {
+            Home::File { store, slot } => Some(FileLocation {
+                store: Arc::clone(store),
+                slot: *slot,
+                comp_len: self.comp_len,
+                crc: self.crc,
+            }),
+            Home::Arena { .. } | Home::Heap { .. } | Home::Demoting { .. } => None,
+        }
+    }
+
+    /// The store and slot of a `File` extent, `None` otherwise.
+    #[cfg(test)]
+    pub(crate) fn file_slot(&self) -> Option<(Arc<FileStore>, FileSlot)> {
+        self.file_location()
+            .map(|location| (location.store, location.slot))
+    }
+
+    /// Records a read of the extent's file, returning whether it was already
+    /// read since its demotion.
+    pub(crate) fn note_file_read(&mut self) -> bool {
+        std::mem::replace(&mut self.read_since_demotion, true)
+    }
+
+    /// Moves an `Arena` extent to `Demoting` toward `file_slot` and returns
+    /// what the demoter's unlocked write needs. Panics for any other home.
+    pub(crate) fn begin_demotion(&mut self, file_slot: FileSlot) -> DemotionSource {
+        let Home::Arena {
+            arena,
+            class,
+            slot,
+            ptr,
+        } = &self.home
+        else {
+            panic!("only arena extents demote");
+        };
+        let source = DemotionSource {
+            ptr: ptr.cast_const(),
+            comp_len: self.comp_len,
+            alloc_size: self.alloc_size,
+            file_slot,
+        };
+        self.home = Home::Demoting {
+            arena: Arc::clone(arena),
+            class: *class,
+            slot: *slot,
+            ptr: *ptr,
+            file_slot,
+        };
+        source
+    }
+
+    /// Commits a demotion whose write succeeded: the extent moves to its
+    /// `File` home with checksum `crc`, and its arena slot is freed with its
+    /// pages discarded. Panics unless the extent is `Demoting`. The caller
+    /// holds the chunk's state lock, so no reader borrows the arena slot.
+    pub(crate) fn commit_demotion(&mut self, store: Arc<FileStore>, crc: u32) {
+        let Home::Demoting {
+            arena,
+            class,
+            slot,
+            ptr,
+            file_slot,
+        } = &self.home
+        else {
+            panic!("only demoting extents commit");
+        };
+        let (arena, class, slot, ptr) = (Arc::clone(arena), *class, *slot, *ptr);
+        self.home = Home::File {
+            store,
+            slot: *file_slot,
+        };
+        self.crc = crc;
+        self.read_since_demotion = false;
+        // SAFETY: the extent owned the slot until the home change above, and
+        // readers borrow it only under the chunk lock the caller holds.
+        unsafe { free_arena_slot(&arena, class, slot, ptr, self.alloc_size) };
+    }
+
+    /// Returns a `Demoting` extent to its `Arena` home and hands back the
+    /// file slot the demotion reserved, for the caller to return to the
+    /// store. Panics unless the extent is `Demoting`.
+    pub(crate) fn abort_demotion(&mut self) -> FileSlot {
+        let Home::Demoting {
+            arena,
+            class,
+            slot,
+            ptr,
+            file_slot,
+        } = &self.home
+        else {
+            panic!("only demoting extents abort");
+        };
+        let file_slot = *file_slot;
+        self.home = Home::Arena {
+            arena: Arc::clone(arena),
+            class: *class,
+            slot: *slot,
+            ptr: *ptr,
+        };
+        file_slot
     }
 
     /// Whether the extent's pageout retry budget is exhausted: consecutive
@@ -360,6 +588,8 @@ impl Extent {
         match self.home {
             Home::Heap { .. } => true,
             Home::Arena { .. } => self.incomplete_passes >= PAGEOUT_RETRY_CAP,
+            // File mode demotes instead of advising pages out.
+            Home::Demoting { .. } | Home::File { .. } => false,
         }
     }
 
@@ -393,15 +623,24 @@ impl Extent {
     }
 
     /// Hints the kernel to swap the extent's pages back in ahead of a read.
+    /// A no-op for `Demoting` and `File` extents: the first is resident, and
+    /// the second would need an asynchronous read into a buffer a later read
+    /// can claim.
     pub(crate) fn prefetch(&self) {
-        region::willneed(self.ptr(), self.alloc_size);
+        match self.home {
+            Home::Arena { ptr, .. } | Home::Heap { ptr, .. } => {
+                region::willneed(ptr, self.alloc_size)
+            }
+            Home::Demoting { .. } | Home::File { .. } => {}
+        }
     }
 
     /// Decodes the extent through `codec` into `dst`, which must be exactly
-    /// the chunk's body length. Reading faults the pages back in, so the
-    /// extent is resident again afterwards; the caller owns the accounting
-    /// for that transition (the pool re-counts and re-enqueues it for the
-    /// RSS target).
+    /// the chunk's body length. Reading an in-memory extent faults its pages
+    /// back in, so it is resident again afterwards; the caller owns the
+    /// accounting for that transition (the pool re-counts and re-enqueues it
+    /// for the RSS target). A `File` extent is read per
+    /// [`FileLocation::read_range_into`] and stays on file.
     pub(crate) fn read_into(&mut self, codec: &dyn ExtentCodec, dst: &mut [u8]) {
         self.read_range_into(codec, dst.len(), 0, dst);
     }
@@ -411,11 +650,9 @@ impl Extent {
     /// the body, and `body_len` must be the body's exact length (the codec
     /// validates it against the stored form). Residency effects are those
     /// of [`Extent::read_into`] regardless of the range: the stored
-    /// form is one whole codec block, so any read faults and decodes the
-    /// entire extent, and a sub-range only narrows the final copy. A
-    /// backend whose stored form is rangeable (file extents reading with
-    /// `pread`, a sub-block-framed codec) can serve the range with
-    /// proportional I/O behind this same signature.
+    /// form is one whole codec block, so any read faults (or reads from
+    /// file) and decodes the entire extent, and a sub-range only narrows
+    /// the final copy.
     pub(crate) fn read_range_into(
         &mut self,
         codec: &dyn ExtentCodec,
@@ -423,46 +660,115 @@ impl Extent {
         offset: usize,
         dst: &mut [u8],
     ) {
+        if let Some(location) = self.file_location() {
+            location.read_range_into(codec, body_len, offset, dst);
+            return;
+        }
         self.resident = true;
         // The decode faults every page back in, so prior incomplete
         // pageout passes no longer describe the mapping and the retry
         // budget starts over.
         self.incomplete_passes = 0;
         self.prefetch();
-        // SAFETY: the extent exclusively owns its backing, and the first
-        // `comp_len` bytes were initialized by `write`.
+        // SAFETY: the extent exclusively owns its in-memory copy, and the
+        // first `comp_len` bytes were initialized by `write`. A `Demoting`
+        // extent's arena bytes are immutable while the demoter writes them
+        // out, so this read may overlap that write.
         let buf = unsafe { std::slice::from_raw_parts(self.ptr(), self.comp_len) };
-        let end = offset
-            .checked_add(dst.len())
-            .expect("range end overflows usize");
-        assert!(
-            end <= body_len,
-            "range end {end} exceeds the extent's body length {body_len}",
-        );
-        if offset == 0 && dst.len() == body_len {
-            codec.decode(buf, dst);
-            return;
-        }
-        // A sub-range still decodes the whole block, into a reused
-        // thread-local scratch, and copies the range out. Reads run on
-        // worker threads, so the scratch mirrors the write side's `Shrink`
-        // policy: capacity beyond the ~2 MiB chunk target is released after
-        // the copy rather than parked per worker.
+        decode_range(buf, codec, body_len, offset, dst);
+    }
+}
+
+impl FileLocation {
+    /// Reads the stored bytes from file, verifies their checksum, and
+    /// decodes the byte range `[offset, offset + dst.len())` of the
+    /// `body_len`-byte body into `dst`, per [`Extent::read_range_into`].
+    /// Panics on an I/O error, a short read, or a checksum mismatch.
+    pub(crate) fn read_range_into(
+        &self,
+        codec: &dyn ExtentCodec,
+        body_len: usize,
+        offset: usize,
+        dst: &mut [u8],
+    ) {
         use std::cell::RefCell;
         thread_local! {
-            static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+            static READ_BUF: RefCell<AlignedBuf> = const { RefCell::new(AlignedBuf::new()) };
         }
-        SCRATCH.with(|cell| {
-            let mut scratch = cell.borrow_mut();
-            scratch.resize(body_len, 0);
-            codec.decode(buf, &mut scratch);
-            dst.copy_from_slice(&scratch[offset..end]);
-            if scratch.capacity() > 2 << 20 {
-                scratch.clear();
-                scratch.shrink_to_fit();
-            }
+        READ_BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            self.store
+                .read(self.slot, self.comp_len, self.crc, &mut buf);
+            decode_range(buf.as_slice(), codec, body_len, offset, dst);
+            // The decode scratch's policy: reads run on worker threads, so
+            // capacity beyond the ~2 MiB chunk target is released.
+            buf.shrink_above(2 << 20);
         });
     }
+}
+
+/// Decodes the byte range `[offset, offset + dst.len())` of the
+/// `body_len`-byte body whose stored form is `stored` into `dst`.
+fn decode_range(
+    stored: &[u8],
+    codec: &dyn ExtentCodec,
+    body_len: usize,
+    offset: usize,
+    dst: &mut [u8],
+) {
+    let end = offset
+        .checked_add(dst.len())
+        .expect("range end overflows usize");
+    assert!(
+        end <= body_len,
+        "range end {end} exceeds the extent's body length {body_len}",
+    );
+    if offset == 0 && dst.len() == body_len {
+        codec.decode(stored, dst);
+        return;
+    }
+    // A sub-range still decodes the whole block, into a reused
+    // thread-local scratch, and copies the range out. Reads run on
+    // worker threads, so the scratch mirrors the write side's `Shrink`
+    // policy: capacity beyond the ~2 MiB chunk target is released after
+    // the copy rather than parked per worker.
+    use std::cell::RefCell;
+    thread_local! {
+        static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        scratch.resize(body_len, 0);
+        codec.decode(stored, &mut scratch);
+        dst.copy_from_slice(&scratch[offset..end]);
+        if scratch.capacity() > 2 << 20 {
+            scratch.clear();
+            scratch.shrink_to_fit();
+        }
+    });
+}
+
+/// Returns an arena slot to its region with its pages discarded.
+/// Discarding the pages also drops any copy on the swap device
+/// (`MADV_DONTNEED` frees an anonymous range's swap entries), so the slot
+/// returns to the free list with no dead compressed data left to fault back
+/// in.
+///
+/// # Safety
+///
+/// The caller owned the slot, and no reference into it exists.
+unsafe fn free_arena_slot(
+    arena: &ExtentArena,
+    class: usize,
+    slot: u32,
+    ptr: *mut u8,
+    alloc_size: usize,
+) {
+    // SAFETY: per the function contract.
+    unsafe {
+        region::dontneed(ptr, alloc_size);
+    }
+    arena.regions[class].free(slot, false);
 }
 
 /// The heap layout of a fallback extent for a compressed payload of
@@ -480,17 +786,9 @@ impl Drop for Extent {
                 slot,
                 ptr,
             } => {
-                // Discarding the pages also drops any copy on the swap
-                // device (`MADV_DONTNEED` frees an anonymous range's swap
-                // entries), so the slot returns to the free list with no
-                // dead compressed data left to fault back in.
-                //
                 // SAFETY: the extent exclusively owns the slot and is being
                 // dropped, so no reference into it exists.
-                unsafe {
-                    region::dontneed(*ptr, self.alloc_size);
-                }
-                arena.regions[*class].free(*slot, false);
+                unsafe { free_arena_slot(arena, *class, *slot, *ptr, self.alloc_size) };
             }
             Home::Heap { ptr, layout } => {
                 // SAFETY: `ptr` was returned by `alloc` with exactly this
@@ -498,6 +796,13 @@ impl Drop for Extent {
                 unsafe {
                     std::alloc::dealloc(*ptr, *layout);
                 }
+            }
+            Home::File { store, slot } => store.free(*slot),
+            Home::Demoting { .. } => {
+                // The demoter reads the arena slot without the chunk lock
+                // and writes the file slot. Freeing either here would hand
+                // it to a new owner mid-I/O, so both leak instead.
+                crate::soft_panic_or_log!("dropped an extent mid-demotion");
             }
         }
     }
