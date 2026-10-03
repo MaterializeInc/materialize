@@ -21,7 +21,7 @@ use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
-use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
+use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole, StorageHostContext};
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -416,7 +416,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut timely_config = args.compute_timely_config;
     timely_config.process = args.process;
 
-    let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+    let (compute_client_builder, storage_client_builder) = mz_compute::server::serve(
         timely_config,
         ComputeRuntimeRole::Solo,
         &metrics_registry,
@@ -428,11 +428,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             worker_core_affinity: args.worker_core_affinity,
             connection_context: connection_context.clone(),
         },
-        SYSTEM_TIME.clone(),
-        connection_context,
-        StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        Some(StorageHostContext {
+            now: SYSTEM_TIME.clone(),
+            connection_context,
+            instance_context: StorageInstanceContext::new(
+                args.scratch_directory,
+                args.announce_memory_limit,
+            ),
+        }),
     )
     .await?;
+    let storage_client_builder = storage_client_builder.expect("the cluster hosts storage objects");
 
     info!(
         "listening for storage controller connections on {}",
