@@ -1580,8 +1580,8 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
+    use crate::Eval;
     use crate::scalar::optimizable::OptimizableExpr;
-    use crate::{Columns, Eval};
     use crate::{EvalError, MapFilterProject, MirScalarExpr};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1769,18 +1769,24 @@ pub mod plan {
         /// If any unsupported expression is found, for example one that uses `mz_now`
         /// in an unsupported position, an error is returned.
         pub fn create_from(mut mfp: MapFilterProject<E>) -> Result<Self, String> {
+            // Rewrite temporal predicates into bound form before optimizing,
+            // so predicates that denote the same bound are syntactically
+            // equal and `optimize` dedups them, and memoization sees the
+            // final predicate set. Extracting only after `optimize` leaves
+            // the plan dependent on how many predicates a bound was written
+            // as, and folding the bounds back and planning again then yields
+            // a different plan. This order makes the plan a fixed point of
+            // `into_map_filter_project` followed by `create_from`.
+            let temporal = take_temporal(&mut mfp);
+            if !temporal.is_empty() {
+                let (lower, upper) = E::extract_temporal_bounds(temporal)?;
+                for predicate in E::temporal_bound_predicates(lower, upper)? {
+                    push_predicate(&mut mfp, predicate);
+                }
+            }
             mfp.optimize();
 
-            let mut temporal = Vec::new();
-            mfp.predicates.retain(|(_position, predicate)| {
-                if OptimizableExpr::contains_temporal(predicate) {
-                    temporal.push(predicate.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-
+            let temporal = take_temporal(&mut mfp);
             let (lower_bounds, upper_bounds) = E::extract_temporal_bounds(temporal)?;
 
             Ok(Self {
@@ -1856,42 +1862,41 @@ pub mod plan {
         /// Reconstruct a `MapFilterProject` by folding temporal bounds back as
         /// `mz_now()` predicates.
         ///
-        /// This is the inverse of `create_from`: the returned MFP, when passed
-        /// through `create_from`, will produce an equivalent `MfpPlan`.
-        ///
-        /// Lower bounds become `mz_now() >= expr` predicates;
-        /// upper bounds become `mz_now() < expr` predicates.
+        /// This is the inverse of `create_from`: passing the returned MFP
+        /// through `create_from` yields a plan equal to `self`.
         pub fn into_map_filter_project(self) -> MapFilterProject<MirScalarExpr> {
             let (safe, lower_bounds, upper_bounds) = self.into_parts();
             let mut mfp = safe.into_mfp();
-
-            let mz_now = MirScalarExpr::CallUnmaterializable(crate::UnmaterializableFunc::MzNow);
-
-            for lb in lower_bounds {
-                // mz_now() >= lb
-                let predicate = mz_now.clone().call_binary(lb, crate::func::Gte);
-                let support = predicate
-                    .support()
-                    .into_iter()
-                    .max()
-                    .map(|c| c + 1)
-                    .unwrap_or(0);
-                mfp.predicates.push((support, predicate));
+            let predicates = MirScalarExpr::temporal_bound_predicates(lower_bounds, upper_bounds)
+                .expect("MIR expresses every temporal bound");
+            for predicate in predicates {
+                push_predicate(&mut mfp, predicate);
             }
-            for ub in upper_bounds {
-                // mz_now() < ub
-                let predicate = mz_now.clone().call_binary(ub, crate::func::Lt);
-                let support = predicate
-                    .support()
-                    .into_iter()
-                    .max()
-                    .map(|c| c + 1)
-                    .unwrap_or(0);
-                mfp.predicates.push((support, predicate));
-            }
-
             mfp
         }
+    }
+
+    /// Removes and returns the predicates that mention `mz_now()`.
+    fn take_temporal<E: OptimizableExpr>(mfp: &mut MapFilterProject<E>) -> Vec<E> {
+        let mut temporal = Vec::new();
+        mfp.predicates.retain(|(_position, predicate)| {
+            if predicate.contains_temporal() {
+                temporal.push(predicate.clone());
+                false
+            } else {
+                true
+            }
+        });
+        temporal
+    }
+
+    /// Appends a predicate over the MFP's internal columns. Unlike
+    /// `MapFilterProject::filter`, no permutation through the projection is
+    /// applied, since the predicate came from the MFP's own predicate list.
+    fn push_predicate<E: OptimizableExpr>(mfp: &mut MapFilterProject<E>, predicate: E) {
+        let support = predicate.support().last().map_or(0, |c| c + 1);
+        mfp.predicates.push((support, predicate));
+        mfp.predicates.sort();
     }
 
     impl<E: OptimizableExpr + Eval> MfpPlan<E> {
@@ -2017,5 +2022,178 @@ pub mod plan {
                 || self.lower_bounds.iter().any(|e| e.could_error())
                 || self.upper_bounds.iter().any(|e| e.could_error())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::adt::interval::Interval;
+    use mz_repr::{Datum, ReprScalarType};
+    use proptest::prelude::*;
+    use proptest::strategy::Union;
+
+    use super::*;
+    use crate::{BinaryFunc, MfpPlan, UnaryFunc, UnmaterializableFunc, func};
+
+    const ARITY: usize = 3;
+
+    fn mz_now() -> MirScalarExpr {
+        MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+    }
+
+    fn column() -> impl Strategy<Value = MirScalarExpr> {
+        (0..ARITY).prop_map(MirScalarExpr::column)
+    }
+
+    fn to_mz_timestamp(expr: MirScalarExpr) -> MirScalarExpr {
+        expr.call_unary(UnaryFunc::CastTimestampToMzTimestamp(
+            func::CastTimestampToMzTimestamp,
+        ))
+    }
+
+    fn int_to_mz_timestamp(expr: MirScalarExpr) -> MirScalarExpr {
+        expr.call_unary(UnaryFunc::CastInt64ToMzTimestamp(
+            func::CastInt64ToMzTimestamp,
+        ))
+    }
+
+    /// Operands a temporal bound may compare `mz_now()` against: columns
+    /// and literals, and the shapes temporal filters take in practice, a
+    /// timestamp column offset by an interval, or integer arithmetic on a
+    /// column, cast to `mz_timestamp`, and `step_mz_timestamp` of any of
+    /// those. The space is small so generated predicates repeat and overlap.
+    ///
+    /// NOTE: the terms are not well typed. One column serves as a timestamp,
+    /// an int64, and an mz_timestamp within a single MFP. Planning and
+    /// `optimize` are purely structural and never evaluate or typecheck, so
+    /// this is fine, but nothing generated here may be evaluated.
+    fn bound_operand() -> impl Strategy<Value = MirScalarExpr> {
+        let interval = (1i32..3).prop_map(|days| {
+            MirScalarExpr::literal_ok(
+                Datum::Interval(Interval::new(0, days, 0)),
+                ReprScalarType::Interval,
+            )
+        });
+        let int = (1i64..3).prop_map(|n| {
+            MirScalarExpr::literal_ok(Datum::Int64(n * 10_000), ReprScalarType::Int64)
+        });
+        let plain = Union::new([
+            column().boxed(),
+            (1u64..3)
+                .prop_map(|t| {
+                    MirScalarExpr::literal_ok(
+                        Datum::MzTimestamp(t.into()),
+                        ReprScalarType::MzTimestamp,
+                    )
+                })
+                .boxed(),
+            (column(), interval)
+                .prop_map(|(col, interval)| {
+                    to_mz_timestamp(col.call_binary(interval, func::AddTimestampInterval))
+                })
+                .boxed(),
+            (column(), int)
+                .prop_map(|(col, int)| int_to_mz_timestamp(col.call_binary(int, func::MulInt64)))
+                .boxed(),
+            (column(), column())
+                .prop_map(|(a, b)| int_to_mz_timestamp(a.call_binary(b, func::AddInt64)))
+                .boxed(),
+        ]);
+        (plain, any::<bool>()).prop_map(|(operand, stepped)| {
+            if stepped {
+                operand.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp))
+            } else {
+                operand
+            }
+        })
+    }
+
+    fn comparison() -> impl Strategy<Value = BinaryFunc> {
+        Union::new([
+            Just(func::Eq.into()),
+            Just(func::Lt.into()),
+            Just(func::Lte.into()),
+            Just(func::Gt.into()),
+            Just(func::Gte.into()),
+        ])
+    }
+
+    /// `mz_now() cmp e`, or the mirrored `e cmp mz_now()`.
+    fn temporal_predicate() -> impl Strategy<Value = MirScalarExpr> {
+        (bound_operand(), comparison(), any::<bool>()).prop_map(|(operand, cmp, mirrored)| {
+            if mirrored {
+                operand.call_binary(mz_now(), cmp)
+            } else {
+                mz_now().call_binary(operand, cmp)
+            }
+        })
+    }
+
+    fn plain_predicate() -> impl Strategy<Value = MirScalarExpr> {
+        Union::new([
+            (0..ARITY)
+                .prop_map(|c| MirScalarExpr::column(c).call_is_null().not())
+                .boxed(),
+            (0..ARITY, 0..ARITY)
+                .prop_map(|(a, b)| {
+                    MirScalarExpr::column(a).call_binary(MirScalarExpr::column(b), func::Eq)
+                })
+                .boxed(),
+        ])
+    }
+
+    fn mfp() -> impl Strategy<Value = MapFilterProject<MirScalarExpr>> {
+        let predicate = Union::new([temporal_predicate().boxed(), plain_predicate().boxed()]);
+        (
+            prop::collection::vec(predicate, 0..5),
+            prop::collection::vec(0..ARITY, 1..ARITY),
+        )
+            .prop_map(|(predicates, projection)| {
+                MapFilterProject::new(ARITY)
+                    .filter(predicates)
+                    .project(projection)
+            })
+    }
+
+    fn plan(mfp: MapFilterProject<MirScalarExpr>) -> MfpPlan<MirScalarExpr> {
+        MfpPlan::create_from(mfp).expect("every generated MFP is plannable")
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn mfp_plan_is_a_fixed_point_of_fold_and_plan(mfp in mfp()) {
+            let planned = plan(mfp);
+            let folded = planned.clone().into_map_filter_project();
+            prop_assert_eq!(plan(folded.clone()), planned.clone());
+            // The folded form is itself a fixed point of fold after plan.
+            prop_assert_eq!(plan(folded.clone()).into_map_filter_project(), folded);
+        }
+    }
+
+    /// The two spellings of one inclusive upper bound that the optimizer
+    /// emits side by side.
+    #[mz_ore::test]
+    fn equivalent_temporal_predicates_plan_to_one_bound() {
+        let col = || MirScalarExpr::column(0);
+        let mfp = MapFilterProject::new(1).filter([
+            mz_now().call_binary(col(), func::Lte),
+            mz_now().call_binary(
+                col().call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                func::Lt,
+            ),
+        ]);
+        let (safe, lower, upper) = plan(mfp).into_parts();
+        assert!(lower.is_empty());
+        assert_eq!(
+            upper,
+            vec![col().call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp))]
+        );
+        assert!(
+            safe.into_mfp().expressions.is_empty(),
+            "nothing left to memoize"
+        );
     }
 }
