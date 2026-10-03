@@ -175,7 +175,6 @@ use crate::render::columnar::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::server::ComputeRuntimeRole;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
@@ -660,46 +659,9 @@ where
             .enter(self.scope)
     }
 
+    /// Imports an index from its trace in `compute_state.traces`, whether this runtime maintains
+    /// it or the process's other compute runtime publishes it.
     pub(crate) fn import_index<'outer>(
-        &mut self,
-        outer: Scope<'outer, mz_repr::Timestamp>,
-        compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        input_probe: probe::Handle<mz_repr::Timestamp>,
-        idx_id: GlobalId,
-        idx: &IndexDesc<LirScalarExpr>,
-        typ: &ReprRelationType,
-        snapshot_mode: SnapshotMode,
-        start_signal: StartSignal,
-    ) {
-        match compute_state.role() {
-            // The interactive runtime maintains no traces of its own. It imports the arrangements
-            // the maintenance runtime publishes into the per-process sharing registry.
-            ComputeRuntimeRole::Interactive => self.import_index_shared(
-                outer,
-                compute_state,
-                tokens,
-                input_probe,
-                idx_id,
-                idx,
-                start_signal,
-            ),
-            ComputeRuntimeRole::Maintenance | ComputeRuntimeRole::Solo => self.import_index_local(
-                outer,
-                compute_state,
-                tokens,
-                input_probe,
-                idx_id,
-                idx,
-                typ,
-                snapshot_mode,
-                start_signal,
-            ),
-        }
-    }
-
-    /// Imports an index this runtime maintains, from its trace in `compute_state.traces`.
-    fn import_index_local<'outer>(
         &mut self,
         outer: Scope<'outer, mz_repr::Timestamp>,
         compute_state: &mut ComputeState,
@@ -783,7 +745,11 @@ where
             self.update_id(Id::Global(idx.on_id), bundle);
             tokens.insert(
                 idx_id,
-                Rc::new((PressOnDrop(ok_button), PressOnDrop(err_button), token)),
+                Rc::new((
+                    ok_button.map(PressOnDrop),
+                    err_button.map(PressOnDrop),
+                    token,
+                )),
             );
         } else {
             panic!(
@@ -791,57 +757,6 @@ where
                 idx_id, self.dataflow_id
             );
         }
-    }
-
-    /// The interactive-runtime counterpart to [`Self::import_index_local`].
-    ///
-    /// Imports the published index as an arrangement, [`ArrangementFlavor::SharedTrace`], keyed and
-    /// permuted as the plan expects, so a `Get` of `idx.on_id` and the joins and reduces below it
-    /// consume an arrangement rather than re-deriving one.
-    fn import_index_shared<'outer>(
-        &mut self,
-        outer: Scope<'outer, mz_repr::Timestamp>,
-        compute_state: &ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn Any>>,
-        input_probe: probe::Handle<mz_repr::Timestamp>,
-        idx_id: GlobalId,
-        idx: &IndexDesc<LirScalarExpr>,
-        start_signal: StartSignal,
-    ) {
-        let name = format!("Index({}, {:?})", idx.on_id, idx.key);
-        let (mut oks_arranged, errs_arranged, slot) = compute_state.sharing_registry.import(
-            outer,
-            idx_id,
-            &name,
-            &self.as_of_frontier,
-            &self.until,
-        );
-
-        // Attach the input probe to the replayed batch stream so hydration tracking observes it,
-        // mirroring the maintenance import.
-        oks_arranged.stream = oks_arranged.stream.probe_with(&input_probe);
-
-        // Enter the dataflow scope and gate on the start signal, mirroring the maintenance Trace
-        // import's `.enter(self.scope).with_start_signal(..)`. The shared handle shares the
-        // maintenance arrangement's batch/cursor types, so the entered `Arranged` is a real
-        // arrangement `ArrangementFlavor::SharedTrace` can carry and downstream operators consume.
-        let ok_arranged = oks_arranged
-            .enter(self.scope)
-            .with_start_signal(start_signal.clone());
-        let err_arranged = errs_arranged
-            .enter(self.scope)
-            .with_start_signal(start_signal);
-
-        let bundle = CollectionBundle::from_expressions(
-            idx.key.clone(),
-            ArrangementFlavor::SharedTrace(idx_id, ok_arranged, err_arranged),
-        );
-        self.update_id(Id::Global(idx.on_id), bundle);
-
-        // The slot Arc's strong count marks a live reader, so it must outlive the dataflow. The read
-        // hold is not in here: it lives in the `Arranged`s the bundle above retains, so that a
-        // consumer can downgrade it. See `ArrangementSharingRegistry::import`.
-        tokens.insert(idx_id, Rc::new(slot));
     }
 }
 
@@ -920,21 +835,15 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                let publication = compute_state.publisher.as_ref().map(|publisher| {
-                    publisher.publish(
-                        idx_id,
-                        self.scope.worker(),
-                        trace.oks().unpadded(),
-                        trace.errs().unpadded(),
-                    )
+                // Only a trace this runtime maintains can be published.
+                let publication = trace.local().and_then(|(oks, errs)| {
+                    let publisher = compute_state.publisher.as_ref()?;
+                    Some(publisher.publish(idx_id, self.scope.worker(), oks, errs))
                 });
                 let to_drop = trace.to_drop().clone();
                 compute_state
                     .traces
                     .set(idx_id, trace.with_drop((to_drop, publication)));
-            }
-            Some(ArrangementFlavor::SharedTrace(gid, _, _)) => {
-                compute_state.shared_reexports.insert(idx_id, gid);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -1042,21 +951,15 @@ where
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                let publication = compute_state.publisher.as_ref().map(|publisher| {
-                    publisher.publish(
-                        idx_id,
-                        outer.worker(),
-                        trace.oks().unpadded(),
-                        trace.errs().unpadded(),
-                    )
+                // Only a trace this runtime maintains can be published.
+                let publication = trace.local().and_then(|(oks, errs)| {
+                    let publisher = compute_state.publisher.as_ref()?;
+                    Some(publisher.publish(idx_id, outer.worker(), oks, errs))
                 });
                 let to_drop = trace.to_drop().clone();
                 compute_state
                     .traces
                     .set(idx_id, trace.with_drop((to_drop, publication)));
-            }
-            Some(ArrangementFlavor::SharedTrace(gid, _, _)) => {
-                compute_state.shared_reexports.insert(idx_id, gid);
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -1727,9 +1630,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                         a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                     Trace(_, a, _) => {
-                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
-                    }
-                    SharedTrace(_, a, _) => {
                         a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                 }

@@ -12,22 +12,22 @@ use std::sync::mpsc;
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::{Capture, Probe};
 use timely::dataflow::{ProbeHandle, Scope};
+use timely::PartialOrder;
 use timely::progress::Antichain;
 
+use crate::arrangement::manager::{ErrsTrace, OksTrace};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::shared_trace::SharedOksFrontier;
 use crate::shared_trace::adopt_trace;
 use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
-use crate::sharing::ArrangementSharingRegistry;
+use crate::sharing::{ArrangementSharingRegistry, SharedIndexArrangement};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
-
-use crate::server::ComputeRuntimeRole;
 
 fn test_rows() -> Vec<(Row, Row)> {
     vec![
@@ -56,7 +56,10 @@ fn publish_index(
     rows: Vec<(Row, Row)>,
 ) -> (
     RowRowAgent<Timestamp, Diff>,
-    crate::typedefs::ErrAgent<Timestamp, Diff>,
+    (
+        crate::typedefs::ErrAgent<Timestamp, Diff>,
+        std::sync::Arc<SharedIndexArrangement>,
+    ),
 ) {
     let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
     let oks = oks_collection.mz_arrange::<
@@ -85,7 +88,37 @@ fn publish_index(
     oks_input.flush();
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
-    (oks.trace.clone(), errs.trace.clone())
+    // The slot is returned with the traces, because the publication lasts only while it is held.
+    (oks.trace.clone(), (errs.trace.clone(), slot))
+}
+
+/// Imports index `id`'s publication into `scope` the way the interactive runtime does, through a
+/// peer handle at `as_of`. Returns the slot, which the caller keeps for the life of the import.
+fn import_shared<'scope>(
+    registry: &ArrangementSharingRegistry,
+    scope: Scope<'scope, Timestamp>,
+    id: GlobalId,
+    as_of: &Antichain<Timestamp>,
+    until: &Antichain<Timestamp>,
+) -> (
+    Arranged<'scope, TraceFrontier<OksTrace>>,
+    Arranged<'scope, TraceFrontier<ErrsTrace>>,
+    std::sync::Arc<SharedIndexArrangement>,
+) {
+    let slot = registry.get_or_create(id);
+    let (oks, _) = OksTrace::Shared(slot.oks.peer_handle(as_of)).import_frontier_core(
+        scope.clone(),
+        "Index",
+        as_of.clone(),
+        until.clone(),
+    );
+    let (errs, _) = ErrsTrace::Shared(slot.errs.peer_handle(as_of)).import_frontier_core(
+        scope,
+        "ErrIndex",
+        as_of.clone(),
+        until.clone(),
+    );
+    (oks, errs, slot)
 }
 
 /// The interactive import path imports a maintenance-published arrangement into a second
@@ -118,10 +151,15 @@ fn interactive_import_replays_rows_and_holds_at_as_of() {
         let probe = ProbeHandle::new();
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             // `until` empty: no upper suppression, so the whole snapshot at `as_of` flows.
-            let (oks_arranged, errs_arranged, _slot) =
-                registry_in.import(scope.clone(), id, "Index", &as_of_in, &Antichain::new());
+            let (oks_arranged, errs_arranged, _slot) = import_shared(
+                &registry_in,
+                scope.clone(),
+                id,
+                &as_of_in,
+                &Antichain::new(),
+            );
 
-            let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
+            let collected = Arranged::<TraceFrontier<OksTrace>>::flat_map_batches(
                 oks_arranged.stream,
                 |k: DatumSeq, v: DatumSeq| {
                     let key = Row::pack_slice(&k.into_iter().collect::<Vec<_>>());
@@ -170,7 +208,10 @@ fn publish_index_with_writer(
     InputSession<Timestamp, (Row, Row), Diff>,
     InputSession<Timestamp, crate::render::errors::DataflowErrorSer, Diff>,
     RowRowAgent<Timestamp, Diff>,
-    crate::typedefs::ErrAgent<Timestamp, Diff>,
+    (
+        crate::typedefs::ErrAgent<Timestamp, Diff>,
+        std::sync::Arc<SharedIndexArrangement>,
+    ),
 ) {
     let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
     let oks = oks_collection.mz_arrange::<
@@ -201,7 +242,8 @@ fn publish_index_with_writer(
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
 
-    (oks_input, errs_input, oks_writer, errs.trace.clone())
+    // The slot is returned with the traces, because the publication lasts only while it is held.
+    (oks_input, errs_input, oks_writer, (errs.trace.clone(), slot))
 }
 
 /// Feeds `oks_input` a filler update at `at`, advances it to `next`, and steps `worker` a few
@@ -273,7 +315,7 @@ fn interactive_import_hold_releases_on_drop() {
         // as a consumer that only needs the trace would.
         let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (oks_arranged, errs_arranged, _slot) =
-                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
+                import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
 
@@ -362,8 +404,8 @@ fn interactive_import_holds_after_construction() {
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
             let (oks_arranged, _errs_arranged, _slot) =
-                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
-            let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
+                import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
+            let collected = Arranged::<TraceFrontier<OksTrace>>::flat_map_batches(
                 oks_arranged.stream,
                 |k: DatumSeq, _v: DatumSeq| [Row::pack_slice(&k.into_iter().collect::<Vec<_>>())],
             );
@@ -426,7 +468,7 @@ fn published_since_does_not_chase_reader_holds() {
         // import operator's own hold remains.
         worker.dataflow::<Timestamp, _, _>(|scope| {
             let (_o, _e, _slot) =
-                registry.import(scope.clone(), id, "Index", &high, &Antichain::new());
+                import_shared(&registry, scope.clone(), id, &high, &Antichain::new());
         });
         for t in 1..4 {
             tick(
@@ -486,7 +528,7 @@ fn import_reports_physical_within_chain_coverage() {
 
         let mut trace = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (oks_arranged, _e, _slot) =
-                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
+                import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             oks_arranged.trace
         });
 
@@ -533,7 +575,7 @@ fn interactive_import_hold_downgrades_while_live() {
 
         let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (oks_arranged, errs_arranged, _slot) =
-                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
+                import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
 
@@ -595,18 +637,13 @@ fn interactive_import_hold_downgrades_while_live() {
     });
 }
 
-/// A published slot's `since` may already sit above the dataflow's requested `as_of` if the
-/// controller offered an unreadable `as_of`, a protocol error: `ArrangementSharingRegistry::import` must
-/// panic rather than let the read silently see coalesced data, mirroring the maintenance
-/// path's `compaction_frontier` assert in `import_index`.
+/// A peer handle minted below the published `since` holds at that `since` and does not refuse.
 ///
-/// Advances the writer's compaction well past `as_of` with no reader hold registered yet, the
-/// same `publish_without_readers_does_not_pin_compaction` scenario `shared_trace.rs` covers,
-/// so a freshly minted handle's hold starts at the already-advanced `since`. Importing at
-/// `as_of` afterward must panic.
+/// History reduction can replay an index's create with an `as_of` below its published `since`, and
+/// the runtime that only holds the index as a peer must not abort over a dataflow it does not
+/// render. The `since <= as_of` protocol check belongs to the dataflow that imports the index.
 #[mz_ore::test]
-#[should_panic(expected = "since")]
-fn import_asserts_since_at_most_as_of() {
+fn a_peer_handle_below_the_since_joins_up_to_it() {
     let id = GlobalId::User(1);
     let rows = test_rows();
     let as_of = Antichain::from_elem(Timestamp::from(1_u64));
@@ -618,10 +655,6 @@ fn import_asserts_since_at_most_as_of() {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
 
-        // The controller advances compaction well past `as_of`, with no reader hold registered
-        // yet, and both runtimes apply it. The publisher then advances the published `since` past
-        // `as_of` on the next tick: no reader hold pins it, and the standing hold has moved with
-        // the writer floor.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
         registry.note_standing_hold(id, &target);
         oks_writer.set_logical_compaction(target.borrow());
@@ -633,10 +666,13 @@ fn import_asserts_since_at_most_as_of() {
             Timestamp::from(6_u64),
         );
 
-        // Importing at `as_of` now finds a `since` already beyond it: the assert must panic.
-        worker.dataflow::<Timestamp, _, _>(|scope| {
-            let _ = registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
-        });
+        let mut bundle = registry.peer_bundle(id, &as_of);
+        assert!(
+            PartialOrder::less_than(&as_of.borrow(), &bundle.oks_mut().get_logical_compaction()),
+            "the hold sits at the published since, above the requested as_of"
+        );
+        drop(bundle);
+        drop_dataflows(worker);
     });
 }
 
@@ -685,7 +721,7 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
         // be the ones a read at `as_of` should see rather than a coalesced history.
         let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (oks_arranged, errs_arranged, _slot) =
-                registry.import(scope.clone(), id, "Index", &as_of, &Antichain::new());
+                import_shared(&registry, scope.clone(), id, &as_of, &Antichain::new());
             (oks_arranged.trace, errs_arranged.trace)
         });
 
@@ -718,24 +754,71 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
     });
 }
 
-/// A two-runtime process's maintenance runtime publishes into the sharing registry. Its
-/// interactive peer reads only from the registry, so publication is what keeps interactive
-/// peeks from blocking until they time out.
 #[mz_ore::test]
-fn maintenance_role_publishes() {
-    assert!(ComputeRuntimeRole::Maintenance.publishes());
-}
+#[cfg_attr(miri, ignore)]
+fn a_peer_bundle_holds_logically_and_its_import_reads_the_rows() {
+    let id = GlobalId::User(1);
+    let rows = test_rows();
+    let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+    let registry = ArrangementSharingRegistry::new();
+    let (capture_tx, capture_rx) = mpsc::channel();
+    let registry_in = registry.clone();
 
-/// A two-runtime process's interactive runtime publishes its transient query outputs into the
-/// sharing registry, so a result peek served from the registry can read the output and receive
-/// its seal notifications.
-#[mz_ore::test]
-fn interactive_role_publishes() {
-    assert!(ComputeRuntimeRole::Interactive.publishes());
-}
+    timely::execute_directly(move |worker| {
+        let _keep = worker.dataflow::<Timestamp, _, _>(|scope| {
+            publish_index(scope, &registry_in, id, rows.clone())
+        });
 
-/// The `Solo` (single-runtime) role has no registry peer, so it does not publish.
-#[mz_ore::test]
-fn solo_role_does_not_publish() {
-    assert!(!ComputeRuntimeRole::Solo.publishes());
+        let mut bundle = registry_in.peer_bundle(id, &as_of);
+        assert_eq!(
+            bundle.oks_mut().get_physical_compaction(),
+            Antichain::new().borrow(),
+            "a peer bundle holds nothing physically, so the publisher keeps merging"
+        );
+        assert!(
+            bundle.local().is_none(),
+            "a peer bundle is not a trace this runtime maintains"
+        );
+
+        let probe = ProbeHandle::new();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (oks, _button) = bundle.oks_mut().import_frontier_core(
+                scope.clone(),
+                "Index",
+                as_of.clone(),
+                Antichain::new(),
+            );
+            Arranged::<TraceFrontier<OksTrace>>::flat_map_batches(
+                oks.stream,
+                |k: DatumSeq, v: DatumSeq| {
+                    let key = Row::pack_slice(&k.into_iter().collect::<Vec<_>>());
+                    let val = Row::pack_slice(&v.into_iter().collect::<Vec<_>>());
+                    [(key, val)]
+                },
+            )
+            .inner
+            .probe_with(&probe)
+            .capture_into(capture_tx.clone());
+        });
+        let sealed = Timestamp::from(1_u64);
+        let mut steps = 0;
+        while probe.less_than(&sealed) {
+            worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "the import did not seal");
+        }
+        drop(bundle);
+        drop_dataflows(worker);
+    });
+
+    let mut found: Vec<(Row, Row)> = capture_rx
+        .extract()
+        .into_iter()
+        .flat_map(|(_, data)| data)
+        .map(|((k, v), _t, _d)| (k, v))
+        .collect();
+    found.sort();
+    let mut expected = test_rows();
+    expected.sort();
+    assert_eq!(found, expected);
 }
