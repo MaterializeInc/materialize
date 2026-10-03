@@ -1521,3 +1521,126 @@ def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) ->
         )
 
     print(f"OK: ROTATE aborted with OCC conflict, SET preserved: {err_str}")
+
+
+# Pauses CREATE MATERIALIZED VIEW in its off-thread optimize stage, between
+# planning (which computes the `OR REPLACE` drop set) and the finish stage
+# that commits it. Must fire off the coordinator main loop. Pausing on-loop
+# would freeze the coordinator and block this test's other statements.
+# Defined in src/adapter/src/coord/sequencer/inner/create_materialized_view.rs.
+CREATE_MV_OPTIMIZE_FAILPOINT = "create_materialized_view_optimize"
+
+# The error the planner raises for a RESTRICT drop, which the finish stage of
+# CREATE OR REPLACE reruns against the current catalog. It must name the sink
+# that committed while the replacement was parked.
+OR_REPLACE_CONFLICT_MESSAGE = "still depended upon by sink"
+
+
+def workflow_create_or_replace_race(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for SQL-521: a CREATE SINK on a materialized view that
+    commits while a CREATE OR REPLACE of that view is between planning and its
+    staged finish must make the replacement fail. Committing the plan-time drop
+    set would leave the sink with dependency edges to a dropped item, which the
+    catalog consistency check turns into a coordinator panic.
+
+    CREATE SINK is exempt from the DDL lock (see `must_serialize_ddl`), so it
+    can commit inside that window. The `create_materialized_view_optimize`
+    failpoint parks the replacement in its off-thread optimize stage to force
+    the interleaving deterministically.
+    """
+    parser.parse_args()
+
+    c.up("materialized", "kafka")
+
+    c.sql(dedent("""
+            CREATE TABLE sql521_t (a int, b int);
+            CREATE MATERIALIZED VIEW sql521_mv AS SELECT a, b FROM sql521_t;
+            CREATE CONNECTION sql521_kafka_conn
+                TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
+            """))
+
+    # `SET failpoints` calls `fail::cfg` (see src/sql/src/session/vars/value.rs),
+    # which writes to the process-global registry. The pause applies to any
+    # session that later hits the named failpoint.
+    c.sql(f"SET failpoints = '{CREATE_MV_OPTIMIZE_FAILPOINT}=pause'")
+
+    replace_err: Exception | None = None
+
+    def replace() -> None:
+        nonlocal replace_err
+        try:
+            with c.sql_cursor(reuse_connection=False) as cur:
+                cur.execute(
+                    b"CREATE OR REPLACE MATERIALIZED VIEW sql521_mv"
+                    b" AS SELECT a + 1 AS a, b FROM sql521_t"
+                )
+        except Exception as e:
+            replace_err = e
+
+    t_replace = PropagatingThread(target=replace, name="replace")
+    t_replace.start()
+
+    try:
+        # Give the replacement time to plan (with an empty dependent set for
+        # the old MV) and park at the failpoint in its optimize stage.
+        time.sleep(1)
+
+        # Commit a new dependent on the old MV item while the replacement is
+        # parked. CREATE SINK does not take the DDL lock, so it does not queue
+        # behind the in-flight CREATE OR REPLACE.
+        c.sql(dedent("""
+                CREATE SINK sql521_snk FROM sql521_mv
+                INTO KAFKA CONNECTION sql521_kafka_conn (TOPIC 'sql521-snk')
+                FORMAT JSON ENVELOPE DEBEZIUM
+                """))
+
+        # The finish stage reports the same error the planner would, so only a
+        # replacement still parked at the failpoint proves that the sink
+        # committed inside the window. A plan-time rejection returns at once.
+        time.sleep(0.5)
+        if not t_replace.is_alive():
+            raise Exception(
+                "CREATE OR REPLACE was not parked at the failpoint when the sink "
+                f"committed, so the race was not exercised: {replace_err}"
+            )
+    finally:
+        # Always release the replacement, or its thread blocks until the CI
+        # step times out.
+        c.sql(f"SET failpoints = '{CREATE_MV_OPTIMIZE_FAILPOINT}=off'")
+
+    t_replace.join()
+
+    if replace_err is None:
+        # The replacement committing means it dropped the old MV item while the
+        # sink still references it, which is the original bug. On soft-assert builds
+        # the coordinator panics on that very transact, so usually this shows
+        # up as a lost connection instead (handled below).
+        raise Exception(
+            "race reproduced: CREATE OR REPLACE succeeded despite a "
+            "concurrently created sink on the replaced materialized view. "
+            "This is SQL-521: the sink is left with dangling dependency edges."
+        )
+
+    err_str = str(replace_err)
+    if OR_REPLACE_CONFLICT_MESSAGE not in err_str or "sql521_snk" not in err_str:
+        raise Exception(
+            f"CREATE OR REPLACE failed but not with the expected conflict "
+            f"error (a lost connection means the coordinator panicked on the "
+            f"corrupted catalog): {replace_err}"
+        )
+
+    # The old MV and the sink should both have survived intact. Any DDL then
+    # re-runs the coordinator's consistency check (soft-assert builds), which
+    # would panic if the catalog had been corrupted.
+    rows = c.sql_query("SHOW CREATE MATERIALIZED VIEW sql521_mv")
+    create_sql = rows[0][1]
+    if "a + 1" in create_sql:
+        raise Exception(f"replacement was applied despite erroring:\n  {create_sql}")
+    rows = c.sql_query("SELECT count(*) FROM mz_sinks WHERE name = 'sql521_snk'")
+    if rows[0][0] != 1:
+        raise Exception("sink sql521_snk went missing")
+    c.sql("CREATE TABLE sql521_probe (x int); DROP TABLE sql521_probe")
+
+    print(f"OK: CREATE OR REPLACE aborted, sink preserved: {err_str}")

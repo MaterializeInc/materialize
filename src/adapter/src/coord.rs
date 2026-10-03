@@ -857,6 +857,9 @@ pub enum CreateViewStage {
 pub struct CreateViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateViewPlan,
+    /// The item `plan.replace` refers to and its name, captured in the same coordinator turn
+    /// as planning. See `revalidate_or_replace_drop_ids`.
+    replace_target: Option<(CatalogItemId, QualifiedItemName)>,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
@@ -871,6 +874,8 @@ pub struct CreateViewFinish {
     /// ID by with Compute will reference this View.
     global_id: GlobalId,
     plan: plan::CreateViewPlan,
+    /// See [`CreateViewOptimize::replace_target`].
+    replace_target: Option<(CatalogItemId, QualifiedItemName)>,
     /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
@@ -1034,6 +1039,8 @@ pub enum CreateMaterializedViewStage {
 pub struct CreateMaterializedViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
+    /// See [`CreateViewOptimize::replace_target`].
+    replace_target: Option<(CatalogItemId, QualifiedItemName)>,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
@@ -1048,6 +1055,8 @@ pub struct CreateMaterializedViewFinish {
     global_id: GlobalId,
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
+    /// See [`CreateViewOptimize::replace_target`].
+    replace_target: Option<(CatalogItemId, QualifiedItemName)>,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,

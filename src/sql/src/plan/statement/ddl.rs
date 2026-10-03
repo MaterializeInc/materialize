@@ -6195,7 +6195,7 @@ fn plan_drop_item_name(
 /// object that depends on it and is not itself being dropped. Dependents whose
 /// ids are in `also_dropped` are ignored, since they are being dropped as part
 /// of the same statement.
-fn ensure_no_blocking_dependents(
+pub fn ensure_no_blocking_dependents(
     scx: &StatementContext,
     object_type: ObjectType,
     catalog_item: &dyn CatalogItem,

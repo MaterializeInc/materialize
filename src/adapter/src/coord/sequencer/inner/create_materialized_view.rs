@@ -23,7 +23,7 @@ use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
-use mz_sql::catalog::CatalogError;
+use mz_sql::catalog::{CatalogError, ObjectType};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
@@ -407,10 +407,15 @@ impl Coordinator {
             }
         }
 
+        let replace_target = plan
+            .replace
+            .map(|id| (id, self.catalog().get_entry(&id).name().clone()));
+
         Ok(CreateMaterializedViewStage::Optimize(
             CreateMaterializedViewOptimize {
                 validity,
                 plan,
+                replace_target,
                 resolved_ids,
                 explain_ctx,
             },
@@ -423,6 +428,7 @@ impl Coordinator {
         CreateMaterializedViewOptimize {
             validity,
             plan,
+            replace_target,
             resolved_ids,
             explain_ctx,
         }: CreateMaterializedViewOptimize,
@@ -477,6 +483,10 @@ impl Coordinator {
             || "optimize create materialized view",
             move || {
                 span.in_scope(|| {
+                    // Lets tests pause here (off the coordinator main loop) to widen the
+                    // window between planning a `CREATE OR REPLACE` and its finish stage.
+                    fail::fail_point!("create_materialized_view_optimize");
+
                     let mut pipeline = || -> Result<(
                         optimize::materialized_view::LocalMirPlan,
                         optimize::materialized_view::GlobalMirPlan,
@@ -516,6 +526,7 @@ impl Coordinator {
                                     global_id,
                                     validity,
                                     plan,
+                                    replace_target,
                                     resolved_ids,
                                     local_mir_plan,
                                     global_mir_plan,
@@ -585,10 +596,10 @@ impl Coordinator {
                             refresh_schedule,
                             ..
                         },
-                    drop_ids,
                     if_not_exists,
                     ..
                 },
+            replace_target,
             resolved_ids,
             local_mir_plan,
             global_mir_plan,
@@ -596,6 +607,12 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
+
+        let drop_ids = self.revalidate_or_replace_drop_ids(
+            ctx.session(),
+            ObjectType::MaterializedView,
+            replace_target,
+        )?;
 
         // Validate the replacement target, if one is given.
         if let Some(target_id) = replacement_target {
