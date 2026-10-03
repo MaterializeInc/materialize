@@ -5350,7 +5350,7 @@ dependencies = [
 [[package]]
 name = "k8s-controller"
 version = "0.13.0"
-source = "git+https://github.com/antiguru/k8s-controller?rev=f2372fcb02df4db94cc538a7ef9bb156ee9be41e#f2372fcb02df4db94cc538a7ef9bb156ee9be41e"
+source = "git+https://github.com/MaterializeInc/k8s-controller?rev=f2372fcb02df4db94cc538a7ef9bb156ee9be41e#f2372fcb02df4db94cc538a7ef9bb156ee9be41e"
 dependencies = [
  "async-trait",
  "futures",

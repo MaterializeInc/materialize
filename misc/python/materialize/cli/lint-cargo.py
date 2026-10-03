@@ -158,7 +158,7 @@ def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
 
     # Root patches for crates outside the fuzz crates' dependency graph. Cargo
     # would warn that they are unused, so the fuzz workspace leaves them out.
-    OMITTED = {"duckdb", "postgres_array"}
+    OMITTED = {"duckdb", "k8s-controller", "postgres_array"}
 
     with open(MZ_ROOT / "Cargo.toml") as f:
         root_patches = toml.load(f).get("patch", {}).get("crates-io", {})
