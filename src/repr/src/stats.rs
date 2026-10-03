@@ -12,6 +12,7 @@
 //! For primitive types please see [`mz_persist_types::stats`].
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 
@@ -382,6 +383,77 @@ pub fn decode_numeric<'a>(
     Ok((lower, upper))
 }
 
+/// Compares like [`OrderedDecimal::cmp`].
+///
+/// `OrderedDecimal::cmp` builds a context and reduces both operands on every call, which
+/// dominates computing stats over a numeric column. This compares finite values directly and
+/// defers to it only for specials and coefficients too wide for a `u128`.
+fn numeric_cmp(a: &OrderedDecimal<Numeric>, b: &OrderedDecimal<Numeric>) -> Ordering {
+    let (x, y) = (&a.0, &b.0);
+    if x.is_special() || y.is_special() {
+        return a.cmp(b);
+    }
+    // Zeros compare equal regardless of sign and exponent.
+    match (x.is_zero(), y.is_zero()) {
+        (true, true) => return Ordering::Equal,
+        (true, false) if y.is_negative() => return Ordering::Greater,
+        (true, false) => return Ordering::Less,
+        (false, true) if x.is_negative() => return Ordering::Less,
+        (false, true) => return Ordering::Greater,
+        (false, false) => {}
+    }
+    match (x.is_negative(), y.is_negative()) {
+        (true, false) => return Ordering::Less,
+        (false, true) => return Ordering::Greater,
+        _ => {}
+    }
+    // Coefficients carry no leading zeros, so the exponent of the most significant digit orders
+    // the magnitudes unless it is equal.
+    let msd_exponent = |n: &Numeric| i64::from(n.exponent()) + i64::from(n.digits()) - 1;
+    let magnitude = match msd_exponent(x).cmp(&msd_exponent(y)) {
+        Ordering::Equal => {
+            // Align the coefficients on the smaller exponent. Equal most significant digit
+            // exponents mean the aligned coefficients have equal digit counts.
+            let Some((cx, cy)) = coefficient_u128(x).zip(coefficient_u128(y)) else {
+                return a.cmp(b);
+            };
+            let shift = x.exponent().abs_diff(y.exponent());
+            let Some(scale) = 10u128.checked_pow(shift) else {
+                return a.cmp(b);
+            };
+            let aligned = if x.exponent() > y.exponent() {
+                cx.checked_mul(scale).map(|cx| (cx, cy))
+            } else {
+                cy.checked_mul(scale).map(|cy| (cx, cy))
+            };
+            let Some((cx, cy)) = aligned else {
+                return a.cmp(b);
+            };
+            cx.cmp(&cy)
+        }
+        ordering => ordering,
+    };
+    if x.is_negative() {
+        magnitude.reverse()
+    } else {
+        magnitude
+    }
+}
+
+/// Returns the coefficient of `n`, or `None` if it has more digits than a `u128` always holds.
+fn coefficient_u128(n: &Numeric) -> Option<u128> {
+    if n.digits() > 38 {
+        return None;
+    }
+    // Each unit holds three decimal digits, least significant unit first.
+    Some(
+        n.coefficient_units()
+            .iter()
+            .rev()
+            .fold(0u128, |acc, unit| acc * 1000 + u128::from(*unit)),
+    )
+}
+
 /// Take the smallest / largest numeric values for a numeric col.
 /// TODO: use the float data for this instead if it becomes a performance bottleneck.
 pub fn numeric_stats_from_column(col: &BinaryArray) -> ColumnStatKinds {
@@ -397,8 +469,12 @@ pub fn numeric_stats_from_column(col: &BinaryArray) -> ColumnStatKinds {
                 .expect("failed to roundtrip Numeric")
                 .into_value(),
         );
-        lower = val.min(lower);
-        upper = val.max(upper);
+        if numeric_cmp(&val, &lower) != Ordering::Greater {
+            lower = val;
+        }
+        if numeric_cmp(&val, &upper) == Ordering::Greater {
+            upper = val;
+        }
     }
 
     BytesStats::FixedSize(FixedSizeBytesStats {
@@ -681,6 +757,88 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{Datum, RelationDesc, Row, RowArena, SqlScalarType};
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn numeric_stats_match_ordered_decimal() {
+        use arrow::array::BinaryArray;
+        use dec::OrderedDecimal;
+        use mz_persist_types::columnar::FixedSizeCodec;
+        use mz_persist_types::stats::ColumnStatKinds;
+        use mz_persist_types::stats::bytes::BytesStats;
+        use rand::RngExt;
+
+        use crate::adt::numeric::{self, Numeric, PackedNumeric};
+
+        let mut cx = numeric::cx_datum();
+        let mut rng = rand::rng();
+        // Few distinct coefficients and exponents, so that equal exponents, equal values with
+        // different representations (`1.0` and `1.00`), zeros, and specials all occur often.
+        let mut random_numeric = |rng: &mut rand::rngs::ThreadRng| -> Numeric {
+            match rng.random_range(0..20) {
+                0 => Numeric::nan(),
+                1 => Numeric::infinity(),
+                2 => -Numeric::infinity(),
+                3 => -Numeric::zero(),
+                4 => {
+                    // 39 digits, too wide for the `u128` comparison.
+                    let mut n: Numeric =
+                        cx.parse("123456789012345678901234567890123456789").unwrap();
+                    n.set_exponent(rng.random_range(-40..0));
+                    n
+                }
+                _ => {
+                    let coefficient =
+                        rng.random_range(-2000..2000) * 1000_i64.pow(rng.random_range(0..3));
+                    let mut n = cx.from_i64(coefficient);
+                    n.set_exponent(rng.random_range(-4..1));
+                    if rng.random() {
+                        cx.reduce(&mut n);
+                    }
+                    n
+                }
+            }
+        };
+
+        for _ in 0..10_000 {
+            let (a, b) = (random_numeric(&mut rng), random_numeric(&mut rng));
+            let (a, b) = (OrderedDecimal(a), OrderedDecimal(b));
+            assert_eq!(super::numeric_cmp(&a, &b), a.cmp(&b), "{a} vs {b}");
+        }
+
+        for _ in 0..1_000 {
+            let len = rng.random_range(1..50);
+            let values: Vec<Numeric> = (0..len).map(|_| random_numeric(&mut rng)).collect();
+            let col = BinaryArray::from_iter_values(
+                values
+                    .iter()
+                    .map(|n| PackedNumeric::from_value(*n).as_bytes().to_vec()),
+            );
+
+            let mut lower = OrderedDecimal(Numeric::nan());
+            let mut upper = OrderedDecimal(-Numeric::infinity());
+            for n in &values {
+                lower = OrderedDecimal(*n).min(lower);
+                upper = OrderedDecimal(*n).max(upper);
+            }
+
+            let ColumnStatKinds::Bytes(BytesStats::FixedSize(stats)) =
+                super::numeric_stats_from_column(&col)
+            else {
+                panic!("expected fixed size bytes stats");
+            };
+            assert_eq!(
+                stats.lower,
+                PackedNumeric::from_value(lower.0).as_bytes(),
+                "{values:?}"
+            );
+            assert_eq!(
+                stats.upper,
+                PackedNumeric::from_value(upper.0).as_bytes(),
+                "{values:?}"
+            );
+        }
+    }
 
     fn datum_stats_roundtrip_trim<'a>(
         schema: &RelationDesc,
