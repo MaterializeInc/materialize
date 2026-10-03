@@ -19,7 +19,10 @@ SERVICES = [
         name="lean",
         config={
             "mzbuild": "lean",
-            "volumes": [".:/src:ro"],
+            "volumes": [
+                ".:/src:ro",
+                "../../doc/developer/design:/mz/doc/developer/design:ro",
+            ],
         },
     ),
 ]

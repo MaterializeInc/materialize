@@ -19,7 +19,7 @@ pre-image:
   - type: copy
     source: misc/lean
     destination: .
-    matching: lakefile.toml
+    matching: lakefile.lean
   - type: copy
     source: misc/lean
     destination: .

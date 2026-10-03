@@ -672,6 +672,9 @@ steps:
     label: Lean models
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    # Design doc models live outside the composition directory. A git
+    # pathspec `*` also matches `/`, so this covers every subdirectory.
+    inputs: ["doc/developer/design/*.lean"]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: lean
