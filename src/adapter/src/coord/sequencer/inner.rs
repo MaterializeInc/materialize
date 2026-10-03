@@ -3223,6 +3223,26 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // A pin can only promise history that still exists. Check the storage collections'
+        // read frontiers (indexes rehydrate from their inputs' shards, so they carry no
+        // history of their own to pin).
+        if let CompactionWindow::PinAt(pin) = plan.window {
+            for gid in self.catalog().get_entry(&plan.id).global_ids() {
+                if let Ok(frontiers) = self
+                    .controller
+                    .storage_collections
+                    .collection_frontiers(gid)
+                {
+                    if !frontiers.read_capabilities.less_equal(&pin) {
+                        return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                            "RETAIN HISTORY PIN AT {pin} is before the earliest retained time \
+                             {:?} of the collection; that history is already compacted away",
+                            frontiers.read_capabilities.elements()
+                        )));
+                    }
+                }
+            }
+        }
         let ops = vec![catalog::Op::AlterRetainHistory {
             id: plan.id,
             value: plan.value,

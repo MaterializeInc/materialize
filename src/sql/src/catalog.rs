@@ -916,6 +916,11 @@ pub trait CatalogItem {
     /// Returns the cluster the item belongs to.
     fn cluster_id(&self) -> Option<ClusterId>;
 
+    /// The custom history retention policy of the item, if any.
+    fn compaction_window(&self) -> Option<mz_adapter_types::compaction::CompactionWindow> {
+        None
+    }
+
     /// Returns the [`CatalogCollectionItem`] for a specific version of this
     /// [`CatalogItem`].
     fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;

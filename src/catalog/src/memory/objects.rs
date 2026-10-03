@@ -2370,7 +2370,11 @@ impl CatalogItem {
                     if let Some(value) = value {
                         let next = mz_sql_parser::ast::$opt {
                             name: mz_sql_parser::ast::$name::RetainHistory,
-                            value: Some(WithOptionValue::RetainHistoryFor(value)),
+                            value: Some(if matches!(window, CompactionWindow::PinAt(_)) {
+                                WithOptionValue::RetainHistoryPinAt(value)
+                            } else {
+                                WithOptionValue::RetainHistoryFor(value)
+                            }),
                         };
                         if let Some(idx) = pos {
                             let previous = $stmt.with_options[idx].clone();
@@ -4129,6 +4133,10 @@ impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
 }
 
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
+    fn compaction_window(&self) -> Option<CompactionWindow> {
+        self.item().custom_logical_compaction_window()
+    }
+
     fn name(&self) -> &QualifiedItemName {
         self.name()
     }
