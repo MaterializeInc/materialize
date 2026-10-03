@@ -1,0 +1,207 @@
+# Persist 101
+
+## Semantics
+Persist is a durable store of time-varying collections.
+
+Each time-varying collection is called a "shard".
+
+For the time window between a shard's **"since"** (lower bound) and its **"upper"** (upper bound), we know the history of the collection and can query its contents.
+- Before the lower bound, we no longer remember the history of the collection.
+- At or beyond the upper, the collection's state is still being decided.
+
+We can only write (append) to a collection _at or beyond_ the upper. We cannot alter history before that point.
+
+Individual records within a shard (as recorded at a given point in history) are _(key, value, multiplicity)_.
+
+## Architecture
+
+**Blob Storage:** Each shard's contents are written to (immutable) blobs.
+
+**Consensus:** All coordination and bookkeeping happens in the consensus database. For each shard:
+- _Trace:_ The since, the upper, and all the blobs with our data.
+- _Readers:_ What each reader is looking at, so we don't delete it before they're done.
+- _Writers:_ Each writer's last write, for idempotent retries.
+
+**Clients:** There is no Persist "server". All clients interact directly with blob storage and consensus.
+
+## Data Layout in Blob Storage
+At its core, a Persist shard is just an append-only log, where writers append batches of blobs
+and readers sift through the blobs to find what they need.
+
+Here is what those blobs look like:
+
+### Layout: Shard > Batch > Run > Part
+Within a shard, records are organized into:
+- _Batches._ Together, they cover the entire `[Since, Frontier)` time range without overlapping. Each timestamp within the range belongs to a single batch.
+- _Runs._ Each batch is made up of one or more runs. Runs are an artifact of how batches are written, not a semantic separation of records. i.e. Two runs can cover exactly the same time and key ranges.
+- _Parts._ Each run is made up of one or more parts. Each _part_ of a _run_ is responsible for a range of keys.
+  Within a part, records are typically sorted by key, and within a run, parts are sorted by their key ranges (which do not overlap).
+	- _Parts are internally sorted by key only if they've been through compaction. For large shards, most parts have been through compaction._
+
+#### Data Layout in a Part File
+Part files are Parquet, where the columns are:
+- `t` - timestamp
+- `d` - diff
+- `k_s` - Arrow-encoded Parquet "key", which is either:
+	- `ok` - struct with one field per relation column
+	- `err` - binary-encoded `DataflowError`
+- `v_s` - unused
+
+Our Parquet writer is simple:
+- only one row group
+- no statistics (Predicate push-down chooses which part files to read based on stats we write into shard state--outside the part files themselves.)
+
+_Note: There is also a legacy format with columns `k, v, t, d` and a migration format with `k, v, t, d, k_s, v_s`._
+
+#### Interlude on Future Work: Predicate Push-Down _within_ a Part
+Today, we always read and decode an entire part file.
+If we stop doing that, maybe we can improve predicate push-down and even support point (key + time) lookups.
+
+Claude's diagram of Parquet chunks and pages within our one row group:
+```
+File
+└── Row group            (a horizontal slice of rows, all columns)
+    ├── Column chunk "t" (all of t's values for those rows)
+    │   ├── Page         (~1 MB of t values)
+    │   ├── Page
+    │   └── Page
+    ├── Column chunk "d"
+    │   └── Page ...
+    └── Column chunk "k_s"
+        └── Page ..
+```
+
+Steps to doing better:
+- Split the file into multiple row groups.
+- Enable `Chunk` or `Page` statistics, which gives us a page index (in the parquet footer) with stats (e.g. column min/max/nulls) for those segmentations of the part file.
+- Add "Range Read" to our Blob Store interface to read from specific offsets within a file. Then, only read the row groups or pages whose stats fit the predicate.
+
+## Writers
+### First, a bare-minimum introduction to the consensus database
+
+In order to append to a shard, a writer must perform an atomic `compare_and_append` operation:
+1. By comparing sequence numbers, does the actual shard state match the latest shard state the writer has seen?
+2. Durably append the writer's change to the shard's state (with the next sequence number).
+    - Example state change: Append a batch of blobs for the latest timestamp range.
+
+Any client (writers, readers, others) that needs to catch up on the latest shard state performs these operations:
+1. `head`, to get an outline of the latest shard state, including a pointer to the latest state "rollup" blob.
+2. `scan`, to read from the most recent state rollup through all the subsequent state changes.
+
+_Shard state is recorded as a sequence of incremental updates (stored inline in the consensus database) interspersed with periodic full-state rollups (stored in blobs),
+and each client builds its own view of shard state by applying the updates to a rollup._
+
+### Materialized View sink
+Multiple replicas can write to the same shard, including replicas running different versions of the code.
+- We can't assume all writers agree on the collection's contents.
+	- e.g. After a bugfix, newer replicas will disagree with older replicas.
+- A writer can't assume the previous batches in Persist were written by writers it agrees with.
+
+Therefore, if a writer wants the shard to match its own view of the collection, it must _read the shard_, calculate the diff, and commit the diff.
+We call this behavior _self-correction_ because the winning writer erases any accumulated mistakes from the collection.
+
+_On each replica:_
+
+1. One worker chooses the time range for a batch.
+    - It also _selects which worker_ is responsible for `compare_and_append`ing the batch.
+2. All workers write their own parts for the batch.
+3. The _selected worker_ `compare_and_append`s all the workers' runs.
+
+### Source exports' Persist sinks
+For each of a _source's_ (e.g. database) _exports_ (e.g. table), we run a `persist_sink` dataflow to record that export's collection of records.
+
+_On each replica:_ 
+1. One worker chooses the time range for a batch.
+2. All workers write their own parts for the batch.
+   - _N.B._ Because sources don't guarantee key ordering, each part can span the entire key range. Therefore, each part is its own run.
+   - _Fun fact:_ Workers write their parts as single-timestamp batches, which the leader worker consolidates into one Persist batch, typically spanning multiple timestamps.
+3. One worker `compare_and_append`s the batch with each worker's run(s).
+   - _Multiple Replicas:_ Kafka and load-generator sources run on multiple replicas, which compete for a successful `compare_and_append`.
+   Postgres, MySQL, and SQL Server only run on a single replica.
+
+_Fun fact x2:_ The source exports' Persist sink implementation is derived from the materialized view sink, with the self-correction step removed.
+### Tables, `txn-wal`
+In each environment, the storage controller batches updates from all tables (user tables and system tables) into a group commit, timestamped by the timestamp oracle, and appends it to a `txn-wal` shard.
+
+For every table with data changes, the storage controller then copies from the group commit in `txn-wal` into the table's shard (and deletes that table's commit from `txn-wal` to mark it as "done").
+
+If we didn't group-commit all tables to `txn-wal`:
+- We couldn't support multi-table transactions.
+- We'd still tick each table separately. i.e. Even if a table didn't change, we'd still need to append to its shard every tick. Now, only `txn-wal` needs to tick.
+
+#### Migrating system tables during 0dt upgrades
+The new generation starts out read-only. The new storage controller follows `txn-wal` but cannot write to it.
+
+For any system tables with schema changes that cannot be migrated in place, the new coordinator creates new table shards and writes their IDs to the migration shard.
+The new storage controller writes the catalog state to the new table shards directly, without passing through `txn-wal` first.
+
+On promotion, the new generation restarts, no longer in read-only mode:
+- The new catalog performs its migration, with the new table shard IDs from the migration shard.
+- The new storage controller takes over `txn-wal` and registers the new table shards there.
+- The coordinator reads system tables from their shards and, via `txn-wal`, replaces their rows with the current state from the catalog.
+
+_Note:_ Docs say the new generation's behavior is a hack, and it should be unified with the `txn-wal` approach.
+
+### More Writers
+
+These other components write to Persist but are not drivers of its design:
+- Sinks: only record progress
+- COPY FROM: uses the table path
+- Webhook sources
+- Storage-controller collections
+- Catalog
+- Expression cache
+- Builtin schema migration shard
+- Dropped-shard cleanup
+
+## Readers
+TODO
+
+_Claude says: leased vs. critical readers, since holds, heartbeats, and what happens when a reader loses its lease._
+
+### Reading a Snapshot
+- Get all _batches_ for the shard, up to the _time_ we want to read.
+- In parallel, read all the _parts_ for all the _runs_ in those batches.
+
+TODO
+
+### Interlude on Future Work: Consolidate on Read
+TODO
+
+## Consensus
+TODO
+
+_Claude says: Shard state is stored as a log of diffs plus periodic rollups, updated by compare-and-set. Every operation on a shard (appends, heartbeats, compaction, GC) goes through that one compare-and-set, per PER-38._
+
+### Shard State
+
+Claude's diagram of shard state:
+```
+State
+├── shard_id, seqno, walltime_ms, hostname
+└── collections: StateCollections
+    ├── version                      state format version (0dt compatibility)
+    ├── trace: Trace                 the batch list: since, upper, spine
+    │   └── HollowBatch              desc (lower, upper, since), len, run_splits, run_meta
+    │       └── RunPart
+    │           ├── Single(BatchPart)
+    │           │   ├── Hollow       blob key, size, key_lower, stats, schema_id
+    │           │   └── Inline       the updates themselves, stored in state
+    │           └── Many(HollowRunRef)   pointer to a blob that lists more parts
+    ├── leased_readers   id → since, seqno, last heartbeat, lease duration
+    ├── critical_readers id → since, opaque token
+    ├── writers          id → last heartbeat, last write token, last write upper
+    ├── schemas          schema id → encoded key/val schemas
+    ├── rollups          seqno → blob key of that rollup
+    ├── active_rollup, active_gc, last_gc_req
+```
+
+## Compaction
+TODO
+
+_Claude says: writers trigger it after writing. Include physical vs. logical compaction, incremental compaction, and how one slow reader holds back compaction for everyone (PER-42)._
+
+## Garbage Collection
+TODO
+
+_Claude says: state GC and blob GC. GC is turned off in cloud, and dropped shards leave orphaned blobs (about 200 TB at one customer)._
