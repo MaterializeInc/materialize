@@ -1,0 +1,25 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "orchestratord-console.fullname" . }}
+  labels:
+    {{- include "orchestratord-console.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "orchestratord-console.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "orchestratord-console.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

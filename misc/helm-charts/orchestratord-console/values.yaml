@@ -1,0 +1,62 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+image:
+  # -- The Docker repository for the console image
+  repository: materialize/orchestratord-console
+  # -- The tag/version of the console image to be used
+  tag: v26.38.0-dev.0
+  # -- Policy for pulling the image
+  pullPolicy: IfNotPresent
+
+# -- Number of console replicas. The console holds no state, so this is purely
+# about availability.
+replicas: 1
+
+# -- Namespace the orchestratord Deployment runs in. Used only to report which
+# operator build these environments belong to. Leave empty to search all
+# namespaces, which requires the cluster-scoped read below.
+operatorNamespace: ""
+
+# -- Log filter for the console.
+logFilter: "info"
+
+service:
+  # -- Service type. Kept ClusterIP by default because the console has no
+  # authentication and must not be exposed directly.
+  type: ClusterIP
+  # -- Port the service listens on.
+  port: 8080
+
+rbac:
+  # -- Whether to create the ClusterRole and binding the console needs. The
+  # console reads the operator's resources and writes a deliberately small
+  # subset. It never reads Secrets.
+  create: true
+
+serviceAccount:
+  # -- Whether to create a service account for the console.
+  create: true
+  # -- Name of the service account. Generated when empty.
+  name: ""
+
+# -- Resource requests and limits for the console pod.
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    memory: "128Mi"
+
+# -- Node selector for the console pod.
+nodeSelector: {}
+# -- Affinity for the console pod.
+affinity: {}
+# -- Tolerations for the console pod.
+tolerations: []

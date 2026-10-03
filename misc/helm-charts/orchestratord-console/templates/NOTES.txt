@@ -1,0 +1,6 @@
+The Materialize operator console is deployed.
+
+It has no authentication, so it is exposed as a ClusterIP service only. To open it:
+
+  $ kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "orchestratord-console.fullname" . }} {{ .Values.service.port }}
+  then visit http://localhost:{{ .Values.service.port }}
