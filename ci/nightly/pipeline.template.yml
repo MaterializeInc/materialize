@@ -131,6 +131,27 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
         sanitizer: skip
 
+      - id: crate-cuts
+        label: Crate dependency cuts
+        command: bin/ci-builder run stable bin/crate-cuts --annotate
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        depends_on: []
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        sanitizer: skip
+        artifact_paths:
+          - target/crate-cuts/report.md
+          - target/crate-cuts/report.json
+          - target/crate-cuts/modules.json
+          - target/crate-cuts/facts.json
+          - target/crate-cuts/crates.dot
+          - target/crate-cuts/rust-analyzer.log
+
       - id: cargo-deny-check-advisories
         label: Security advisories
         command: bin/ci-builder run stable cargo deny check advisories
