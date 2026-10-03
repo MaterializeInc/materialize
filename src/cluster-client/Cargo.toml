@@ -14,9 +14,17 @@ anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["tracing"] }
 mz-repr = { path = "../repr" }
 prometheus.workspace = true
+proptest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+mz-cluster-client = { path = ".", features = ["proptest"] }
+mz-ore = { path = "../ore", features = ["test"] }
+proptest.workspace = true
 
 [features]
 default = []
+proptest = ["dep:proptest"]
