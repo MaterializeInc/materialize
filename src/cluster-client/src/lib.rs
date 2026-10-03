@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod client;
 pub mod metrics;
+pub mod params;
 
 /// A function that computes the lag between the given time and wallclock time.
 ///
