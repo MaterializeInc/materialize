@@ -49,9 +49,20 @@ pub async fn plan(
         });
     }
 
+    let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
+    let (live, default_replication_factor) =
+        futures::try_join!(live_clusters(client, &names), async {
+            client
+                .default_cluster_replication_factor()
+                .await
+                .map_err(CliError::Connection)
+        })?;
+    let defaults = default_options(default_replication_factor);
+
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result = plan_cluster(client, executor, def).await?;
+        let obj_result =
+            plan_cluster(client, executor, def, live.get(&def.name), &defaults).await?;
         object_results.push(obj_result);
     }
 
@@ -82,13 +93,13 @@ async fn plan_cluster(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &ClusterDefinition,
+    live: Option<&CreateClusterStatement<Raw>>,
+    defaults: &BTreeMap<ClusterOptionName, WithOptionValue<Raw>>,
 ) -> Result<ObjectResult, CliError> {
     let cluster_name = &def.name;
 
     // Drain any prior statements
     executor.take_statements();
-
-    let live = live_cluster(client, cluster_name).await?;
 
     let action = match live {
         None => {
@@ -96,13 +107,7 @@ async fn plan_cluster(
             ObjectAction::Created
         }
         Some(live) => {
-            let defaults = default_options(
-                client
-                    .default_cluster_replication_factor()
-                    .await
-                    .map_err(CliError::Connection)?,
-            );
-            let (to_set, to_reset) = diff_cluster_options(&def.create_stmt, &live, &defaults);
+            let (to_set, to_reset) = diff_cluster_options(&def.create_stmt, live, defaults);
 
             if to_set.is_empty() && to_reset.is_empty() {
                 ObjectAction::UpToDate
@@ -161,35 +166,44 @@ async fn plan_cluster(
     })
 }
 
-/// The live cluster's configuration, as the canonical `CREATE CLUSTER` statement
-/// the server renders from the catalog. `None` when the cluster does not exist.
+/// The live configuration of each of `names` that exists, as the canonical
+/// `CREATE CLUSTER` statement the server renders from the catalog.
 ///
 /// Errors on an unmanaged cluster, which has no `SHOW CREATE CLUSTER` form.
-async fn live_cluster(
+async fn live_clusters(
     client: &Client,
-    name: &str,
-) -> Result<Option<CreateClusterStatement<Raw>>, CliError> {
-    let Some(cluster) = client
+    names: &[&str],
+) -> Result<BTreeMap<String, CreateClusterStatement<Raw>>, CliError> {
+    let clusters = client
         .introspection()
-        .get_cluster(name)
+        .get_clusters(names)
         .await
-        .map_err(CliError::Connection)?
-    else {
-        return Ok(None);
-    };
-    if !cluster.managed {
-        return Err(CliError::Message(format!(
-            "cluster '{}' is unmanaged; mz-deploy reconciles managed clusters only",
-            name
-        )));
-    }
+        .map_err(CliError::Connection)?;
+
+    let managed: Vec<&str> = names
+        .iter()
+        .filter_map(|name| match clusters.get(*name) {
+            Some(cluster) if cluster.managed => Some(Ok(*name)),
+            Some(_) => Some(Err(CliError::Message(format!(
+                "cluster '{}' is unmanaged; mz-deploy reconciles managed clusters only",
+                name
+            )))),
+            None => None,
+        })
+        .collect::<Result<_, _>>()?;
+
     client
         .introspection()
-        .get_cluster_create_sql(name)
+        .get_cluster_create_sqls(&managed)
         .await
         .map_err(CliError::Connection)?
-        .map(|sql| parse_create_cluster(&sql).map_err(CliError::Message))
-        .transpose()
+        .into_iter()
+        .map(|(name, sql)| {
+            parse_create_cluster(&sql)
+                .map(|create| (name, create))
+                .map_err(CliError::Message)
+        })
+        .collect()
 }
 
 /// The options `SHOW CREATE CLUSTER` renders for every managed cluster, paired
