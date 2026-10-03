@@ -61,11 +61,6 @@ impl std::error::Error for ValidationError {
 }
 
 impl ValidationError {
-    /// Create a new validation error with context
-    pub fn with_context(kind: ValidationErrorKind, context: ErrorContext) -> Self {
-        Self { kind, context }
-    }
-
     /// Create a new validation error with just a file path
     pub fn with_file(kind: ValidationErrorKind, file: PathBuf) -> Self {
         Self {
@@ -985,11 +980,6 @@ impl ValidationErrors {
     /// Get the number of errors
     pub fn len(&self) -> usize {
         self.errors.len()
-    }
-
-    /// Convert into a Result, returning Err if there are any errors
-    pub fn into_result(self) -> Result<(), Self> {
-        if self.is_empty() { Ok(()) } else { Err(self) }
     }
 }
 
