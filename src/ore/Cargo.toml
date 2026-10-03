@@ -27,6 +27,7 @@ clap = { workspace = true, optional = true, features = ["env", "string"] }
 columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
 compact_bytes = { workspace = true, optional = true }
+crc32fast = { workspace = true, optional = true }
 ctor = { workspace = true, optional = true }
 differential-dataflow = { workspace = true, optional = true }
 derivative.workspace = true
@@ -154,7 +155,7 @@ assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
-pool = ["dep:bytemuck", "libc", "dep:tracing"]
+pool = ["dep:bytemuck", "dep:crc32fast", "libc", "dep:tracing"]
 
 [[test]]
 name = "future"

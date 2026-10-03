@@ -7791,6 +7791,7 @@ dependencies = [
  "columnation",
  "compact_bytes",
  "console-subscriber",
+ "crc32fast",
  "criterion",
  "ctor",
  "derivative",
