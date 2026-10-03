@@ -270,6 +270,156 @@ mod plan_tests {
             "statement's own name should be suffixed; got: {serialized}",
         );
     }
+
+    /// A cluster name that overflows the identifier length limit once the
+    /// profile suffix is appended surfaces as a compile error, not a panic.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_cluster_name_too_long_after_suffix_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let schema_dir = root.path().join("models/mydb/public");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        let long_cluster = "c".repeat(250);
+        std::fs::write(
+            schema_dir.join("v.sql"),
+            format!(
+                "CREATE MATERIALIZED VIEW mydb.public.v IN CLUSTER {long_cluster} AS SELECT 1 AS x;\n"
+            ),
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let err = plan_sync(
+            &fs,
+            root.path(),
+            None,
+            Some("__staging"),
+            &Default::default(),
+        )
+        .expect_err("over-length suffixed cluster name must error, not panic");
+        assert!(
+            err.to_string().contains("too long"),
+            "error should explain the length overflow; got: {err}",
+        );
+    }
+
+    /// A supporting statement that references an object with too many
+    /// qualification levels is reported as a validation error, not a panic.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_overqualified_reference_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let schema_dir = root.path().join("models/mydb/public");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        std::fs::write(
+            schema_dir.join("t.sql"),
+            "CREATE TABLE mydb.public.t (id INT);\n\
+             COMMENT ON COLUMN mydb.public.t.extra.id IS 'bad';\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let result = plan_sync(&fs, root.path(), None, None, &Default::default());
+        assert!(
+            result.is_err(),
+            "over-qualified column reference must be a validation error, not a panic",
+        );
+    }
+
+    /// A cross-database reference to a database whose name is not bare (needs
+    /// SQL quoting, e.g. `café`) still gets its profile suffix. The name-map
+    /// lookup must key off the raw identifier, not its quoted `Display` form.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_profile_suffix_suffixes_non_bare_database_name() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+
+        let a_dir = root.path().join("models/café/public");
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::write(
+            a_dir.join("base.sql"),
+            "CREATE TABLE \"café\".public.base (id INT);\n",
+        )
+        .unwrap();
+
+        let b_dir = root.path().join("models/app/public");
+        std::fs::create_dir_all(&b_dir).unwrap();
+        std::fs::write(
+            b_dir.join("derived.sql"),
+            "CREATE VIEW app.public.derived AS SELECT id FROM \"café\".public.base;\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let project = plan_sync(&fs, root.path(), None, Some("_dev"), &Default::default())
+            .expect("non-bare cross-database reference should compile under a profile suffix");
+
+        let derived = project
+            .find_object(&ir::object_id::ObjectId::new(
+                "app_dev".to_string(),
+                "public".to_string(),
+                "derived".to_string(),
+            ))
+            .expect("derived view should appear under the suffixed database");
+
+        assert!(
+            derived.dependencies.contains(&ir::object_id::ObjectId::new(
+                "café_dev".to_string(),
+                "public".to_string(),
+                "base".to_string(),
+            )),
+            "non-bare database reference should be suffixed; got {:?}",
+            derived.dependencies,
+        );
+    }
+
+    /// A supporting statement on an unqualified object must still be rejected
+    /// when it targets a different schema than the file's object.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_rejects_wrong_schema_grant_on_unqualified_object() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let dir = root.path().join("models/app/ingest");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("users.sql"),
+            "CREATE TABLE users (id INT);\n\
+             GRANT SELECT ON TABLE other_schema.users TO some_role;\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let result = plan_sync(&fs, root.path(), None, None, &Default::default());
+        assert!(
+            result.is_err(),
+            "grant targeting a different schema than the file's object must be rejected",
+        );
+    }
+
+    /// The same-schema control still validates: an unqualified object with a
+    /// grant on its own (unqualified) name compiles cleanly.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_accepts_same_schema_grant_on_unqualified_object() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let dir = root.path().join("models/app/ingest");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("users.sql"),
+            "CREATE TABLE users (id INT);\n\
+             GRANT SELECT ON TABLE users TO some_role;\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        plan_sync(&fs, root.path(), None, None, &Default::default())
+            .expect("grant on the file's own object should validate");
+    }
 }
 
 /// Compile a project root into a planned deployment representation.

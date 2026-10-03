@@ -473,7 +473,7 @@ impl DatabaseObject {
     /// For any `RawClusterName::Unresolved(ident)` where the ident matches a key
     /// in the map, replace it with the suffixed name. This applies to `IN CLUSTER`
     /// clauses in the main statement and in index definitions.
-    pub fn rewrite_cluster_references(&mut self, cluster_map: &BTreeMap<String, String>) {
+    pub fn rewrite_cluster_references(&mut self, cluster_map: &BTreeMap<String, Ident>) {
         // Rewrite IN CLUSTER on the main statement
         match &mut self.stmt {
             Statement::CreateMaterializedView(s) => {
@@ -620,7 +620,7 @@ impl Project {
     ///
     /// Walks all objects in all databases/schemas and replaces cluster names in
     /// `IN CLUSTER` clauses when the cluster name is a key in the map.
-    pub fn rewrite_cluster_references(&mut self, cluster_map: &BTreeMap<String, String>) {
+    pub fn rewrite_cluster_references(&mut self, cluster_map: &BTreeMap<String, Ident>) {
         for db in &mut self.databases {
             for schema in &mut db.schemas {
                 for obj in &mut schema.objects {
@@ -649,12 +649,12 @@ impl Project {
 /// Rewrite an optional `RawClusterName::Unresolved` ident if it matches a key in the map.
 fn rewrite_in_cluster(
     in_cluster: &mut Option<RawClusterName>,
-    cluster_map: &BTreeMap<String, String>,
+    cluster_map: &BTreeMap<String, Ident>,
 ) {
     if let Some(RawClusterName::Unresolved(ident)) = in_cluster {
         let name = ident.to_string();
         if let Some(suffixed) = cluster_map.get(&name) {
-            *ident = Ident::new(suffixed).expect("valid cluster identifier");
+            *ident = suffixed.clone();
         }
     }
 }
