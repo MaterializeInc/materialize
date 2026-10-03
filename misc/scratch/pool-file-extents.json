@@ -1,0 +1,7 @@
+{
+    "name": "pool file extents",
+    "launch_script": "set -euo pipefail; dev=$(lsblk -dpno NAME,MODEL | awk '/Instance Storage/ {print $1; exit}'); sudo mkfs.ext4 -q -F -E nodiscard \"$dev\"; sudo mkdir -p /scratch; sudo mount -o noatime \"$dev\" /scratch; sudo chown ubuntu:ubuntu /scratch; sudo apt-get install -y -qq fio",
+    "instance_type": "r8gd.4xlarge",
+    "size_gb": 200,
+    "tags": {}
+}
