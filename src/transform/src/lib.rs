@@ -77,6 +77,7 @@ pub mod demand;
 pub mod equivalence_propagation;
 pub mod fold_constants;
 pub mod fusion;
+pub mod housed_relation_optimization;
 pub mod join_implementation;
 pub mod literal_constraints;
 pub mod literal_lifting;
@@ -757,6 +758,10 @@ impl Optimizer {
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(NonNullRequirements::default()),
+            // 1.5. Optimize relations housed in `TableFunc::EvalRelation`.
+            // Housed bodies are opaque to every other transform, and static
+            // once built at lowering time, so a single early pass suffices.
+            Box::new(housed_relation_optimization::HousedRelationOptimization),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
