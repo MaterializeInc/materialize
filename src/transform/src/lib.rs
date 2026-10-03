@@ -134,7 +134,7 @@ pub struct TransformCtx<'a> {
     pub last_hash: BTreeMap<GlobalId, u64>,
 }
 
-const FOLD_CONSTANTS_LIMIT: usize = 10000;
+pub(crate) const FOLD_CONSTANTS_LIMIT: usize = 10000;
 
 impl<'a> TransformCtx<'a> {
     /// Generates a [`TransformCtx`] instance for the local MIR optimization
