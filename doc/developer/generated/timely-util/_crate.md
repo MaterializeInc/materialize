@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/lib.rs
-revision: 93dcb0ef5a
+revision: bb5c454adc
 ---
 
 # timely-util
@@ -15,7 +15,8 @@ Key modules:
 * `reclock` — timestamp translation operator for remapping source times to query times.
 * `order` — `Partitioned<P, T>` timestamp, `Interval<P>`, `Reverse<T>`, and `refine_antichain`.
 * `column_pager` — `ColumnPager` and policy types for spilling columnar chunks to a backing store under memory pressure; used by `Col2ValPagedBatcher`.
-* `columnar` — `Column<C>` columnar container with submodules `batcher` (`Chunker`, `ColumnChunker`, `ColumnMerger`), `builder` (`ColumnBuilder`), `consolidate`, and `merge_batcher` (`ColumnMergeBatcher`) for batched aligned allocations; `Col2ValBatcher`, `Col2KeyBatcher`, and `Col2ValPagedBatcher` type aliases.
+* `columnar` — `Column<C>` columnar container with submodules `batcher` (`Chunker`, `ColumnChunker`, `ColumnMerger`), `body` (`ColumnBody`), `builder` (`ColumnBuilder`), `builder_input`, `chunk` (`ColumnChunk`), `consolidate`, `merge_batcher` (`ColumnMergeBatcher`), and `unload`; `Col2ValBatcher`, `Col2KeyBatcher`, `Col2ValPagedBatcher`, and `Col2ValColBatcher` type aliases.
+* `funded_spine` — a fork of differential-dataflow's fueled `Spine` that ties voluntary consolidation work to inserted updates and frontier advances, preventing idle scheduling from driving unbounded merge work.
 * `columnation` — columnation-based region storage including `ColumnationStack` and `ColInternalMerger`.
 * `containers` — lgalloc-aware `alloc_aligned_zeroed` and `AccountedStackBuilder`.
 * `probe` — frontier observation via `Handle<T>` with async and activator notifications.

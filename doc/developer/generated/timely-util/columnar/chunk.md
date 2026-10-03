@@ -1,18 +1,18 @@
 ---
 source: src/timely-util/src/columnar/chunk.rs
-revision: 07d9506f7e
+revision: 24a45d84c0
 ---
 
 # timely-util::columnar::chunk
 
-`ColumnChunk<D, T, R>`: differential's `Chunk` trait implemented over `Column`-shaped updates, with an optional buffer-pool spill path.
+`ColumnChunk<D, T, R>`: differential's `Chunk` trait implemented over [`ColumnBody`](body.md)-backed sorted updates, with an optional buffer-pool spill path.
 
 ## Overview
 
 A `ColumnChunk` is a sorted, consolidated run of `(D, T, R)` updates. It has two storage variants:
 
-- **`Resident`** — an `Rc`-shared `Column<(D, T, R)>` on the heap. Fresh input, merge output, and small tails live here.
-- **`Spilled`** — the serialized column body in the process `Pool`, with a resident `SpilledBody` holding the record count, the first and last data items (the fence entries), the time bounds (`time_lower` / `time_upper`) that `extract` consults for whole-chunk passthrough, a `compressed` flag recording which codec the body was stored under, and `len_bytes` recording the body's serialized size before the pool's codec saw it (retained because the pool reports no per-chunk figure, so a chunk that reported nothing would drop its operator's share of the batcher's memory out of introspection tables). The generational depth is stored in the `Spilled` variant itself, not in the body, because a body is `Rc`-shared across chunk copies and aging must not depend on how many callers hold it. No reference into pool memory ever exists outside a single call: `extract_into` and `fetch_into` copy out into caller-owned scratch.
+- **`Resident`** — an `Rc`-shared `ColumnBody<(D, T, R)>` on the heap. Fresh input, merge output, and small tails live here.
+- **`Spilled`** — the serialized body in the process `Pool`, with a resident `SpilledBody` holding the record count, the first and last data items (the fence entries), the time bounds (`time_lower` / `time_upper`) that `extract` consults for whole-chunk passthrough, a `compressed` flag recording which codec the body was stored under, and `len_bytes` recording the body's serialized size before the pool's codec saw it (retained because the pool reports no per-chunk figure, so a chunk that reported nothing would drop its operator's share of the batcher's memory out of introspection tables). The generational depth is stored in the `Spilled` variant itself, not in the body, because a body is `Rc`-shared across chunk copies and aging must not depend on how many callers hold it. No reference into pool memory ever exists outside a single call: `extract_into` and `fetch_into` copy out into caller-owned scratch.
 
 ## Spill gate
 

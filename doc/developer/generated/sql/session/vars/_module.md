@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: dd5350d2ae
+revision: bb5c454adc
 ---
 
 # mz-sql::session::vars
