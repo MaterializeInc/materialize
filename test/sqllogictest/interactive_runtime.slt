@@ -9,9 +9,8 @@
 
 # Reads served by the interactive compute runtime.
 #
-# The flag is read when a replica is provisioned, so it is pinned before the cluster is created
-# rather than inherited from the environment, and the replica has two workers so every shared read
-# crosses a multi-worker registry.
+# The flag is read when a replica is provisioned, so it is set before the cluster is created, and
+# the replica has two workers so every shared read crosses a multi-worker registry.
 
 mode cockroach
 
