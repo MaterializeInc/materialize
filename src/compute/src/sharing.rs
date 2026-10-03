@@ -20,9 +20,9 @@
 //! sound only because both runtimes run the same number of workers per process at the same process
 //! ordinal, so both sides shard keys by the same `key.hashed() % peers`.
 
-// TODO(CPU-215): drop once `crate::render` and `crate::compute_state` call this registry. Only the
-// registry's constructor is reachable yet, so the rest reads as dead.
-#![expect(unused)]
+// TODO(CPU-215): drop once `crate::compute_state` serves peeks through this registry. Until then
+// some of its methods are called only from tests, so the expectation holds outside tests alone.
+#![cfg_attr(not(test), expect(unused))]
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -32,6 +32,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
+use crate::arrangement::manager::TraceBundle;
 use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
@@ -150,6 +151,18 @@ impl ArrangementSharingRegistry {
             registry: self.clone(),
             slot: Some(slot),
         }
+    }
+
+    /// The bundle through which this runtime holds and reads index `id`, which its peer publishes.
+    ///
+    /// The bundle's logical compaction is this runtime's hold on the publication. It holds nothing
+    /// physically, so the publisher keeps merging. Imports from the bundle mint readers that do.
+    /// The slot lives as long as the bundle.
+    pub(crate) fn peer_bundle(&self, id: GlobalId, as_of: &Antichain<Timestamp>) -> TraceBundle {
+        let slot = self.get_or_create(id);
+        let oks = slot.oks.peer_handle(as_of);
+        let errs = slot.errs.peer_handle(as_of);
+        TraceBundle::shared(oks, errs).with_drop(slot)
     }
 
     /// Mints reader handles for `id`, if published.

@@ -47,7 +47,7 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::typedefs::{RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::typedefs::{ImportedRowRowEnter, RowRowAgent, RowRowSpine};
 
 /// Available linear join implementations.
 ///
@@ -273,7 +273,7 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
+    Trace(Arranged<'scope, ImportedRowRowEnter<T>>),
 }
 
 impl<'scope, T> Context<'scope, T>
@@ -427,10 +427,23 @@ where
             JoinedFlavor::Local(_) | JoinedFlavor::Trace(_) => {}
         }
 
-        // Demultiplex the four different cross products of arrangement types we might have.
         let arrangement = lookup_relation
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
+
+        // The four `(stream flavor) x (lookup flavor)` combinations differ only in the two trace
+        // types handed to the generic `differential_join_inner` and the two arrangement values
+        // consumed. This local macro spells one combination.
+        macro_rules! join {
+            ($stream:expr, $stream_tr:ty, $lookup:expr, $lookup_tr:ty, $errs1:expr) => {{
+                let (oks, errs2) = self.differential_join_inner::<$stream_tr, $lookup_tr>(
+                    $stream, $lookup, closure, terminal,
+                );
+                errors.push($errs1.as_collection(|k, _v| k.clone()));
+                errors.extend(errs2);
+                oks
+            }};
+        }
 
         match joined {
             JoinedFlavor::Collection(_) => {
@@ -438,46 +451,24 @@ where
             }
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                            local, oks, closure, terminal,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(local, RowRowAgent<_, _>, oks, RowRowAgent<_, _>, errs1)
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                            local, oks, closure, terminal,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(local, RowRowAgent<_, _>, oks, ImportedRowRowEnter<_>, errs1)
                 }
             },
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                            trace, oks, closure, terminal,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(trace, ImportedRowRowEnter<_>, oks, RowRowAgent<_, _>, errs1)
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                            trace, oks, closure, terminal,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                    join!(
+                        trace,
+                        ImportedRowRowEnter<_>,
+                        oks,
+                        ImportedRowRowEnter<_>,
+                        errs1
+                    )
                 }
             },
         }
