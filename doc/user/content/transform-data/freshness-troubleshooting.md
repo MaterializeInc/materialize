@@ -169,7 +169,7 @@ A cluster can become overloaded if:
   the cluster undersized.
 
 When a cluster is overloaded, this may manifest as high CPU utilization, high
-memory utilization forcing data to disk, or Out of Memory (OOM) crash loops.
+memory utilization spilling into swap, or Out of Memory (OOM) crash loops.
 
 ### Check the CPU or memory pressure
 
@@ -185,7 +185,8 @@ SELECT
     c.id as cluster_id,
     r.name AS replica_name,
     u.cpu_percent,
-    u.memory_percent
+    u.memory_percent,
+    u.heap_percent
 FROM mz_internal.mz_cluster_replica_utilization u
 JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
 JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
@@ -202,7 +203,8 @@ SELECT
     c.id as cluster_id,
     r.name AS replica_name,
     u.cpu_percent,
-    u.memory_percent
+    u.memory_percent,
+    u.heap_percent
 FROM mz_internal.mz_cluster_replica_utilization u
 JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
 JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
@@ -215,8 +217,11 @@ ORDER BY u.cpu_percent DESC;
 - If the returned `cpu_percent` is high, all objects on that cluster experience
   correlated freshness degradation.
 
-- If the returned `memory_percent` is high, Materialize may force data to disk,
-  which can slow down processing.
+- If the returned `memory_percent` is high, the replica is close to its RAM
+  allocation and further growth spills into swap, which can slow down
+  processing.
+  `heap_percent` (RAM plus swap) shows how close the replica is to being
+  OOM-killed.
 
 Note that `cpu_percent` averages over the replica's workers, so a cluster whose
 work is concentrated on one worker can degrade while reporting unremarkable CPU.
