@@ -1839,13 +1839,25 @@ class MaintenanceUnderPeekSaturation(Scenario):
 
     The other isolation scenarios saturate maintenance and measure peeks. This
     is the converse. Cluster `sat` has one worker per core of the host, rounded
-    down to a size the size map offers, and carries three loads: one closed
-    loop of a join peek per worker, so every worker that serves peeks is busy;
-    two hydration churn loops, so the maintenance workers are busy too; and a
-    small materialized view over a table a writer keeps advancing. With one
-    runtime the workers already fill the cores. A second runtime doubles the
-    worker threads on the same cores, which is the oversubscription a
-    production replica sees under its CPU limit.
+    down to a size the size map offers, and carries three loads: join peeks
+    at a fixed rate that scales with the workers; two hydration churn loops,
+    so the maintenance workers are busy too; and a small materialized view
+    over a table a writer keeps advancing. With one runtime the workers
+    already fill the cores. A second runtime doubles the worker threads on the
+    same cores, which is the oversubscription a production replica sees under
+    its CPU limit.
+
+    The join peeks run open-loop so that both sides of an A/B serve the same
+    peek load. With one closed loop per worker, the side that served joins
+    faster also issued more of them: at 16 workers the interactive runtime ran
+    70 joins per second against 30, and the extra peeks loaded environmentd,
+    which the INSERT loop shares. The rate is one join per worker per second.
+    At 1.5 the single runtime, which sustains about 30 joins per second at 16
+    workers, fell behind in one of two runs and its join p50 grew to 14 s of
+    queue wait, see `ReadIsolationUnderHydration`. At 1.0 it kept up with a
+    join p50 of 510-530 ms, about 9 pooled connections in flight by Little's
+    law, well under the pool's 100. The join's qps is the offered rate on both
+    sides, so compare its p50 and p95.
 
     The measured query is a strict serializable read of the materialized view
     from `sat_idle`, a separate one-worker cluster with nothing else to do. It
@@ -1870,6 +1882,7 @@ class MaintenanceUnderPeekSaturation(Scenario):
         # cores of its own instead of oversubscribing the first. The size map
         # offers powers of two up to 32 workers.
         workers = min(32, 1 << ((os.cpu_count() or 1).bit_length() - 1))
+        join_rate = 1.0 * workers
         self.init(
             [
                 TdPhase(f"""
@@ -1927,10 +1940,11 @@ class MaintenanceUnderPeekSaturation(Scenario):
                         ),
                     ]
                     + [
-                        # Contention and measured: one peek dataflow in flight
-                        # per worker.
-                        ClosedLoop(action=PooledQuery(join))
-                        for _ in range(workers)
+                        # Contention and measured: a fixed rate of join peeks.
+                        OpenLoop(
+                            action=PooledQuery(join),
+                            dist=Periodic(per_second=join_rate),
+                        )
                     ]
                     + [
                         # Contention: continuous hydration on the maintenance
