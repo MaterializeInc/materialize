@@ -281,8 +281,15 @@ NULL
 4
 3
 
+# bar_idx2 reads from bar_idx, so it is dropped and recreated around the drop.
+statement ok
+DROP INDEX bar_idx2;
+
 statement ok
 DROP INDEX bar_idx;
+
+statement ok
+CREATE INDEX bar_idx2 on bar(-a);
 
 statement ok
 CREATE INDEX bar_idx3 on bar(a + 4);
