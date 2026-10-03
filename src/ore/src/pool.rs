@@ -66,7 +66,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use crate::cast::CastFrom;
-use crate::pool::extent::{ExtentArena, Scratch, SwapExtent};
+use crate::pool::extent::{Extent, ExtentArena, Scratch};
 use crate::pool::region::{Region, SIZE_CLASSES};
 
 /// Virtual reservation per size class. Purely virtual: physical memory
@@ -384,7 +384,7 @@ struct PoolInner {
     rss_target_bytes: AtomicU64,
     /// One region per entry of [`SIZE_CLASSES`], same order.
     regions: Vec<Region>,
-    /// The arena backing extents. Shared with every live [`SwapExtent`],
+    /// The arena backing extents. Shared with every live [`Extent`],
     /// whose drop returns its slot.
     extent_arena: Arc<ExtentArena>,
     /// Second-chance FIFOs of eviction candidates, one per depth band; a
@@ -513,7 +513,7 @@ struct ChunkState {
     typed: Option<Box<dyn TypedBody>>,
     /// The backing copy; present exactly in the `BackedResident` and
     /// `Evicted` states.
-    extent: Option<SwapExtent>,
+    extent: Option<Extent>,
     /// The payload of an `Oversize` chunk.
     oversize: Option<Vec<u64>>,
 }
@@ -821,7 +821,7 @@ impl Pool {
         words.fill(u64::from_ne_bytes([0xDE; 8]));
         fill(&mut words);
         let inner = &self.0;
-        let extent = SwapExtent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
+        let extent = Extent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
         drop(words);
         let meta = Arc::new(ChunkMeta::new(
             inner,
@@ -1118,7 +1118,7 @@ impl PoolInner {
     /// Records a freshly written extent under the chunk's state lock: the
     /// compressed-bytes counter, the compressed-tier accounting, and the
     /// state's extent field.
-    fn commit_extent(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState, extent: SwapExtent) {
+    fn commit_extent(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState, extent: Extent) {
         self.counters
             .extent_bytes_written
             .fetch_add(u64::cast_from(extent.comp_len()), Ordering::Relaxed);
@@ -1299,11 +1299,11 @@ impl PoolInner {
                         // slot while this borrow is live (reads copy out
                         // under the same lock).
                         let data = unsafe { self.slot_data(meta, slot) };
-                        SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink)
+                        Extent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink)
                     }
                     (None, Some(body)) => {
                         let data = serialize_typed(body);
-                        SwapExtent::write(&self.extent_arena, &data, meta.codec, Scratch::Shrink)
+                        Extent::write(&self.extent_arena, &data, meta.codec, Scratch::Shrink)
                     }
                     (None, None) => unreachable!("checked above"),
                 };
@@ -1492,7 +1492,7 @@ impl PoolInner {
         };
         // Spill threads see a steady job stream, so they keep the grown
         // compression scratch for the next job.
-        let extent = SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Retain);
+        let extent = Extent::write(&self.extent_arena, data, meta.codec, Scratch::Retain);
         let mut state = meta.state();
         if state.freed {
             // Freed during compression: the extent is garbage; cleanup is
@@ -1919,7 +1919,7 @@ impl PoolInner {
     /// Uncounts a resident extent that is being dropped (chunk freed or
     /// degraded). Its queue entry goes stale and is dropped on visit or by
     /// [`PoolInner::prune_extent_queue`].
-    fn note_extent_released(&self, extent: &SwapExtent) {
+    fn note_extent_released(&self, extent: &Extent) {
         if extent.is_resident() {
             self.counters
                 .extent_resident_bytes
