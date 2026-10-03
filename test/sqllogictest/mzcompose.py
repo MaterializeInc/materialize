@@ -588,6 +588,9 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cast.slt",
         "test/sqllogictest/char.slt",
         "test/sqllogictest/chbench.slt",
+        # A constant-folded numeric(5,2) literal loses its scale in a view;
+        # see the file's header.
+        "test/sqllogictest/try_cast_noindex.slt",
         "test/sqllogictest/chr.slt",
         "test/sqllogictest/cluster.slt",
         "test/sqllogictest/coercion.slt",
@@ -1091,6 +1094,9 @@ def compileSlowSltConfig() -> SltRunConfig:
         # pg_typeof contains public schema name in views
         "test/sqllogictest/cast.slt",
         "test/sqllogictest/map.slt",
+        # A constant-folded numeric(5,2) literal loses its scale in a view;
+        # see the file's header.
+        "test/sqllogictest/try_cast_noindex.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/typeof.slt",
         # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157

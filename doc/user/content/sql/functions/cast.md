@@ -1,12 +1,14 @@
 ---
-title: "CAST function and operator"
+title: "CAST and TRY_CAST"
 description: "Returns the value converted to the specified type"
 menu:
   main:
     parent: 'sql-functions'
 ---
 
-The `cast` function and operator return a value converted to the specified [type](../../types/).
+The `cast` function and operator return a value converted to the specified
+[type](../../types/). The `try_cast` function does the same, but returns `NULL`
+instead of an error when the value cannot be converted.
 
 ## Signatures
 
@@ -18,9 +20,15 @@ The following special syntax is permitted if _val_ is a string literal:
 
 {{% include-syntax file="examples/sql_functions/cast" example="syntax-literal" %}}
 
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-try-cast" %}}
+
 ### Return value
 
 `cast` returns the value with the type specified by the _type_ parameter.
+
+`try_cast` returns the value with the type specified by the _type_ parameter,
+or `NULL` if the conversion fails. Its result is nullable whenever the
+conversion can fail, even when the value being converted is not.
 
 ## Details
 
@@ -169,6 +177,48 @@ Source type                                | Return type                        
 
 <sup>2</sup> Casting a [`float`](../../types/float/) to a [`numeric`](../../types/numeric/) can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
+### `TRY_CAST`
+
+{{< public-preview />}}
+
+`TRY_CAST` accepts the same explicit casts as `CAST`, and returns `NULL` where
+`CAST` would return an error: for example, text that does not parse as the
+target type, a number that does not fit in the target type, or a JSON value of
+the wrong kind. When the conversion succeeds, `TRY_CAST` and `CAST` return the
+same value.
+
+`TRY_CAST` only suppresses errors from the conversion itself. Errors raised
+while computing the value being converted still propagate:
+
+```mzsql
+SELECT TRY_CAST(1 / 0 AS text);
+```
+```nofmt
+ERROR:  division by zero
+```
+
+Converting a value of a composite type ([`array`](../../types/array/),
+[`list`](../../types/list/), or [`record`](../../types/record/)) converts each
+element. If any element fails to convert, `TRY_CAST` returns `NULL` for the
+whole value rather than a value with `NULL` elements. This also applies to
+`ARRAY`, `LIST`, and `ROW` constructors written directly inside `TRY_CAST`,
+which are typed on their own before the conversion, so an empty constructor
+needs an explicit type:
+
+```mzsql
+SELECT TRY_CAST(ARRAY[]::text[] AS int[]);
+```
+
+A `MAP` constructor cannot be the argument of `TRY_CAST`, because there is no
+cast between two [`map`](../../types/map/) types to fall back on. Convert it
+with `CAST` or `::` instead.
+
+`TRY_CAST` supports every explicit cast that `CAST` does with some exceptions:
+it does not currently casts between `MAP` types; it does not support casts to or
+from `regclass`, `regproc`, `regtype`, `aclitem`, and [`mz_aclitem`](../../types/mz_aclitem/),
+other than those between the `oid` alias types and the integer types. Trying
+to use `TRY_CAST` for these casts will be rejected when the statement is planned.
+
 ## Examples
 
 ```mzsql
@@ -200,6 +250,30 @@ SELECT 100.21::numeric(10, 2)::float AS dec_to_float;
  dec_to_float
 --------------
        100.21
+```
+
+<hr/>
+
+```mzsql
+SELECT TRY_CAST('42' AS int) AS ok, TRY_CAST('forty-two' AS int) AS bad;
+```
+```nofmt
+ ok | bad
+----+-----
+ 42 |
+```
+
+<hr/>
+
+Routing rows whose values do not convert, instead of failing the whole view:
+
+```mzsql
+CREATE VIEW parsed AS
+  SELECT raw, TRY_CAST(raw AS timestamp) AS ts
+  FROM events;
+
+CREATE VIEW unparseable AS
+  SELECT raw FROM parsed WHERE ts IS NULL AND raw IS NOT NULL;
 ```
 
 ## Related topics

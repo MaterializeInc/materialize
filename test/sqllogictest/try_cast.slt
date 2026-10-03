@@ -1,0 +1,4453 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# TRY_CAST(expr AS type) is CAST(expr AS type) that yields NULL where the cast
+# would error. Errors raised by `expr` itself still propagate.
+#
+# The matrix below has one block per entry of the planner's cast table. For
+# each source value that converts, the block shows the TRY_CAST result and
+# checks that it agrees with CAST (the second column, always true, comparing
+# the text renderings so that every type is comparable; the third
+# column checks that a NULL source yields NULL). For each source value that
+# does not convert, the block checks that CAST errors and TRY_CAST is NULL.
+# The values were chosen so that every cast with a failure mode has at least
+# one failing value; a block with no failing value is a cast that cannot fail.
+#
+# The numeric(5,2) target's blocks are in try_cast_noindex.slt, see there.
+#
+# `"char"` sources appear only against the targets with a dedicated `"char"`
+# cast: the other targets route through text and panic on its datum (DB-201),
+# in CAST and TRY_CAST alike.
+
+mode cockroach
+
+# The feature flag gates the syntax.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_try_cast = false
+----
+COMPLETE 0
+
+statement error enable_try_cast
+SELECT TRY_CAST('1' AS int4)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_try_cast = true
+----
+COMPLETE 0
+
+# Record types can only be named through user-defined types.
+statement ok
+CREATE TYPE rec8 AS (a int8, b text)
+
+statement ok
+CREATE TYPE rec2 AS (a int2, b text)
+
+# Basics.
+query ITT
+SELECT TRY_CAST('42' AS int4), TRY_CAST('abc' AS int4)::text, TRY_CAST(NULL AS int4)::text
+----
+42 NULL NULL
+
+query T
+SELECT pg_typeof(TRY_CAST(1 AS int8))
+----
+bigint
+
+# The argument is evaluated first, and its errors propagate.
+statement error division by zero
+SELECT TRY_CAST(1 / 0 AS text)
+
+statement error number too large to fit in target type
+SELECT TRY_CAST(CAST('99999' AS smallint) AS integer)
+
+statement error division by zero
+SELECT TRY_CAST(TRY_CAST(1 / 0 AS int8) AS int4)
+
+# Every stage of a multi-stage cast is protected.
+query TT
+SELECT TRY_CAST((-1)::int8 AS regclass)::text, TRY_CAST(5::int8 AS regclass)::text
+----
+NULL 5
+
+# String-like targets route through text, and an explicit cast to char(n)
+# truncates rather than failing, as CAST does.
+query T
+SELECT TRY_CAST(12345 AS char(3))
+----
+123
+
+# A bad element yields NULL for the whole value, never a value with NULL
+# holes in it. Collection literals are typed on their own, so the same holds
+# for them.
+query TTTT
+SELECT TRY_CAST('{1,2,x}' AS int4 list)::text, TRY_CAST('{1,2,3}' AS int4 list)::text, TRY_CAST(ARRAY['1', 'x'] AS int4[])::text, TRY_CAST(LIST[100000] AS int2 list)::text
+----
+NULL {1,2,3} NULL NULL
+
+query TT
+SELECT TRY_CAST(ROW(100000, 'a') AS rec2)::text, TRY_CAST(ROW(1, 'a') AS rec8)::text
+----
+NULL (1,a)
+
+# The same holds when the fields are untyped literals, which are typed on
+# their own rather than coerced to the record's field types.
+query TT
+SELECT TRY_CAST(ROW('100000', 'a') AS rec2)::text, TRY_CAST(ROW('1', 'a') AS rec8)::text
+----
+NULL (1,a)
+
+# Because the literal is typed on its own, an empty collection literal needs
+# its own type annotation.
+statement error cannot determine type of empty array
+SELECT TRY_CAST(ARRAY[] AS int4[])
+
+# There is no cast between map types, so a MAP constructor has no whole-value
+# cast to fall back on and is rejected rather than converted element by element.
+statement error MAP constructor as the argument of TRY_CAST not yet supported
+SELECT TRY_CAST(MAP['k' => '1'] AS map[text=>int4])
+
+query T
+SELECT TRY_CAST(MAP['k' => '1']::map[text=>int4] AS map[text=>int4])::text
+----
+{k=>1}
+
+query T
+SELECT TRY_CAST(ARRAY[]::int4[] AS int8[])::text
+----
+{}
+
+# Pairs CAST rejects are rejected the same way.
+statement error CAST does not support casting from integer to jsonb
+SELECT TRY_CAST(1 AS jsonb)
+
+# The catalog-lookup casts are implemented in SQL and have no null-fallback
+# form. String-like types route through text, so all of them are refused.
+
+statement error TRY_CAST does not support casting from text to regclass
+SELECT TRY_CAST(NULL::text AS regclass)
+
+statement error TRY_CAST does not support casting from regclass to text
+SELECT TRY_CAST(NULL::regclass AS text)
+
+statement error TRY_CAST does not support casting from text to regproc
+SELECT TRY_CAST(NULL::text AS regproc)
+
+statement error TRY_CAST does not support casting from regproc to text
+SELECT TRY_CAST(NULL::regproc AS text)
+
+statement error TRY_CAST does not support casting from text to regtype
+SELECT TRY_CAST(NULL::text AS regtype)
+
+statement error TRY_CAST does not support casting from regtype to text
+SELECT TRY_CAST(NULL::regtype AS text)
+
+statement error TRY_CAST does not support casting from text to regclass
+SELECT TRY_CAST(NULL::char(3) AS regclass)
+
+statement error TRY_CAST does not support casting from regclass to text
+SELECT TRY_CAST(NULL::regclass AS char(3))
+
+statement error TRY_CAST does not support casting from text to regproc
+SELECT TRY_CAST(NULL::char(3) AS regproc)
+
+statement error TRY_CAST does not support casting from regproc to text
+SELECT TRY_CAST(NULL::regproc AS char(3))
+
+statement error TRY_CAST does not support casting from text to regtype
+SELECT TRY_CAST(NULL::char(3) AS regtype)
+
+statement error TRY_CAST does not support casting from regtype to text
+SELECT TRY_CAST(NULL::regtype AS char(3))
+
+statement error TRY_CAST does not support casting from text to regclass
+SELECT TRY_CAST(NULL::varchar(3) AS regclass)
+
+statement error TRY_CAST does not support casting from regclass to text
+SELECT TRY_CAST(NULL::regclass AS varchar(3))
+
+statement error TRY_CAST does not support casting from text to regproc
+SELECT TRY_CAST(NULL::varchar(3) AS regproc)
+
+statement error TRY_CAST does not support casting from regproc to text
+SELECT TRY_CAST(NULL::regproc AS varchar(3))
+
+statement error TRY_CAST does not support casting from text to regtype
+SELECT TRY_CAST(NULL::varchar(3) AS regtype)
+
+statement error TRY_CAST does not support casting from regtype to text
+SELECT TRY_CAST(NULL::regtype AS varchar(3))
+
+statement error TRY_CAST does not support casting from text to regclass
+SELECT TRY_CAST(NULL::name AS regclass)
+
+statement error TRY_CAST does not support casting from regclass to text
+SELECT TRY_CAST(NULL::regclass AS name)
+
+statement error TRY_CAST does not support casting from text to regproc
+SELECT TRY_CAST(NULL::name AS regproc)
+
+statement error TRY_CAST does not support casting from regproc to text
+SELECT TRY_CAST(NULL::regproc AS name)
+
+statement error TRY_CAST does not support casting from text to regtype
+SELECT TRY_CAST(NULL::name AS regtype)
+
+statement error TRY_CAST does not support casting from regtype to text
+SELECT TRY_CAST(NULL::regtype AS name)
+
+statement error TRY_CAST does not support casting from aclitem to text
+SELECT TRY_CAST(NULL::aclitem AS text)
+
+statement error TRY_CAST does not support casting from mz_aclitem to text
+SELECT TRY_CAST(NULL::mz_aclitem AS text)
+
+statement error TRY_CAST does not support casting from aclitem to mz_aclitem
+SELECT TRY_CAST(NULL::aclitem AS mz_aclitem)
+
+statement error TRY_CAST does not support casting from mz_aclitem to aclitem
+SELECT TRY_CAST(NULL::mz_aclitem AS aclitem)
+
+# TRY_CAST over a NOT NULL column is nullable, and NULL fallbacks flow through
+# dataflows without error.
+statement ok
+CREATE TABLE t (s text NOT NULL)
+
+statement ok
+INSERT INTO t VALUES ('1'), ('2'), ('x'), ('3000000000'), ('2020-01-01')
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT s, TRY_CAST(s AS int4) AS i, TRY_CAST(s AS date) AS d, TRY_CAST(s AS int4 list) AS l FROM t
+
+statement ok
+CREATE INDEX mv_i ON mv (i)
+
+query TTTT rowsort
+SELECT s, i::text, d::text, l::text FROM mv
+----
+1 1 NULL NULL
+2 2 NULL NULL
+2020-01-01 NULL 2020-01-01 NULL
+3000000000 NULL NULL NULL
+x NULL NULL NULL
+
+query TT rowsort
+SELECT name, nullable::text FROM mz_columns WHERE id = (SELECT id FROM mz_materialized_views WHERE name = 'mv') AND name IN ('s', 'i')
+----
+i true
+s false
+
+# A view definition plans as a TryCast.
+statement ok
+CREATE VIEW v AS SELECT TRY_CAST(s AS int4) AS i FROM t
+
+query T multiline
+EXPLAIN RAW PLAN FOR VIEW v
+----
+Project (#1)
+  Map (try_cast[text_to_integer](#0{s}))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT TRY_CAST(s AS int4) FROM t
+----
+Project (#1)
+  Map (try_cast[text_to_integer](#0{s}))
+    Get materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT TRY_CAST('x' AS int4), TRY_CAST('7' AS int4)
+----
+Explained Query (fast path):
+  Constant
+    - (null, 7)
+
+Target cluster: quickstart
+
+EOF
+
+# The matrix.
+
+## boolean sources
+
+# boolean -> int4
+query TBB
+SELECT TRY_CAST(true AS int4)::text, TRY_CAST(true AS int4)::text IS NOT DISTINCT FROM CAST(true AS int4)::text, TRY_CAST(NULL::bool AS int4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(false AS int4)::text, TRY_CAST(false AS int4)::text IS NOT DISTINCT FROM CAST(false AS int4)::text, TRY_CAST(NULL::bool AS int4) IS NULL
+----
+0  true  true
+
+# boolean -> int8
+query TBB
+SELECT TRY_CAST(true AS int8)::text, TRY_CAST(true AS int8)::text IS NOT DISTINCT FROM CAST(true AS int8)::text, TRY_CAST(NULL::bool AS int8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(false AS int8)::text, TRY_CAST(false AS int8)::text IS NOT DISTINCT FROM CAST(false AS int8)::text, TRY_CAST(NULL::bool AS int8) IS NULL
+----
+0  true  true
+
+# boolean -> text
+query TBB
+SELECT TRY_CAST(true AS text)::text, TRY_CAST(true AS text)::text IS NOT DISTINCT FROM CAST(true AS text)::text, TRY_CAST(NULL::bool AS text) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST(false AS text)::text, TRY_CAST(false AS text)::text IS NOT DISTINCT FROM CAST(false AS text)::text, TRY_CAST(NULL::bool AS text) IS NULL
+----
+false  true  true
+
+## smallint sources
+
+# smallint -> int4
+query TBB
+SELECT TRY_CAST(1::int2 AS int4)::text, TRY_CAST(1::int2 AS int4)::text IS NOT DISTINCT FROM CAST(1::int2 AS int4)::text, TRY_CAST(NULL::int2 AS int4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS int4)::text, TRY_CAST(32767::int2 AS int4)::text IS NOT DISTINCT FROM CAST(32767::int2 AS int4)::text, TRY_CAST(NULL::int2 AS int4) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS int4)::text, TRY_CAST((-1)::int2 AS int4)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS int4)::text, TRY_CAST(NULL::int2 AS int4) IS NULL
+----
+-1  true  true
+
+# smallint -> int8
+query TBB
+SELECT TRY_CAST(1::int2 AS int8)::text, TRY_CAST(1::int2 AS int8)::text IS NOT DISTINCT FROM CAST(1::int2 AS int8)::text, TRY_CAST(NULL::int2 AS int8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS int8)::text, TRY_CAST(32767::int2 AS int8)::text IS NOT DISTINCT FROM CAST(32767::int2 AS int8)::text, TRY_CAST(NULL::int2 AS int8) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS int8)::text, TRY_CAST((-1)::int2 AS int8)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS int8)::text, TRY_CAST(NULL::int2 AS int8) IS NULL
+----
+-1  true  true
+
+# smallint -> uint2
+query TBB
+SELECT TRY_CAST(1::int2 AS uint2)::text, TRY_CAST(1::int2 AS uint2)::text IS NOT DISTINCT FROM CAST(1::int2 AS uint2)::text, TRY_CAST(NULL::int2 AS uint2) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS uint2)::text, TRY_CAST(32767::int2 AS uint2)::text IS NOT DISTINCT FROM CAST(32767::int2 AS uint2)::text, TRY_CAST(NULL::int2 AS uint2) IS NULL
+----
+32767  true  true
+
+statement error
+SELECT CAST((-1)::int2 AS uint2)
+
+query T
+SELECT TRY_CAST((-1)::int2 AS uint2)::text
+----
+NULL
+
+# smallint -> uint4
+query TBB
+SELECT TRY_CAST(1::int2 AS uint4)::text, TRY_CAST(1::int2 AS uint4)::text IS NOT DISTINCT FROM CAST(1::int2 AS uint4)::text, TRY_CAST(NULL::int2 AS uint4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS uint4)::text, TRY_CAST(32767::int2 AS uint4)::text IS NOT DISTINCT FROM CAST(32767::int2 AS uint4)::text, TRY_CAST(NULL::int2 AS uint4) IS NULL
+----
+32767  true  true
+
+statement error
+SELECT CAST((-1)::int2 AS uint4)
+
+query T
+SELECT TRY_CAST((-1)::int2 AS uint4)::text
+----
+NULL
+
+# smallint -> uint8
+query TBB
+SELECT TRY_CAST(1::int2 AS uint8)::text, TRY_CAST(1::int2 AS uint8)::text IS NOT DISTINCT FROM CAST(1::int2 AS uint8)::text, TRY_CAST(NULL::int2 AS uint8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS uint8)::text, TRY_CAST(32767::int2 AS uint8)::text IS NOT DISTINCT FROM CAST(32767::int2 AS uint8)::text, TRY_CAST(NULL::int2 AS uint8) IS NULL
+----
+32767  true  true
+
+statement error
+SELECT CAST((-1)::int2 AS uint8)
+
+query T
+SELECT TRY_CAST((-1)::int2 AS uint8)::text
+----
+NULL
+
+# smallint -> float4
+query TBB
+SELECT TRY_CAST(1::int2 AS float4)::text, TRY_CAST(1::int2 AS float4)::text IS NOT DISTINCT FROM CAST(1::int2 AS float4)::text, TRY_CAST(NULL::int2 AS float4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS float4)::text, TRY_CAST(32767::int2 AS float4)::text IS NOT DISTINCT FROM CAST(32767::int2 AS float4)::text, TRY_CAST(NULL::int2 AS float4) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS float4)::text, TRY_CAST((-1)::int2 AS float4)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS float4)::text, TRY_CAST(NULL::int2 AS float4) IS NULL
+----
+-1  true  true
+
+# smallint -> float8
+query TBB
+SELECT TRY_CAST(1::int2 AS float8)::text, TRY_CAST(1::int2 AS float8)::text IS NOT DISTINCT FROM CAST(1::int2 AS float8)::text, TRY_CAST(NULL::int2 AS float8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS float8)::text, TRY_CAST(32767::int2 AS float8)::text IS NOT DISTINCT FROM CAST(32767::int2 AS float8)::text, TRY_CAST(NULL::int2 AS float8) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS float8)::text, TRY_CAST((-1)::int2 AS float8)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS float8)::text, TRY_CAST(NULL::int2 AS float8) IS NULL
+----
+-1  true  true
+
+# smallint -> numeric
+query TBB
+SELECT TRY_CAST(1::int2 AS numeric)::text, TRY_CAST(1::int2 AS numeric)::text IS NOT DISTINCT FROM CAST(1::int2 AS numeric)::text, TRY_CAST(NULL::int2 AS numeric) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS numeric)::text, TRY_CAST(32767::int2 AS numeric)::text IS NOT DISTINCT FROM CAST(32767::int2 AS numeric)::text, TRY_CAST(NULL::int2 AS numeric) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS numeric)::text, TRY_CAST((-1)::int2 AS numeric)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS numeric)::text, TRY_CAST(NULL::int2 AS numeric) IS NULL
+----
+-1  true  true
+
+# smallint -> oid
+query TBB
+SELECT TRY_CAST(1::int2 AS oid)::text, TRY_CAST(1::int2 AS oid)::text IS NOT DISTINCT FROM CAST(1::int2 AS oid)::text, TRY_CAST(NULL::int2 AS oid) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS oid)::text, TRY_CAST(32767::int2 AS oid)::text IS NOT DISTINCT FROM CAST(32767::int2 AS oid)::text, TRY_CAST(NULL::int2 AS oid) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS oid)::text, TRY_CAST((-1)::int2 AS oid)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS oid)::text, TRY_CAST(NULL::int2 AS oid) IS NULL
+----
+4294967295  true  true
+
+# smallint -> regclass
+query TBB
+SELECT TRY_CAST(1::int2 AS regclass)::text, TRY_CAST(1::int2 AS regclass)::text IS NOT DISTINCT FROM CAST(1::int2 AS regclass)::text, TRY_CAST(NULL::int2 AS regclass) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS regclass)::text, TRY_CAST(32767::int2 AS regclass)::text IS NOT DISTINCT FROM CAST(32767::int2 AS regclass)::text, TRY_CAST(NULL::int2 AS regclass) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS regclass)::text, TRY_CAST((-1)::int2 AS regclass)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS regclass)::text, TRY_CAST(NULL::int2 AS regclass) IS NULL
+----
+4294967295  true  true
+
+# smallint -> regproc
+query TBB
+SELECT TRY_CAST(1::int2 AS regproc)::text, TRY_CAST(1::int2 AS regproc)::text IS NOT DISTINCT FROM CAST(1::int2 AS regproc)::text, TRY_CAST(NULL::int2 AS regproc) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS regproc)::text, TRY_CAST(32767::int2 AS regproc)::text IS NOT DISTINCT FROM CAST(32767::int2 AS regproc)::text, TRY_CAST(NULL::int2 AS regproc) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS regproc)::text, TRY_CAST((-1)::int2 AS regproc)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS regproc)::text, TRY_CAST(NULL::int2 AS regproc) IS NULL
+----
+4294967295  true  true
+
+# smallint -> regtype
+query TBB
+SELECT TRY_CAST(1::int2 AS regtype)::text, TRY_CAST(1::int2 AS regtype)::text IS NOT DISTINCT FROM CAST(1::int2 AS regtype)::text, TRY_CAST(NULL::int2 AS regtype) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS regtype)::text, TRY_CAST(32767::int2 AS regtype)::text IS NOT DISTINCT FROM CAST(32767::int2 AS regtype)::text, TRY_CAST(NULL::int2 AS regtype) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS regtype)::text, TRY_CAST((-1)::int2 AS regtype)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS regtype)::text, TRY_CAST(NULL::int2 AS regtype) IS NULL
+----
+4294967295  true  true
+
+# smallint -> text
+query TBB
+SELECT TRY_CAST(1::int2 AS text)::text, TRY_CAST(1::int2 AS text)::text IS NOT DISTINCT FROM CAST(1::int2 AS text)::text, TRY_CAST(NULL::int2 AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS text)::text, TRY_CAST(32767::int2 AS text)::text IS NOT DISTINCT FROM CAST(32767::int2 AS text)::text, TRY_CAST(NULL::int2 AS text) IS NULL
+----
+32767  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS text)::text, TRY_CAST((-1)::int2 AS text)::text IS NOT DISTINCT FROM CAST((-1)::int2 AS text)::text, TRY_CAST(NULL::int2 AS text) IS NULL
+----
+-1  true  true
+
+## integer sources
+
+# integer -> bool
+query TBB
+SELECT TRY_CAST(1 AS bool)::text, TRY_CAST(1 AS bool)::text IS NOT DISTINCT FROM CAST(1 AS bool)::text, TRY_CAST(NULL::int4 AS bool) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS bool)::text, TRY_CAST(2147483647 AS bool)::text IS NOT DISTINCT FROM CAST(2147483647 AS bool)::text, TRY_CAST(NULL::int4 AS bool) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS bool)::text, TRY_CAST(-1 AS bool)::text IS NOT DISTINCT FROM CAST(-1 AS bool)::text, TRY_CAST(NULL::int4 AS bool) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS bool)::text, TRY_CAST(100000 AS bool)::text IS NOT DISTINCT FROM CAST(100000 AS bool)::text, TRY_CAST(NULL::int4 AS bool) IS NULL
+----
+true  true  true
+
+# integer -> oid
+query TBB
+SELECT TRY_CAST(1 AS oid)::text, TRY_CAST(1 AS oid)::text IS NOT DISTINCT FROM CAST(1 AS oid)::text, TRY_CAST(NULL::int4 AS oid) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS oid)::text, TRY_CAST(2147483647 AS oid)::text IS NOT DISTINCT FROM CAST(2147483647 AS oid)::text, TRY_CAST(NULL::int4 AS oid) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS oid)::text, TRY_CAST(-1 AS oid)::text IS NOT DISTINCT FROM CAST(-1 AS oid)::text, TRY_CAST(NULL::int4 AS oid) IS NULL
+----
+4294967295  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS oid)::text, TRY_CAST(100000 AS oid)::text IS NOT DISTINCT FROM CAST(100000 AS oid)::text, TRY_CAST(NULL::int4 AS oid) IS NULL
+----
+100000  true  true
+
+# integer -> regclass
+query TBB
+SELECT TRY_CAST(1 AS regclass)::text, TRY_CAST(1 AS regclass)::text IS NOT DISTINCT FROM CAST(1 AS regclass)::text, TRY_CAST(NULL::int4 AS regclass) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS regclass)::text, TRY_CAST(2147483647 AS regclass)::text IS NOT DISTINCT FROM CAST(2147483647 AS regclass)::text, TRY_CAST(NULL::int4 AS regclass) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS regclass)::text, TRY_CAST(-1 AS regclass)::text IS NOT DISTINCT FROM CAST(-1 AS regclass)::text, TRY_CAST(NULL::int4 AS regclass) IS NULL
+----
+4294967295  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS regclass)::text, TRY_CAST(100000 AS regclass)::text IS NOT DISTINCT FROM CAST(100000 AS regclass)::text, TRY_CAST(NULL::int4 AS regclass) IS NULL
+----
+100000  true  true
+
+# integer -> regproc
+query TBB
+SELECT TRY_CAST(1 AS regproc)::text, TRY_CAST(1 AS regproc)::text IS NOT DISTINCT FROM CAST(1 AS regproc)::text, TRY_CAST(NULL::int4 AS regproc) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS regproc)::text, TRY_CAST(2147483647 AS regproc)::text IS NOT DISTINCT FROM CAST(2147483647 AS regproc)::text, TRY_CAST(NULL::int4 AS regproc) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS regproc)::text, TRY_CAST(-1 AS regproc)::text IS NOT DISTINCT FROM CAST(-1 AS regproc)::text, TRY_CAST(NULL::int4 AS regproc) IS NULL
+----
+4294967295  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS regproc)::text, TRY_CAST(100000 AS regproc)::text IS NOT DISTINCT FROM CAST(100000 AS regproc)::text, TRY_CAST(NULL::int4 AS regproc) IS NULL
+----
+100000  true  true
+
+# integer -> regtype
+query TBB
+SELECT TRY_CAST(1 AS regtype)::text, TRY_CAST(1 AS regtype)::text IS NOT DISTINCT FROM CAST(1 AS regtype)::text, TRY_CAST(NULL::int4 AS regtype) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS regtype)::text, TRY_CAST(2147483647 AS regtype)::text IS NOT DISTINCT FROM CAST(2147483647 AS regtype)::text, TRY_CAST(NULL::int4 AS regtype) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS regtype)::text, TRY_CAST(-1 AS regtype)::text IS NOT DISTINCT FROM CAST(-1 AS regtype)::text, TRY_CAST(NULL::int4 AS regtype) IS NULL
+----
+4294967295  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS regtype)::text, TRY_CAST(100000 AS regtype)::text IS NOT DISTINCT FROM CAST(100000 AS regtype)::text, TRY_CAST(NULL::int4 AS regtype) IS NULL
+----
+100000  true  true
+
+# integer -> "char"
+query TBB
+SELECT TRY_CAST(1 AS "char")::text, TRY_CAST(1 AS "char")::text IS NOT DISTINCT FROM CAST(1 AS "char")::text, TRY_CAST(NULL::int4 AS "char") IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS "char")::text, TRY_CAST(2147483647 AS "char")::text IS NOT DISTINCT FROM CAST(2147483647 AS "char")::text, TRY_CAST(NULL::int4 AS "char") IS NULL
+----
+2  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS "char")::text, TRY_CAST(-1 AS "char")::text IS NOT DISTINCT FROM CAST(-1 AS "char")::text, TRY_CAST(NULL::int4 AS "char") IS NULL
+----
+-  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS "char")::text, TRY_CAST(100000 AS "char")::text IS NOT DISTINCT FROM CAST(100000 AS "char")::text, TRY_CAST(NULL::int4 AS "char") IS NULL
+----
+1  true  true
+
+# integer -> int2
+query TBB
+SELECT TRY_CAST(1 AS int2)::text, TRY_CAST(1 AS int2)::text IS NOT DISTINCT FROM CAST(1 AS int2)::text, TRY_CAST(NULL::int4 AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(2147483647 AS int2)
+
+query T
+SELECT TRY_CAST(2147483647 AS int2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(-1 AS int2)::text, TRY_CAST(-1 AS int2)::text IS NOT DISTINCT FROM CAST(-1 AS int2)::text, TRY_CAST(NULL::int4 AS int2) IS NULL
+----
+-1  true  true
+
+statement error
+SELECT CAST(100000 AS int2)
+
+query T
+SELECT TRY_CAST(100000 AS int2)::text
+----
+NULL
+
+# integer -> int8
+query TBB
+SELECT TRY_CAST(1 AS int8)::text, TRY_CAST(1 AS int8)::text IS NOT DISTINCT FROM CAST(1 AS int8)::text, TRY_CAST(NULL::int4 AS int8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS int8)::text, TRY_CAST(2147483647 AS int8)::text IS NOT DISTINCT FROM CAST(2147483647 AS int8)::text, TRY_CAST(NULL::int4 AS int8) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS int8)::text, TRY_CAST(-1 AS int8)::text IS NOT DISTINCT FROM CAST(-1 AS int8)::text, TRY_CAST(NULL::int4 AS int8) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS int8)::text, TRY_CAST(100000 AS int8)::text IS NOT DISTINCT FROM CAST(100000 AS int8)::text, TRY_CAST(NULL::int4 AS int8) IS NULL
+----
+100000  true  true
+
+# integer -> uint2
+query TBB
+SELECT TRY_CAST(1 AS uint2)::text, TRY_CAST(1 AS uint2)::text IS NOT DISTINCT FROM CAST(1 AS uint2)::text, TRY_CAST(NULL::int4 AS uint2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(2147483647 AS uint2)
+
+query T
+SELECT TRY_CAST(2147483647 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST(-1 AS uint2)
+
+query T
+SELECT TRY_CAST(-1 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST(100000 AS uint2)
+
+query T
+SELECT TRY_CAST(100000 AS uint2)::text
+----
+NULL
+
+# integer -> uint4
+query TBB
+SELECT TRY_CAST(1 AS uint4)::text, TRY_CAST(1 AS uint4)::text IS NOT DISTINCT FROM CAST(1 AS uint4)::text, TRY_CAST(NULL::int4 AS uint4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS uint4)::text, TRY_CAST(2147483647 AS uint4)::text IS NOT DISTINCT FROM CAST(2147483647 AS uint4)::text, TRY_CAST(NULL::int4 AS uint4) IS NULL
+----
+2147483647  true  true
+
+statement error
+SELECT CAST(-1 AS uint4)
+
+query T
+SELECT TRY_CAST(-1 AS uint4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(100000 AS uint4)::text, TRY_CAST(100000 AS uint4)::text IS NOT DISTINCT FROM CAST(100000 AS uint4)::text, TRY_CAST(NULL::int4 AS uint4) IS NULL
+----
+100000  true  true
+
+# integer -> uint8
+query TBB
+SELECT TRY_CAST(1 AS uint8)::text, TRY_CAST(1 AS uint8)::text IS NOT DISTINCT FROM CAST(1 AS uint8)::text, TRY_CAST(NULL::int4 AS uint8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS uint8)::text, TRY_CAST(2147483647 AS uint8)::text IS NOT DISTINCT FROM CAST(2147483647 AS uint8)::text, TRY_CAST(NULL::int4 AS uint8) IS NULL
+----
+2147483647  true  true
+
+statement error
+SELECT CAST(-1 AS uint8)
+
+query T
+SELECT TRY_CAST(-1 AS uint8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(100000 AS uint8)::text, TRY_CAST(100000 AS uint8)::text IS NOT DISTINCT FROM CAST(100000 AS uint8)::text, TRY_CAST(NULL::int4 AS uint8) IS NULL
+----
+100000  true  true
+
+# integer -> float4
+query TBB
+SELECT TRY_CAST(1 AS float4)::text, TRY_CAST(1 AS float4)::text IS NOT DISTINCT FROM CAST(1 AS float4)::text, TRY_CAST(NULL::int4 AS float4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS float4)::text, TRY_CAST(2147483647 AS float4)::text IS NOT DISTINCT FROM CAST(2147483647 AS float4)::text, TRY_CAST(NULL::int4 AS float4) IS NULL
+----
+2147483600  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS float4)::text, TRY_CAST(-1 AS float4)::text IS NOT DISTINCT FROM CAST(-1 AS float4)::text, TRY_CAST(NULL::int4 AS float4) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS float4)::text, TRY_CAST(100000 AS float4)::text IS NOT DISTINCT FROM CAST(100000 AS float4)::text, TRY_CAST(NULL::int4 AS float4) IS NULL
+----
+100000  true  true
+
+# integer -> float8
+query TBB
+SELECT TRY_CAST(1 AS float8)::text, TRY_CAST(1 AS float8)::text IS NOT DISTINCT FROM CAST(1 AS float8)::text, TRY_CAST(NULL::int4 AS float8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS float8)::text, TRY_CAST(2147483647 AS float8)::text IS NOT DISTINCT FROM CAST(2147483647 AS float8)::text, TRY_CAST(NULL::int4 AS float8) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS float8)::text, TRY_CAST(-1 AS float8)::text IS NOT DISTINCT FROM CAST(-1 AS float8)::text, TRY_CAST(NULL::int4 AS float8) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS float8)::text, TRY_CAST(100000 AS float8)::text IS NOT DISTINCT FROM CAST(100000 AS float8)::text, TRY_CAST(NULL::int4 AS float8) IS NULL
+----
+100000  true  true
+
+# integer -> numeric
+query TBB
+SELECT TRY_CAST(1 AS numeric)::text, TRY_CAST(1 AS numeric)::text IS NOT DISTINCT FROM CAST(1 AS numeric)::text, TRY_CAST(NULL::int4 AS numeric) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS numeric)::text, TRY_CAST(2147483647 AS numeric)::text IS NOT DISTINCT FROM CAST(2147483647 AS numeric)::text, TRY_CAST(NULL::int4 AS numeric) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS numeric)::text, TRY_CAST(-1 AS numeric)::text IS NOT DISTINCT FROM CAST(-1 AS numeric)::text, TRY_CAST(NULL::int4 AS numeric) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS numeric)::text, TRY_CAST(100000 AS numeric)::text IS NOT DISTINCT FROM CAST(100000 AS numeric)::text, TRY_CAST(NULL::int4 AS numeric) IS NULL
+----
+100000  true  true
+
+# integer -> text
+query TBB
+SELECT TRY_CAST(1 AS text)::text, TRY_CAST(1 AS text)::text IS NOT DISTINCT FROM CAST(1 AS text)::text, TRY_CAST(NULL::int4 AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS text)::text, TRY_CAST(2147483647 AS text)::text IS NOT DISTINCT FROM CAST(2147483647 AS text)::text, TRY_CAST(NULL::int4 AS text) IS NULL
+----
+2147483647  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS text)::text, TRY_CAST(-1 AS text)::text IS NOT DISTINCT FROM CAST(-1 AS text)::text, TRY_CAST(NULL::int4 AS text) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS text)::text, TRY_CAST(100000 AS text)::text IS NOT DISTINCT FROM CAST(100000 AS text)::text, TRY_CAST(NULL::int4 AS text) IS NULL
+----
+100000  true  true
+
+# integer -> mz_timestamp
+query TBB
+SELECT TRY_CAST(1 AS mz_timestamp)::text, TRY_CAST(1 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(1 AS mz_timestamp)::text, TRY_CAST(NULL::int4 AS mz_timestamp) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS mz_timestamp)::text, TRY_CAST(2147483647 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(2147483647 AS mz_timestamp)::text, TRY_CAST(NULL::int4 AS mz_timestamp) IS NULL
+----
+2147483647  true  true
+
+statement error
+SELECT CAST(-1 AS mz_timestamp)
+
+query T
+SELECT TRY_CAST(-1 AS mz_timestamp)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(100000 AS mz_timestamp)::text, TRY_CAST(100000 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(100000 AS mz_timestamp)::text, TRY_CAST(NULL::int4 AS mz_timestamp) IS NULL
+----
+100000  true  true
+
+## bigint sources
+
+# bigint -> bool
+query TBB
+SELECT TRY_CAST(1::int8 AS bool)::text, TRY_CAST(1::int8 AS bool)::text IS NOT DISTINCT FROM CAST(1::int8 AS bool)::text, TRY_CAST(NULL::int8 AS bool) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS bool)::text, TRY_CAST(9223372036854775807::int8 AS bool)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS bool)::text, TRY_CAST(NULL::int8 AS bool) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS bool)::text, TRY_CAST((-1)::int8 AS bool)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS bool)::text, TRY_CAST(NULL::int8 AS bool) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS bool)::text, TRY_CAST(3000000000::int8 AS bool)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS bool)::text, TRY_CAST(NULL::int8 AS bool) IS NULL
+----
+true  true  true
+
+# bigint -> int2
+query TBB
+SELECT TRY_CAST(1::int8 AS int2)::text, TRY_CAST(1::int8 AS int2)::text IS NOT DISTINCT FROM CAST(1::int8 AS int2)::text, TRY_CAST(NULL::int8 AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS int2)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS int2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS int2)::text, TRY_CAST((-1)::int8 AS int2)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS int2)::text, TRY_CAST(NULL::int8 AS int2) IS NULL
+----
+-1  true  true
+
+statement error
+SELECT CAST(3000000000::int8 AS int2)
+
+query T
+SELECT TRY_CAST(3000000000::int8 AS int2)::text
+----
+NULL
+
+# bigint -> int4
+query TBB
+SELECT TRY_CAST(1::int8 AS int4)::text, TRY_CAST(1::int8 AS int4)::text IS NOT DISTINCT FROM CAST(1::int8 AS int4)::text, TRY_CAST(NULL::int8 AS int4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS int4)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS int4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS int4)::text, TRY_CAST((-1)::int8 AS int4)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS int4)::text, TRY_CAST(NULL::int8 AS int4) IS NULL
+----
+-1  true  true
+
+statement error
+SELECT CAST(3000000000::int8 AS int4)
+
+query T
+SELECT TRY_CAST(3000000000::int8 AS int4)::text
+----
+NULL
+
+# bigint -> uint2
+query TBB
+SELECT TRY_CAST(1::int8 AS uint2)::text, TRY_CAST(1::int8 AS uint2)::text IS NOT DISTINCT FROM CAST(1::int8 AS uint2)::text, TRY_CAST(NULL::int8 AS uint2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS uint2)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1)::int8 AS uint2)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST(3000000000::int8 AS uint2)
+
+query T
+SELECT TRY_CAST(3000000000::int8 AS uint2)::text
+----
+NULL
+
+# bigint -> uint4
+query TBB
+SELECT TRY_CAST(1::int8 AS uint4)::text, TRY_CAST(1::int8 AS uint4)::text IS NOT DISTINCT FROM CAST(1::int8 AS uint4)::text, TRY_CAST(NULL::int8 AS uint4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS uint4)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1)::int8 AS uint4)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS uint4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS uint4)::text, TRY_CAST(3000000000::int8 AS uint4)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS uint4)::text, TRY_CAST(NULL::int8 AS uint4) IS NULL
+----
+3000000000  true  true
+
+# bigint -> uint8
+query TBB
+SELECT TRY_CAST(1::int8 AS uint8)::text, TRY_CAST(1::int8 AS uint8)::text IS NOT DISTINCT FROM CAST(1::int8 AS uint8)::text, TRY_CAST(NULL::int8 AS uint8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS uint8)::text, TRY_CAST(9223372036854775807::int8 AS uint8)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS uint8)::text, TRY_CAST(NULL::int8 AS uint8) IS NULL
+----
+9223372036854775807  true  true
+
+statement error
+SELECT CAST((-1)::int8 AS uint8)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS uint8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS uint8)::text, TRY_CAST(3000000000::int8 AS uint8)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS uint8)::text, TRY_CAST(NULL::int8 AS uint8) IS NULL
+----
+3000000000  true  true
+
+# bigint -> numeric
+query TBB
+SELECT TRY_CAST(1::int8 AS numeric)::text, TRY_CAST(1::int8 AS numeric)::text IS NOT DISTINCT FROM CAST(1::int8 AS numeric)::text, TRY_CAST(NULL::int8 AS numeric) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS numeric)::text, TRY_CAST(9223372036854775807::int8 AS numeric)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS numeric)::text, TRY_CAST(NULL::int8 AS numeric) IS NULL
+----
+9223372036854775807  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS numeric)::text, TRY_CAST((-1)::int8 AS numeric)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS numeric)::text, TRY_CAST(NULL::int8 AS numeric) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS numeric)::text, TRY_CAST(3000000000::int8 AS numeric)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS numeric)::text, TRY_CAST(NULL::int8 AS numeric) IS NULL
+----
+3000000000  true  true
+
+# bigint -> float4
+query TBB
+SELECT TRY_CAST(1::int8 AS float4)::text, TRY_CAST(1::int8 AS float4)::text IS NOT DISTINCT FROM CAST(1::int8 AS float4)::text, TRY_CAST(NULL::int8 AS float4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS float4)::text, TRY_CAST(9223372036854775807::int8 AS float4)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS float4)::text, TRY_CAST(NULL::int8 AS float4) IS NULL
+----
+9.223372e+18  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS float4)::text, TRY_CAST((-1)::int8 AS float4)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS float4)::text, TRY_CAST(NULL::int8 AS float4) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS float4)::text, TRY_CAST(3000000000::int8 AS float4)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS float4)::text, TRY_CAST(NULL::int8 AS float4) IS NULL
+----
+3000000000  true  true
+
+# bigint -> float8
+query TBB
+SELECT TRY_CAST(1::int8 AS float8)::text, TRY_CAST(1::int8 AS float8)::text IS NOT DISTINCT FROM CAST(1::int8 AS float8)::text, TRY_CAST(NULL::int8 AS float8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS float8)::text, TRY_CAST(9223372036854775807::int8 AS float8)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS float8)::text, TRY_CAST(NULL::int8 AS float8) IS NULL
+----
+9.223372036854776e+18  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS float8)::text, TRY_CAST((-1)::int8 AS float8)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS float8)::text, TRY_CAST(NULL::int8 AS float8) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS float8)::text, TRY_CAST(3000000000::int8 AS float8)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS float8)::text, TRY_CAST(NULL::int8 AS float8) IS NULL
+----
+3000000000  true  true
+
+# bigint -> oid
+query TBB
+SELECT TRY_CAST(1::int8 AS oid)::text, TRY_CAST(1::int8 AS oid)::text IS NOT DISTINCT FROM CAST(1::int8 AS oid)::text, TRY_CAST(NULL::int8 AS oid) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS oid)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS oid)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1)::int8 AS oid)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS oid)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS oid)::text, TRY_CAST(3000000000::int8 AS oid)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS oid)::text, TRY_CAST(NULL::int8 AS oid) IS NULL
+----
+3000000000  true  true
+
+# bigint -> regclass
+query TBB
+SELECT TRY_CAST(1::int8 AS regclass)::text, TRY_CAST(1::int8 AS regclass)::text IS NOT DISTINCT FROM CAST(1::int8 AS regclass)::text, TRY_CAST(NULL::int8 AS regclass) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS regclass)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS regclass)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1)::int8 AS regclass)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS regclass)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS regclass)::text, TRY_CAST(3000000000::int8 AS regclass)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS regclass)::text, TRY_CAST(NULL::int8 AS regclass) IS NULL
+----
+3000000000  true  true
+
+# bigint -> regproc
+query TBB
+SELECT TRY_CAST(1::int8 AS regproc)::text, TRY_CAST(1::int8 AS regproc)::text IS NOT DISTINCT FROM CAST(1::int8 AS regproc)::text, TRY_CAST(NULL::int8 AS regproc) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS regproc)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS regproc)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1)::int8 AS regproc)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS regproc)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS regproc)::text, TRY_CAST(3000000000::int8 AS regproc)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS regproc)::text, TRY_CAST(NULL::int8 AS regproc) IS NULL
+----
+3000000000  true  true
+
+# bigint -> regtype
+query TBB
+SELECT TRY_CAST(1::int8 AS regtype)::text, TRY_CAST(1::int8 AS regtype)::text IS NOT DISTINCT FROM CAST(1::int8 AS regtype)::text, TRY_CAST(NULL::int8 AS regtype) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(9223372036854775807::int8 AS regtype)
+
+query T
+SELECT TRY_CAST(9223372036854775807::int8 AS regtype)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1)::int8 AS regtype)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS regtype)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS regtype)::text, TRY_CAST(3000000000::int8 AS regtype)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS regtype)::text, TRY_CAST(NULL::int8 AS regtype) IS NULL
+----
+3000000000  true  true
+
+# bigint -> text
+query TBB
+SELECT TRY_CAST(1::int8 AS text)::text, TRY_CAST(1::int8 AS text)::text IS NOT DISTINCT FROM CAST(1::int8 AS text)::text, TRY_CAST(NULL::int8 AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS text)::text, TRY_CAST(9223372036854775807::int8 AS text)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS text)::text, TRY_CAST(NULL::int8 AS text) IS NULL
+----
+9223372036854775807  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS text)::text, TRY_CAST((-1)::int8 AS text)::text IS NOT DISTINCT FROM CAST((-1)::int8 AS text)::text, TRY_CAST(NULL::int8 AS text) IS NULL
+----
+-1  true  true
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS text)::text, TRY_CAST(3000000000::int8 AS text)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS text)::text, TRY_CAST(NULL::int8 AS text) IS NULL
+----
+3000000000  true  true
+
+# bigint -> mz_timestamp
+query TBB
+SELECT TRY_CAST(1::int8 AS mz_timestamp)::text, TRY_CAST(1::int8 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(1::int8 AS mz_timestamp)::text, TRY_CAST(NULL::int8 AS mz_timestamp) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS mz_timestamp)::text, TRY_CAST(9223372036854775807::int8 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS mz_timestamp)::text, TRY_CAST(NULL::int8 AS mz_timestamp) IS NULL
+----
+9223372036854775807  true  true
+
+statement error
+SELECT CAST((-1)::int8 AS mz_timestamp)
+
+query T
+SELECT TRY_CAST((-1)::int8 AS mz_timestamp)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS mz_timestamp)::text, TRY_CAST(3000000000::int8 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS mz_timestamp)::text, TRY_CAST(NULL::int8 AS mz_timestamp) IS NULL
+----
+3000000000  true  true
+
+## uint2 sources
+
+# uint2 -> uint4
+query TBB
+SELECT TRY_CAST(1::uint2 AS uint4)::text, TRY_CAST(1::uint2 AS uint4)::text IS NOT DISTINCT FROM CAST(1::uint2 AS uint4)::text, TRY_CAST(NULL::uint2 AS uint4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS uint4)::text, TRY_CAST(65535::uint2 AS uint4)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS uint4)::text, TRY_CAST(NULL::uint2 AS uint4) IS NULL
+----
+65535  true  true
+
+# uint2 -> uint8
+query TBB
+SELECT TRY_CAST(1::uint2 AS uint8)::text, TRY_CAST(1::uint2 AS uint8)::text IS NOT DISTINCT FROM CAST(1::uint2 AS uint8)::text, TRY_CAST(NULL::uint2 AS uint8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS uint8)::text, TRY_CAST(65535::uint2 AS uint8)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS uint8)::text, TRY_CAST(NULL::uint2 AS uint8) IS NULL
+----
+65535  true  true
+
+# uint2 -> int2
+query TBB
+SELECT TRY_CAST(1::uint2 AS int2)::text, TRY_CAST(1::uint2 AS int2)::text IS NOT DISTINCT FROM CAST(1::uint2 AS int2)::text, TRY_CAST(NULL::uint2 AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(65535::uint2 AS int2)
+
+query T
+SELECT TRY_CAST(65535::uint2 AS int2)::text
+----
+NULL
+
+# uint2 -> int4
+query TBB
+SELECT TRY_CAST(1::uint2 AS int4)::text, TRY_CAST(1::uint2 AS int4)::text IS NOT DISTINCT FROM CAST(1::uint2 AS int4)::text, TRY_CAST(NULL::uint2 AS int4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS int4)::text, TRY_CAST(65535::uint2 AS int4)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS int4)::text, TRY_CAST(NULL::uint2 AS int4) IS NULL
+----
+65535  true  true
+
+# uint2 -> int8
+query TBB
+SELECT TRY_CAST(1::uint2 AS int8)::text, TRY_CAST(1::uint2 AS int8)::text IS NOT DISTINCT FROM CAST(1::uint2 AS int8)::text, TRY_CAST(NULL::uint2 AS int8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS int8)::text, TRY_CAST(65535::uint2 AS int8)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS int8)::text, TRY_CAST(NULL::uint2 AS int8) IS NULL
+----
+65535  true  true
+
+# uint2 -> numeric
+query TBB
+SELECT TRY_CAST(1::uint2 AS numeric)::text, TRY_CAST(1::uint2 AS numeric)::text IS NOT DISTINCT FROM CAST(1::uint2 AS numeric)::text, TRY_CAST(NULL::uint2 AS numeric) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS numeric)::text, TRY_CAST(65535::uint2 AS numeric)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS numeric)::text, TRY_CAST(NULL::uint2 AS numeric) IS NULL
+----
+65535  true  true
+
+# uint2 -> float4
+query TBB
+SELECT TRY_CAST(1::uint2 AS float4)::text, TRY_CAST(1::uint2 AS float4)::text IS NOT DISTINCT FROM CAST(1::uint2 AS float4)::text, TRY_CAST(NULL::uint2 AS float4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS float4)::text, TRY_CAST(65535::uint2 AS float4)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS float4)::text, TRY_CAST(NULL::uint2 AS float4) IS NULL
+----
+65535  true  true
+
+# uint2 -> float8
+query TBB
+SELECT TRY_CAST(1::uint2 AS float8)::text, TRY_CAST(1::uint2 AS float8)::text IS NOT DISTINCT FROM CAST(1::uint2 AS float8)::text, TRY_CAST(NULL::uint2 AS float8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS float8)::text, TRY_CAST(65535::uint2 AS float8)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS float8)::text, TRY_CAST(NULL::uint2 AS float8) IS NULL
+----
+65535  true  true
+
+# uint2 -> text
+query TBB
+SELECT TRY_CAST(1::uint2 AS text)::text, TRY_CAST(1::uint2 AS text)::text IS NOT DISTINCT FROM CAST(1::uint2 AS text)::text, TRY_CAST(NULL::uint2 AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS text)::text, TRY_CAST(65535::uint2 AS text)::text IS NOT DISTINCT FROM CAST(65535::uint2 AS text)::text, TRY_CAST(NULL::uint2 AS text) IS NULL
+----
+65535  true  true
+
+## uint4 sources
+
+# uint4 -> uint2
+query TBB
+SELECT TRY_CAST(1::uint4 AS uint2)::text, TRY_CAST(1::uint4 AS uint2)::text IS NOT DISTINCT FROM CAST(1::uint4 AS uint2)::text, TRY_CAST(NULL::uint4 AS uint2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(4294967295::uint4 AS uint2)
+
+query T
+SELECT TRY_CAST(4294967295::uint4 AS uint2)::text
+----
+NULL
+
+# uint4 -> uint8
+query TBB
+SELECT TRY_CAST(1::uint4 AS uint8)::text, TRY_CAST(1::uint4 AS uint8)::text IS NOT DISTINCT FROM CAST(1::uint4 AS uint8)::text, TRY_CAST(NULL::uint4 AS uint8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS uint8)::text, TRY_CAST(4294967295::uint4 AS uint8)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS uint8)::text, TRY_CAST(NULL::uint4 AS uint8) IS NULL
+----
+4294967295  true  true
+
+# uint4 -> int2
+query TBB
+SELECT TRY_CAST(1::uint4 AS int2)::text, TRY_CAST(1::uint4 AS int2)::text IS NOT DISTINCT FROM CAST(1::uint4 AS int2)::text, TRY_CAST(NULL::uint4 AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(4294967295::uint4 AS int2)
+
+query T
+SELECT TRY_CAST(4294967295::uint4 AS int2)::text
+----
+NULL
+
+# uint4 -> int4
+query TBB
+SELECT TRY_CAST(1::uint4 AS int4)::text, TRY_CAST(1::uint4 AS int4)::text IS NOT DISTINCT FROM CAST(1::uint4 AS int4)::text, TRY_CAST(NULL::uint4 AS int4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(4294967295::uint4 AS int4)
+
+query T
+SELECT TRY_CAST(4294967295::uint4 AS int4)::text
+----
+NULL
+
+# uint4 -> int8
+query TBB
+SELECT TRY_CAST(1::uint4 AS int8)::text, TRY_CAST(1::uint4 AS int8)::text IS NOT DISTINCT FROM CAST(1::uint4 AS int8)::text, TRY_CAST(NULL::uint4 AS int8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS int8)::text, TRY_CAST(4294967295::uint4 AS int8)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS int8)::text, TRY_CAST(NULL::uint4 AS int8) IS NULL
+----
+4294967295  true  true
+
+# uint4 -> numeric
+query TBB
+SELECT TRY_CAST(1::uint4 AS numeric)::text, TRY_CAST(1::uint4 AS numeric)::text IS NOT DISTINCT FROM CAST(1::uint4 AS numeric)::text, TRY_CAST(NULL::uint4 AS numeric) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS numeric)::text, TRY_CAST(4294967295::uint4 AS numeric)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS numeric)::text, TRY_CAST(NULL::uint4 AS numeric) IS NULL
+----
+4294967295  true  true
+
+# uint4 -> float4
+query TBB
+SELECT TRY_CAST(1::uint4 AS float4)::text, TRY_CAST(1::uint4 AS float4)::text IS NOT DISTINCT FROM CAST(1::uint4 AS float4)::text, TRY_CAST(NULL::uint4 AS float4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS float4)::text, TRY_CAST(4294967295::uint4 AS float4)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS float4)::text, TRY_CAST(NULL::uint4 AS float4) IS NULL
+----
+4294967300  true  true
+
+# uint4 -> float8
+query TBB
+SELECT TRY_CAST(1::uint4 AS float8)::text, TRY_CAST(1::uint4 AS float8)::text IS NOT DISTINCT FROM CAST(1::uint4 AS float8)::text, TRY_CAST(NULL::uint4 AS float8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS float8)::text, TRY_CAST(4294967295::uint4 AS float8)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS float8)::text, TRY_CAST(NULL::uint4 AS float8) IS NULL
+----
+4294967295  true  true
+
+# uint4 -> text
+query TBB
+SELECT TRY_CAST(1::uint4 AS text)::text, TRY_CAST(1::uint4 AS text)::text IS NOT DISTINCT FROM CAST(1::uint4 AS text)::text, TRY_CAST(NULL::uint4 AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS text)::text, TRY_CAST(4294967295::uint4 AS text)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS text)::text, TRY_CAST(NULL::uint4 AS text) IS NULL
+----
+4294967295  true  true
+
+# uint4 -> mz_timestamp
+query TBB
+SELECT TRY_CAST(1::uint4 AS mz_timestamp)::text, TRY_CAST(1::uint4 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(1::uint4 AS mz_timestamp)::text, TRY_CAST(NULL::uint4 AS mz_timestamp) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS mz_timestamp)::text, TRY_CAST(4294967295::uint4 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS mz_timestamp)::text, TRY_CAST(NULL::uint4 AS mz_timestamp) IS NULL
+----
+4294967295  true  true
+
+## uint8 sources
+
+# uint8 -> uint2
+query TBB
+SELECT TRY_CAST(1::uint8 AS uint2)::text, TRY_CAST(1::uint8 AS uint2)::text IS NOT DISTINCT FROM CAST(1::uint8 AS uint2)::text, TRY_CAST(NULL::uint8 AS uint2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(18446744073709551615::uint8 AS uint2)
+
+query T
+SELECT TRY_CAST(18446744073709551615::uint8 AS uint2)::text
+----
+NULL
+
+# uint8 -> uint4
+query TBB
+SELECT TRY_CAST(1::uint8 AS uint4)::text, TRY_CAST(1::uint8 AS uint4)::text IS NOT DISTINCT FROM CAST(1::uint8 AS uint4)::text, TRY_CAST(NULL::uint8 AS uint4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(18446744073709551615::uint8 AS uint4)
+
+query T
+SELECT TRY_CAST(18446744073709551615::uint8 AS uint4)::text
+----
+NULL
+
+# uint8 -> int2
+query TBB
+SELECT TRY_CAST(1::uint8 AS int2)::text, TRY_CAST(1::uint8 AS int2)::text IS NOT DISTINCT FROM CAST(1::uint8 AS int2)::text, TRY_CAST(NULL::uint8 AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(18446744073709551615::uint8 AS int2)
+
+query T
+SELECT TRY_CAST(18446744073709551615::uint8 AS int2)::text
+----
+NULL
+
+# uint8 -> int4
+query TBB
+SELECT TRY_CAST(1::uint8 AS int4)::text, TRY_CAST(1::uint8 AS int4)::text IS NOT DISTINCT FROM CAST(1::uint8 AS int4)::text, TRY_CAST(NULL::uint8 AS int4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(18446744073709551615::uint8 AS int4)
+
+query T
+SELECT TRY_CAST(18446744073709551615::uint8 AS int4)::text
+----
+NULL
+
+# uint8 -> int8
+query TBB
+SELECT TRY_CAST(1::uint8 AS int8)::text, TRY_CAST(1::uint8 AS int8)::text IS NOT DISTINCT FROM CAST(1::uint8 AS int8)::text, TRY_CAST(NULL::uint8 AS int8) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST(18446744073709551615::uint8 AS int8)
+
+query T
+SELECT TRY_CAST(18446744073709551615::uint8 AS int8)::text
+----
+NULL
+
+# uint8 -> numeric
+query TBB
+SELECT TRY_CAST(1::uint8 AS numeric)::text, TRY_CAST(1::uint8 AS numeric)::text IS NOT DISTINCT FROM CAST(1::uint8 AS numeric)::text, TRY_CAST(NULL::uint8 AS numeric) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::uint8 AS numeric)::text, TRY_CAST(18446744073709551615::uint8 AS numeric)::text IS NOT DISTINCT FROM CAST(18446744073709551615::uint8 AS numeric)::text, TRY_CAST(NULL::uint8 AS numeric) IS NULL
+----
+18446744073709551615  true  true
+
+# uint8 -> float4
+query TBB
+SELECT TRY_CAST(1::uint8 AS float4)::text, TRY_CAST(1::uint8 AS float4)::text IS NOT DISTINCT FROM CAST(1::uint8 AS float4)::text, TRY_CAST(NULL::uint8 AS float4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::uint8 AS float4)::text, TRY_CAST(18446744073709551615::uint8 AS float4)::text IS NOT DISTINCT FROM CAST(18446744073709551615::uint8 AS float4)::text, TRY_CAST(NULL::uint8 AS float4) IS NULL
+----
+1.8446744e+19  true  true
+
+# uint8 -> float8
+query TBB
+SELECT TRY_CAST(1::uint8 AS float8)::text, TRY_CAST(1::uint8 AS float8)::text IS NOT DISTINCT FROM CAST(1::uint8 AS float8)::text, TRY_CAST(NULL::uint8 AS float8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::uint8 AS float8)::text, TRY_CAST(18446744073709551615::uint8 AS float8)::text IS NOT DISTINCT FROM CAST(18446744073709551615::uint8 AS float8)::text, TRY_CAST(NULL::uint8 AS float8) IS NULL
+----
+1.8446744073709552e+19  true  true
+
+# uint8 -> text
+query TBB
+SELECT TRY_CAST(1::uint8 AS text)::text, TRY_CAST(1::uint8 AS text)::text IS NOT DISTINCT FROM CAST(1::uint8 AS text)::text, TRY_CAST(NULL::uint8 AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::uint8 AS text)::text, TRY_CAST(18446744073709551615::uint8 AS text)::text IS NOT DISTINCT FROM CAST(18446744073709551615::uint8 AS text)::text, TRY_CAST(NULL::uint8 AS text) IS NULL
+----
+18446744073709551615  true  true
+
+# uint8 -> mz_timestamp
+query TBB
+SELECT TRY_CAST(1::uint8 AS mz_timestamp)::text, TRY_CAST(1::uint8 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(1::uint8 AS mz_timestamp)::text, TRY_CAST(NULL::uint8 AS mz_timestamp) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::uint8 AS mz_timestamp)::text, TRY_CAST(18446744073709551615::uint8 AS mz_timestamp)::text IS NOT DISTINCT FROM CAST(18446744073709551615::uint8 AS mz_timestamp)::text, TRY_CAST(NULL::uint8 AS mz_timestamp) IS NULL
+----
+18446744073709551615  true  true
+
+## mz_timestamp sources
+
+# mz_timestamp -> text
+query TBB
+SELECT TRY_CAST(1::mz_timestamp AS text)::text, TRY_CAST(1::mz_timestamp AS text)::text IS NOT DISTINCT FROM CAST(1::mz_timestamp AS text)::text, TRY_CAST(NULL::mz_timestamp AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::mz_timestamp AS text)::text, TRY_CAST(18446744073709551615::mz_timestamp AS text)::text IS NOT DISTINCT FROM CAST(18446744073709551615::mz_timestamp AS text)::text, TRY_CAST(NULL::mz_timestamp AS text) IS NULL
+----
+18446744073709551615  true  true
+
+# mz_timestamp -> timestamp
+query TBB
+SELECT TRY_CAST(1::mz_timestamp AS timestamp)::text, TRY_CAST(1::mz_timestamp AS timestamp)::text IS NOT DISTINCT FROM CAST(1::mz_timestamp AS timestamp)::text, TRY_CAST(NULL::mz_timestamp AS timestamp) IS NULL
+----
+1970-01-01␠00:00:00.001  true  true
+
+statement error
+SELECT CAST(18446744073709551615::mz_timestamp AS timestamp)
+
+query T
+SELECT TRY_CAST(18446744073709551615::mz_timestamp AS timestamp)::text
+----
+NULL
+
+# mz_timestamp -> timestamp(3)
+query TBB
+SELECT TRY_CAST(1::mz_timestamp AS timestamp(3))::text, TRY_CAST(1::mz_timestamp AS timestamp(3))::text IS NOT DISTINCT FROM CAST(1::mz_timestamp AS timestamp(3))::text, TRY_CAST(NULL::mz_timestamp AS timestamp(3)) IS NULL
+----
+1970-01-01␠00:00:00.001  true  true
+
+statement error
+SELECT CAST(18446744073709551615::mz_timestamp AS timestamp(3))
+
+query T
+SELECT TRY_CAST(18446744073709551615::mz_timestamp AS timestamp(3))::text
+----
+NULL
+
+# mz_timestamp -> timestamptz
+query TBB
+SELECT TRY_CAST(1::mz_timestamp AS timestamptz)::text, TRY_CAST(1::mz_timestamp AS timestamptz)::text IS NOT DISTINCT FROM CAST(1::mz_timestamp AS timestamptz)::text, TRY_CAST(NULL::mz_timestamp AS timestamptz) IS NULL
+----
+1970-01-01␠00:00:00.001+00  true  true
+
+statement error
+SELECT CAST(18446744073709551615::mz_timestamp AS timestamptz)
+
+query T
+SELECT TRY_CAST(18446744073709551615::mz_timestamp AS timestamptz)::text
+----
+NULL
+
+## text sources
+
+# text -> mz_timestamp
+query TBB
+SELECT TRY_CAST('1' AS mz_timestamp)::text, TRY_CAST('1' AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('1' AS mz_timestamp)::text, TRY_CAST(NULL AS mz_timestamp) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS mz_timestamp)
+
+query T
+SELECT TRY_CAST('abc' AS mz_timestamp)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS mz_timestamp)
+
+query T
+SELECT TRY_CAST('' AS mz_timestamp)::text
+----
+NULL
+
+# text -> bool
+query TBB
+SELECT TRY_CAST('true' AS bool)::text, TRY_CAST('true' AS bool)::text IS NOT DISTINCT FROM CAST('true' AS bool)::text, TRY_CAST(NULL AS bool) IS NULL
+----
+true  true  true
+
+statement error
+SELECT CAST('abc' AS bool)
+
+query T
+SELECT TRY_CAST('abc' AS bool)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS bool)
+
+query T
+SELECT TRY_CAST('' AS bool)::text
+----
+NULL
+
+# text -> int2
+query TBB
+SELECT TRY_CAST('1' AS int2)::text, TRY_CAST('1' AS int2)::text IS NOT DISTINCT FROM CAST('1' AS int2)::text, TRY_CAST(NULL AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS int2)
+
+query T
+SELECT TRY_CAST('abc' AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int2)
+
+query T
+SELECT TRY_CAST('' AS int2)::text
+----
+NULL
+
+# text -> int4
+query TBB
+SELECT TRY_CAST('1' AS int4)::text, TRY_CAST('1' AS int4)::text IS NOT DISTINCT FROM CAST('1' AS int4)::text, TRY_CAST(NULL AS int4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS int4)
+
+query T
+SELECT TRY_CAST('abc' AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int4)
+
+query T
+SELECT TRY_CAST('' AS int4)::text
+----
+NULL
+
+# text -> int8
+query TBB
+SELECT TRY_CAST('1' AS int8)::text, TRY_CAST('1' AS int8)::text IS NOT DISTINCT FROM CAST('1' AS int8)::text, TRY_CAST(NULL AS int8) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS int8)
+
+query T
+SELECT TRY_CAST('abc' AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int8)
+
+query T
+SELECT TRY_CAST('' AS int8)::text
+----
+NULL
+
+# text -> uint2
+query TBB
+SELECT TRY_CAST('1' AS uint2)::text, TRY_CAST('1' AS uint2)::text IS NOT DISTINCT FROM CAST('1' AS uint2)::text, TRY_CAST(NULL AS uint2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS uint2)
+
+query T
+SELECT TRY_CAST('abc' AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS uint2)
+
+query T
+SELECT TRY_CAST('' AS uint2)::text
+----
+NULL
+
+# text -> uint4
+query TBB
+SELECT TRY_CAST('1' AS uint4)::text, TRY_CAST('1' AS uint4)::text IS NOT DISTINCT FROM CAST('1' AS uint4)::text, TRY_CAST(NULL AS uint4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS uint4)
+
+query T
+SELECT TRY_CAST('abc' AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS uint4)
+
+query T
+SELECT TRY_CAST('' AS uint4)::text
+----
+NULL
+
+# text -> uint8
+query TBB
+SELECT TRY_CAST('1' AS uint8)::text, TRY_CAST('1' AS uint8)::text IS NOT DISTINCT FROM CAST('1' AS uint8)::text, TRY_CAST(NULL AS uint8) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS uint8)
+
+query T
+SELECT TRY_CAST('abc' AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS uint8)
+
+query T
+SELECT TRY_CAST('' AS uint8)::text
+----
+NULL
+
+# text -> oid
+query TBB
+SELECT TRY_CAST('1' AS oid)::text, TRY_CAST('1' AS oid)::text IS NOT DISTINCT FROM CAST('1' AS oid)::text, TRY_CAST(NULL AS oid) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('abc' AS oid)
+
+query T
+SELECT TRY_CAST('abc' AS oid)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS oid)
+
+query T
+SELECT TRY_CAST('' AS oid)::text
+----
+NULL
+
+# text -> float4
+query TBB
+SELECT TRY_CAST('1.5' AS float4)::text, TRY_CAST('1.5' AS float4)::text IS NOT DISTINCT FROM CAST('1.5' AS float4)::text, TRY_CAST(NULL AS float4) IS NULL
+----
+1.5  true  true
+
+statement error
+SELECT CAST('abc' AS float4)
+
+query T
+SELECT TRY_CAST('abc' AS float4)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS float4)
+
+query T
+SELECT TRY_CAST('' AS float4)::text
+----
+NULL
+
+# text -> float8
+query TBB
+SELECT TRY_CAST('1.5' AS float8)::text, TRY_CAST('1.5' AS float8)::text IS NOT DISTINCT FROM CAST('1.5' AS float8)::text, TRY_CAST(NULL AS float8) IS NULL
+----
+1.5  true  true
+
+statement error
+SELECT CAST('abc' AS float8)
+
+query T
+SELECT TRY_CAST('abc' AS float8)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS float8)
+
+query T
+SELECT TRY_CAST('' AS float8)::text
+----
+NULL
+
+# text -> numeric
+query TBB
+SELECT TRY_CAST('1.5' AS numeric)::text, TRY_CAST('1.5' AS numeric)::text IS NOT DISTINCT FROM CAST('1.5' AS numeric)::text, TRY_CAST(NULL AS numeric) IS NULL
+----
+1.5  true  true
+
+statement error
+SELECT CAST('abc' AS numeric)
+
+query T
+SELECT TRY_CAST('abc' AS numeric)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS numeric)
+
+query T
+SELECT TRY_CAST('' AS numeric)::text
+----
+NULL
+
+# text -> date
+query TBB
+SELECT TRY_CAST('2020-01-01' AS date)::text, TRY_CAST('2020-01-01' AS date)::text IS NOT DISTINCT FROM CAST('2020-01-01' AS date)::text, TRY_CAST(NULL AS date) IS NULL
+----
+2020-01-01  true  true
+
+statement error
+SELECT CAST('abc' AS date)
+
+query T
+SELECT TRY_CAST('abc' AS date)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS date)
+
+query T
+SELECT TRY_CAST('' AS date)::text
+----
+NULL
+
+# text -> time
+query TBB
+SELECT TRY_CAST('12:34:56' AS time)::text, TRY_CAST('12:34:56' AS time)::text IS NOT DISTINCT FROM CAST('12:34:56' AS time)::text, TRY_CAST(NULL AS time) IS NULL
+----
+12:34:56  true  true
+
+statement error
+SELECT CAST('abc' AS time)
+
+query T
+SELECT TRY_CAST('abc' AS time)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS time)
+
+query T
+SELECT TRY_CAST('' AS time)::text
+----
+NULL
+
+# text -> timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789' AS timestamp)::text, TRY_CAST('2020-01-01 12:34:56.789' AS timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789' AS timestamp)::text, TRY_CAST(NULL AS timestamp) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+statement error
+SELECT CAST('abc' AS timestamp)
+
+query T
+SELECT TRY_CAST('abc' AS timestamp)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS timestamp)
+
+query T
+SELECT TRY_CAST('' AS timestamp)::text
+----
+NULL
+
+# text -> timestamp(3)
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789' AS timestamp(3))::text, TRY_CAST('2020-01-01 12:34:56.789' AS timestamp(3))::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789' AS timestamp(3))::text, TRY_CAST(NULL AS timestamp(3)) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+statement error
+SELECT CAST('abc' AS timestamp(3))
+
+query T
+SELECT TRY_CAST('abc' AS timestamp(3))::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS timestamp(3))
+
+query T
+SELECT TRY_CAST('' AS timestamp(3))::text
+----
+NULL
+
+# text -> timestamptz
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00' AS timestamptz)::text, TRY_CAST('2020-01-01 12:34:56.789+00' AS timestamptz)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00' AS timestamptz)::text, TRY_CAST(NULL AS timestamptz) IS NULL
+----
+2020-01-01␠12:34:56.789+00  true  true
+
+statement error
+SELECT CAST('abc' AS timestamptz)
+
+query T
+SELECT TRY_CAST('abc' AS timestamptz)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS timestamptz)
+
+query T
+SELECT TRY_CAST('' AS timestamptz)::text
+----
+NULL
+
+# text -> interval
+query TBB
+SELECT TRY_CAST('1 day' AS interval)::text, TRY_CAST('1 day' AS interval)::text IS NOT DISTINCT FROM CAST('1 day' AS interval)::text, TRY_CAST(NULL AS interval) IS NULL
+----
+1␠day  true  true
+
+statement error
+SELECT CAST('abc' AS interval)
+
+query T
+SELECT TRY_CAST('abc' AS interval)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('' AS interval)::text, TRY_CAST('' AS interval)::text IS NOT DISTINCT FROM CAST('' AS interval)::text, TRY_CAST(NULL AS interval) IS NULL
+----
+00:00:00  true  true
+
+# text -> bytea
+query TBB
+SELECT TRY_CAST('\x0102' AS bytea)::text, TRY_CAST('\x0102' AS bytea)::text IS NOT DISTINCT FROM CAST('\x0102' AS bytea)::text, TRY_CAST(NULL AS bytea) IS NULL
+----
+\x0102  true  true
+
+query TBB
+SELECT TRY_CAST('abc' AS bytea)::text, TRY_CAST('abc' AS bytea)::text IS NOT DISTINCT FROM CAST('abc' AS bytea)::text, TRY_CAST(NULL AS bytea) IS NULL
+----
+\x616263  true  true
+
+query TBB
+SELECT TRY_CAST('' AS bytea)::text, TRY_CAST('' AS bytea)::text IS NOT DISTINCT FROM CAST('' AS bytea)::text, TRY_CAST(NULL AS bytea) IS NULL
+----
+\x  true  true
+
+# text -> jsonb
+query TBB
+SELECT TRY_CAST('{"a":1}' AS jsonb)::text, TRY_CAST('{"a":1}' AS jsonb)::text IS NOT DISTINCT FROM CAST('{"a":1}' AS jsonb)::text, TRY_CAST(NULL AS jsonb) IS NULL
+----
+{"a":1}  true  true
+
+statement error
+SELECT CAST('abc' AS jsonb)
+
+query T
+SELECT TRY_CAST('abc' AS jsonb)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS jsonb)
+
+query T
+SELECT TRY_CAST('' AS jsonb)::text
+----
+NULL
+
+# text -> uuid
+query TBB
+SELECT TRY_CAST('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' AS uuid)::text, TRY_CAST('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' AS uuid)::text IS NOT DISTINCT FROM CAST('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' AS uuid)::text, TRY_CAST(NULL AS uuid) IS NULL
+----
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11  true  true
+
+statement error
+SELECT CAST('abc' AS uuid)
+
+query T
+SELECT TRY_CAST('abc' AS uuid)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS uuid)
+
+query T
+SELECT TRY_CAST('' AS uuid)::text
+----
+NULL
+
+# text -> int8[]
+query TBB
+SELECT TRY_CAST('{1,2}' AS int8[])::text, TRY_CAST('{1,2}' AS int8[])::text IS NOT DISTINCT FROM CAST('{1,2}' AS int8[])::text, TRY_CAST(NULL AS int8[]) IS NULL
+----
+{1,2}  true  true
+
+statement error
+SELECT CAST('abc' AS int8[])
+
+query T
+SELECT TRY_CAST('abc' AS int8[])::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int8[])
+
+query T
+SELECT TRY_CAST('' AS int8[])::text
+----
+NULL
+
+# text -> int2[]
+query TBB
+SELECT TRY_CAST('{1,2}' AS int2[])::text, TRY_CAST('{1,2}' AS int2[])::text IS NOT DISTINCT FROM CAST('{1,2}' AS int2[])::text, TRY_CAST(NULL AS int2[]) IS NULL
+----
+{1,2}  true  true
+
+statement error
+SELECT CAST('abc' AS int2[])
+
+query T
+SELECT TRY_CAST('abc' AS int2[])::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int2[])
+
+query T
+SELECT TRY_CAST('' AS int2[])::text
+----
+NULL
+
+# text -> int8 list
+query TBB
+SELECT TRY_CAST('{1,2}' AS int8 list)::text, TRY_CAST('{1,2}' AS int8 list)::text IS NOT DISTINCT FROM CAST('{1,2}' AS int8 list)::text, TRY_CAST(NULL AS int8 list) IS NULL
+----
+{1,2}  true  true
+
+statement error
+SELECT CAST('abc' AS int8 list)
+
+query T
+SELECT TRY_CAST('abc' AS int8 list)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int8 list)
+
+query T
+SELECT TRY_CAST('' AS int8 list)::text
+----
+NULL
+
+# text -> int2 list
+query TBB
+SELECT TRY_CAST('{1,2}' AS int2 list)::text, TRY_CAST('{1,2}' AS int2 list)::text IS NOT DISTINCT FROM CAST('{1,2}' AS int2 list)::text, TRY_CAST(NULL AS int2 list) IS NULL
+----
+{1,2}  true  true
+
+statement error
+SELECT CAST('abc' AS int2 list)
+
+query T
+SELECT TRY_CAST('abc' AS int2 list)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int2 list)
+
+query T
+SELECT TRY_CAST('' AS int2 list)::text
+----
+NULL
+
+# text -> map[text=>int8]
+query TBB
+SELECT TRY_CAST('{a=>1}' AS map[text=>int8])::text, TRY_CAST('{a=>1}' AS map[text=>int8])::text IS NOT DISTINCT FROM CAST('{a=>1}' AS map[text=>int8])::text, TRY_CAST(NULL AS map[text=>int8]) IS NULL
+----
+{a=>1}  true  true
+
+statement error
+SELECT CAST('abc' AS map[text=>int8])
+
+query T
+SELECT TRY_CAST('abc' AS map[text=>int8])::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS map[text=>int8])
+
+query T
+SELECT TRY_CAST('' AS map[text=>int8])::text
+----
+NULL
+
+# text -> int4range
+query TBB
+SELECT TRY_CAST('[1,3)' AS int4range)::text, TRY_CAST('[1,3)' AS int4range)::text IS NOT DISTINCT FROM CAST('[1,3)' AS int4range)::text, TRY_CAST(NULL AS int4range) IS NULL
+----
+[1,3)  true  true
+
+statement error
+SELECT CAST('abc' AS int4range)
+
+query T
+SELECT TRY_CAST('abc' AS int4range)::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS int4range)
+
+query T
+SELECT TRY_CAST('' AS int4range)::text
+----
+NULL
+
+# text -> int2vector
+query TBB
+SELECT TRY_CAST('1 2' AS int2vector)::text, TRY_CAST('1 2' AS int2vector)::text IS NOT DISTINCT FROM CAST('1 2' AS int2vector)::text, TRY_CAST(NULL AS int2vector) IS NULL
+----
+1␠2  true  true
+
+statement error
+SELECT CAST('abc' AS int2vector)
+
+query T
+SELECT TRY_CAST('abc' AS int2vector)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('' AS int2vector)::text, TRY_CAST('' AS int2vector)::text IS NOT DISTINCT FROM CAST('' AS int2vector)::text, TRY_CAST(NULL AS int2vector) IS NULL
+----
+(empty)  true  true
+
+# text -> char(3)
+query TBB
+SELECT TRY_CAST('abc' AS char(3))::text, TRY_CAST('abc' AS char(3))::text IS NOT DISTINCT FROM CAST('abc' AS char(3))::text, TRY_CAST(NULL AS char(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc' AS char(3))::text, TRY_CAST('abc' AS char(3))::text IS NOT DISTINCT FROM CAST('abc' AS char(3))::text, TRY_CAST(NULL AS char(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('' AS char(3))::text, TRY_CAST('' AS char(3))::text IS NOT DISTINCT FROM CAST('' AS char(3))::text, TRY_CAST(NULL AS char(3)) IS NULL
+----
+(empty)  true  true
+
+# text -> varchar(3)
+query TBB
+SELECT TRY_CAST('abc' AS varchar(3))::text, TRY_CAST('abc' AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc' AS varchar(3))::text, TRY_CAST(NULL AS varchar(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc' AS varchar(3))::text, TRY_CAST('abc' AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc' AS varchar(3))::text, TRY_CAST(NULL AS varchar(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('' AS varchar(3))::text, TRY_CAST('' AS varchar(3))::text IS NOT DISTINCT FROM CAST('' AS varchar(3))::text, TRY_CAST(NULL AS varchar(3)) IS NULL
+----
+(empty)  true  true
+
+# text -> "char"
+query TBB
+SELECT TRY_CAST('a' AS "char")::text, TRY_CAST('a' AS "char")::text IS NOT DISTINCT FROM CAST('a' AS "char")::text, TRY_CAST(NULL AS "char") IS NULL
+----
+a  true  true
+
+query TBB
+SELECT TRY_CAST('abc' AS "char")::text, TRY_CAST('abc' AS "char")::text IS NOT DISTINCT FROM CAST('abc' AS "char")::text, TRY_CAST(NULL AS "char") IS NULL
+----
+a  true  true
+
+query TBB
+SELECT TRY_CAST('' AS "char")::text, TRY_CAST('' AS "char")::text IS NOT DISTINCT FROM CAST('' AS "char")::text, TRY_CAST(NULL AS "char") IS NULL
+----
+   true  true
+
+# text -> name
+query TBB
+SELECT TRY_CAST('abc' AS name)::text, TRY_CAST('abc' AS name)::text IS NOT DISTINCT FROM CAST('abc' AS name)::text, TRY_CAST(NULL AS name) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc' AS name)::text, TRY_CAST('abc' AS name)::text IS NOT DISTINCT FROM CAST('abc' AS name)::text, TRY_CAST(NULL AS name) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('' AS name)::text, TRY_CAST('' AS name)::text IS NOT DISTINCT FROM CAST('' AS name)::text, TRY_CAST(NULL AS name) IS NULL
+----
+(empty)  true  true
+
+## numeric sources
+
+# numeric -> mz_timestamp
+statement error
+SELECT CAST(1.5::numeric AS mz_timestamp)
+
+query T
+SELECT TRY_CAST(1.5::numeric AS mz_timestamp)::text
+----
+NULL
+
+statement error
+SELECT CAST(1e38::numeric AS mz_timestamp)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS mz_timestamp)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::numeric AS mz_timestamp)
+
+query T
+SELECT TRY_CAST((-1.5)::numeric AS mz_timestamp)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::numeric AS mz_timestamp)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS mz_timestamp)::text
+----
+NULL
+
+statement error
+SELECT CAST(123.456::numeric AS mz_timestamp)
+
+query T
+SELECT TRY_CAST(123.456::numeric AS mz_timestamp)::text
+----
+NULL
+
+# numeric -> numeric
+query TBB
+SELECT TRY_CAST(1.5::numeric AS numeric)::text, TRY_CAST(1.5::numeric AS numeric)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS numeric)::text, TRY_CAST(NULL::numeric AS numeric) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST(1e38::numeric AS numeric)::text, TRY_CAST(1e38::numeric AS numeric)::text IS NOT DISTINCT FROM CAST(1e38::numeric AS numeric)::text, TRY_CAST(NULL::numeric AS numeric) IS NULL
+----
+100000000000000000000000000000000000000  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS numeric)::text, TRY_CAST((-1.5)::numeric AS numeric)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS numeric)::text, TRY_CAST(NULL::numeric AS numeric) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::numeric AS numeric)::text, TRY_CAST('NaN'::numeric AS numeric)::text IS NOT DISTINCT FROM CAST('NaN'::numeric AS numeric)::text, TRY_CAST(NULL::numeric AS numeric) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS numeric)::text, TRY_CAST(123.456::numeric AS numeric)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS numeric)::text, TRY_CAST(NULL::numeric AS numeric) IS NULL
+----
+123.456  true  true
+
+# numeric -> float4
+query TBB
+SELECT TRY_CAST(1.5::numeric AS float4)::text, TRY_CAST(1.5::numeric AS float4)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS float4)::text, TRY_CAST(NULL::numeric AS float4) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST(1e38::numeric AS float4)::text, TRY_CAST(1e38::numeric AS float4)::text IS NOT DISTINCT FROM CAST(1e38::numeric AS float4)::text, TRY_CAST(NULL::numeric AS float4) IS NULL
+----
+1e+38  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS float4)::text, TRY_CAST((-1.5)::numeric AS float4)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS float4)::text, TRY_CAST(NULL::numeric AS float4) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::numeric AS float4)::text, TRY_CAST('NaN'::numeric AS float4)::text IS NOT DISTINCT FROM CAST('NaN'::numeric AS float4)::text, TRY_CAST(NULL::numeric AS float4) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS float4)::text, TRY_CAST(123.456::numeric AS float4)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS float4)::text, TRY_CAST(NULL::numeric AS float4) IS NULL
+----
+123.456  true  true
+
+# numeric -> float8
+query TBB
+SELECT TRY_CAST(1.5::numeric AS float8)::text, TRY_CAST(1.5::numeric AS float8)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS float8)::text, TRY_CAST(NULL::numeric AS float8) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST(1e38::numeric AS float8)::text, TRY_CAST(1e38::numeric AS float8)::text IS NOT DISTINCT FROM CAST(1e38::numeric AS float8)::text, TRY_CAST(NULL::numeric AS float8) IS NULL
+----
+1e+38  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS float8)::text, TRY_CAST((-1.5)::numeric AS float8)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS float8)::text, TRY_CAST(NULL::numeric AS float8) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::numeric AS float8)::text, TRY_CAST('NaN'::numeric AS float8)::text IS NOT DISTINCT FROM CAST('NaN'::numeric AS float8)::text, TRY_CAST(NULL::numeric AS float8) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS float8)::text, TRY_CAST(123.456::numeric AS float8)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS float8)::text, TRY_CAST(NULL::numeric AS float8) IS NULL
+----
+123.456  true  true
+
+# numeric -> int2
+query TBB
+SELECT TRY_CAST(1.5::numeric AS int2)::text, TRY_CAST(1.5::numeric AS int2)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS int2)::text, TRY_CAST(NULL::numeric AS int2) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS int2)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS int2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS int2)::text, TRY_CAST((-1.5)::numeric AS int2)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS int2)::text, TRY_CAST(NULL::numeric AS int2) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::numeric AS int2)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS int2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS int2)::text, TRY_CAST(123.456::numeric AS int2)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS int2)::text, TRY_CAST(NULL::numeric AS int2) IS NULL
+----
+123  true  true
+
+# numeric -> int4
+query TBB
+SELECT TRY_CAST(1.5::numeric AS int4)::text, TRY_CAST(1.5::numeric AS int4)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS int4)::text, TRY_CAST(NULL::numeric AS int4) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS int4)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS int4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS int4)::text, TRY_CAST((-1.5)::numeric AS int4)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS int4)::text, TRY_CAST(NULL::numeric AS int4) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::numeric AS int4)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS int4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS int4)::text, TRY_CAST(123.456::numeric AS int4)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS int4)::text, TRY_CAST(NULL::numeric AS int4) IS NULL
+----
+123  true  true
+
+# numeric -> int8
+query TBB
+SELECT TRY_CAST(1.5::numeric AS int8)::text, TRY_CAST(1.5::numeric AS int8)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS int8)::text, TRY_CAST(NULL::numeric AS int8) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS int8)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS int8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS int8)::text, TRY_CAST((-1.5)::numeric AS int8)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS int8)::text, TRY_CAST(NULL::numeric AS int8) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::numeric AS int8)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS int8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS int8)::text, TRY_CAST(123.456::numeric AS int8)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS int8)::text, TRY_CAST(NULL::numeric AS int8) IS NULL
+----
+123  true  true
+
+# numeric -> uint2
+query TBB
+SELECT TRY_CAST(1.5::numeric AS uint2)::text, TRY_CAST(1.5::numeric AS uint2)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS uint2)::text, TRY_CAST(NULL::numeric AS uint2) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS uint2)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::numeric AS uint2)
+
+query T
+SELECT TRY_CAST((-1.5)::numeric AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::numeric AS uint2)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS uint2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS uint2)::text, TRY_CAST(123.456::numeric AS uint2)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS uint2)::text, TRY_CAST(NULL::numeric AS uint2) IS NULL
+----
+123  true  true
+
+# numeric -> uint4
+query TBB
+SELECT TRY_CAST(1.5::numeric AS uint4)::text, TRY_CAST(1.5::numeric AS uint4)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS uint4)::text, TRY_CAST(NULL::numeric AS uint4) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS uint4)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::numeric AS uint4)
+
+query T
+SELECT TRY_CAST((-1.5)::numeric AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::numeric AS uint4)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS uint4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS uint4)::text, TRY_CAST(123.456::numeric AS uint4)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS uint4)::text, TRY_CAST(NULL::numeric AS uint4) IS NULL
+----
+123  true  true
+
+# numeric -> uint8
+query TBB
+SELECT TRY_CAST(1.5::numeric AS uint8)::text, TRY_CAST(1.5::numeric AS uint8)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS uint8)::text, TRY_CAST(NULL::numeric AS uint8) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS uint8)
+
+query T
+SELECT TRY_CAST(1e38::numeric AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::numeric AS uint8)
+
+query T
+SELECT TRY_CAST((-1.5)::numeric AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::numeric AS uint8)
+
+query T
+SELECT TRY_CAST('NaN'::numeric AS uint8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS uint8)::text, TRY_CAST(123.456::numeric AS uint8)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS uint8)::text, TRY_CAST(NULL::numeric AS uint8) IS NULL
+----
+123  true  true
+
+# numeric -> text
+query TBB
+SELECT TRY_CAST(1.5::numeric AS text)::text, TRY_CAST(1.5::numeric AS text)::text IS NOT DISTINCT FROM CAST(1.5::numeric AS text)::text, TRY_CAST(NULL::numeric AS text) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST(1e38::numeric AS text)::text, TRY_CAST(1e38::numeric AS text)::text IS NOT DISTINCT FROM CAST(1e38::numeric AS text)::text, TRY_CAST(NULL::numeric AS text) IS NULL
+----
+100000000000000000000000000000000000000  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS text)::text, TRY_CAST((-1.5)::numeric AS text)::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS text)::text, TRY_CAST(NULL::numeric AS text) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::numeric AS text)::text, TRY_CAST('NaN'::numeric AS text)::text IS NOT DISTINCT FROM CAST('NaN'::numeric AS text)::text, TRY_CAST(NULL::numeric AS text) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS text)::text, TRY_CAST(123.456::numeric AS text)::text IS NOT DISTINCT FROM CAST(123.456::numeric AS text)::text, TRY_CAST(NULL::numeric AS text) IS NULL
+----
+123.456  true  true
+
+## timestamp sources
+
+# timestamp -> mz_timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS mz_timestamp)::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS mz_timestamp)::text, TRY_CAST(NULL::timestamp AS mz_timestamp) IS NULL
+----
+1577882096789  true  true
+
+statement error
+SELECT CAST('1969-01-01'::timestamp AS mz_timestamp)
+
+query T
+SELECT TRY_CAST('1969-01-01'::timestamp AS mz_timestamp)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS mz_timestamp)::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS mz_timestamp)::text, TRY_CAST(NULL::timestamp AS mz_timestamp) IS NULL
+----
+8210266876799000  true  true
+
+# timestamp -> date
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS date)::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS date)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS date)::text, TRY_CAST(NULL::timestamp AS date) IS NULL
+----
+2020-01-01  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01'::timestamp AS date)::text, TRY_CAST('1969-01-01'::timestamp AS date)::text IS NOT DISTINCT FROM CAST('1969-01-01'::timestamp AS date)::text, TRY_CAST(NULL::timestamp AS date) IS NULL
+----
+1969-01-01  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS date)::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS date)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS date)::text, TRY_CAST(NULL::timestamp AS date) IS NULL
+----
+262142-12-31  true  true
+
+# timestamp -> timestamptz
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS timestamptz)::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS timestamptz)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS timestamptz)::text, TRY_CAST(NULL::timestamp AS timestamptz) IS NULL
+----
+2020-01-01␠12:34:56.789+00  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01'::timestamp AS timestamptz)::text, TRY_CAST('1969-01-01'::timestamp AS timestamptz)::text IS NOT DISTINCT FROM CAST('1969-01-01'::timestamp AS timestamptz)::text, TRY_CAST(NULL::timestamp AS timestamptz) IS NULL
+----
+1969-01-01␠00:00:00+00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS timestamptz)::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS timestamptz)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS timestamptz)::text, TRY_CAST(NULL::timestamp AS timestamptz) IS NULL
+----
+262142-12-31␠23:59:59+00  true  true
+
+# timestamp -> timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS timestamp)::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS timestamp)::text, TRY_CAST(NULL::timestamp AS timestamp) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01'::timestamp AS timestamp)::text, TRY_CAST('1969-01-01'::timestamp AS timestamp)::text IS NOT DISTINCT FROM CAST('1969-01-01'::timestamp AS timestamp)::text, TRY_CAST(NULL::timestamp AS timestamp) IS NULL
+----
+1969-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS timestamp)::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS timestamp)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS timestamp)::text, TRY_CAST(NULL::timestamp AS timestamp) IS NULL
+----
+262142-12-31␠23:59:59  true  true
+
+# timestamp -> timestamp(3)
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS timestamp(3))::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS timestamp(3))::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS timestamp(3))::text, TRY_CAST(NULL::timestamp AS timestamp(3)) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01'::timestamp AS timestamp(3))::text, TRY_CAST('1969-01-01'::timestamp AS timestamp(3))::text IS NOT DISTINCT FROM CAST('1969-01-01'::timestamp AS timestamp(3))::text, TRY_CAST(NULL::timestamp AS timestamp(3)) IS NULL
+----
+1969-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS timestamp(3))::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS timestamp(3))::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS timestamp(3))::text, TRY_CAST(NULL::timestamp AS timestamp(3)) IS NULL
+----
+262142-12-31␠23:59:59  true  true
+
+# timestamp -> time
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS time)::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS time)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS time)::text, TRY_CAST(NULL::timestamp AS time) IS NULL
+----
+12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01'::timestamp AS time)::text, TRY_CAST('1969-01-01'::timestamp AS time)::text IS NOT DISTINCT FROM CAST('1969-01-01'::timestamp AS time)::text, TRY_CAST(NULL::timestamp AS time) IS NULL
+----
+00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS time)::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS time)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS time)::text, TRY_CAST(NULL::timestamp AS time) IS NULL
+----
+23:59:59  true  true
+
+# timestamp -> text
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS text)::text, TRY_CAST('2020-01-01 12:34:56.789'::timestamp AS text)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789'::timestamp AS text)::text, TRY_CAST(NULL::timestamp AS text) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01'::timestamp AS text)::text, TRY_CAST('1969-01-01'::timestamp AS text)::text IS NOT DISTINCT FROM CAST('1969-01-01'::timestamp AS text)::text, TRY_CAST(NULL::timestamp AS text) IS NULL
+----
+1969-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59'::timestamp AS text)::text, TRY_CAST('262142-12-31 23:59:59'::timestamp AS text)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59'::timestamp AS text)::text, TRY_CAST(NULL::timestamp AS text) IS NULL
+----
+262142-12-31␠23:59:59  true  true
+
+## timestamp with time zone sources
+
+# timestamp with time zone -> mz_timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS mz_timestamp)::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS mz_timestamp)::text, TRY_CAST(NULL::timestamptz AS mz_timestamp) IS NULL
+----
+1577882096789  true  true
+
+statement error
+SELECT CAST('1969-01-01 00:00:00+00'::timestamptz AS mz_timestamp)
+
+query T
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS mz_timestamp)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS mz_timestamp)::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS mz_timestamp)::text, TRY_CAST(NULL::timestamptz AS mz_timestamp) IS NULL
+----
+8210266876799000  true  true
+
+# timestamp with time zone -> date
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS date)::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS date)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS date)::text, TRY_CAST(NULL::timestamptz AS date) IS NULL
+----
+2020-01-01  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS date)::text, TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS date)::text IS NOT DISTINCT FROM CAST('1969-01-01 00:00:00+00'::timestamptz AS date)::text, TRY_CAST(NULL::timestamptz AS date) IS NULL
+----
+1969-01-01  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS date)::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS date)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS date)::text, TRY_CAST(NULL::timestamptz AS date) IS NULL
+----
+262142-12-31  true  true
+
+# timestamp with time zone -> timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamp)::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamp)::text, TRY_CAST(NULL::timestamptz AS timestamp) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamp)::text, TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamp)::text IS NOT DISTINCT FROM CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamp)::text, TRY_CAST(NULL::timestamptz AS timestamp) IS NULL
+----
+1969-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamp)::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamp)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamp)::text, TRY_CAST(NULL::timestamptz AS timestamp) IS NULL
+----
+262142-12-31␠23:59:59  true  true
+
+# timestamp with time zone -> timestamp(3)
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamp(3))::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamp(3))::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamp(3))::text, TRY_CAST(NULL::timestamptz AS timestamp(3)) IS NULL
+----
+2020-01-01␠12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamp(3))::text, TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamp(3))::text IS NOT DISTINCT FROM CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamp(3))::text, TRY_CAST(NULL::timestamptz AS timestamp(3)) IS NULL
+----
+1969-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamp(3))::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamp(3))::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamp(3))::text, TRY_CAST(NULL::timestamptz AS timestamp(3)) IS NULL
+----
+262142-12-31␠23:59:59  true  true
+
+# timestamp with time zone -> timestamptz
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamptz)::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamptz)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS timestamptz)::text, TRY_CAST(NULL::timestamptz AS timestamptz) IS NULL
+----
+2020-01-01␠12:34:56.789+00  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamptz)::text, TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamptz)::text IS NOT DISTINCT FROM CAST('1969-01-01 00:00:00+00'::timestamptz AS timestamptz)::text, TRY_CAST(NULL::timestamptz AS timestamptz) IS NULL
+----
+1969-01-01␠00:00:00+00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamptz)::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamptz)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS timestamptz)::text, TRY_CAST(NULL::timestamptz AS timestamptz) IS NULL
+----
+262142-12-31␠23:59:59+00  true  true
+
+# timestamp with time zone -> time
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS time)::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS time)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS time)::text, TRY_CAST(NULL::timestamptz AS time) IS NULL
+----
+12:34:56.789  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS time)::text, TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS time)::text IS NOT DISTINCT FROM CAST('1969-01-01 00:00:00+00'::timestamptz AS time)::text, TRY_CAST(NULL::timestamptz AS time) IS NULL
+----
+00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS time)::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS time)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS time)::text, TRY_CAST(NULL::timestamptz AS time) IS NULL
+----
+23:59:59  true  true
+
+# timestamp with time zone -> text
+query TBB
+SELECT TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS text)::text, TRY_CAST('2020-01-01 12:34:56.789+00'::timestamptz AS text)::text IS NOT DISTINCT FROM CAST('2020-01-01 12:34:56.789+00'::timestamptz AS text)::text, TRY_CAST(NULL::timestamptz AS text) IS NULL
+----
+2020-01-01␠12:34:56.789+00  true  true
+
+query TBB
+SELECT TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS text)::text, TRY_CAST('1969-01-01 00:00:00+00'::timestamptz AS text)::text IS NOT DISTINCT FROM CAST('1969-01-01 00:00:00+00'::timestamptz AS text)::text, TRY_CAST(NULL::timestamptz AS text) IS NULL
+----
+1969-01-01␠00:00:00+00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS text)::text, TRY_CAST('262142-12-31 23:59:59+00'::timestamptz AS text)::text IS NOT DISTINCT FROM CAST('262142-12-31 23:59:59+00'::timestamptz AS text)::text, TRY_CAST(NULL::timestamptz AS text) IS NULL
+----
+262142-12-31␠23:59:59+00  true  true
+
+## date sources
+
+# date -> mz_timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01'::date AS mz_timestamp)::text, TRY_CAST('2020-01-01'::date AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01'::date AS mz_timestamp)::text, TRY_CAST(NULL::date AS mz_timestamp) IS NULL
+----
+1577836800000  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31'::date AS mz_timestamp)::text, TRY_CAST('262142-12-31'::date AS mz_timestamp)::text IS NOT DISTINCT FROM CAST('262142-12-31'::date AS mz_timestamp)::text, TRY_CAST(NULL::date AS mz_timestamp) IS NULL
+----
+8210266790400000  true  true
+
+# date -> timestamp
+query TBB
+SELECT TRY_CAST('2020-01-01'::date AS timestamp)::text, TRY_CAST('2020-01-01'::date AS timestamp)::text IS NOT DISTINCT FROM CAST('2020-01-01'::date AS timestamp)::text, TRY_CAST(NULL::date AS timestamp) IS NULL
+----
+2020-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31'::date AS timestamp)::text, TRY_CAST('262142-12-31'::date AS timestamp)::text IS NOT DISTINCT FROM CAST('262142-12-31'::date AS timestamp)::text, TRY_CAST(NULL::date AS timestamp) IS NULL
+----
+262142-12-31␠00:00:00  true  true
+
+# date -> timestamp(3)
+query TBB
+SELECT TRY_CAST('2020-01-01'::date AS timestamp(3))::text, TRY_CAST('2020-01-01'::date AS timestamp(3))::text IS NOT DISTINCT FROM CAST('2020-01-01'::date AS timestamp(3))::text, TRY_CAST(NULL::date AS timestamp(3)) IS NULL
+----
+2020-01-01␠00:00:00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31'::date AS timestamp(3))::text, TRY_CAST('262142-12-31'::date AS timestamp(3))::text IS NOT DISTINCT FROM CAST('262142-12-31'::date AS timestamp(3))::text, TRY_CAST(NULL::date AS timestamp(3)) IS NULL
+----
+262142-12-31␠00:00:00  true  true
+
+# date -> timestamptz
+query TBB
+SELECT TRY_CAST('2020-01-01'::date AS timestamptz)::text, TRY_CAST('2020-01-01'::date AS timestamptz)::text IS NOT DISTINCT FROM CAST('2020-01-01'::date AS timestamptz)::text, TRY_CAST(NULL::date AS timestamptz) IS NULL
+----
+2020-01-01␠00:00:00+00  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31'::date AS timestamptz)::text, TRY_CAST('262142-12-31'::date AS timestamptz)::text IS NOT DISTINCT FROM CAST('262142-12-31'::date AS timestamptz)::text, TRY_CAST(NULL::date AS timestamptz) IS NULL
+----
+262142-12-31␠00:00:00+00  true  true
+
+# date -> text
+query TBB
+SELECT TRY_CAST('2020-01-01'::date AS text)::text, TRY_CAST('2020-01-01'::date AS text)::text IS NOT DISTINCT FROM CAST('2020-01-01'::date AS text)::text, TRY_CAST(NULL::date AS text) IS NULL
+----
+2020-01-01  true  true
+
+query TBB
+SELECT TRY_CAST('262142-12-31'::date AS text)::text, TRY_CAST('262142-12-31'::date AS text)::text IS NOT DISTINCT FROM CAST('262142-12-31'::date AS text)::text, TRY_CAST(NULL::date AS text) IS NULL
+----
+262142-12-31  true  true
+
+## oid sources
+
+# oid -> int4
+query TBB
+SELECT TRY_CAST(1::oid AS int4)::text, TRY_CAST(1::oid AS int4)::text IS NOT DISTINCT FROM CAST(1::oid AS int4)::text, TRY_CAST(NULL::oid AS int4) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid AS int4)::text, TRY_CAST(4294967295::oid AS int4)::text IS NOT DISTINCT FROM CAST(4294967295::oid AS int4)::text, TRY_CAST(NULL::oid AS int4) IS NULL
+----
+-1  true  true
+
+# oid -> int8
+query TBB
+SELECT TRY_CAST(1::oid AS int8)::text, TRY_CAST(1::oid AS int8)::text IS NOT DISTINCT FROM CAST(1::oid AS int8)::text, TRY_CAST(NULL::oid AS int8) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid AS int8)::text, TRY_CAST(4294967295::oid AS int8)::text IS NOT DISTINCT FROM CAST(4294967295::oid AS int8)::text, TRY_CAST(NULL::oid AS int8) IS NULL
+----
+4294967295  true  true
+
+# oid -> text
+query TBB
+SELECT TRY_CAST(1::oid AS text)::text, TRY_CAST(1::oid AS text)::text IS NOT DISTINCT FROM CAST(1::oid AS text)::text, TRY_CAST(NULL::oid AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid AS text)::text, TRY_CAST(4294967295::oid AS text)::text IS NOT DISTINCT FROM CAST(4294967295::oid AS text)::text, TRY_CAST(NULL::oid AS text) IS NULL
+----
+4294967295  true  true
+
+# oid -> regclass
+query TBB
+SELECT TRY_CAST(1::oid AS regclass)::text, TRY_CAST(1::oid AS regclass)::text IS NOT DISTINCT FROM CAST(1::oid AS regclass)::text, TRY_CAST(NULL::oid AS regclass) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid AS regclass)::text, TRY_CAST(4294967295::oid AS regclass)::text IS NOT DISTINCT FROM CAST(4294967295::oid AS regclass)::text, TRY_CAST(NULL::oid AS regclass) IS NULL
+----
+4294967295  true  true
+
+# oid -> regproc
+query TBB
+SELECT TRY_CAST(1::oid AS regproc)::text, TRY_CAST(1::oid AS regproc)::text IS NOT DISTINCT FROM CAST(1::oid AS regproc)::text, TRY_CAST(NULL::oid AS regproc) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid AS regproc)::text, TRY_CAST(4294967295::oid AS regproc)::text IS NOT DISTINCT FROM CAST(4294967295::oid AS regproc)::text, TRY_CAST(NULL::oid AS regproc) IS NULL
+----
+4294967295  true  true
+
+# oid -> regtype
+query TBB
+SELECT TRY_CAST(1::oid AS regtype)::text, TRY_CAST(1::oid AS regtype)::text IS NOT DISTINCT FROM CAST(1::oid AS regtype)::text, TRY_CAST(NULL::oid AS regtype) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid AS regtype)::text, TRY_CAST(4294967295::oid AS regtype)::text IS NOT DISTINCT FROM CAST(4294967295::oid AS regtype)::text, TRY_CAST(NULL::oid AS regtype) IS NULL
+----
+4294967295  true  true
+
+## regclass sources
+
+# regclass -> oid
+query TBB
+SELECT TRY_CAST(1::regclass AS oid)::text, TRY_CAST(1::regclass AS oid)::text IS NOT DISTINCT FROM CAST(1::regclass AS oid)::text, TRY_CAST(NULL::regclass AS oid) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid::regclass AS oid)::text, TRY_CAST(4294967295::oid::regclass AS oid)::text IS NOT DISTINCT FROM CAST(4294967295::oid::regclass AS oid)::text, TRY_CAST(NULL::regclass AS oid) IS NULL
+----
+4294967295  true  true
+
+## regproc sources
+
+# regproc -> oid
+query TBB
+SELECT TRY_CAST(1::regproc AS oid)::text, TRY_CAST(1::regproc AS oid)::text IS NOT DISTINCT FROM CAST(1::regproc AS oid)::text, TRY_CAST(NULL::regproc AS oid) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid::regproc AS oid)::text, TRY_CAST(4294967295::oid::regproc AS oid)::text IS NOT DISTINCT FROM CAST(4294967295::oid::regproc AS oid)::text, TRY_CAST(NULL::regproc AS oid) IS NULL
+----
+4294967295  true  true
+
+## regtype sources
+
+# regtype -> oid
+query TBB
+SELECT TRY_CAST(1::regtype AS oid)::text, TRY_CAST(1::regtype AS oid)::text IS NOT DISTINCT FROM CAST(1::regtype AS oid)::text, TRY_CAST(NULL::regtype AS oid) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::oid::regtype AS oid)::text, TRY_CAST(4294967295::oid::regtype AS oid)::text IS NOT DISTINCT FROM CAST(4294967295::oid::regtype AS oid)::text, TRY_CAST(NULL::regtype AS oid) IS NULL
+----
+4294967295  true  true
+
+## real sources
+
+# real -> int2
+query TBB
+SELECT TRY_CAST(1.5::float4 AS int2)::text, TRY_CAST(1.5::float4 AS int2)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS int2)::text, TRY_CAST(NULL::float4 AS int2) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS int2)
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS int2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS int2)::text, TRY_CAST((-1.5)::float4 AS int2)::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS int2)::text, TRY_CAST(NULL::float4 AS int2) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::float4 AS int2)
+
+query T
+SELECT TRY_CAST('NaN'::float4 AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float4 AS int2)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS int2)::text
+----
+NULL
+
+# real -> int4
+query TBB
+SELECT TRY_CAST(1.5::float4 AS int4)::text, TRY_CAST(1.5::float4 AS int4)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS int4)::text, TRY_CAST(NULL::float4 AS int4) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS int4)
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS int4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS int4)::text, TRY_CAST((-1.5)::float4 AS int4)::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS int4)::text, TRY_CAST(NULL::float4 AS int4) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::float4 AS int4)
+
+query T
+SELECT TRY_CAST('NaN'::float4 AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float4 AS int4)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS int4)::text
+----
+NULL
+
+# real -> int8
+query TBB
+SELECT TRY_CAST(1.5::float4 AS int8)::text, TRY_CAST(1.5::float4 AS int8)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS int8)::text, TRY_CAST(NULL::float4 AS int8) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS int8)
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS int8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS int8)::text, TRY_CAST((-1.5)::float4 AS int8)::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS int8)::text, TRY_CAST(NULL::float4 AS int8) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::float4 AS int8)
+
+query T
+SELECT TRY_CAST('NaN'::float4 AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float4 AS int8)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS int8)::text
+----
+NULL
+
+# real -> uint2
+query TBB
+SELECT TRY_CAST(1.5::float4 AS uint2)::text, TRY_CAST(1.5::float4 AS uint2)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS uint2)::text, TRY_CAST(NULL::float4 AS uint2) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS uint2)
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::float4 AS uint2)
+
+query T
+SELECT TRY_CAST((-1.5)::float4 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::float4 AS uint2)
+
+query T
+SELECT TRY_CAST('NaN'::float4 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float4 AS uint2)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS uint2)::text
+----
+NULL
+
+# real -> uint4
+query TBB
+SELECT TRY_CAST(1.5::float4 AS uint4)::text, TRY_CAST(1.5::float4 AS uint4)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS uint4)::text, TRY_CAST(NULL::float4 AS uint4) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS uint4)
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::float4 AS uint4)
+
+query T
+SELECT TRY_CAST((-1.5)::float4 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::float4 AS uint4)
+
+query T
+SELECT TRY_CAST('NaN'::float4 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float4 AS uint4)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS uint4)::text
+----
+NULL
+
+# real -> uint8
+query TBB
+SELECT TRY_CAST(1.5::float4 AS uint8)::text, TRY_CAST(1.5::float4 AS uint8)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS uint8)::text, TRY_CAST(NULL::float4 AS uint8) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS uint8)
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::float4 AS uint8)
+
+query T
+SELECT TRY_CAST((-1.5)::float4 AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::float4 AS uint8)
+
+query T
+SELECT TRY_CAST('NaN'::float4 AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float4 AS uint8)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS uint8)::text
+----
+NULL
+
+# real -> float8
+query TBB
+SELECT TRY_CAST(1.5::float4 AS float8)::text, TRY_CAST(1.5::float4 AS float8)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS float8)::text, TRY_CAST(NULL::float4 AS float8) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST('3.4e38'::float4 AS float8)::text, TRY_CAST('3.4e38'::float4 AS float8)::text IS NOT DISTINCT FROM CAST('3.4e38'::float4 AS float8)::text, TRY_CAST(NULL::float4 AS float8) IS NULL
+----
+3.3999999521443642e+38  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS float8)::text, TRY_CAST((-1.5)::float4 AS float8)::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS float8)::text, TRY_CAST(NULL::float4 AS float8) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float4 AS float8)::text, TRY_CAST('NaN'::float4 AS float8)::text IS NOT DISTINCT FROM CAST('NaN'::float4 AS float8)::text, TRY_CAST(NULL::float4 AS float8) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST('Infinity'::float4 AS float8)::text, TRY_CAST('Infinity'::float4 AS float8)::text IS NOT DISTINCT FROM CAST('Infinity'::float4 AS float8)::text, TRY_CAST(NULL::float4 AS float8) IS NULL
+----
+Infinity  true  true
+
+# real -> numeric
+query TBB
+SELECT TRY_CAST(1.5::float4 AS numeric)::text, TRY_CAST(1.5::float4 AS numeric)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS numeric)::text, TRY_CAST(NULL::float4 AS numeric) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST('3.4e38'::float4 AS numeric)::text, TRY_CAST('3.4e38'::float4 AS numeric)::text IS NOT DISTINCT FROM CAST('3.4e38'::float4 AS numeric)::text, TRY_CAST(NULL::float4 AS numeric) IS NULL
+----
+340000000000000000000000000000000000000  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS numeric)::text, TRY_CAST((-1.5)::float4 AS numeric)::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS numeric)::text, TRY_CAST(NULL::float4 AS numeric) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float4 AS numeric)::text, TRY_CAST('NaN'::float4 AS numeric)::text IS NOT DISTINCT FROM CAST('NaN'::float4 AS numeric)::text, TRY_CAST(NULL::float4 AS numeric) IS NULL
+----
+NaN  true  true
+
+statement error
+SELECT CAST('Infinity'::float4 AS numeric)
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS numeric)::text
+----
+NULL
+
+# real -> text
+query TBB
+SELECT TRY_CAST(1.5::float4 AS text)::text, TRY_CAST(1.5::float4 AS text)::text IS NOT DISTINCT FROM CAST(1.5::float4 AS text)::text, TRY_CAST(NULL::float4 AS text) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST('3.4e38'::float4 AS text)::text, TRY_CAST('3.4e38'::float4 AS text)::text IS NOT DISTINCT FROM CAST('3.4e38'::float4 AS text)::text, TRY_CAST(NULL::float4 AS text) IS NULL
+----
+3.4e+38  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS text)::text, TRY_CAST((-1.5)::float4 AS text)::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS text)::text, TRY_CAST(NULL::float4 AS text) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float4 AS text)::text, TRY_CAST('NaN'::float4 AS text)::text IS NOT DISTINCT FROM CAST('NaN'::float4 AS text)::text, TRY_CAST(NULL::float4 AS text) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST('Infinity'::float4 AS text)::text, TRY_CAST('Infinity'::float4 AS text)::text IS NOT DISTINCT FROM CAST('Infinity'::float4 AS text)::text, TRY_CAST(NULL::float4 AS text) IS NULL
+----
+Infinity  true  true
+
+## double precision sources
+
+# double precision -> int2
+query TBB
+SELECT TRY_CAST(1.5::float8 AS int2)::text, TRY_CAST(1.5::float8 AS int2)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS int2)::text, TRY_CAST(NULL::float8 AS int2) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS int2)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS int2)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS int2)::text, TRY_CAST((-1.5)::float8 AS int2)::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS int2)::text, TRY_CAST(NULL::float8 AS int2) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::float8 AS int2)
+
+query T
+SELECT TRY_CAST('NaN'::float8 AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float8 AS int2)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS int2)::text
+----
+NULL
+
+# double precision -> int4
+query TBB
+SELECT TRY_CAST(1.5::float8 AS int4)::text, TRY_CAST(1.5::float8 AS int4)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS int4)::text, TRY_CAST(NULL::float8 AS int4) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS int4)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS int4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS int4)::text, TRY_CAST((-1.5)::float8 AS int4)::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS int4)::text, TRY_CAST(NULL::float8 AS int4) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::float8 AS int4)
+
+query T
+SELECT TRY_CAST('NaN'::float8 AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float8 AS int4)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS int4)::text
+----
+NULL
+
+# double precision -> int8
+query TBB
+SELECT TRY_CAST(1.5::float8 AS int8)::text, TRY_CAST(1.5::float8 AS int8)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS int8)::text, TRY_CAST(NULL::float8 AS int8) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS int8)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS int8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS int8)::text, TRY_CAST((-1.5)::float8 AS int8)::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS int8)::text, TRY_CAST(NULL::float8 AS int8) IS NULL
+----
+-2  true  true
+
+statement error
+SELECT CAST('NaN'::float8 AS int8)
+
+query T
+SELECT TRY_CAST('NaN'::float8 AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float8 AS int8)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS int8)::text
+----
+NULL
+
+# double precision -> uint2
+query TBB
+SELECT TRY_CAST(1.5::float8 AS uint2)::text, TRY_CAST(1.5::float8 AS uint2)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS uint2)::text, TRY_CAST(NULL::float8 AS uint2) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS uint2)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::float8 AS uint2)
+
+query T
+SELECT TRY_CAST((-1.5)::float8 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::float8 AS uint2)
+
+query T
+SELECT TRY_CAST('NaN'::float8 AS uint2)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float8 AS uint2)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS uint2)::text
+----
+NULL
+
+# double precision -> uint4
+query TBB
+SELECT TRY_CAST(1.5::float8 AS uint4)::text, TRY_CAST(1.5::float8 AS uint4)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS uint4)::text, TRY_CAST(NULL::float8 AS uint4) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS uint4)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::float8 AS uint4)
+
+query T
+SELECT TRY_CAST((-1.5)::float8 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::float8 AS uint4)
+
+query T
+SELECT TRY_CAST('NaN'::float8 AS uint4)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float8 AS uint4)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS uint4)::text
+----
+NULL
+
+# double precision -> uint8
+query TBB
+SELECT TRY_CAST(1.5::float8 AS uint8)::text, TRY_CAST(1.5::float8 AS uint8)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS uint8)::text, TRY_CAST(NULL::float8 AS uint8) IS NULL
+----
+2  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS uint8)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST((-1.5)::float8 AS uint8)
+
+query T
+SELECT TRY_CAST((-1.5)::float8 AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST('NaN'::float8 AS uint8)
+
+query T
+SELECT TRY_CAST('NaN'::float8 AS uint8)::text
+----
+NULL
+
+statement error
+SELECT CAST('Infinity'::float8 AS uint8)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS uint8)::text
+----
+NULL
+
+# double precision -> float4
+query TBB
+SELECT TRY_CAST(1.5::float8 AS float4)::text, TRY_CAST(1.5::float8 AS float4)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS float4)::text, TRY_CAST(NULL::float8 AS float4) IS NULL
+----
+1.5  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS float4)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS float4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS float4)::text, TRY_CAST((-1.5)::float8 AS float4)::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS float4)::text, TRY_CAST(NULL::float8 AS float4) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float8 AS float4)::text, TRY_CAST('NaN'::float8 AS float4)::text IS NOT DISTINCT FROM CAST('NaN'::float8 AS float4)::text, TRY_CAST(NULL::float8 AS float4) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST('Infinity'::float8 AS float4)::text, TRY_CAST('Infinity'::float8 AS float4)::text IS NOT DISTINCT FROM CAST('Infinity'::float8 AS float4)::text, TRY_CAST(NULL::float8 AS float4) IS NULL
+----
+Infinity  true  true
+
+# double precision -> numeric
+query TBB
+SELECT TRY_CAST(1.5::float8 AS numeric)::text, TRY_CAST(1.5::float8 AS numeric)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS numeric)::text, TRY_CAST(NULL::float8 AS numeric) IS NULL
+----
+1.5  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS numeric)
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS numeric)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS numeric)::text, TRY_CAST((-1.5)::float8 AS numeric)::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS numeric)::text, TRY_CAST(NULL::float8 AS numeric) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float8 AS numeric)::text, TRY_CAST('NaN'::float8 AS numeric)::text IS NOT DISTINCT FROM CAST('NaN'::float8 AS numeric)::text, TRY_CAST(NULL::float8 AS numeric) IS NULL
+----
+NaN  true  true
+
+statement error
+SELECT CAST('Infinity'::float8 AS numeric)
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS numeric)::text
+----
+NULL
+
+# double precision -> text
+query TBB
+SELECT TRY_CAST(1.5::float8 AS text)::text, TRY_CAST(1.5::float8 AS text)::text IS NOT DISTINCT FROM CAST(1.5::float8 AS text)::text, TRY_CAST(NULL::float8 AS text) IS NULL
+----
+1.5  true  true
+
+query TBB
+SELECT TRY_CAST('1.7e308'::float8 AS text)::text, TRY_CAST('1.7e308'::float8 AS text)::text IS NOT DISTINCT FROM CAST('1.7e308'::float8 AS text)::text, TRY_CAST(NULL::float8 AS text) IS NULL
+----
+1.7e+308  true  true
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS text)::text, TRY_CAST((-1.5)::float8 AS text)::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS text)::text, TRY_CAST(NULL::float8 AS text) IS NULL
+----
+-1.5  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float8 AS text)::text, TRY_CAST('NaN'::float8 AS text)::text IS NOT DISTINCT FROM CAST('NaN'::float8 AS text)::text, TRY_CAST(NULL::float8 AS text) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST('Infinity'::float8 AS text)::text, TRY_CAST('Infinity'::float8 AS text)::text IS NOT DISTINCT FROM CAST('Infinity'::float8 AS text)::text, TRY_CAST(NULL::float8 AS text) IS NULL
+----
+Infinity  true  true
+
+## time sources
+
+# time -> interval
+query TBB
+SELECT TRY_CAST('12:34:56'::time AS interval)::text, TRY_CAST('12:34:56'::time AS interval)::text IS NOT DISTINCT FROM CAST('12:34:56'::time AS interval)::text, TRY_CAST(NULL::time AS interval) IS NULL
+----
+12:34:56  true  true
+
+# time -> text
+query TBB
+SELECT TRY_CAST('12:34:56'::time AS text)::text, TRY_CAST('12:34:56'::time AS text)::text IS NOT DISTINCT FROM CAST('12:34:56'::time AS text)::text, TRY_CAST(NULL::time AS text) IS NULL
+----
+12:34:56  true  true
+
+## interval sources
+
+# interval -> time
+query TBB
+SELECT TRY_CAST('1 day 02:03:04'::interval AS time)::text, TRY_CAST('1 day 02:03:04'::interval AS time)::text IS NOT DISTINCT FROM CAST('1 day 02:03:04'::interval AS time)::text, TRY_CAST(NULL::interval AS time) IS NULL
+----
+02:03:04  true  true
+
+query TBB
+SELECT TRY_CAST('178000000 years'::interval AS time)::text, TRY_CAST('178000000 years'::interval AS time)::text IS NOT DISTINCT FROM CAST('178000000 years'::interval AS time)::text, TRY_CAST(NULL::interval AS time) IS NULL
+----
+00:00:00  true  true
+
+# interval -> text
+query TBB
+SELECT TRY_CAST('1 day 02:03:04'::interval AS text)::text, TRY_CAST('1 day 02:03:04'::interval AS text)::text IS NOT DISTINCT FROM CAST('1 day 02:03:04'::interval AS text)::text, TRY_CAST(NULL::interval AS text) IS NULL
+----
+1␠day␠02:03:04  true  true
+
+query TBB
+SELECT TRY_CAST('178000000 years'::interval AS text)::text, TRY_CAST('178000000 years'::interval AS text)::text IS NOT DISTINCT FROM CAST('178000000 years'::interval AS text)::text, TRY_CAST(NULL::interval AS text) IS NULL
+----
+178000000␠years  true  true
+
+## bytea sources
+
+# bytea -> text
+query TBB
+SELECT TRY_CAST('\x0102'::bytea AS text)::text, TRY_CAST('\x0102'::bytea AS text)::text IS NOT DISTINCT FROM CAST('\x0102'::bytea AS text)::text, TRY_CAST(NULL::bytea AS text) IS NULL
+----
+\x0102  true  true
+
+## char sources
+
+# char -> text
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS text)::text, TRY_CAST('abc'::char(3) AS text)::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS text)::text, TRY_CAST(NULL::char(3) AS text) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS text)::text, TRY_CAST('abc'::char(3) AS text)::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS text)::text, TRY_CAST(NULL::char(3) AS text) IS NULL
+----
+abc  true  true
+
+# char -> char(3)
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS char(3))::text, TRY_CAST('abc'::char(3) AS char(3))::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS char(3))::text, TRY_CAST(NULL::char(3) AS char(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS char(3))::text, TRY_CAST('abc'::char(3) AS char(3))::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS char(3))::text, TRY_CAST(NULL::char(3) AS char(3)) IS NULL
+----
+abc  true  true
+
+# char -> varchar(3)
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS varchar(3))::text, TRY_CAST('abc'::char(3) AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS varchar(3))::text, TRY_CAST(NULL::char(3) AS varchar(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS varchar(3))::text, TRY_CAST('abc'::char(3) AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS varchar(3))::text, TRY_CAST(NULL::char(3) AS varchar(3)) IS NULL
+----
+abc  true  true
+
+# char -> "char"
+query TBB
+SELECT TRY_CAST('a'::char(3) AS "char")::text, TRY_CAST('a'::char(3) AS "char")::text IS NOT DISTINCT FROM CAST('a'::char(3) AS "char")::text, TRY_CAST(NULL::char(3) AS "char") IS NULL
+----
+a  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS "char")::text, TRY_CAST('abc'::char(3) AS "char")::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS "char")::text, TRY_CAST(NULL::char(3) AS "char") IS NULL
+----
+a  true  true
+
+# char -> name
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS name)::text, TRY_CAST('abc'::char(3) AS name)::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS name)::text, TRY_CAST(NULL::char(3) AS name) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::char(3) AS name)::text, TRY_CAST('abc'::char(3) AS name)::text IS NOT DISTINCT FROM CAST('abc'::char(3) AS name)::text, TRY_CAST(NULL::char(3) AS name) IS NULL
+----
+abc  true  true
+
+## varchar sources
+
+# varchar -> text
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS text)::text, TRY_CAST('abc'::varchar(3) AS text)::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS text)::text, TRY_CAST(NULL::varchar(3) AS text) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS text)::text, TRY_CAST('abc'::varchar(3) AS text)::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS text)::text, TRY_CAST(NULL::varchar(3) AS text) IS NULL
+----
+abc  true  true
+
+# varchar -> char(3)
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS char(3))::text, TRY_CAST('abc'::varchar(3) AS char(3))::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS char(3))::text, TRY_CAST(NULL::varchar(3) AS char(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS char(3))::text, TRY_CAST('abc'::varchar(3) AS char(3))::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS char(3))::text, TRY_CAST(NULL::varchar(3) AS char(3)) IS NULL
+----
+abc  true  true
+
+# varchar -> varchar(3)
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS varchar(3))::text, TRY_CAST('abc'::varchar(3) AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS varchar(3))::text, TRY_CAST(NULL::varchar(3) AS varchar(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS varchar(3))::text, TRY_CAST('abc'::varchar(3) AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS varchar(3))::text, TRY_CAST(NULL::varchar(3) AS varchar(3)) IS NULL
+----
+abc  true  true
+
+# varchar -> "char"
+query TBB
+SELECT TRY_CAST('a'::varchar(3) AS "char")::text, TRY_CAST('a'::varchar(3) AS "char")::text IS NOT DISTINCT FROM CAST('a'::varchar(3) AS "char")::text, TRY_CAST(NULL::varchar(3) AS "char") IS NULL
+----
+a  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS "char")::text, TRY_CAST('abc'::varchar(3) AS "char")::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS "char")::text, TRY_CAST(NULL::varchar(3) AS "char") IS NULL
+----
+a  true  true
+
+# varchar -> name
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS name)::text, TRY_CAST('abc'::varchar(3) AS name)::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS name)::text, TRY_CAST(NULL::varchar(3) AS name) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::varchar(3) AS name)::text, TRY_CAST('abc'::varchar(3) AS name)::text IS NOT DISTINCT FROM CAST('abc'::varchar(3) AS name)::text, TRY_CAST(NULL::varchar(3) AS name) IS NULL
+----
+abc  true  true
+
+## "char" sources
+
+# "char" -> text
+query TBB
+SELECT TRY_CAST('a'::"char" AS text)::text, TRY_CAST('a'::"char" AS text)::text IS NOT DISTINCT FROM CAST('a'::"char" AS text)::text, TRY_CAST(NULL::"char" AS text) IS NULL
+----
+a  true  true
+
+# "char" -> char(3)
+query TBB
+SELECT TRY_CAST('a'::"char" AS char(3))::text, TRY_CAST('a'::"char" AS char(3))::text IS NOT DISTINCT FROM CAST('a'::"char" AS char(3))::text, TRY_CAST(NULL::"char" AS char(3)) IS NULL
+----
+a  true  true
+
+# "char" -> varchar(3)
+query TBB
+SELECT TRY_CAST('a'::"char" AS varchar(3))::text, TRY_CAST('a'::"char" AS varchar(3))::text IS NOT DISTINCT FROM CAST('a'::"char" AS varchar(3))::text, TRY_CAST(NULL::"char" AS varchar(3)) IS NULL
+----
+a  true  true
+
+# "char" -> int4
+statement error
+SELECT CAST('a'::"char" AS int4)
+
+query T
+SELECT TRY_CAST('a'::"char" AS int4)::text
+----
+NULL
+
+## name sources
+
+# name -> text
+query TBB
+SELECT TRY_CAST('abc'::name AS text)::text, TRY_CAST('abc'::name AS text)::text IS NOT DISTINCT FROM CAST('abc'::name AS text)::text, TRY_CAST(NULL::name AS text) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::name AS text)::text, TRY_CAST('abc'::name AS text)::text IS NOT DISTINCT FROM CAST('abc'::name AS text)::text, TRY_CAST(NULL::name AS text) IS NULL
+----
+abc  true  true
+
+# name -> char(3)
+query TBB
+SELECT TRY_CAST('abc'::name AS char(3))::text, TRY_CAST('abc'::name AS char(3))::text IS NOT DISTINCT FROM CAST('abc'::name AS char(3))::text, TRY_CAST(NULL::name AS char(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::name AS char(3))::text, TRY_CAST('abc'::name AS char(3))::text IS NOT DISTINCT FROM CAST('abc'::name AS char(3))::text, TRY_CAST(NULL::name AS char(3)) IS NULL
+----
+abc  true  true
+
+# name -> varchar(3)
+query TBB
+SELECT TRY_CAST('abc'::name AS varchar(3))::text, TRY_CAST('abc'::name AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc'::name AS varchar(3))::text, TRY_CAST(NULL::name AS varchar(3)) IS NULL
+----
+abc  true  true
+
+query TBB
+SELECT TRY_CAST('abc'::name AS varchar(3))::text, TRY_CAST('abc'::name AS varchar(3))::text IS NOT DISTINCT FROM CAST('abc'::name AS varchar(3))::text, TRY_CAST(NULL::name AS varchar(3)) IS NULL
+----
+abc  true  true
+
+## record sources
+
+# record -> text
+query TBB
+SELECT TRY_CAST(ROW(1, 'a') AS text)::text, TRY_CAST(ROW(1, 'a') AS text)::text IS NOT DISTINCT FROM CAST(ROW(1, 'a') AS text)::text, TRY_CAST(NULL::rec8 AS text) IS NULL
+----
+(1,a)  true  true
+
+query TBB
+SELECT TRY_CAST(ROW(100000, 'a') AS text)::text, TRY_CAST(ROW(100000, 'a') AS text)::text IS NOT DISTINCT FROM CAST(ROW(100000, 'a') AS text)::text, TRY_CAST(NULL::rec8 AS text) IS NULL
+----
+(100000,a)  true  true
+
+# record -> rec8
+query TBB
+SELECT TRY_CAST(ROW(1, 'a') AS rec8)::text, TRY_CAST(ROW(1, 'a') AS rec8)::text IS NOT DISTINCT FROM CAST(ROW(1, 'a') AS rec8)::text, TRY_CAST(NULL::rec8 AS rec8) IS NULL
+----
+(1,a)  true  true
+
+query TBB
+SELECT TRY_CAST(ROW(100000, 'a') AS rec8)::text, TRY_CAST(ROW(100000, 'a') AS rec8)::text IS NOT DISTINCT FROM CAST(ROW(100000, 'a') AS rec8)::text, TRY_CAST(NULL::rec8 AS rec8) IS NULL
+----
+(100000,a)  true  true
+
+# record -> rec2
+query TBB
+SELECT TRY_CAST(ROW(1, 'a') AS rec2)::text, TRY_CAST(ROW(1, 'a') AS rec2)::text IS NOT DISTINCT FROM CAST(ROW(1, 'a') AS rec2)::text, TRY_CAST(NULL::rec8 AS rec2) IS NULL
+----
+(1,a)  true  true
+
+statement error
+SELECT CAST(ROW(100000, 'a') AS rec2)
+
+query T
+SELECT TRY_CAST(ROW(100000, 'a') AS rec2)::text
+----
+NULL
+
+## array sources
+
+# array -> text
+query TBB
+SELECT TRY_CAST(ARRAY[1, 2] AS text)::text, TRY_CAST(ARRAY[1, 2] AS text)::text IS NOT DISTINCT FROM CAST(ARRAY[1, 2] AS text)::text, TRY_CAST(NULL::int8[] AS text) IS NULL
+----
+{1,2}  true  true
+
+query TBB
+SELECT TRY_CAST(ARRAY[100000] AS text)::text, TRY_CAST(ARRAY[100000] AS text)::text IS NOT DISTINCT FROM CAST(ARRAY[100000] AS text)::text, TRY_CAST(NULL::int8[] AS text) IS NULL
+----
+{100000}  true  true
+
+# array -> int8 list
+query TBB
+SELECT TRY_CAST(ARRAY[1, 2] AS int8 list)::text, TRY_CAST(ARRAY[1, 2] AS int8 list)::text IS NOT DISTINCT FROM CAST(ARRAY[1, 2] AS int8 list)::text, TRY_CAST(NULL::int8[] AS int8 list) IS NULL
+----
+{1,2}  true  true
+
+query TBB
+SELECT TRY_CAST(ARRAY[100000] AS int8 list)::text, TRY_CAST(ARRAY[100000] AS int8 list)::text IS NOT DISTINCT FROM CAST(ARRAY[100000] AS int8 list)::text, TRY_CAST(NULL::int8[] AS int8 list) IS NULL
+----
+{100000}  true  true
+
+# array -> int2 list
+query TBB
+SELECT TRY_CAST(ARRAY[1, 2] AS int2 list)::text, TRY_CAST(ARRAY[1, 2] AS int2 list)::text IS NOT DISTINCT FROM CAST(ARRAY[1, 2] AS int2 list)::text, TRY_CAST(NULL::int8[] AS int2 list) IS NULL
+----
+{1,2}  true  true
+
+query TBB
+SELECT TRY_CAST(ARRAY[100000] AS int2 list)::text, TRY_CAST(ARRAY[100000] AS int2 list)::text IS NOT DISTINCT FROM CAST(ARRAY[100000] AS int2 list)::text, TRY_CAST(NULL::int8[] AS int2 list) IS NULL
+----
+{100000}  true  true
+
+# array -> int8[]
+query TBB
+SELECT TRY_CAST(ARRAY[1, 2] AS int8[])::text, TRY_CAST(ARRAY[1, 2] AS int8[])::text IS NOT DISTINCT FROM CAST(ARRAY[1, 2] AS int8[])::text, TRY_CAST(NULL::int8[] AS int8[]) IS NULL
+----
+{1,2}  true  true
+
+query TBB
+SELECT TRY_CAST(ARRAY[100000] AS int8[])::text, TRY_CAST(ARRAY[100000] AS int8[])::text IS NOT DISTINCT FROM CAST(ARRAY[100000] AS int8[])::text, TRY_CAST(NULL::int8[] AS int8[]) IS NULL
+----
+{100000}  true  true
+
+# array -> int2[]
+query TBB
+SELECT TRY_CAST(ARRAY[1, 2] AS int2[])::text, TRY_CAST(ARRAY[1, 2] AS int2[])::text IS NOT DISTINCT FROM CAST(ARRAY[1, 2] AS int2[])::text, TRY_CAST(NULL::int8[] AS int2[]) IS NULL
+----
+{1,2}  true  true
+
+statement error
+SELECT CAST(ARRAY[100000] AS int2[])
+
+query T
+SELECT TRY_CAST(ARRAY[100000] AS int2[])::text
+----
+NULL
+
+## int2vector sources
+
+# int2vector -> int8[]
+query TBB
+SELECT TRY_CAST('1 2'::int2vector AS int8[])::text, TRY_CAST('1 2'::int2vector AS int8[])::text IS NOT DISTINCT FROM CAST('1 2'::int2vector AS int8[])::text, TRY_CAST(NULL::int2vector AS int8[]) IS NULL
+----
+{1,2}  true  true
+
+# int2vector -> int2[]
+query TBB
+SELECT TRY_CAST('1 2'::int2vector AS int2[])::text, TRY_CAST('1 2'::int2vector AS int2[])::text IS NOT DISTINCT FROM CAST('1 2'::int2vector AS int2[])::text, TRY_CAST(NULL::int2vector AS int2[]) IS NULL
+----
+{1,2}  true  true
+
+# int2vector -> text
+query TBB
+SELECT TRY_CAST('1 2'::int2vector AS text)::text, TRY_CAST('1 2'::int2vector AS text)::text IS NOT DISTINCT FROM CAST('1 2'::int2vector AS text)::text, TRY_CAST(NULL::int2vector AS text) IS NULL
+----
+1␠2  true  true
+
+## list sources
+
+# list -> text
+query TBB
+SELECT TRY_CAST(LIST[1, 2] AS text)::text, TRY_CAST(LIST[1, 2] AS text)::text IS NOT DISTINCT FROM CAST(LIST[1, 2] AS text)::text, TRY_CAST(NULL::int8 list AS text) IS NULL
+----
+{1,2}  true  true
+
+query TBB
+SELECT TRY_CAST(LIST[100000] AS text)::text, TRY_CAST(LIST[100000] AS text)::text IS NOT DISTINCT FROM CAST(LIST[100000] AS text)::text, TRY_CAST(NULL::int8 list AS text) IS NULL
+----
+{100000}  true  true
+
+# list -> int8 list
+query TBB
+SELECT TRY_CAST(LIST[1, 2] AS int8 list)::text, TRY_CAST(LIST[1, 2] AS int8 list)::text IS NOT DISTINCT FROM CAST(LIST[1, 2] AS int8 list)::text, TRY_CAST(NULL::int8 list AS int8 list) IS NULL
+----
+{1,2}  true  true
+
+query TBB
+SELECT TRY_CAST(LIST[100000] AS int8 list)::text, TRY_CAST(LIST[100000] AS int8 list)::text IS NOT DISTINCT FROM CAST(LIST[100000] AS int8 list)::text, TRY_CAST(NULL::int8 list AS int8 list) IS NULL
+----
+{100000}  true  true
+
+# list -> int2 list
+query TBB
+SELECT TRY_CAST(LIST[1, 2] AS int2 list)::text, TRY_CAST(LIST[1, 2] AS int2 list)::text IS NOT DISTINCT FROM CAST(LIST[1, 2] AS int2 list)::text, TRY_CAST(NULL::int8 list AS int2 list) IS NULL
+----
+{1,2}  true  true
+
+statement error
+SELECT CAST(LIST[100000] AS int2 list)
+
+query T
+SELECT TRY_CAST(LIST[100000] AS int2 list)::text
+----
+NULL
+
+## map sources
+
+# map -> text
+query TBB
+SELECT TRY_CAST('{a=>1}'::map[text=>int4] AS text)::text, TRY_CAST('{a=>1}'::map[text=>int4] AS text)::text IS NOT DISTINCT FROM CAST('{a=>1}'::map[text=>int4] AS text)::text, TRY_CAST(NULL::map[text=>int8] AS text) IS NULL
+----
+{a=>1}  true  true
+
+## jsonb sources
+
+# jsonb -> bool
+statement error
+SELECT CAST('1'::jsonb AS bool)
+
+query T
+SELECT TRY_CAST('1'::jsonb AS bool)::text
+----
+NULL
+
+statement error
+SELECT CAST('"x"'::jsonb AS bool)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS bool)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS bool)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS bool)::text
+----
+NULL
+
+statement error
+SELECT CAST('1e30'::jsonb AS bool)
+
+query T
+SELECT TRY_CAST('1e30'::jsonb AS bool)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('true'::jsonb AS bool)::text, TRY_CAST('true'::jsonb AS bool)::text IS NOT DISTINCT FROM CAST('true'::jsonb AS bool)::text, TRY_CAST(NULL::jsonb AS bool) IS NULL
+----
+true  true  true
+
+statement error
+SELECT CAST('null'::jsonb AS bool)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS bool)::text
+----
+NULL
+
+# jsonb -> int2
+query TBB
+SELECT TRY_CAST('1'::jsonb AS int2)::text, TRY_CAST('1'::jsonb AS int2)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS int2)::text, TRY_CAST(NULL::jsonb AS int2) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS int2)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS int2)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('1e30'::jsonb AS int2)
+
+query T
+SELECT TRY_CAST('1e30'::jsonb AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('true'::jsonb AS int2)
+
+query T
+SELECT TRY_CAST('true'::jsonb AS int2)::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS int2)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS int2)::text
+----
+NULL
+
+# jsonb -> int4
+query TBB
+SELECT TRY_CAST('1'::jsonb AS int4)::text, TRY_CAST('1'::jsonb AS int4)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS int4)::text, TRY_CAST(NULL::jsonb AS int4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS int4)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS int4)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('1e30'::jsonb AS int4)
+
+query T
+SELECT TRY_CAST('1e30'::jsonb AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('true'::jsonb AS int4)
+
+query T
+SELECT TRY_CAST('true'::jsonb AS int4)::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS int4)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS int4)::text
+----
+NULL
+
+# jsonb -> int8
+query TBB
+SELECT TRY_CAST('1'::jsonb AS int8)::text, TRY_CAST('1'::jsonb AS int8)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS int8)::text, TRY_CAST(NULL::jsonb AS int8) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS int8)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS int8)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('1e30'::jsonb AS int8)
+
+query T
+SELECT TRY_CAST('1e30'::jsonb AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('true'::jsonb AS int8)
+
+query T
+SELECT TRY_CAST('true'::jsonb AS int8)::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS int8)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS int8)::text
+----
+NULL
+
+# jsonb -> float4
+query TBB
+SELECT TRY_CAST('1'::jsonb AS float4)::text, TRY_CAST('1'::jsonb AS float4)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS float4)::text, TRY_CAST(NULL::jsonb AS float4) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS float4)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS float4)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS float4)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS float4)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('1e30'::jsonb AS float4)::text, TRY_CAST('1e30'::jsonb AS float4)::text IS NOT DISTINCT FROM CAST('1e30'::jsonb AS float4)::text, TRY_CAST(NULL::jsonb AS float4) IS NULL
+----
+1e+30  true  true
+
+statement error
+SELECT CAST('true'::jsonb AS float4)
+
+query T
+SELECT TRY_CAST('true'::jsonb AS float4)::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS float4)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS float4)::text
+----
+NULL
+
+# jsonb -> float8
+query TBB
+SELECT TRY_CAST('1'::jsonb AS float8)::text, TRY_CAST('1'::jsonb AS float8)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS float8)::text, TRY_CAST(NULL::jsonb AS float8) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS float8)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS float8)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS float8)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS float8)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('1e30'::jsonb AS float8)::text, TRY_CAST('1e30'::jsonb AS float8)::text IS NOT DISTINCT FROM CAST('1e30'::jsonb AS float8)::text, TRY_CAST(NULL::jsonb AS float8) IS NULL
+----
+1e+30  true  true
+
+statement error
+SELECT CAST('true'::jsonb AS float8)
+
+query T
+SELECT TRY_CAST('true'::jsonb AS float8)::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS float8)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS float8)::text
+----
+NULL
+
+# jsonb -> numeric
+query TBB
+SELECT TRY_CAST('1'::jsonb AS numeric)::text, TRY_CAST('1'::jsonb AS numeric)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS numeric)::text, TRY_CAST(NULL::jsonb AS numeric) IS NULL
+----
+1  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS numeric)
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS numeric)::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS numeric)
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS numeric)::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('1e30'::jsonb AS numeric)::text, TRY_CAST('1e30'::jsonb AS numeric)::text IS NOT DISTINCT FROM CAST('1e30'::jsonb AS numeric)::text, TRY_CAST(NULL::jsonb AS numeric) IS NULL
+----
+1000000000000000000000000000000  true  true
+
+statement error
+SELECT CAST('true'::jsonb AS numeric)
+
+query T
+SELECT TRY_CAST('true'::jsonb AS numeric)::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS numeric)
+
+query T
+SELECT TRY_CAST('null'::jsonb AS numeric)::text
+----
+NULL
+
+# jsonb -> text
+query TBB
+SELECT TRY_CAST('1'::jsonb AS text)::text, TRY_CAST('1'::jsonb AS text)::text IS NOT DISTINCT FROM CAST('1'::jsonb AS text)::text, TRY_CAST(NULL::jsonb AS text) IS NULL
+----
+1  true  true
+
+query TBB
+SELECT TRY_CAST('"x"'::jsonb AS text)::text, TRY_CAST('"x"'::jsonb AS text)::text IS NOT DISTINCT FROM CAST('"x"'::jsonb AS text)::text, TRY_CAST(NULL::jsonb AS text) IS NULL
+----
+"x"  true  true
+
+query TBB
+SELECT TRY_CAST('[1]'::jsonb AS text)::text, TRY_CAST('[1]'::jsonb AS text)::text IS NOT DISTINCT FROM CAST('[1]'::jsonb AS text)::text, TRY_CAST(NULL::jsonb AS text) IS NULL
+----
+[1]  true  true
+
+query TBB
+SELECT TRY_CAST('1e30'::jsonb AS text)::text, TRY_CAST('1e30'::jsonb AS text)::text IS NOT DISTINCT FROM CAST('1e30'::jsonb AS text)::text, TRY_CAST(NULL::jsonb AS text) IS NULL
+----
+1000000000000000000000000000000  true  true
+
+query TBB
+SELECT TRY_CAST('true'::jsonb AS text)::text, TRY_CAST('true'::jsonb AS text)::text IS NOT DISTINCT FROM CAST('true'::jsonb AS text)::text, TRY_CAST(NULL::jsonb AS text) IS NULL
+----
+true  true  true
+
+query TBB
+SELECT TRY_CAST('null'::jsonb AS text)::text, TRY_CAST('null'::jsonb AS text)::text IS NOT DISTINCT FROM CAST('null'::jsonb AS text)::text, TRY_CAST(NULL::jsonb AS text) IS NULL
+----
+null  true  true
+
+## uuid sources
+
+# uuid -> text
+query TBB
+SELECT TRY_CAST('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid AS text)::text, TRY_CAST('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid AS text)::text IS NOT DISTINCT FROM CAST('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid AS text)::text, TRY_CAST(NULL::uuid AS text) IS NULL
+----
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11  true  true
+
+## range sources
+
+# range -> text
+query TBB
+SELECT TRY_CAST('[1,3)'::int4range AS text)::text, TRY_CAST('[1,3)'::int4range AS text)::text IS NOT DISTINCT FROM CAST('[1,3)'::int4range AS text)::text, TRY_CAST(NULL::int4range AS text) IS NULL
+----
+[1,3)  true  true
