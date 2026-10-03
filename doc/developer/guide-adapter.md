@@ -215,6 +215,15 @@ fixed connection does not authorize its dependencies separately. For example,
 standalone `VALIDATE CONNECTION` is delegated by `USAGE` on the connection and
 its containing schema, without requiring `USAGE` on referenced secrets.
 
+Changing a connection also changes the effective configuration of dependent
+connections. `Coordinator::check_alter_connection_usage` requires `USAGE` on
+every secret reachable through those connections, including connections with no
+active source or sink. Route ownership alone does not delegate authority over
+dependent credentials. This check precedes secret reads and validation and runs
+again before persistence, because dependents and grants can change during
+external validation. Dependency traversal uses the altered connection's final
+definition so removing an inaccessible dependency remains possible.
+
 ### The catalog is the source of truth for state that gets rebuilt from it
 
 If a reconcile or refresh path rebuilds downstream state (for example a

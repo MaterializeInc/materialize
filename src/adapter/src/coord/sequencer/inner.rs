@@ -3793,20 +3793,8 @@ impl Coordinator {
             }
         };
 
-        // Replanning uses a system session and discovers retained dependencies
-        // that `check_plan` could not authorize. Check them before secret guards
-        // or validation can resolve a secret.
-        let usage_check = {
-            let catalog = self.catalog().for_session(ctx.session());
-            rbac::check_usage(
-                &catalog,
-                ctx.session(),
-                &conn.resolved_ids,
-                &rbac::CREATE_ITEM_USAGE,
-            )
-        };
-        if let Err(err) = usage_check {
-            return ctx.retire(Err(err.into()));
+        if let Err(err) = self.check_alter_connection_usage(ctx.session(), id, &conn) {
+            return ctx.retire(Err(err));
         }
 
         // `conn` is the whole re-planned connection, so this also rejects a
@@ -3889,6 +3877,53 @@ impl Coordinator {
         }
     }
 
+    /// Authorizes the final definition and secrets used by connections whose
+    /// effective configuration changes with it.
+    fn check_alter_connection_usage(
+        &self,
+        session: &Session,
+        id: CatalogItemId,
+        connection: &Connection,
+    ) -> Result<(), AdapterError> {
+        let catalog = self.catalog().for_session(session);
+        let mut usage_ids = connection.resolved_ids.clone();
+
+        // A route's own definition can contain no secrets even though changing
+        // it redirects credentials in dependent connections. Include unused
+        // connections because delegated validation can activate them later.
+        let mut pending: Vec<_> = catalog
+            .item_dependents(id)
+            .into_iter()
+            .filter_map(|object_id| match object_id {
+                ObjectId::Item(id) if self.catalog().get_entry(&id).connection().is_ok() => {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .collect();
+        let mut visited = BTreeSet::new();
+        while let Some(dependency_id) = pending.pop() {
+            if !visited.insert(dependency_id) {
+                continue;
+            }
+            let entry = self.catalog().get_entry(&dependency_id);
+            match entry.item() {
+                CatalogItem::Connection(conn) => {
+                    let conn = if dependency_id == id {
+                        connection
+                    } else {
+                        conn
+                    };
+                    pending.extend(conn.resolved_ids.items().copied());
+                }
+                CatalogItem::Secret(_) => usage_ids.add_item(dependency_id),
+                _ => (),
+            }
+        }
+        rbac::check_usage(&catalog, session, &usage_ids, &rbac::CREATE_ITEM_USAGE)?;
+        Ok(())
+    }
+
     #[instrument]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
@@ -3896,6 +3931,9 @@ impl Coordinator {
         id: CatalogItemId,
         connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // Dependents and grants can change while external validation runs.
+        self.check_alter_connection_usage(session, id, &connection)?;
+
         match self.catalog.get_entry(&id).item() {
             CatalogItem::Connection(curr_conn) => {
                 curr_conn
