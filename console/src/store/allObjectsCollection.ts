@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useLiveQuery } from "@tanstack/react-db";
+import { and, eq, inArray, useLiveQuery } from "@tanstack/react-db";
 import { useAtomValue, useStore } from "jotai";
 import React from "react";
 
@@ -66,4 +66,37 @@ export function useAllObjectsLive() {
     }),
     [data, status],
   );
+}
+
+const NO_OBJECTS: DatabaseObject[] = [];
+
+/**
+ * A cluster's objects of the given types, as a live query over
+ * `allObjectsCollection`. The result is maintained incrementally, so it keeps
+ * its identity through DDL elsewhere in the environment, where filtering
+ * `useAllObjects` gets a new array on every change. `objectTypes` must keep its
+ * identity across renders, or the query is rebuilt each render.
+ */
+export function useClusterObjectsLive(
+  clusterId: string,
+  objectTypes: readonly string[],
+) {
+  const { data } = useLiveQuery(
+    (q) =>
+      q
+        .from({ object: allObjectsCollection.collection })
+        .where(({ object }) =>
+          and(
+            eq(object.clusterId, clusterId),
+            inArray(object.objectType, [...objectTypes]),
+          ),
+        ),
+    [clusterId, objectTypes],
+  );
+  const status = useAtomValue(allObjectsCollection.statusAtom);
+  return {
+    data: data ?? NO_OBJECTS,
+    snapshotComplete: status.snapshotComplete,
+    isError: Boolean(status.error),
+  };
 }
