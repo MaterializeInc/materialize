@@ -1402,7 +1402,15 @@ impl Instance {
         let config = self.replicas[&id].config.clone();
         let epoch = self.replicas[&id].epoch + 1;
 
+        // `remove_replica` forgets the replica's dyncfg override, and the coordinator re-pushes
+        // overrides only when the scoped configuration changes. Without carrying it across, the
+        // replayed commands and every later configuration push reach the replica without its
+        // override.
+        let dyncfg_override = self.replica_dyncfg_overrides.get(&id).cloned();
         self.remove_replica(id).expect("replica must exist");
+        if let Some(dyncfg_override) = dyncfg_override {
+            self.replica_dyncfg_overrides.insert(id, dyncfg_override);
+        }
         let result = self.add_replica(id, config, Some(epoch));
 
         match result {
