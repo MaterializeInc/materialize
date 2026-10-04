@@ -495,14 +495,14 @@ impl FileStore {
         self.capacity.load(Ordering::Relaxed)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn allocated_bytes(&self) -> u64 {
         self.allocated.load(Ordering::Relaxed)
     }
 
     /// Test hook: the number of slots allocated across classes and not
     /// free.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn slots_in_use(&self) -> usize {
         self.classes.iter().map(|c| c.slots().in_use()).sum()
     }
