@@ -155,6 +155,10 @@ fn free_during_demotion_returns_both_slots_once() {
         stats.extent_file_writes, 1,
         "the write ran before the commit"
     );
+    assert!(
+        stats.extent_file_write_bytes_compressed > 0,
+        "write bytes count the same writes as `extent_file_writes`"
+    );
     assert_eq!(
         stats.extent_pageouts, 0,
         "a freed chunk's demotion never commits"
@@ -404,22 +408,6 @@ fn stored_class_size(data: &[u64], codec: &'static dyn ExtentCodec) -> usize {
     store.class_size(store.class_for(comp_len).expect("a class fits"))
 }
 
-/// Marks this thread as a spill thread until dropped.
-struct AsSpillThread;
-
-impl AsSpillThread {
-    fn enter() -> AsSpillThread {
-        IS_SPILL_THREAD.with(|cell| cell.set(true));
-        AsSpillThread
-    }
-}
-
-impl Drop for AsSpillThread {
-    fn drop(&mut self) {
-        IS_SPILL_THREAD.with(|cell| cell.set(false));
-    }
-}
-
 fn is_arena(handle: &ChunkHandle) -> bool {
     handle
         .meta
@@ -646,10 +634,7 @@ fn inline_pass_stops_at_twice_the_cap() {
     assert_eq!(stats.extent_file_writes, CHUNKS - 3);
     assert_eq!(stats.extent_file_writes_inline, CHUNKS - 3);
 
-    {
-        let _spill = AsSpillThread::enter();
-        pool.enforce_compressed();
-    }
+    pool.0.enforce_compressed_cap(Pass::Background);
     let stats = pool.stats();
     assert_eq!(
         stats.extent_resident_bytes, extent,
@@ -787,7 +772,6 @@ fn partly_full_store_probes_once_per_class() {
     assert_eq!(demotion_probes(), probes, "no inline pass");
 
     // A spill thread retries only once the retry deadline passes.
-    let _spill = AsSpillThread::enter();
     let mut retry = std::time::Instant::now() + std::time::Duration::from_secs(3600);
     for _ in 0..10 {
         pool.0.spill_trim(&mut retry);
@@ -802,7 +786,6 @@ fn partly_full_store_probes_once_per_class() {
     );
     pool.0.spill_trim(&mut retry);
     assert_eq!(demotion_probes() - probes, 1);
-    drop(_spill);
 
     for (data, handle) in large.iter().zip_eq(&handles) {
         assert_eq!(&read(handle), data);
@@ -1066,12 +1049,26 @@ fn concurrent_file_mode_churn() {
     }
     done.store(true, Ordering::Relaxed);
     enforcer.join().expect("enforcer thread panicked");
+    pool.quiesce_spill();
+    pool.join_spill_threads();
+    // With every thread stopped, the live extents' file bytes are the
+    // counter, per the invariant on `note_extent_resident`.
+    let live_file_bytes: usize = shared
+        .iter()
+        .filter_map(|(_, handle)| handle.meta.state().extent.as_ref()?.file_bytes())
+        .sum();
+    assert_eq!(
+        pool.stats().extent_file_bytes,
+        u64::cast_from(live_file_bytes)
+    );
+    assert_eq!(
+        pool.stats().extent_file_allocated_bytes,
+        store.allocated_bytes()
+    );
     for (data, handle) in shared.iter() {
         assert_eq!(&read(handle), data);
     }
     drop(shared);
-    pool.quiesce_spill();
-    pool.join_spill_threads();
 
     let stats = pool.stats();
     assert!(stats.extent_file_writes > 0, "demotions ran");
