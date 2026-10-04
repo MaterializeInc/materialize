@@ -978,6 +978,7 @@ impl Accounting {
         sub_checked(&self.totals.records, records);
         sub_checked(&self.totals.size, bytes);
         sub_checked(&self.totals.allocations, allocations);
+        STAGE_BYTES.fetch_sub(u64::cast_from(bytes), atomic::Ordering::Relaxed);
         if let Some(logging) = &self.logging {
             logging.chain_dropped(records);
         }
@@ -989,6 +990,17 @@ impl Accounting {
         add_signed(&self.totals.records, records);
         add_signed(&self.totals.size, bytes);
         add_signed(&self.totals.allocations, allocations);
+        if bytes >= 0 {
+            STAGE_BYTES.fetch_add(
+                u64::cast_from(bytes.unsigned_abs()),
+                atomic::Ordering::Relaxed,
+            );
+        } else {
+            STAGE_BYTES.fetch_sub(
+                u64::cast_from(bytes.unsigned_abs()),
+                atomic::Ordering::Relaxed,
+            );
+        }
 
         // The stage is reported as a chain that is dropped and re-created at its new length.
         let Some(logging) = &self.logging else { return };
@@ -1758,6 +1770,8 @@ static MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
 /// Bytes [`Chunk::with_view`] copied out of the pool for scoped reads, process-wide.
 static VIEW_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// Bytes of owned updates held in correction buffer stages, process-wide.
+static STAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 /// MV sink write commands sent to a write task and not yet received by it, process-wide.
 pub(crate) static WRITE_QUEUE_COMMANDS: AtomicU64 = AtomicU64::new(0);
 /// Updates in MV sink write commands sent to a write task and not yet received, process-wide.
@@ -1808,6 +1822,7 @@ pub fn register_metrics(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_compute_correction_heap_materialized_bytes", help: "Bytes of MV sink correction chunks taken out of the buffer pool onto the heap by a merge or split read."), &HEAP_MATERIALIZED_BYTES);
         gauge(registry, metric!(name: "mz_compute_correction_materializations_total", help: "MV sink correction chunks taken out of the buffer pool onto the heap."), &MATERIALIZATIONS);
         gauge(registry, metric!(name: "mz_compute_correction_view_copy_bytes_total", help: "Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks."), &VIEW_COPY_BYTES);
+        gauge(registry, metric!(name: "mz_compute_correction_stage_bytes", help: "Bytes of owned updates held in MV sink correction buffer stages."), &STAGE_BYTES);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_commands", help: "MV sink write commands queued for the write task."), &WRITE_QUEUE_COMMANDS);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_updates", help: "Updates in MV sink write commands queued for the write task."), &WRITE_QUEUE_UPDATES);
     });
