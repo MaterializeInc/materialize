@@ -954,6 +954,9 @@ pub struct SubscribePlan {
     pub up_to: Option<Timestamp>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
+    /// Whether rows with errors are delivered with an `mz_error` column rather than failing the
+    /// subscribe. Only rows with cell-scoped or row-scoped errors qualify.
+    pub inline_errors: bool,
     pub output: SubscribeOutput,
 }
 

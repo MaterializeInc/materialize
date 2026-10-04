@@ -647,6 +647,7 @@ impl Coordinator {
                             mz_controller::clusters::ClusterConfig {
                                 arranged_logs,
                                 workload_class: cluster.config.workload_class.clone(),
+                                cell_errors: cluster.config.cell_errors(),
                             },
                         )
                         .expect("creating cluster must not fail");

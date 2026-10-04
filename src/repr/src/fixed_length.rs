@@ -11,7 +11,7 @@
 //! `Row` is the most obvious implementor, but other trace types that may use more advanced
 //! representations only need to commit to implementing this trait.
 
-use crate::{Datum, Row, RowArena};
+use crate::{Datum, DatumError, Row, RowArena, RowRef};
 
 /// A helper trait for types that can append their datums to a `Vec<Datum>`.
 pub trait ExtendDatums {
@@ -32,6 +32,14 @@ pub trait ExtendDatums {
         target: &mut Vec<Datum<'a>>,
         max: Option<usize>,
     );
+
+    /// The row-level error of the represented row, see [`crate::RowRef::row_error`].
+    ///
+    /// [`ExtendDatums::extend_datums`] does not append it, so code that evaluates the datums
+    /// must fetch it here. Representations that cannot carry one keep the default.
+    fn row_error(&self) -> Option<DatumError<'_>> {
+        None
+    }
 }
 
 impl<T: ExtendDatums + ?Sized> ExtendDatums for &T {
@@ -44,6 +52,11 @@ impl<T: ExtendDatums + ?Sized> ExtendDatums for &T {
     ) {
         // Forward to T's impl so an override isn't lost behind a reference.
         (**self).extend_datums(arena, target, max)
+    }
+
+    #[inline]
+    fn row_error(&self) -> Option<DatumError<'_>> {
+        (**self).row_error()
     }
 }
 
@@ -60,5 +73,10 @@ impl ExtendDatums for Row {
             Some(max) => target.extend(self.iter().take(max)),
             None => target.extend(self.iter()),
         }
+    }
+
+    #[inline]
+    fn row_error(&self) -> Option<DatumError<'_>> {
+        RowRef::row_error(self)
     }
 }

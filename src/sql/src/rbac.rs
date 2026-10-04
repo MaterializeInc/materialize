@@ -972,6 +972,7 @@ fn generate_rbac_requirements(
             up_to: _,
             copy_to: _,
             emit_progress: _,
+            inline_errors: _,
             output: _,
         }) => {
             let items = from

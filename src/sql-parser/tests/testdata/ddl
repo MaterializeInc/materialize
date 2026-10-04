@@ -1491,7 +1491,7 @@ Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("fo
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
-error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
+error: Expected one of PROGRESS or SNAPSHOT or INLINE, found identifier "timestamps"
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
                                           ^
 

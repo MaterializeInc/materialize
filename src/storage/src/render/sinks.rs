@@ -85,6 +85,7 @@ pub(crate) fn render_sink<'scope>(
                 snapshot_mode,
                 timely::progress::Antichain::new(),
                 None,
+                mz_expr::ErrorScope::Row,
                 None,
                 async {},
                 error_handler,

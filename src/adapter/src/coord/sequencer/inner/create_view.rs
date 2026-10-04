@@ -304,7 +304,8 @@ impl Coordinator {
 
         // Build an optimizer for this VIEW.
         let mut optimizer =
-            optimize::view::Optimizer::new(optimizer_config, Some(self.optimizer_metrics()));
+            optimize::view::Optimizer::new(optimizer_config, Some(self.optimizer_metrics()))
+                .for_view_definition();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
