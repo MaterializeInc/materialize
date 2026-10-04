@@ -837,6 +837,14 @@ metrics:
   help: MV sink correction chunks taken out of the buffer pool onto the heap.
   source: src/compute/src/sink/correction_v2.rs
   visibility: internal
+- name: mz_compute_correction_pool_read_nanoseconds_total
+  help: Wall-clock nanoseconds spent reading MV sink correction chunk bodies out of the buffer pool, page faults included.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
+- name: mz_compute_correction_pool_reads_total
+  help: Reads of MV sink correction chunk bodies out of the buffer pool.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
 - name: mz_compute_correction_stage_bytes
   help: Bytes of owned updates held in MV sink correction buffer stages.
   source: src/compute/src/sink/correction_v2.rs

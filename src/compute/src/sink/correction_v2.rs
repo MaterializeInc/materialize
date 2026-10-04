@@ -1770,6 +1770,19 @@ static MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
 /// Bytes [`Chunk::with_view`] copied out of the pool for scoped reads, process-wide.
 static VIEW_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// Reads of correction chunk bodies out of the buffer pool, process-wide.
+static POOL_READS: AtomicU64 = AtomicU64::new(0);
+/// Wall-clock nanoseconds spent in reads of correction chunk bodies out of the buffer pool,
+/// page faults included, process-wide.
+static POOL_READ_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Count one pool read that started at `started`.
+fn record_read(started: std::time::Instant) {
+    POOL_READS.fetch_add(1, atomic::Ordering::Relaxed);
+    let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    POOL_READ_NANOS.fetch_add(nanos, atomic::Ordering::Relaxed);
+}
+
 /// Bytes of owned updates held in correction buffer stages, process-wide.
 static STAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 /// MV sink write commands sent to a write task and not yet received by it, process-wide.
@@ -1822,6 +1835,8 @@ pub fn register_metrics(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_compute_correction_heap_materialized_bytes", help: "Bytes of MV sink correction chunks taken out of the buffer pool onto the heap by a merge or split read."), &HEAP_MATERIALIZED_BYTES);
         gauge(registry, metric!(name: "mz_compute_correction_materializations_total", help: "MV sink correction chunks taken out of the buffer pool onto the heap."), &MATERIALIZATIONS);
         gauge(registry, metric!(name: "mz_compute_correction_view_copy_bytes_total", help: "Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks."), &VIEW_COPY_BYTES);
+        gauge(registry, metric!(name: "mz_compute_correction_pool_reads_total", help: "Reads of MV sink correction chunk bodies out of the buffer pool."), &POOL_READS);
+        gauge(registry, metric!(name: "mz_compute_correction_pool_read_nanoseconds_total", help: "Wall-clock nanoseconds spent reading MV sink correction chunk bodies out of the buffer pool, page faults included."), &POOL_READ_NANOS);
         gauge(registry, metric!(name: "mz_compute_correction_stage_bytes", help: "Bytes of owned updates held in MV sink correction buffer stages."), &STAGE_BYTES);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_commands", help: "MV sink write commands queued for the write task."), &WRITE_QUEUE_COMMANDS);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_updates", help: "Updates in MV sink write commands queued for the write task."), &WRITE_QUEUE_UPDATES);
@@ -1942,7 +1957,9 @@ impl<D: Data> Chunk<D> {
                 .take()
                 .expect("a chunk the pool declined is materialized at construction");
             let mut words = Vec::new();
+            let started = std::time::Instant::now();
             handle.take(&mut words);
+            record_read(started);
             MATERIALIZATIONS.fetch_add(1, atomic::Ordering::Relaxed);
             HEAP_MATERIALIZED_BYTES
                 .fetch_add(u64::cast_from(self.size()), atomic::Ordering::Relaxed);
@@ -1964,7 +1981,9 @@ impl<D: Data> Chunk<D> {
             let pooled = self.pooled.lock().expect("pool handle mutex poisoned");
             match pooled.as_ref() {
                 Some(handle) => {
+                    let started = std::time::Instant::now();
                     handle.read_into(&mut words);
+                    record_read(started);
                     VIEW_COPY_BYTES.fetch_add(
                         u64::cast_from(words.len() * std::mem::size_of::<u64>()),
                         atomic::Ordering::Relaxed,
