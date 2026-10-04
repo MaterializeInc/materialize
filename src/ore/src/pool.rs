@@ -763,7 +763,7 @@ thread_local! {
     static DEMOTION_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn demotion_probes() -> u64 {
     DEMOTION_PROBES.with(std::cell::Cell::get)
 }
@@ -1173,7 +1173,7 @@ impl Pool {
     /// Test hook: makes the pool behave as if spill threads exist, without
     /// spawning any or enabling hand-off, so the inline backstop and the
     /// backstop threshold apply to inline passes and nothing else demotes.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn fake_spill_threads(&self) {
         self.0.spill.threads.store(1, Ordering::Relaxed);
     }
@@ -1199,7 +1199,7 @@ impl Pool {
     }
 
     /// Test hook: the file store of a file-mode pool.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn file_store(&self) -> Option<Arc<FileStore>> {
         match &self.0.store {
             ExtentStore::Swap => None,
@@ -2602,14 +2602,14 @@ impl ChunkHandle {
     }
 
     /// Test hook: the file slot of the chunk's extent, if demoted.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn file_slot(&self) -> Option<file::FileSlot> {
         self.demoted_file().map(|(_, slot)| slot)
     }
 
     /// Test hook: the store and file slot of the chunk's extent, if
     /// demoted.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn demoted_file(&self) -> Option<(Arc<FileStore>, file::FileSlot)> {
         self.meta.state().extent.as_ref()?.file_slot()
     }
