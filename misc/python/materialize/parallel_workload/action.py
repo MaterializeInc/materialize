@@ -3158,6 +3158,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # Read once when a replica installs its pool, so a flip reaches only
+        # replicas started afterwards.
         self.flags_with_values["enable_column_paged_batcher_file_extents"] = (
             BOOLEAN_FLAG_VALUES
         )
