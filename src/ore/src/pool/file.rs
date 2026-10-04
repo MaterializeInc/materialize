@@ -16,12 +16,12 @@
 //! The file-backed extent store: a userspace extent allocator over one
 //! anonymous file per extent class in a scratch directory.
 //!
-//! **Files.** Each class of the [`extent_classes`] ladder gets one file,
-//! opened `O_TMPFILE` so it has no name and the kernel frees its blocks when
-//! the process exits, crash included. Where the filesystem refuses
-//! `O_TMPFILE`, the store creates a uniquely named file and unlinks it
-//! immediately. A slot `(class, index)` lives at byte offset
-//! `index * class_size` of its class's file.
+//! **Files.** Each class of the ladder the caller passes to
+//! [`FileStore::open`] gets one file, opened `O_TMPFILE` so it has no name
+//! and the kernel frees its blocks when the process exits, crash included.
+//! Where the filesystem refuses `O_TMPFILE`, the store creates a uniquely
+//! named file and unlinks it immediately. A slot `(class, index)` lives at
+//! byte offset `index * class_size` of its class's file.
 //!
 //! **Block ownership.** Each class allocates slot indices with a
 //! [`SlotAllocator`] behind its own mutex. Its warm side holds free slots
@@ -41,23 +41,25 @@
 //!
 //! **Alignment.** Class sizes are page multiples, and every transfer covers
 //! whole pages from a page-aligned buffer, which satisfies `O_DIRECT` on
-//! devices with 512-byte and 4 KiB logical blocks. `open` probes one
-//! page-aligned write and read. A probe failing with `EINVAL` means the
-//! device needs a larger alignment or the filesystem lacks direct I/O, and
-//! the store reopens its files buffered: each write is then followed by a
-//! synchronous writeback and a page-cache drop over its range. Memory-backed
-//! filesystems are rejected by type, since tmpfs accepts the probe and would
-//! hold extents in RAM.
+//! devices with 512-byte and 4 KiB logical blocks. The store owns that
+//! rounding: [`FileStore::write`] and [`FileStore::read`] return the length
+//! they transferred. `open` probes one page-aligned write and read. A probe
+//! failing with `EINVAL` means the device needs a larger alignment or the
+//! filesystem lacks direct I/O, and the store reopens its files buffered:
+//! each write is then followed by a synchronous writeback and a page-cache
+//! drop over its range. Memory-backed filesystems are rejected by type,
+//! since tmpfs accepts the probe and would hold extents in RAM.
 //!
 //! **Errors.** Running out of capacity, or `ENOSPC` from `fallocate`, fails
 //! the allocation with [`AllocError::Full`]. An `ENOSPC` from a write fails
 //! it with [`WriteError::Full`] after the store punches and takes back the
-//! slot. Either `ENOSPC` additionally lowers the capacity to the bytes
-//! allocated at that moment, permanently. Any other write or `fallocate`
-//! error disables writes for the store's lifetime. Data already written
-//! stays readable. A read error, short read, or checksum mismatch panics:
-//! there is no correct value to return, and the pool's contents are
-//! recreatable.
+//! slot. A short direct write is retried whole first, and its final error
+//! is classified the same way. Either `ENOSPC` additionally lowers the
+//! capacity to the bytes allocated at that moment, permanently. Any other
+//! write or `fallocate` error disables writes for the store's lifetime. Data
+//! already written stays readable. A read error, short read, or checksum
+//! mismatch panics: there is no correct value to return, and the pool's
+//! contents are recreatable.
 
 use std::alloc::Layout;
 use std::fs::File;
@@ -71,7 +73,6 @@ use std::time::Instant;
 use itertools::Itertools;
 
 use crate::cast::CastFrom;
-use crate::pool::extent::extent_classes;
 use crate::pool::region::{SlotAllocator, page_size};
 
 /// Where the store's I/O goes.
@@ -126,7 +127,14 @@ pub(crate) struct FileStoreStats {
     /// I/O errors that disabled writes.
     pub(crate) write_errors: u64,
     pub(crate) holes_punched_bytes: u64,
+    /// Bytes of slots with allocated blocks, in use or warm: what the store
+    /// holds on the filesystem.
+    pub(crate) allocated_bytes: u64,
 }
+
+/// Attempts a direct write makes at a slot before a short write counts as
+/// failed.
+const DIRECT_WRITE_ATTEMPTS: usize = 3;
 
 /// The checksum the store verifies on every read.
 pub(crate) fn crc(bytes: &[u8]) -> u32 {
@@ -184,13 +192,18 @@ pub(crate) struct FileStore {
 }
 
 impl FileStore {
-    /// Opens one anonymous file per extent class in `dir`. `capacity_bytes`
+    /// Opens one anonymous file per entry of `classes` in `dir`. `classes`
+    /// is the ladder of slot sizes, ascending page multiples. `capacity_bytes`
     /// `None` derives capacity from the volume: the bytes available to
     /// unprivileged writers, minus the larger of 1 GiB and 2% of them.
     ///
     /// Fails with [`io::ErrorKind::Unsupported`] when `dir` is on a
     /// memory-backed filesystem or the platform is not Linux.
-    pub(crate) fn open(dir: &Path, capacity_bytes: Option<u64>) -> io::Result<FileStore> {
+    pub(crate) fn open(
+        dir: &Path,
+        capacity_bytes: Option<u64>,
+        classes: &[usize],
+    ) -> io::Result<FileStore> {
         if sys::is_memory_backed(dir)? {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -207,20 +220,29 @@ impl FileStore {
             }
         };
         let page = page_size();
-        let sizes = extent_classes(page);
-        let (files, io_mode) = match open_files(dir, sizes.len(), page, true) {
+        assert!(
+            !classes.is_empty()
+                && classes.iter().all(|&size| size > 0 && size % page == 0)
+                && classes.is_sorted(),
+            "classes must be ascending page multiples: {classes:?}",
+        );
+        let (files, io_mode) = match open_files(dir, classes.len(), page, IoMode::Direct) {
             Ok(files) => (files, IoMode::Direct),
             Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {
                 tracing::warn!(
                     dir = %dir.display(),
                     "pool file store: direct I/O unsupported ({err}), using buffered I/O",
                 );
-                (open_files(dir, sizes.len(), page, false)?, IoMode::Buffered)
+                (
+                    open_files(dir, classes.len(), page, IoMode::Buffered)?,
+                    IoMode::Buffered,
+                )
             }
             Err(err) => return Err(err),
         };
-        let classes = sizes
-            .into_iter()
+        let classes = classes
+            .iter()
+            .copied()
             .zip_eq(files)
             .map(|(size, file)| Class {
                 size,
@@ -270,8 +292,8 @@ impl FileStore {
             allocated
         };
         let Some((index, warm)) = allocated else {
-            // Every `u32` index of the class is in use, far beyond any
-            // capacity a volume provides.
+            // Every `u32` index of the class is in use: `u32::MAX` slots,
+            // 16 TiB at a one-page class on a 4 KiB page.
             return Err(AllocError::Full);
         };
         let slot = FileSlot { class, index };
@@ -312,12 +334,17 @@ impl FileStore {
             .fetch_add(u64::cast_from(c.size), Ordering::Relaxed);
     }
 
-    /// Writes `buf[..round_up(len, page)]` to `slot`. `buf` must be at least
-    /// that long, and page aligned in [`IoMode::Direct`]. Fails without I/O
-    /// once writes are disabled. On `ENOSPC`, takes the slot back and fails
-    /// with [`WriteError::Full`]. On any other I/O error, disables further
-    /// writes for the store's lifetime.
-    pub(crate) fn write(&self, slot: FileSlot, buf: &[u8], len: usize) -> Result<(), WriteError> {
+    /// Writes `buf[..round_up(len, page)]` to `slot` and returns the rounded
+    /// length. `buf` must be at least that long, and page aligned in
+    /// [`IoMode::Direct`]. Fails without I/O once writes are disabled. On
+    /// `ENOSPC`, takes the slot back and fails with [`WriteError::Full`]. On
+    /// any other I/O error, disables further writes for the store's lifetime.
+    pub(crate) fn write(
+        &self,
+        slot: FileSlot,
+        buf: &[u8],
+        len: usize,
+    ) -> Result<usize, WriteError> {
         if self.writes_disabled() {
             return Err(WriteError::Disabled);
         }
@@ -341,14 +368,15 @@ impl FileStore {
             );
         }
         let offset = self.offset(slot);
-        let result = write_all(&c.file, &buf[..n], offset).and_then(|()| match self.io_mode {
-            IoMode::Direct => Ok(()),
-            IoMode::Buffered => sys::writeback_and_drop(&c.file, offset, n),
-        });
+        let result =
+            write_all(&c.file, &buf[..n], offset, self.io_mode).and_then(|()| match self.io_mode {
+                IoMode::Direct => Ok(()),
+                IoMode::Buffered => sys::writeback_and_drop(&c.file, offset, n),
+            });
         match result {
             Ok(()) => {
                 self.counters.writes.fetch_add(1, Ordering::Relaxed);
-                Ok(())
+                Ok(n)
             }
             Err(err) if err.raw_os_error() == Some(libc::ENOSPC) => {
                 self.reclaim_after_enospc(slot);
@@ -381,7 +409,8 @@ impl FileStore {
             }
             Err(err) => {
                 tracing::warn!("pool file store: punching a slot after ENOSPC failed: {err}");
-                c.slots().free(slot.index, true);
+                let mut slots = c.slots();
+                slots.free(slot.index, true);
                 c.warm_bytes.fetch_add(size, Ordering::Relaxed);
             }
         }
@@ -404,9 +433,10 @@ impl FileStore {
     }
 
     /// Reads the slot's first `len` stored bytes into `dst` (resized to
-    /// `len`), verifying `crc`. Panics on I/O error, short read, or checksum
+    /// `len`), verifying `crc`, and returns the length transferred, `len`
+    /// rounded up to a page. Panics on I/O error, short read, or checksum
     /// mismatch.
-    pub(crate) fn read(&self, slot: FileSlot, len: usize, crc: u32, dst: &mut AlignedBuf) {
+    pub(crate) fn read(&self, slot: FileSlot, len: usize, crc: u32, dst: &mut AlignedBuf) -> usize {
         let c = &self.classes[slot.class];
         let n = len.next_multiple_of(self.page);
         assert!(
@@ -458,6 +488,7 @@ impl FileStore {
             .fetch_add(u64::cast_from(n), Ordering::Relaxed);
         self.counters.read_latency_buckets[read_latency_bucket(micros)]
             .fetch_add(1, Ordering::Relaxed);
+        n
     }
 
     pub(crate) fn capacity_bytes(&self) -> u64 {
@@ -522,6 +553,7 @@ impl FileStore {
             }),
             write_errors: c.write_errors.load(Ordering::Relaxed),
             holes_punched_bytes: c.holes_punched_bytes.load(Ordering::Relaxed),
+            allocated_bytes: self.allocated.load(Ordering::Relaxed),
         }
     }
 
@@ -576,27 +608,57 @@ impl FileStore {
                 return;
             };
             let c = &self.classes[victim];
-            let mut slots = c.slots();
-            while !self.fits(size) {
-                let Some(index) = slots.pop_warm() else {
-                    break;
-                };
+            let class_size = u64::cast_from(c.size);
+            let shortfall = self
+                .allocated
+                .load(Ordering::Relaxed)
+                .saturating_add(size)
+                .saturating_sub(self.capacity_bytes());
+            // Take the victims off the warm list under the lock and punch
+            // them after releasing it. `free` takes this mutex on workers
+            // holding a chunk's state lock, so it must not wait out the
+            // punches. A popped slot is on no free list, so nothing can
+            // allocate it meanwhile.
+            let popped: Vec<u32> = {
+                let mut slots = c.slots();
+                let mut popped = Vec::new();
+                while u64::cast_from(popped.len()).saturating_mul(class_size) < shortfall {
+                    let Some(index) = slots.pop_warm() else {
+                        break;
+                    };
+                    c.warm_bytes.fetch_sub(class_size, Ordering::Relaxed);
+                    popped.push(index);
+                }
+                popped
+            };
+            let mut punched = 0;
+            for &index in &popped {
                 let slot = FileSlot {
                     class: victim,
                     index,
                 };
                 if let Err(err) = sys::punch_hole(&c.file, self.offset(slot), c.size) {
-                    slots.free(index, true);
                     tracing::warn!("pool file store: punching a free slot failed: {err}");
-                    return;
+                    break;
                 }
-                slots.free(index, false);
-                let class_size = u64::cast_from(c.size);
-                c.warm_bytes.fetch_sub(class_size, Ordering::Relaxed);
+                punched += 1;
                 self.allocated.fetch_sub(class_size, Ordering::Relaxed);
                 self.counters
                     .holes_punched_bytes
                     .fetch_add(class_size, Ordering::Relaxed);
+            }
+            let (cold, warm) = popped.split_at(punched);
+            let mut slots = c.slots();
+            for &index in cold {
+                slots.free(index, false);
+            }
+            for &index in warm {
+                slots.free(index, true);
+                c.warm_bytes.fetch_add(class_size, Ordering::Relaxed);
+            }
+            if !warm.is_empty() {
+                // A punch failed.
+                return;
             }
         }
     }
@@ -609,25 +671,26 @@ impl FileStore {
     }
 }
 
-/// Opens `classes` anonymous files and probes the first. With
-/// `direct`, an `EINVAL` from the open or the probe means direct I/O is
-/// unusable here.
-fn open_files(dir: &Path, classes: usize, page: usize, direct: bool) -> io::Result<Vec<File>> {
+/// Opens `classes` anonymous files for `io_mode` and probes the first. In
+/// [`IoMode::Direct`], an `EINVAL` from the open or the probe means direct
+/// I/O is unusable here.
+fn open_files(dir: &Path, classes: usize, page: usize, io_mode: IoMode) -> io::Result<Vec<File>> {
+    let direct = io_mode == IoMode::Direct;
     let files = (0..classes)
         .map(|class| sys::open_anonymous(dir, class, direct))
         .collect::<io::Result<Vec<_>>>()?;
-    probe(&files[0], page)?;
+    probe(&files[0], page, io_mode)?;
     Ok(files)
 }
 
 /// Allocates, writes, reads back, and punches one page at offset 0.
-fn probe(file: &File, page: usize) -> io::Result<()> {
+fn probe(file: &File, page: usize, io_mode: IoMode) -> io::Result<()> {
     let pattern: Vec<u8> = (0..page)
         .map(|i| u8::try_from(i % 251).expect("fits"))
         .collect();
     let src = AlignedBuf::from_bytes(&pattern);
     sys::fallocate(file, 0, page)?;
-    write_all(file, src.as_slice(), 0)?;
+    write_all(file, src.as_slice(), 0, io_mode)?;
     let mut dst = AlignedBuf::new();
     dst.resize(page);
     let mut done = 0;
@@ -646,17 +709,46 @@ fn probe(file: &File, page: usize) -> io::Result<()> {
 }
 
 /// Writes all of `buf` at `offset`, retrying on `EINTR` and short writes.
-fn write_all(file: &File, buf: &[u8], offset: u64) -> io::Result<()> {
-    let mut done = 0;
-    while done < buf.len() {
-        match sys::pwrite(file, &buf[done..], offset + u64::cast_from(done)) {
-            Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
-            Ok(k) => done += k,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
+/// In [`IoMode::Direct`], a short write restarts the whole buffer at
+/// `offset`, at most [`DIRECT_WRITE_ATTEMPTS`] times, and the final attempt's
+/// error is returned.
+fn write_all(file: &File, buf: &[u8], offset: u64, io_mode: IoMode) -> io::Result<()> {
+    match io_mode {
+        IoMode::Direct => {
+            // Resuming at `offset + done` would be a direct write that is
+            // aligned only if `done` is, which the kernel does not promise,
+            // and an unaligned direct write fails `EINVAL`, which disables
+            // writes. Rewriting the same bytes is idempotent, and when the
+            // short write came from a full filesystem the retry returns the
+            // `ENOSPC` the caller classifies.
+            let mut attempts = 0;
+            loop {
+                match sys::pwrite(file, buf, offset) {
+                    Ok(k) if k == buf.len() => return Ok(()),
+                    Ok(_) => {
+                        attempts += 1;
+                        if attempts == DIRECT_WRITE_ATTEMPTS {
+                            return Err(io::Error::from(io::ErrorKind::WriteZero));
+                        }
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        IoMode::Buffered => {
+            let mut done = 0;
+            while done < buf.len() {
+                match sys::pwrite(file, &buf[done..], offset + u64::cast_from(done)) {
+                    Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
+                    Ok(k) => done += k,
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(())
         }
     }
-    Ok(())
 }
 
 /// Page-aligned, growable byte buffer for `O_DIRECT` reads.

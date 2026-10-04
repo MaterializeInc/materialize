@@ -17,7 +17,7 @@ use super::*;
 
 fn store(capacity: u64) -> (tempfile::TempDir, FileStore) {
     let dir = disk_tempdir();
-    let store = FileStore::open(dir.path(), Some(capacity)).expect("open");
+    let store = FileStore::open(dir.path(), Some(capacity), &classes()).expect("open");
     (dir, store)
 }
 
@@ -40,7 +40,7 @@ fn pattern(len: usize, seed: u32) -> Vec<u8> {
         .collect()
 }
 
-fn write_bytes(s: &FileStore, slot: FileSlot, data: &[u8]) -> Result<(), WriteError> {
+fn write_bytes(s: &FileStore, slot: FileSlot, data: &[u8]) -> Result<usize, WriteError> {
     let buf = aligned(data);
     s.write(slot, buf.as_slice(), data.len())
 }
@@ -51,7 +51,7 @@ fn assert_reads_back(s: &FileStore, slot: FileSlot, data: &[u8]) {
     assert_eq!(out.as_slice(), data);
 }
 
-/// The class ladder the store uses, without opening a store.
+/// The ladder tests open stores with, the one the pool passes.
 fn classes() -> Vec<usize> {
     crate::pool::extent::extent_classes(crate::pool::region::page_size())
 }
@@ -67,22 +67,21 @@ fn round_trip() {
     let class = s.class_for(data.len()).unwrap();
     let slot = s.alloc(class).unwrap();
     let buf = aligned(&data);
-    s.write(slot, buf.as_slice(), data.len()).unwrap();
+    let rounded = data
+        .len()
+        .next_multiple_of(crate::pool::region::page_size());
+    let written = s.write(slot, buf.as_slice(), data.len()).unwrap();
+    assert_eq!(written, rounded, "writes transfer page-rounded bytes");
     let mut out = AlignedBuf::new();
-    s.read(slot, data.len(), crc(&data), &mut out);
+    let read = s.read(slot, data.len(), crc(&data), &mut out);
+    assert_eq!(read, rounded, "reads transfer page-rounded bytes");
     assert_eq!(out.as_slice(), &data[..]);
     s.free(slot);
     let stats = s.stats();
     assert_eq!(stats.writes, 1);
     assert_eq!(stats.reads, 1);
-    assert_eq!(
-        stats.read_bytes,
-        u64::cast_from(
-            data.len()
-                .next_multiple_of(crate::pool::region::page_size())
-        ),
-        "reads transfer page-rounded bytes"
-    );
+    assert_eq!(stats.read_bytes, u64::cast_from(read));
+    assert_eq!(stats.allocated_bytes, s.allocated_bytes());
 }
 
 #[mz_ore::test]
@@ -217,6 +216,69 @@ fn write_enospc_returns_slot_and_lowers_capacity() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 #[cfg(target_os = "linux")]
+fn short_direct_write_retries_whole_buffer() {
+    let (_dir, s) = store(64 << 20);
+    if s.io_mode() != IoMode::Direct {
+        // Buffered writes resume a short write instead.
+        return;
+    }
+    let data = pattern(50_000, 3);
+    let slot = s.alloc(s.class_for(data.len()).unwrap()).unwrap();
+    // Errno 0 makes the seam transfer 0 bytes, a short write.
+    fault::fail_next(fault::Op::Write, 0);
+    write_bytes(&s, slot, &data).expect("the retry writes the whole buffer");
+    assert_reads_back(&s, slot, &data);
+    assert_eq!(s.stats().write_errors, 0);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn short_direct_write_then_enospc_is_full() {
+    let (_dir, s) = store(64 << 20);
+    if s.io_mode() != IoMode::Direct {
+        return;
+    }
+    let data = pattern(50_000, 4);
+    let class = s.class_for(data.len()).unwrap();
+    let slot = s.alloc(class).unwrap();
+    fault::fail_next(fault::Op::Write, 0);
+    fault::fail_next(fault::Op::Write, libc::ENOSPC);
+    assert!(matches!(
+        write_bytes(&s, slot, &data),
+        Err(WriteError::Full)
+    ));
+    assert!(
+        !s.writes_disabled(),
+        "ENOSPC after a short write stays a capacity condition"
+    );
+    assert_eq!(s.stats().write_errors, 0);
+    assert_eq!(s.allocated_bytes(), 0, "the slot was taken back cold");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn punched_slot_is_free_and_cold() {
+    let classes = classes();
+    let big = classes.len() - 1;
+    let (_dir, s) = store(u64::cast_from(classes[big]));
+    let slot = s.alloc(big).unwrap();
+    s.free(slot);
+    s.alloc(0).expect("punching the big slot makes room");
+    assert_eq!(s.classes[big].warm_bytes.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        s.classes[big].slots().in_use(),
+        0,
+        "the slot is free and cold"
+    );
+    let again = s.alloc(big);
+    assert_eq!(again, Err(AllocError::Full), "no room for a cold big slot");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
 fn write_error_disables_writes() {
     let (_dir, s) = store(64 << 20);
     let class = s.class_for(50_000).unwrap();
@@ -341,7 +403,7 @@ fn tmpfs_is_rejected() {
         eprintln!("skipping tmpfs_is_rejected: /dev/shm is not tmpfs");
         return;
     }
-    let err = FileStore::open(shm, Some(1 << 20)).unwrap_err();
+    let err = FileStore::open(shm, Some(1 << 20), &classes()).unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Unsupported);
 }
 
@@ -363,7 +425,7 @@ fn read_latency_is_bucketed() {
 #[cfg(target_os = "linux")]
 fn probe_einval_falls_back_to_buffered() {
     let dir = disk_tempdir();
-    let direct = FileStore::open(dir.path(), Some(64 << 20)).expect("open");
+    let direct = FileStore::open(dir.path(), Some(64 << 20), &classes()).expect("open");
     if direct.io_mode() != IoMode::Direct {
         // The host filesystem lacks direct I/O, so injecting the probe
         // failure would not exercise the fallback.
@@ -372,7 +434,7 @@ fn probe_einval_falls_back_to_buffered() {
     drop(direct);
 
     fault::fail_next(fault::Op::Write, libc::EINVAL);
-    let s = FileStore::open(dir.path(), Some(64 << 20)).expect("open");
+    let s = FileStore::open(dir.path(), Some(64 << 20), &classes()).expect("open");
     assert_eq!(s.io_mode(), IoMode::Buffered);
     let data = pattern(300_000, 13);
     let slot = s.alloc(s.class_for(data.len()).unwrap()).unwrap();
@@ -386,7 +448,7 @@ fn probe_einval_falls_back_to_buffered() {
 fn probe_error_fails_open() {
     let dir = disk_tempdir();
     fault::fail_next(fault::Op::Read, libc::EIO);
-    let err = FileStore::open(dir.path(), Some(64 << 20)).unwrap_err();
+    let err = FileStore::open(dir.path(), Some(64 << 20), &classes()).unwrap_err();
     assert_eq!(err.raw_os_error(), Some(libc::EIO));
 }
 
@@ -427,7 +489,7 @@ fn tmpfile_unsupported_falls_back_to_unlinked_file() {
     for _ in 0..2 * classes().len() {
         fault::fail_next(fault::Op::OpenTmpfile, libc::EOPNOTSUPP);
     }
-    let s = FileStore::open(dir.path(), Some(64 << 20)).expect("open");
+    let s = FileStore::open(dir.path(), Some(64 << 20), &classes()).expect("open");
     fault::clear();
     for class in &s.classes {
         let link = std::fs::read_link(format!("/proc/self/fd/{}", class.file.as_raw_fd()))
