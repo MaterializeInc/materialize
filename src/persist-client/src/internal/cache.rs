@@ -309,7 +309,7 @@ mod lru {
 
         /// Returns an iterator over the entries in the cache in order from most
         /// recently used to least.
-        #[allow(dead_code)]
+        #[cfg_attr(not(test), expect(dead_code))]
         pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V, usize)> {
             self.by_time.iter().rev().map(|(_, key)| {
                 let (val, _, weight) = self

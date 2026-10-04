@@ -191,7 +191,7 @@ where
     inner: V::M,
     /// Shared cleanup handle. The label is removed from `vec` only when the last clone drops.
     /// Held purely for its `Drop` side effect — never read directly.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     cleanup: Arc<DeleteOnDropCleanup<V, L>>,
 }
 

@@ -638,7 +638,7 @@ mod tests {
             self.txn.tidy(tidy)
         }
 
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         fn take_tidy(&mut self) -> Tidy {
             self.txn.take_tidy()
         }

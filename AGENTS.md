@@ -120,6 +120,11 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   outside the assert, then assert on the bound value. Clippy's
   `debug_assert_with_mut_call` catches `&mut self` receivers but not `&self` or
   free-function side effects.
+* Never write `#[allow(dead_code)]` or `#[allow(unused)]`. Use
+  `#[expect(dead_code)]`, which warns once the code becomes used, so the
+  attribute cannot outlive its reason. Scope it with `cfg_attr` when the code is
+  dead only in some configurations. `bin/lint` enforces this, see
+  `doc/developer/style.md` for the escape hatch.
 * Never write vendor, customer, or account names into durable or user-facing
   surfaces: committed code, comments, column comments, docs, specs, commit
   messages, PR bodies, or test fixtures. Anything persisted to disk gets shared,

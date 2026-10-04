@@ -857,7 +857,7 @@ impl<'a> FromSql<'a> for MzTimestamp {
     }
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct MzAclItem(String);
 
 impl<'a> FromSql<'a> for MzAclItem {

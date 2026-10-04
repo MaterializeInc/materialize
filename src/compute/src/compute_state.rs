@@ -654,7 +654,7 @@ pub(crate) struct ActiveComputeState<'a> {
 }
 
 /// A token that keeps a sink alive.
-pub struct SinkToken(#[allow(dead_code)] Box<dyn Any>);
+pub struct SinkToken(#[expect(dead_code)] Box<dyn Any>);
 
 impl SinkToken {
     /// Create a new `SinkToken`.

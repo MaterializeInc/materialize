@@ -58,7 +58,7 @@ struct RecordFormat {
     requires_key: bool,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug, Clone)]
 enum DecodedValue {
     Avro(DebugValue),

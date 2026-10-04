@@ -127,20 +127,20 @@ pub(crate) struct McpRequest {
 enum McpMethod {
     /// Initialize method - params accepted but not currently used
     #[serde(rename = "initialize")]
-    Initialize(#[allow(dead_code)] InitializeParams),
+    Initialize(#[expect(dead_code)] InitializeParams),
     /// `params` is accepted and ignored: clients may attach `_meta`, and a unit
     /// variant would fail the whole request with a non-JSON-RPC 422.
     #[serde(rename = "tools/list")]
-    ToolsList(#[allow(dead_code)] Option<serde_json::Value>),
+    ToolsList(#[expect(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "tools/call")]
     ToolsCall(#[serde(deserialize_with = "deserialize_tools_call")] ToolsCallParams),
     /// Keepalive, and the post-initialize acknowledgement. Both are named so
     /// their `params` deserialize; `#[serde(other)]` must be a unit variant, so
     /// anything falling through to `Unknown` with `params` still fails the body.
     #[serde(rename = "ping")]
-    Ping(#[allow(dead_code)] Option<serde_json::Value>),
+    Ping(#[expect(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "notifications/initialized")]
-    NotificationsInitialized(#[allow(dead_code)] Option<serde_json::Value>),
+    NotificationsInitialized(#[expect(dead_code)] Option<serde_json::Value>),
     /// Catch-all for unrecognized methods.
     #[serde(other)]
     Unknown,
@@ -163,23 +163,23 @@ impl std::fmt::Display for McpMethod {
 struct InitializeParams {
     /// Protocol version from client. Not currently validated but accepted for MCP compliance.
     #[serde(rename = "protocolVersion")]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     protocol_version: String,
     /// Client capabilities. Not currently used but accepted for MCP compliance.
     #[serde(default)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     capabilities: serde_json::Value,
     /// Client information (name, version). Not currently used but accepted for MCP compliance.
     #[serde(rename = "clientInfo")]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     client_info: Option<ClientInfo>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ClientInfo {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     name: String,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     version: String,
 }
 

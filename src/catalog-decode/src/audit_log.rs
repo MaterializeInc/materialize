@@ -112,7 +112,6 @@ pub fn details(a: JsonbRef<'_>) -> Result<Jsonb, String> {
     /// `Double` is `{"<field>": {"K": {}}}`, where the outer key matches
     /// the field name in the current schemas (`reason`, `transition`).
     /// Unlisted variants error (fail-fast).
-    #[allow(dead_code)]
     #[derive(Copy, Clone)]
     enum WrapKind {
         Single,

@@ -278,15 +278,15 @@ mod v91_to_v92;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+// Which variants are used depends on the migrations currently in the tree, so
+// an `expect` would flip whenever a migration is added or removed.
+#[allow(dead_code)] // allow(allow-dead-code)
 enum MigrationAction<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> {
     /// Deletes the provided key.
-    #[allow(unused)]
     Delete(V1),
     /// Inserts the provided key-value pair. The key must not currently exist!
-    #[allow(unused)]
     Insert(V2),
     /// Update the key-value pair for the provided key.
-    #[allow(unused)]
     Update(V1, V2),
 }
 

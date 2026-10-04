@@ -2310,7 +2310,7 @@ mod tests {
     /// Words that fill a 64 KiB class exactly.
     const SMALL: usize = (64 << 10) / 8;
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn assert_handle_send_sync() {
         fn check<T: Send + Sync>() {}
         check::<Pool>();

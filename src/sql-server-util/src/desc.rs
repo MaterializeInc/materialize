@@ -385,7 +385,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
 
 /// The raw datatype from SQL Server is not supported in Materialize.
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub struct UnsupportedDataType {
     column_name: String,
     column_type: String,

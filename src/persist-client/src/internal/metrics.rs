@@ -117,7 +117,7 @@ pub struct Metrics {
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) registry: MetricsRegistry,
 }
 

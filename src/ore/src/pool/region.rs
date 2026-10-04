@@ -435,7 +435,7 @@ pub(crate) mod fake_residency {
 /// Guarantees, relied on by [`sys::advise`] for pointer arithmetic and
 /// proved by the Kani harnesses: `offset <= len`, `offset + sub_len <= len`,
 /// and both `addr + offset` and `sub_len` are `page`-aligned.
-#[cfg_attr(miri, allow(dead_code))]
+#[cfg_attr(miri, expect(dead_code))]
 fn aligned_subrange(addr: usize, len: usize, page: usize) -> Option<(usize, usize)> {
     crate::soft_assert_no_log!(page.is_power_of_two());
     let start = addr.checked_add(page - 1)? & !(page - 1);
@@ -452,7 +452,7 @@ fn aligned_subrange(addr: usize, len: usize, page: usize) -> Option<(usize, usiz
 /// When `addr` and `len` are page-aligned and `align` is a page-multiple
 /// power of two, `head` and `tail` are page-aligned (so both trims are
 /// unmappable) — proved by the Kani harnesses.
-#[cfg_attr(miri, allow(dead_code))]
+#[cfg_attr(miri, expect(dead_code))]
 fn align_trim(addr: usize, map_len: usize, len: usize, align: usize) -> Option<(usize, usize)> {
     crate::soft_assert_no_log!(align.is_power_of_two());
     let aligned = addr.checked_next_multiple_of(align)?;
@@ -636,7 +636,7 @@ mod sys {
     /// Only Linux answers from the kernel. Elsewhere the reclaim advice is
     /// compiled out, so there is no reclaim to observe and the answer is
     /// `true`, keeping the compressed tier cycling on development platforms.
-    #[cfg_attr(test, allow(dead_code))]
+    #[cfg_attr(test, expect(dead_code))]
     pub(super) fn nonresident(ptr: *mut u8, len: usize) -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -739,7 +739,7 @@ mod sys {
 
     /// The heap backing has no residency to observe, so reclaim advice is
     /// treated as fully effective, mirroring the non-Linux answer.
-    #[cfg_attr(test, allow(dead_code))]
+    #[cfg_attr(test, expect(dead_code))]
     pub(super) fn nonresident(_ptr: *mut u8, _len: usize) -> bool {
         true
     }

@@ -170,9 +170,8 @@ impl std::fmt::Display for CodecMismatch {
 
 /// The concrete type of a [mz_persist_types::Codec] or
 /// [mz_persist_types::Codec64] impl.
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
-pub struct CodecConcreteType(#[allow(dead_code)] pub(crate) &'static str);
+#[derive(Debug, PartialEq)]
+pub struct CodecConcreteType(pub(crate) &'static str);
 
 impl<T> From<CodecMismatch> for InvalidUsage<T> {
     fn from(x: CodecMismatch) -> Self {

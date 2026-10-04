@@ -4543,7 +4543,7 @@ impl Coordinator {
     ///
     /// TODO(parkmycar): This code is dead, but is a nice parallel to [`Coordinator::broadcast_notice_tx`]
     /// so we keep it around.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn broadcast_notice(&self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
             let _ = meta.notice_tx.send(notice.clone());
@@ -4943,7 +4943,7 @@ fn arrangement_sizes_expired_retractions(
 
 #[cfg(test)]
 impl Coordinator {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     async fn verify_ship_dataflow_no_error(
         &mut self,
         dataflow: DataflowDescription<LirRelationExpr>,

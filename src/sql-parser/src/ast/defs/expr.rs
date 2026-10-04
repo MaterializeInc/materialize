@@ -687,10 +687,10 @@ mod prec {
     // `MULTIPLY_DIVIDE` and `ATOM`, but neither edge function ever *returns* them:
     // those forms are self-delimiting (their own operand is parenthesized when it
     // isn't), so both their edges rank `ATOM`. Kept for parity with the ladder.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub const COLLATE: u8 = Precedence::PostfixCollateAt as u8;
     pub const PREFIX: u8 = Precedence::PrefixPlusMinus as u8;
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub const POSTFIX: u8 = Precedence::PostfixSubscriptCast as u8;
     pub const ATOM: u8 = Precedence::PostfixSubscriptCast as u8 + 1;
 }

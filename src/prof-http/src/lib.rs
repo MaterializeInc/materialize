@@ -193,7 +193,7 @@ async fn handle_post_cpu(
     Ok(cpu_pprof_response(stacks))
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 enum MemProfilingStatus {
     Disabled,
     Enabled(Option<ProfStartTime>),
