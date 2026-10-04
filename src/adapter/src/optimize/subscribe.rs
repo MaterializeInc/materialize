@@ -52,6 +52,8 @@ pub struct Optimizer {
     view_id: GlobalId,
     /// Should the plan produce an initial snapshot?
     with_snapshot: bool,
+    /// Should an error discard instead of poisoning the subscribe?
+    ignore_errors: bool,
     /// Sink timestamp.
     up_to: Option<Timestamp>,
     /// A human-readable name exposed internally (useful for debugging).
@@ -84,6 +86,7 @@ impl Optimizer {
         view_id: GlobalId,
         sink_id: GlobalId,
         with_snapshot: bool,
+        ignore_errors: bool,
         up_to: Option<Timestamp>,
         debug_name: String,
         config: OptimizerConfig,
@@ -96,6 +99,7 @@ impl Optimizer {
             view_id,
             sink_id,
             with_snapshot,
+            ignore_errors,
             up_to,
             debug_name,
             config,
@@ -189,7 +193,10 @@ impl Optimizer {
         let sink_description = ComputeSinkDesc {
             from,
             from_desc,
-            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection { output }),
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                output,
+                ignore_errors: self.ignore_errors,
+            }),
             with_snapshot: self.with_snapshot,
             up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
             // No `FORCE NOT NULL` for subscribes

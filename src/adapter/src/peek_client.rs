@@ -379,6 +379,8 @@ impl PeekClient {
         depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
         logging: &mut ExecutionLogging,
+        ignore_errors: bool,
+        notice_tx: tokio::sync::mpsc::UnboundedSender<crate::AdapterNotice>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -397,6 +399,14 @@ impl PeekClient {
 
             let mut rows = match rows_res {
                 Ok(rows) => rows,
+                // The option covers a constant answer too, so an error folded at plan time
+                // becomes an empty result rather than a failure.
+                Err(e) if ignore_errors => {
+                    let _ = notice_tx.send(crate::AdapterNotice::IgnoredErrors {
+                        error: e.to_string(),
+                    });
+                    Vec::new()
+                }
                 Err(e) => return Err(e.into()),
             };
             consolidate(&mut rows);
@@ -538,6 +548,7 @@ impl PeekClient {
                 result_desc,
                 finishing_for_instance,
                 mfp,
+                ignore_errors,
                 target_read_hold,
                 target_replica,
                 rows_tx,
@@ -575,6 +586,7 @@ impl PeekClient {
             self.persist_client.clone(),
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            notice_tx,
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {

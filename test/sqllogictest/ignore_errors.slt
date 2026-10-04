@@ -1,0 +1,92 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# The option is gated, so it is rejected before the flag is set.
+
+statement error is not available
+SELECT 1 WITH (IGNORE ERRORS)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ignore_errors = true
+----
+COMPLETE 0
+
+# A query with no errors is unaffected by the option.
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (0)
+
+query I
+SELECT a FROM t ORDER BY a WITH (IGNORE ERRORS)
+----
+0
+1
+2
+
+# An error the statement's own expressions raise is discarded along with the
+# rest, rather than failing the query. This is the price of statement-level
+# scope: the option cannot tell a poisoned source from a bug in the query.
+#
+# A query that folds to a constant error has no ok rows to return, so the
+# answer is empty.
+
+statement error division by zero
+SELECT 1 / 0
+
+query I
+SELECT 1 / 0 WITH (IGNORE ERRORS)
+----
+
+# Where the error arises per row, the rows that did not error are still
+# returned. Operators keep the ok stream as correct as they can, so a row that
+# failed evaluation is the only one missing. Nothing guarantees this in general.
+
+statement error division by zero
+SELECT 1 / a FROM t
+
+query I
+SELECT 1 / a FROM t ORDER BY 1 WITH (IGNORE ERRORS)
+----
+0
+1
+
+# The option belongs to the statement, not to the query, so nothing that
+# defines a catalog item can carry it.
+
+statement error
+CREATE VIEW v AS SELECT a FROM t WITH (IGNORE ERRORS)
+
+statement error
+CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WITH (IGNORE ERRORS)
+
+statement error
+INSERT INTO t SELECT a FROM t WITH (IGNORE ERRORS)
+
+# A subquery cannot carry it either.
+
+statement error
+SELECT * FROM (SELECT a FROM t WITH (IGNORE ERRORS))
+
+# `IGNORE` stays usable as a bare table alias, which is why the option is a
+# `WITH (...)` list rather than a trailing keyword.
+
+query I
+SELECT ignore.a FROM t ignore ORDER BY a
+----
+0
+1
+2
+
+statement ok
+DROP TABLE t

@@ -222,7 +222,10 @@ async fn push(upload: &mut StashUpload, rows: RowBatch) {
 
 /// Finishes `upload`, which persist accepts for every batch built here.
 async fn finish(upload: StashUpload) -> PeekResponse {
-    upload.finish().await.expect("persist finishes the batch")
+    upload
+        .finish(None)
+        .await
+        .expect("persist finishes the batch")
 }
 
 /// The values a finished upload holds, in ascending order, each repeated as often as the diff
@@ -543,7 +546,7 @@ async fn a_rejected_batch_is_reported_rather_than_raised() {
     let mut upload = upload_with_bounds(&clients, Timestamp::default(), Timestamp::default()).await;
 
     push(&mut upload, batch(0..2, 1)).await;
-    let rejection = upload.finish().await;
+    let rejection = upload.finish(None).await;
 
     assert!(
         matches!(&rejection, Err(StashError::FinishBatch(error)) if error.to_string().contains("beyond the expected batch upper")),

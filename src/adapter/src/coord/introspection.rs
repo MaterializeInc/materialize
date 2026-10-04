@@ -233,6 +233,7 @@ impl Coordinator {
             view_id,
             subscribe_id,
             plan.with_snapshot,
+            plan.ignore_errors,
             None,
             format!("introspection-subscribe-{subscribe_id}"),
             optimizer_config,

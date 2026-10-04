@@ -200,7 +200,17 @@ impl FrontiersResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
-    Rows(Vec<RowCollection>),
+    Rows {
+        /// The rows the peek answered with.
+        rows: Vec<RowCollection>,
+        /// One error the peek discarded under [`Peek::ignore_errors`], if it met any.
+        ///
+        /// Which error is kept is arbitrary, and keeping one never changes `rows`. It exists
+        /// so the client can be told the answer is degraded.
+        ///
+        /// [`Peek::ignore_errors`]: super::command::Peek::ignore_errors
+        ignored_error: Option<PeekError>,
+    },
     /// Results of the peek were stashed in persist batches.
     Stashed(Box<StashedPeekResponse>),
     /// Error of an unsuccessful peek.
@@ -210,10 +220,22 @@ pub enum PeekResponse {
 }
 
 impl PeekResponse {
+    /// The error this peek discarded under `Peek::ignore_errors`, if it discarded any.
+    ///
+    /// Always `None` for a peek that does not ignore errors, and for a response that is itself
+    /// an error or a cancelation.
+    pub fn ignored_error(&self) -> Option<&PeekError> {
+        match self {
+            Self::Rows { ignored_error, .. } => ignored_error.as_ref(),
+            Self::Stashed(stashed) => stashed.ignored_error.as_ref(),
+            Self::Error(_) | Self::Canceled => None,
+        }
+    }
+
     /// Return the size of row bytes stored inline in this response.
     pub fn inline_byte_len(&self) -> usize {
         match self {
-            Self::Rows(rows) => rows.iter().map(|r| r.byte_len()).sum(),
+            Self::Rows { rows, .. } => rows.iter().map(|r| r.byte_len()).sum(),
             Self::Stashed(stashed) => stashed.inline_rows.iter().map(|r| r.byte_len()).sum(),
             Self::Error(_) | Self::Canceled => 0,
         }
@@ -305,6 +327,10 @@ pub struct StashedPeekResponse {
     /// We will have a mix of stashed responses and inline responses because the
     /// result sizes across different workers can and will vary.
     pub inline_rows: Vec<RowCollection>,
+    /// One error the peek discarded under `Peek::ignore_errors`, if it met any.
+    ///
+    /// See [`PeekResponse::Rows::ignored_error`].
+    pub ignored_error: Option<PeekError>,
 }
 
 impl StashedPeekResponse {
@@ -371,6 +397,12 @@ pub struct SubscribeBatch {
     ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
     pub updates: Result<Vec<UpdateCollection>, String>,
+    /// The first error this subscribe discarded under `SubscribeSinkConnection::ignore_errors`.
+    ///
+    /// Set on the one batch that discarded it and empty on every batch after, so that a stream
+    /// erroring continuously reports once rather than on every batch. `updates` is an `Ok` when
+    /// this is set: the error arm is the poison channel that the option removes.
+    pub ignored_error: Option<String>,
 }
 
 impl SubscribeBatch {
@@ -403,6 +435,10 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 112);
+        // Grew from 112 when `SubscribeBatch` gained the error a subscribe discarded under
+        // `IGNORE ERRORS`. The subscribe variant is the largest, so the field lands on the
+        // whole enum. Boxing it does not help: the variant is padded to the same width either
+        // way.
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 120);
     }
 }

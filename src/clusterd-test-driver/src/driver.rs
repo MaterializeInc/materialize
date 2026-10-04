@@ -199,6 +199,7 @@ impl Driver {
             .into_nontemporal()
             .map_err(|_| anyhow::anyhow!("unexpected temporal MFP for identity plan"))?;
         let peek = Peek {
+            ignore_errors: false,
             target,
             result_desc: result_desc.clone(),
             literal_constraints: None,
@@ -210,7 +211,9 @@ impl Driver {
         };
         self.send(ComputeCommand::Peek(Box::new(peek)))?;
         match rx.await? {
-            PeekResponse::Rows(collections) => {
+            PeekResponse::Rows {
+                rows: collections, ..
+            } => {
                 let mut rows = Vec::new();
                 for collection in collections {
                     let mut iter = collection.into_row_iter();

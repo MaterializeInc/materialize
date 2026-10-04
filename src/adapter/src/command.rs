@@ -290,6 +290,10 @@ pub enum Command {
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
+        /// Whether to answer from the ok rows alone, discarding the errors the peek meets.
+        ignore_errors: bool,
+        /// Where a discarded error is reported, since the coordinator holds no session.
+        notice_tx: tokio::sync::mpsc::UnboundedSender<crate::AdapterNotice>,
         /// If statement logging is enabled, contains all info needed for installing watch sets
         /// and logging the statement execution.
         watch_set: Option<WatchSetCreation>,
@@ -306,6 +310,8 @@ pub enum Command {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
         statement_logging_id: Option<StatementLoggingId>,
+        /// Where a discarded error is reported, since the coordinator holds no session.
+        notice_tx: tokio::sync::mpsc::UnboundedSender<crate::AdapterNotice>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 

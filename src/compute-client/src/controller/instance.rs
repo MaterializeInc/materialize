@@ -1358,6 +1358,7 @@ impl Instance {
                     lower: subscribe.frontier.clone(),
                     upper: subscribe.frontier,
                     updates: Err(ERROR_TARGET_REPLICA_FAILED.into()),
+                    ignored_error: None,
                 },
             );
             self.deliver_response(response);
@@ -1779,6 +1780,7 @@ impl Instance {
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        ignore_errors: bool,
         mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
@@ -1823,6 +1825,7 @@ impl Instance {
             timestamp,
             finishing,
             map_filter_project,
+            ignore_errors,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,
@@ -2268,6 +2271,7 @@ impl Instance {
             SubscribeResponse::Batch(batch) => {
                 let upper = batch.upper;
                 let mut updates = batch.updates;
+                let ignored_error = batch.ignored_error;
 
                 // If this batch advances the subscribe's frontier, we emit all updates at times
                 // greater or equal to the last frontier (to avoid emitting duplicate updates).
@@ -2300,6 +2304,7 @@ impl Instance {
                             lower,
                             upper,
                             updates,
+                            ignored_error,
                         },
                     ));
                 }
