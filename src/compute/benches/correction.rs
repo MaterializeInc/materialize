@@ -161,7 +161,7 @@ impl Spill {
                 eager_backing: false,
                 rss_target_bytes: 0,
             },
-            || pool_config::PoolBackend::Swap,
+            pool_config::ExtentBackend::Swap,
         );
         assert!(applied, "pool reservation failed");
     }

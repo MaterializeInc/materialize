@@ -384,11 +384,13 @@ impl ComputeState {
         use mz_compute_types::dyncfgs::*;
 
         let config = &self.worker_config;
+        // The one scratch path every scratch consumer below is fed from.
+        let scratch = self.context.scratch_directory.clone();
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
         if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
+            if let Some(path) = &scratch {
                 let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
                 let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
                 let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
@@ -430,7 +432,7 @@ impl ComputeState {
         // on every `apply_worker_config` tick is safe. The pager module is
         // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
         #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
+        if let Some(path) = &scratch {
             mz_ore::pager::set_scratch_dir(path.clone());
             mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
         } else {
@@ -479,7 +481,7 @@ impl ComputeState {
             let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
             let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
 
-            let backend = if self.context.scratch_directory.is_some() {
+            let backend = if scratch.is_some() {
                 Backend::File
             } else {
                 Backend::Swap
@@ -515,7 +517,7 @@ impl ComputeState {
         // the full dyncfg aggregate, which is what makes the storage flag
         // readable here.
         {
-            use mz_timely_util::pool_config::{PoolBackend, PoolPagerConfig, apply_pool_config};
+            use mz_timely_util::pool_config::{ExtentBackend, PoolPagerConfig, apply_pool_config};
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
@@ -552,25 +554,16 @@ impl ComputeState {
                 // write then pages out immediately, the pre-tier behavior.
                 let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
-                // The closure runs on the first application only, so the
-                // directory is created at install and later flag flips or
-                // directory failures cannot change the backend. The file
-                // store lives in its own subdirectory so it cannot collide
-                // with other scratch users.
-                let scratch = self.context.scratch_directory.as_ref();
-                let file_extents = ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config);
-                let backend = || match scratch {
-                    Some(scratch) if file_extents => {
-                        let dir = scratch.join("pool");
-                        match std::fs::create_dir_all(&dir) {
-                            Ok(()) => PoolBackend::File { dir },
-                            Err(err) => {
-                                warn!(%err, ?dir, "chunk spill: cannot create pool directory, using swap");
-                                PoolBackend::Swap
-                            }
+                // The file store lives in its own subdirectory so it cannot
+                // collide with other scratch users.
+                let backend = match &scratch {
+                    Some(scratch) if ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config) => {
+                        ExtentBackend::File {
+                            dir: scratch.join("pool"),
+                            capacity_bytes: None,
                         }
                     }
-                    _ => PoolBackend::Swap,
+                    _ => ExtentBackend::Swap,
                 };
                 let applied = apply_pool_config(
                     PoolPagerConfig {
