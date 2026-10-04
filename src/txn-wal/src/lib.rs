@@ -637,11 +637,6 @@ mod tests {
         pub(crate) fn tidy(&mut self, tidy: Tidy) {
             self.txn.tidy(tidy)
         }
-
-        #[expect(dead_code)]
-        fn take_tidy(&mut self) -> Tidy {
-            self.txn.take_tidy()
-        }
     }
 
     /// A test helper for collecting committed writes and later comparing them
