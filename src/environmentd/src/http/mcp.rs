@@ -198,9 +198,10 @@ enum ToolsCallParams {
     QuerySystemCatalog(QuerySystemCatalogParams),
 }
 
-/// Arguments of a tool that takes none. A struct rather than `()`, because
-/// `serde_json::from_value` rejects `{}` for `()` when the workspace enables
-/// `preserve_order`.
+/// Arguments of a tool that takes none. A struct rather than `()`: read from a
+/// `serde_json::Value`, `()` accepts `{}` only if serde buffers `arguments`
+/// ahead of `name`, which depends on key order (`preserve_order` keeps the
+/// client's order).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoArguments {}
