@@ -581,7 +581,7 @@ impl FileStore {
     /// not fit.
     fn reserve(&self, size: u64) -> bool {
         self.allocated
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |allocated| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |allocated| {
                 allocated
                     .checked_add(size)
                     .filter(|&n| n <= self.capacity_bytes())
