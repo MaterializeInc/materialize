@@ -654,8 +654,12 @@ metrics:
   help: Extents freed while resident in a reclaimable arena slot, so the free needed no swap or file I/O.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_extent_file_allocated_bytes
+  help: 'Bytes the file store holds on the filesystem: slots in use plus free slots whose blocks were not punched.'
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_extent_file_bytes
-  help: Slot bytes of extents currently demoted to the file store.
+  help: Slot bytes of live extents demoted to the file store.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_capacity_bytes
@@ -689,11 +693,11 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_write_bytes_compressed_total
-  help: Page-rounded bytes written to the file store by committed demotions of compressed extents.
+  help: Page-rounded bytes of file store demotion writes of compressed extents.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_write_bytes_identity_total
-  help: Page-rounded bytes written to the file store by committed demotions of uncompressed extents.
+  help: Page-rounded bytes of file store demotion writes of uncompressed extents.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_write_errors_total
@@ -701,11 +705,11 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_writes_inline_total
-  help: File store demotion writes run on threads other than spill threads.
+  help: File store demotion writes run by inline enforcement rather than spill threads.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_writes_total
-  help: Demotion writes to the file store that completed without error.
+  help: Demotion writes that reached the file store without error, including those whose chunk was freed before the demotion committed.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_pageout_incomplete_total

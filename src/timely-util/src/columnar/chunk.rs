@@ -163,7 +163,7 @@ static COMPRESS_MIN_DEPTH: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_MIN_DEPTH);
 /// a shallow chunk buys a short stay in the pool at the cost of a guaranteed
 /// near-term codec round-trip: the body is encoded only to be read back and
 /// decoded by the next rewrite. Generations below the floor spill under the
-/// identity codec instead: still budgeted and swap-backed like every extent,
+/// identity codec instead: still budgeted and backed like every extent,
 /// but encode and decode are copies. The floor never exempts a body from the
 /// pool, so it cannot grow unbudgeted resident state.
 ///
@@ -538,7 +538,7 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G
     ///
     /// Generations below the compression depth floor store under the
     /// identity codec: rewritten too soon for compression to amortize, they
-    /// stay budgeted and swap-backed while encode and decode reduce to
+    /// stay budgeted and backed while encode and decode reduce to
     /// copies.
     fn spill_body(body: ColumnBody<(D, T, R)>, pool: &Pool, depth: u8) -> Self
     where
@@ -2872,7 +2872,7 @@ mod tests {
                 eager_backing: false,
                 rss_target_bytes: 16 << 20,
             },
-            || crate::pool_config::PoolBackend::Swap,
+            crate::pool_config::ExtentBackend::Swap,
         );
         assert!(installed, "pool reservation failed");
         // A body at the spill floor, so the gates alone decide.
