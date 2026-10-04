@@ -519,6 +519,13 @@ impl ChunkMeta {
     }
 }
 
+/// Set whether a read of a spilled chunk first hints the kernel to swap its whole extent back in
+/// (`MADV_WILLNEED`). On by default. Without the hint, the decode faults the pages in as it
+/// touches them. Consulted at every read, so changes apply to running dataflows.
+pub fn set_read_prefetch(enabled: bool) {
+    extent::READ_PREFETCH.store(enabled, Ordering::Relaxed);
+}
+
 /// Handle to one immutable chunk in a [`Pool`]. Dropping the handle frees the
 /// chunk: the slot (if resident) returns to the region free list with its
 /// physical pages released, and the extent (if any) is deallocated,

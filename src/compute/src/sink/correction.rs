@@ -111,6 +111,23 @@ impl<D: Data> Correction<D> {
         }
     }
 
+    /// Consolidate the updates before `upper` and pass them to `out` in pieces.
+    pub fn drain_before<F>(&mut self, upper: &Antichain<Timestamp>, mut out: F)
+    where
+        F: FnMut(Vec<(D, Timestamp, Diff)>) + 'static,
+    {
+        match self {
+            Self::V1(c) => {
+                c.consolidate_before(upper);
+                let mut updates = c.consolidated_updates_before(upper).peekable();
+                while updates.peek().is_some() {
+                    out(updates.by_ref().take(1024).collect());
+                }
+            }
+            Self::V2(c) => c.drain_before(upper, out),
+        }
+    }
+
     /// Return the updates before the given `upper`, as consolidated by a preceding
     /// [`Correction::consolidate_before`] call.
     ///

@@ -48,7 +48,7 @@
 use std::alloc::Layout;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::pool::region::{self, Region};
 use crate::pool::{ExtentCodec, max_stored_len};
@@ -98,6 +98,9 @@ fn extent_classes(page: usize) -> Vec<usize> {
 fn max_chunk_bytes() -> usize {
     region::SIZE_CLASSES[region::SIZE_CLASSES.len() - 1]
 }
+
+/// Whether an extent read hints the kernel to swap the whole extent in before decoding it.
+pub(crate) static READ_PREFETCH: AtomicBool = AtomicBool::new(true);
 
 /// Pool-owned arena of anonymous-memory regions backing extents, one region
 /// per entry of the [`extent_classes`] ladder. Slots are allocated at write,
@@ -417,7 +420,9 @@ impl SwapExtent {
         // pageout passes no longer describe the mapping and the retry
         // budget starts over.
         self.incomplete_passes = 0;
-        self.prefetch();
+        if READ_PREFETCH.load(Ordering::Relaxed) {
+            self.prefetch();
+        }
         // SAFETY: the extent exclusively owns its backing, and the first
         // `comp_len` bytes were initialized by `write`.
         let buf = unsafe { std::slice::from_raw_parts(self.ptr, self.comp_len) };

@@ -497,6 +497,9 @@ mod write {
     use super::*;
 
     use mz_timely_util::activator::ArcActivator;
+    use std::sync::atomic;
+
+    use crate::sink::correction_v2;
 
     /// Commands sent from the Timely operator to the Tokio write task.
     enum WriteCommand {
@@ -538,6 +541,14 @@ mod write {
                 persist_frontier: None,
                 force_consolidation: false,
             }
+        }
+
+        /// The number of updates in this batch.
+        fn len(&self) -> usize {
+            self.desired_ok.len()
+                + self.desired_err.len()
+                + self.persist_ok.len()
+                + self.persist_err.len()
         }
 
         /// Returns true if there is no work in this batch.
@@ -688,6 +699,11 @@ mod write {
                     let writer = persist_api.open_writer().await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
+                        correction_v2::WRITE_QUEUE_COMMANDS.fetch_sub(1, atomic::Ordering::Relaxed);
+                        if let WriteCommand::Batch(batch) = &cmd {
+                            correction_v2::WRITE_QUEUE_UPDATES
+                                .fetch_sub(u64::cast_from(batch.len()), atomic::Ordering::Relaxed);
+                        }
                         corrections =
                             apply_command(sink_id, corrections, &writer, cmd, &resp_tx).await;
                         // Activate the operator to drain logging events and process batch responses.
@@ -797,6 +813,9 @@ mod write {
                 }
 
                 if !batch.is_empty() {
+                    correction_v2::WRITE_QUEUE_COMMANDS.fetch_add(1, atomic::Ordering::Relaxed);
+                    correction_v2::WRITE_QUEUE_UPDATES
+                        .fetch_add(u64::cast_from(batch.len()), atomic::Ordering::Relaxed);
                     cmd_tx
                         .send(WriteCommand::Batch(batch))
                         .expect("write task unexpectedly gone");
@@ -878,41 +897,66 @@ mod write {
                 // boundary.
                 let upper = desc.upper.clone();
                 let (updates_tx, mut updates_rx) = mpsc::channel(READ_BACK_CHUNKS_IN_FLIGHT);
-                let read_back =
-                    mz_ore::task::spawn_blocking(
-                        || operator_name(sink_id, "write::consolidate"),
-                        move || {
-                            corrections.ok.consolidate_before(&upper);
-                            corrections.err.consolidate_before(&upper);
+                let read_back = mz_ore::task::spawn_blocking(
+                    || operator_name(sink_id, "write::consolidate"),
+                    move || {
+                        if correction_v2::single_read() {
+                            let tx = updates_tx.clone();
+                            corrections.ok.drain_before(&upper, move |chunk| {
+                                let chunk = chunk
+                                    .into_iter()
+                                    .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()))
+                                    .collect();
+                                // A closed channel means the write task is gone. The merge
+                                // still has to finish, so drop the updates and carry on.
+                                let _ = tx.blocking_send(chunk);
+                            });
+                            let tx = updates_tx;
+                            corrections.err.drain_before(&upper, move |chunk| {
+                                let chunk = chunk
+                                    .into_iter()
+                                    .map(|(d, t, r)| {
+                                        ((SourceData(Err(d.deserialize())), ()), t, r.into_inner())
+                                    })
+                                    .collect();
+                                let _ = tx.blocking_send(chunk);
+                            });
+                            return corrections;
+                        }
 
-                            let oks = corrections
-                                .ok
-                                .consolidated_updates_before(&upper)
-                                .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-                            let errs = corrections.err.consolidated_updates_before(&upper).map(
-                                |(d, t, r)| {
-                                    ((SourceData(Err(d.deserialize())), ()), t, r.into_inner())
-                                },
-                            );
+                        corrections.ok.consolidate_before(&upper);
+                        corrections.err.consolidate_before(&upper);
 
-                            let mut updates = oks.chain(errs).peekable();
-                            while updates.peek().is_some() {
-                                let mut chunk = Vec::with_capacity(READ_BACK_CHUNK);
-                                chunk.extend(updates.by_ref().take(READ_BACK_CHUNK));
-                                // A closed channel means the write task is gone, so the batch it
-                                // asked for is moot and there is no point in pulling the rest of
-                                // the buffer.
-                                if updates_tx.blocking_send(chunk).is_err() {
-                                    break;
-                                }
-                            }
-
-                            // The iterators borrow the correction buffers, so they must end before
-                            // the buffers move back out.
-                            drop(updates);
+                        let oks = corrections
+                            .ok
+                            .consolidated_updates_before(&upper)
+                            .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
+                        let errs =
                             corrections
-                        },
-                    );
+                                .err
+                                .consolidated_updates_before(&upper)
+                                .map(|(d, t, r)| {
+                                    ((SourceData(Err(d.deserialize())), ()), t, r.into_inner())
+                                });
+
+                        let mut updates = oks.chain(errs).peekable();
+                        while updates.peek().is_some() {
+                            let mut chunk = Vec::with_capacity(READ_BACK_CHUNK);
+                            chunk.extend(updates.by_ref().take(READ_BACK_CHUNK));
+                            // A closed channel means the write task is gone, so the batch it
+                            // asked for is moot and there is no point in pulling the rest of
+                            // the buffer.
+                            if updates_tx.blocking_send(chunk).is_err() {
+                                break;
+                            }
+                        }
+
+                        // The iterators borrow the correction buffers, so they must end before
+                        // the buffers move back out.
+                        drop(updates);
+                        corrections
+                    },
+                );
 
                 // Create the builder lazily: an idle sink's descriptions find no corrections.
                 let mut builder = None;
@@ -1202,6 +1246,7 @@ mod write {
 
             self.trace("write batch description");
             let (desc, cap) = self.batch_description.take()?;
+            correction_v2::WRITE_QUEUE_COMMANDS.fetch_add(1, atomic::Ordering::Relaxed);
             cmd_tx
                 .send(WriteCommand::WriteBatch(desc.clone()))
                 .expect("write task unexpectedly gone");

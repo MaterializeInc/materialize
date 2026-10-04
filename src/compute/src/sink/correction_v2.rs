@@ -143,11 +143,13 @@
 //! so we instead materialize the affected updates, advance their times, and sort and consolidate
 //! them in one O(U log U) pass.
 
+use std::any::Any;
+use std::cell::RefCell;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicU64, AtomicUsize};
+use std::sync::atomic::{self, AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::bytes::indexed;
@@ -435,6 +437,40 @@ impl<D: Data> CorrectionV2<D> {
         Some(self.emitted.iter()).into_iter().flatten()
     }
 
+    /// Consolidate the updates before `upper` and pass them to `out`, one chunk's worth at a time.
+    ///
+    /// Yields the same updates as [`CorrectionV2::updates_before`]. With single reads enabled
+    /// (see [`set_single_read`]), the chunks the consolidation mints into `emitted` reach `out`
+    /// while their bodies are still in hand, and only the `emitted` chunks reused from before are
+    /// read back out of the pool.
+    pub fn drain_before<F>(&mut self, upper: &Antichain<Timestamp>, out: F)
+    where
+        F: FnMut(Vec<(D, Timestamp, Diff)>) + 'static,
+    {
+        let out = Rc::new(RefCell::new(out));
+        let epoch = if SINGLE_READ.load(atomic::Ordering::Relaxed) {
+            let epoch = TAP_EPOCH.fetch_add(1, atomic::Ordering::Relaxed);
+            let tap_out = Rc::clone(&out);
+            let tap: Tap<D> =
+                Box::new(move |view| (tap_out.borrow_mut())(owned_updates::<D>(view)));
+            self.consolidate_before_inner(upper, Some((epoch, tap)));
+            Some(epoch)
+        } else {
+            self.consolidate_before(upper);
+            None
+        };
+        if !PartialOrder::less_than(&self.since, upper) {
+            return;
+        }
+        for chunk in &self.emitted.chunks {
+            if epoch.is_some_and(|epoch| chunk.tap_epoch == epoch) {
+                continue;
+            }
+            let updates = chunk.with_view(|view| owned_updates::<D>(view));
+            (out.borrow_mut())(updates);
+        }
+    }
+
     /// Consolidate all updates before the given `upper` into the `emitted` chain.
     ///
     /// Once this method returns, `emitted` contains all updates at times before `upper`,
@@ -445,6 +481,16 @@ impl<D: Data> CorrectionV2<D> {
     /// merge, and `boundary` advancement. Normal reads and `consolidate_at_since` always pass an
     /// `upper` beyond the `since`.
     pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+        self.consolidate_before_inner(upper, None);
+    }
+
+    /// As [`CorrectionV2::consolidate_before`], feeding the chunks minted into `emitted` by a
+    /// cursor merge to `tap`, if given, and marking them with its epoch.
+    fn consolidate_before_inner(
+        &mut self,
+        upper: &Antichain<Timestamp>,
+        tap: Option<(u64, Tap<D>)>,
+    ) {
         if !PartialOrder::less_than(&self.since, upper) {
             return;
         }
@@ -553,9 +599,21 @@ impl<D: Data> CorrectionV2<D> {
         } else {
             0
         };
+        let tapped = |cursors: Vec<Cursor<D>>| {
+            let installed = tap.is_some();
+            if let Some((epoch, tap)) = tap {
+                let tap: Box<dyn Any> = Box::new(tap);
+                TAP.with(|cell| *cell.borrow_mut() = Some((epoch, tap)));
+            }
+            let merged = merge_cursors(cursors, depth);
+            if installed {
+                TAP.with(|cell| cell.borrow_mut().take());
+            }
+            merged
+        };
         let merged = if stale_times == 0 {
             let cursors: Vec<_> = lowers.into_iter().filter_map(Chain::into_cursor).collect();
-            merge_cursors(cursors, depth)
+            tapped(cursors)
         } else if stale_times < MAX_STALE_RUNS {
             let mut runs = Vec::new();
             for chain in lowers {
@@ -563,7 +621,7 @@ impl<D: Data> CorrectionV2<D> {
                     runs.append(&mut cursor.advance_by(since_ts));
                 }
             }
-            merge_cursors(runs, depth)
+            tapped(runs)
         } else {
             let mut updates: Vec<_> = lowers.iter().flat_map(|c| c.iter()).collect();
             for (_, time, _) in &mut updates {
@@ -1687,6 +1745,8 @@ struct Chunk<D: Data> {
     /// Whether the pool declined the body at mint, which decides the heap gauge a resident body
     /// counts toward.
     heap_at_mint: bool,
+    /// The epoch of the tap the body was handed to at mint, or 0.
+    tap_epoch: u64,
 }
 
 /// Bytes of chunk bodies held on the heap because the pool declined them at mint, process-wide.
@@ -1698,6 +1758,46 @@ static MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
 /// Bytes [`Chunk::with_view`] copied out of the pool for scoped reads, process-wide.
 static VIEW_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// MV sink write commands sent to a write task and not yet received by it, process-wide.
+pub(crate) static WRITE_QUEUE_COMMANDS: AtomicU64 = AtomicU64::new(0);
+/// Updates in MV sink write commands sent to a write task and not yet received, process-wide.
+pub(crate) static WRITE_QUEUE_UPDATES: AtomicU64 = AtomicU64::new(0);
+
+/// Whether [`CorrectionV2::drain_before`] taps the merge into `emitted`.
+static SINGLE_READ: AtomicBool = AtomicBool::new(false);
+/// Source of tap epochs. Starts at 1, since chunks minted without a tap carry epoch 0.
+static TAP_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// A consumer of the bodies a tapped merge mints.
+type Tap<D> = Box<dyn FnMut(ChunkView<'_, D>)>;
+
+thread_local! {
+    /// The tap of the merge running on this thread, with its epoch, type-erased because the
+    /// thread runs merges of several data types. Holds a [`Tap`] of the merged type.
+    static TAP: RefCell<Option<(u64, Box<dyn Any>)>> = const { RefCell::new(None) };
+}
+
+/// Set whether [`CorrectionV2::drain_before`] hands freshly merged chunks to the persist writer
+/// while their bodies are in hand. Consulted at every write, so changes apply to running sinks.
+pub fn set_single_read(enabled: bool) {
+    SINGLE_READ.store(enabled, atomic::Ordering::Relaxed);
+}
+
+/// Whether single reads are enabled, see [`set_single_read`].
+pub fn single_read() -> bool {
+    SINGLE_READ.load(atomic::Ordering::Relaxed)
+}
+
+/// The updates of a chunk body, owned.
+fn owned_updates<D: Data>(view: ChunkView<'_, D>) -> Vec<(D, Timestamp, Diff)> {
+    (0..view.len())
+        .map(|i| {
+            let (d, t, r) = view.get(i);
+            (D::into_owned(d), t, r)
+        })
+        .collect()
+}
+
 /// Install the correction buffer's heap residency metrics into `registry`. Idempotent.
 pub fn register_metrics(registry: &MetricsRegistry) {
     static REGISTERED: OnceLock<()> = OnceLock::new();
@@ -1708,6 +1808,8 @@ pub fn register_metrics(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_compute_correction_heap_materialized_bytes", help: "Bytes of MV sink correction chunks taken out of the buffer pool onto the heap by a merge or split read."), &HEAP_MATERIALIZED_BYTES);
         gauge(registry, metric!(name: "mz_compute_correction_materializations_total", help: "MV sink correction chunks taken out of the buffer pool onto the heap."), &MATERIALIZATIONS);
         gauge(registry, metric!(name: "mz_compute_correction_view_copy_bytes_total", help: "Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks."), &VIEW_COPY_BYTES);
+        gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_commands", help: "MV sink write commands queued for the write task."), &WRITE_QUEUE_COMMANDS);
+        gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_updates", help: "Updates in MV sink write commands queued for the write task."), &WRITE_QUEUE_UPDATES);
     });
 }
 
@@ -1758,6 +1860,17 @@ impl<D: Data> Chunk<D> {
         };
         let body_words = body.length_in_bytes() / std::mem::size_of::<u64>();
 
+        let tap_epoch = TAP.with(|cell| match cell.borrow_mut().as_mut() {
+            Some((epoch, tap)) => {
+                let tap = tap
+                    .downcast_mut::<Tap<D>>()
+                    .expect("a tap consumes the type its merge mints");
+                tap(body.borrow());
+                *epoch
+            }
+            None => 0,
+        });
+
         // TODO: chunks resting in far-future buckets go untouched for longer than their merge
         // depth suggests, and could spill deeper still.
         let (pooled, resident) = match chunk::try_spill_ref(body, depth) {
@@ -1793,6 +1906,7 @@ impl<D: Data> Chunk<D> {
             last_time,
             depth,
             heap_at_mint,
+            tap_epoch,
         }
     }
 
@@ -2393,6 +2507,59 @@ mod tests {
         out1.sort();
         out2.sort();
         assert_eq!(out1, out2);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn single_read_drain_matches_v1() {
+        set_single_read(true);
+        let sink_metrics = sink_metrics();
+        let mut v1 =
+            CorrectionV1::<String>::new(sink_metrics.clone(), sink_metrics.for_worker(0), 1);
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+        let batch = |t: u64| -> Vec<(String, Timestamp, Diff)> {
+            (0..200)
+                .flat_map(|k| {
+                    let addition = (format!("{k}-{t}"), Timestamp::from(t), Diff::ONE);
+                    let retraction = t
+                        .checked_sub(1)
+                        .map(|p| (format!("{k}-{p}"), Timestamp::from(t), -Diff::ONE));
+                    std::iter::once(addition).chain(retraction)
+                })
+                .collect()
+        };
+        for t in 0..20 {
+            v1.insert(&mut batch(t));
+            v2.insert(&mut batch(t));
+        }
+        // Uppers that skip timestamps, then one that re-reads the resting `emitted` chain only.
+        for (step, t) in [1, 5, 6, 6, 12, 20, 21].into_iter().enumerate() {
+            let upper = Antichain::from_elem(Timestamp::from(t));
+            let mut out1: Vec<_> = v1.updates_before(&upper).collect();
+            let drained = Rc::new(RefCell::new(Vec::new()));
+            let sink = Rc::clone(&drained);
+            v2.drain_before(&upper, move |chunk| sink.borrow_mut().extend(chunk));
+            let mut out2 = drained.take();
+            out1.sort();
+            out2.sort();
+            assert_eq!(out1, out2, "diverged at step {step}");
+            if step == 1 {
+                assert!(
+                    v2.emitted.chunks.iter().any(|c| c.tap_epoch != 0),
+                    "the merge into emitted fed the tap"
+                );
+            }
+            if step % 2 == 0 {
+                v1.insert_negated(&mut out1.clone());
+                v2.insert_negated(&mut out1);
+            }
+        }
     }
 
     /// A since jump across many distinct buffered timestamps must collapse them onto the since.

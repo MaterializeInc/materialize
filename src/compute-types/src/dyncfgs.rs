@@ -324,6 +324,24 @@ pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether a read of a spilled buffer-pool chunk first hints the kernel to swap its whole extent
+/// back in. See [`mz_ore::pool::set_read_prefetch`].
+pub const COLUMN_PAGED_BATCHER_READ_PREFETCH: Config<bool> = Config::new(
+    "column_paged_batcher_read_prefetch",
+    true,
+    "Hint the kernel to swap a spilled chunk's extent back in before reading it.",
+    ParameterScope::Replica,
+);
+
+/// Whether the MV sink hands the persist batch builder the updates of a freshly merged `emitted`
+/// chunk while its body is still in hand, so the write reads it out of the pool once per cycle.
+pub const CORRECTION_V2_SINGLE_READ: Config<bool> = Config::new(
+    "compute_correction_v2_single_read",
+    false,
+    "Read each MV sink correction chunk out of the buffer pool once per write cycle.",
+    ParameterScope::Replica,
+);
+
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -830,6 +848,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
+        .add(&COLUMN_PAGED_BATCHER_READ_PREFETCH)
+        .add(&CORRECTION_V2_SINGLE_READ)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
