@@ -33,7 +33,7 @@
 #![cfg(all(feature = "pool", unix))]
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -232,9 +232,11 @@ fn rss_mib() -> (f64, f64) {
     (field("VmRSS:"), field("VmHWM:"))
 }
 
-/// Process user and system CPU seconds. `/proc/self/stat` reports clock
-/// ticks, taken as 100 per second, the value on every Linux target we run.
+/// Process user and system CPU seconds, from the clock ticks
+/// `/proc/self/stat` reports.
 fn cpu_secs() -> (f64, f64) {
+    // SAFETY: `sysconf` reads a system constant and takes no pointers.
+    let ticks_per_sec = f64::cast_lossy(unsafe { libc::sysconf(libc::_SC_CLK_TCK) });
     let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
     // The command name may contain spaces, so count fields after its closing
     // parenthesis. `utime` and `stime` are fields 14 and 15, indexes 11 and
@@ -247,29 +249,9 @@ fn cpu_secs() -> (f64, f64) {
         fields
             .get(i)
             .and_then(|f| f.parse::<f64>().ok())
-            .map_or(f64::NAN, |t| t / 100.0)
+            .map_or(f64::NAN, |t| t / ticks_per_sec)
     };
     (ticks(11), ticks(12))
-}
-
-/// Bytes the filesystem has allocated to the pool's unnamed files under
-/// `dir`, found through the process's open file descriptors. Unlike the
-/// pool's slot accounting this sees space the file store has not punched out.
-fn allocated_file_bytes(dir: &Path) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    let dir = dir.canonicalize().ok()?;
-    let mut total = 0;
-    for entry in std::fs::read_dir("/proc/self/fd").ok()?.flatten() {
-        let Ok(target) = std::fs::read_link(entry.path()) else {
-            continue;
-        };
-        if target.starts_with(&dir) {
-            if let Ok(meta) = std::fs::metadata(entry.path()) {
-                total += meta.blocks() * 512;
-            }
-        }
-    }
-    Some(total)
 }
 
 /// Polls `spill_in_flight` every millisecond until stopped. Returns the peak,
@@ -353,18 +335,19 @@ impl PhaseTimer {
     }
 }
 
-/// Prints bytes the filesystem has allocated to the file store against the
+/// Prints the bytes the file store holds on the filesystem against the
 /// pool's live slot bytes.
-fn print_file_space(label: &str, dir: Option<&Path>, pool: &Pool) {
-    if let Some(alloc) = dir.and_then(allocated_file_bytes) {
-        let stats = pool.stats();
-        println!(
-            "  file space {label}: allocated={:.1}MiB live_slots={:.1}MiB punched={:.1}MiB",
-            mib(alloc),
-            mib(stats.extent_file_bytes),
-            mib(stats.extent_file_holes_punched_bytes),
-        );
+fn print_file_space(label: &str, pool: &Pool) {
+    if pool.backend_kind() == BackendKind::Swap {
+        return;
     }
+    let stats = pool.stats();
+    println!(
+        "  file space {label}: allocated={:.1}MiB live_slots={:.1}MiB punched={:.1}MiB",
+        mib(stats.extent_file_allocated_bytes),
+        mib(stats.extent_file_bytes),
+        mib(stats.extent_file_holes_punched_bytes),
+    );
 }
 
 fn mib(bytes: u64) -> f64 {
@@ -503,7 +486,6 @@ fn main() {
         .map(|_| rng.next_u64())
         .collect();
     let drain_timeout = Duration::from_secs(args.drain_timeout_secs);
-    let dir = args.dir.as_deref().filter(|_| kind != BackendKind::Swap);
 
     let inserted_bytes = std::cell::Cell::new(0u64);
     let insert = |rng: &mut Rng, index: u64| {
@@ -550,7 +532,7 @@ fn main() {
     // write rates. The final stats count the churn phase's writes too.
     let mut write_wall = fill_wall + phase.finish(&pool);
     println!("  drain ended: {why}");
-    print_file_space("after drain", dir, &pool);
+    print_file_space("after drain", &pool);
 
     // Steady state: each replacement frees a chunk that may sit in the tier or
     // on file, and inserts a fresh one that pushes the tier over its cap again.
@@ -567,7 +549,7 @@ fn main() {
         let why = drain(&pool, drain_timeout);
         write_wall += phase.finish(&pool);
         println!("  drain ended: {why}");
-        print_file_space("after churn", dir, &pool);
+        print_file_space("after churn", &pool);
     }
 
     let mut latencies: Vec<Duration> = Vec::new();
@@ -602,7 +584,7 @@ fn main() {
         });
         latencies = per_thread.into_iter().flatten().collect();
         read_wall = phase.finish(&pool);
-        print_file_space("after reads", dir, &pool);
+        print_file_space("after reads", &pool);
     }
 
     let final_stats = pool.stats();
@@ -613,7 +595,7 @@ fn main() {
     let phase = PhaseTimer::start("free", &pool, false);
     drop(live);
     phase.finish(&pool);
-    print_file_space("after free", dir, &pool);
+    print_file_space("after free", &pool);
 
     println!("\nfinal stats (before the free phase):\n{final_stats:#?}");
     print_histogram(&final_stats.extent_file_read_latency);
@@ -644,15 +626,20 @@ fn main() {
         extents_written,
         args.compressibility
     );
+    // Every file write counter counts the same writes, so the bytes and the
+    // counts divide into each other.
     println!(
-        "  demotion rate         {:.3} GiB/s over the writing phases ({:.1} MiB written, {:.1}% identity)",
+        "  demotion rate         {:.3} GiB/s over the writing phases ({:.1} MiB written, {:.1}% identity, {:.1} KiB per write)",
         gib_per_sec(file_write_bytes, write_wall),
         mib(file_write_bytes),
         100.0 * f64::cast_lossy(final_stats.extent_file_write_bytes_identity)
-            / f64::cast_lossy(file_write_bytes.max(1))
+            / f64::cast_lossy(file_write_bytes.max(1)),
+        f64::cast_lossy(file_write_bytes)
+            / f64::cast_lossy(final_stats.extent_file_writes.max(1))
+            / 1024.0
     );
     println!(
-        "  inline share          {:.3} ({} of {} file writes ran inline on a non-spill thread)",
+        "  inline share          {:.3} ({} of {} file writes ran in an inline pass)",
         f64::cast_lossy(final_stats.extent_file_writes_inline)
             / f64::cast_lossy(final_stats.extent_file_writes.max(1)),
         final_stats.extent_file_writes_inline,
