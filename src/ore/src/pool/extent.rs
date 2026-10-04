@@ -70,6 +70,11 @@ use crate::pool::{ExtentCodec, max_stored_len};
 /// bounding the wasted advice at two extra passes per extent.
 pub(crate) const PAGEOUT_RETRY_CAP: u8 = 3;
 
+/// Capacity a thread keeps in its read-side scratch buffers across reads.
+/// Reads run on worker threads, so capacity beyond the ~2 MiB chunk target
+/// is released after each read rather than parked per worker.
+const READ_SCRATCH_RETAIN: usize = 2 << 20;
+
 /// The extent size-class ladder for a `page`-byte page size: `page`, then
 /// sizes of the form `2^k` and `3 * 2^(k-1)` bytes, up through the first
 /// class that fits [`max_stored_len`], the codec contract's worst case,
@@ -137,6 +142,11 @@ impl ExtentArena {
         })
     }
 
+    /// The class ladder, ascending.
+    pub(crate) fn classes(&self) -> &[usize] {
+        &self.classes
+    }
+
     /// Number of extent writes that degraded to the heap.
     pub(crate) fn fallbacks(&self) -> u64 {
         self.fallbacks.load(Ordering::Relaxed)
@@ -201,8 +211,10 @@ enum Home {
     Heap { ptr: *mut u8, layout: Layout },
     /// File mode, transient: the arena slot still holds the bytes, which
     /// are immutable and readable while a demoter writes them to
-    /// `file_slot` without the chunk lock. The demoter owns the transition
-    /// out of this home, so nothing else may drop the extent.
+    /// `file_slot` without the chunk lock. The demoter owns the extent and
+    /// the transition out of this home: a free of the chunk leaves the
+    /// extent in place for the demoter's commit to drop, which also keeps
+    /// the file slot from being reused mid-write.
     Demoting {
         arena: Arc<ExtentArena>,
         class: usize,
@@ -211,8 +223,9 @@ enum Home {
         file_slot: FileSlot,
     },
     /// File mode: the bytes live only in `slot` of `store`. Terminal until
-    /// the extent is dropped, so a reader may use the location without the
-    /// chunk lock.
+    /// the extent is dropped, so a reader that keeps the extent alive (by
+    /// borrowing its chunk's handle) may use the location without the chunk
+    /// lock.
     File {
         store: Arc<FileStore>,
         slot: FileSlot,
@@ -231,8 +244,7 @@ impl Home {
     }
 }
 
-/// Where a `File`-home extent's bytes live, captured under the chunk lock
-/// so the read can run without it.
+/// Where a `File`-home extent's bytes live.
 #[derive(Debug)]
 pub(crate) struct FileLocation {
     store: Arc<FileStore>,
@@ -260,20 +272,17 @@ impl DemotionSource {
     /// The extent this was captured from must stay in its `Demoting` home
     /// for the duration of the call: not dropped, and not moved to another
     /// home.
-    pub(crate) unsafe fn write(&self, store: &FileStore) -> (u32, Result<(), WriteError>) {
-        // The write covers whole pages. Extent classes are page multiples,
-        // so the arena slot spans at least the rounded length.
-        let len = self.comp_len.next_multiple_of(region::page_size());
-        assert!(len <= self.alloc_size, "write overruns the arena slot");
-        // SAFETY: the arena slot is `alloc_size >= len` bytes of mapped
-        // memory owned by the extent, which the caller keeps `Demoting`, so
-        // the slot is neither freed nor reused. Its bytes are immutable in
-        // that home: nothing writes an extent's slot after `Extent::write`,
-        // and concurrent readers only read. Bytes past `comp_len` within the
-        // last page are initialized memory of the mapping with unspecified
-        // contents. Reads consume only `comp_len` bytes and the checksum
-        // covers only those, so the tail's contents do not matter.
-        let bytes = unsafe { std::slice::from_raw_parts(self.ptr, len) };
+    pub(crate) unsafe fn write(&self, store: &FileStore) -> (u32, Result<usize, WriteError>) {
+        // SAFETY: the arena slot is `alloc_size` bytes of mapped memory
+        // owned by the extent, which the caller keeps `Demoting`, so the
+        // slot is neither freed nor reused. Its bytes are immutable in that
+        // home: nothing writes an extent's slot after `Extent::write`, and
+        // concurrent readers only read. Bytes past `comp_len` are
+        // initialized memory of the mapping with unspecified contents. The
+        // store transfers whole pages, reads consume only `comp_len` bytes,
+        // and the checksum covers only those, so the tail's contents do not
+        // matter.
+        let bytes = unsafe { std::slice::from_raw_parts(self.ptr, self.alloc_size) };
         let crc = file::crc(&bytes[..self.comp_len]);
         (crc, store.write(self.file_slot, bytes, self.comp_len))
     }
@@ -293,13 +302,10 @@ pub(crate) enum Scratch {
     Shrink,
 }
 
-// SAFETY: the extent owns its backing (an arena slot handed out by the
-// region allocator, a heap allocation, or a file slot), so moving the owner
-// across threads is sound. Access goes through the owning chunk's state
-// mutex, except for a `Demoting` extent's arena slot, which the demoter
-// reads through its `DemotionSource` without the mutex. Those bytes are
-// immutable while `Demoting`, the demoter is the only reader outside the
-// mutex, and the slot is freed only after the demoter's write finishes.
+// SAFETY: the extent exclusively owns its backing (an arena slot handed out
+// by the region allocator, a heap allocation, or a file slot), and its raw
+// pointers point into that backing only, so moving the owner across threads
+// is sound.
 unsafe impl Send for Extent {}
 
 /// lz4 codec for the pool's own tests, mirroring the production codec that
@@ -700,9 +706,7 @@ impl FileLocation {
             self.store
                 .read(self.slot, self.comp_len, self.crc, &mut buf);
             decode_range(buf.as_slice(), codec, body_len, offset, dst);
-            // The decode scratch's policy: reads run on worker threads, so
-            // capacity beyond the ~2 MiB chunk target is released.
-            buf.shrink_above(2 << 20);
+            buf.shrink_above(READ_SCRATCH_RETAIN);
         });
     }
 }
@@ -728,10 +732,8 @@ fn decode_range(
         return;
     }
     // A sub-range still decodes the whole block, into a reused
-    // thread-local scratch, and copies the range out. Reads run on
-    // worker threads, so the scratch mirrors the write side's `Shrink`
-    // policy: capacity beyond the ~2 MiB chunk target is released after
-    // the copy rather than parked per worker.
+    // thread-local scratch, and copies the range out. The scratch mirrors
+    // the write side's `Shrink` policy, per `READ_SCRATCH_RETAIN`.
     use std::cell::RefCell;
     thread_local! {
         static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -741,7 +743,7 @@ fn decode_range(
         scratch.resize(body_len, 0);
         codec.decode(stored, &mut scratch);
         dst.copy_from_slice(&scratch[offset..end]);
-        if scratch.capacity() > 2 << 20 {
+        if scratch.capacity() > READ_SCRATCH_RETAIN {
             scratch.clear();
             scratch.shrink_to_fit();
         }
@@ -799,9 +801,8 @@ impl Drop for Extent {
             }
             Home::File { store, slot } => store.free(*slot),
             Home::Demoting { .. } => {
-                // The demoter reads the arena slot without the chunk lock
-                // and writes the file slot. Freeing either here would hand
-                // it to a new owner mid-I/O, so both leak instead.
+                // Freeing either slot here would hand it to a new owner
+                // mid-I/O, so both leak instead.
                 crate::soft_panic_or_log!("dropped an extent mid-demotion");
             }
         }
