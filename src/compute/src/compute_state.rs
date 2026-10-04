@@ -583,6 +583,10 @@ impl ComputeState {
             mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
             mz_ore::pool::set_read_prefetch(COLUMN_PAGED_BATCHER_READ_PREFETCH.get(config));
             crate::sink::correction_v2::set_single_read(CORRECTION_V2_SINGLE_READ.get(config));
+            crate::sink::correction_v2::set_columnar_queue(
+                CORRECTION_V2_COLUMNAR_QUEUE.get(config),
+                u8::try_from(CORRECTION_V2_QUEUE_DEPTH.get(config)).unwrap_or(u8::MAX),
+            );
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

@@ -499,7 +499,7 @@ mod write {
     use mz_timely_util::activator::ArcActivator;
     use std::sync::atomic;
 
-    use crate::sink::correction_v2;
+    use crate::sink::correction_v2::{self, ConsolidatedChain};
 
     /// Commands sent from the Timely operator to the Tokio write task.
     enum WriteCommand {
@@ -525,6 +525,9 @@ mod write {
         persist_ok: Vec<(Row, Timestamp, Diff)>,
         /// Negative contributions from the `persist` err input.
         persist_err: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+        /// The `desired` and negated `persist` ok contributions, consolidated into pool-backed
+        /// chunks. Replaces `desired_ok` and `persist_ok` when the columnar queue is enabled.
+        ok_chain: Option<ConsolidatedChain<Row>>,
         /// The new persist frontier, if it advanced this activation.
         persist_frontier: Option<Antichain<Timestamp>>,
         /// Whether a consolidation of the corrections buffer should be forced.
@@ -538,6 +541,7 @@ mod write {
                 desired_err: Vec::new(),
                 persist_ok: Vec::new(),
                 persist_err: Vec::new(),
+                ok_chain: None,
                 persist_frontier: None,
                 force_consolidation: false,
             }
@@ -549,6 +553,7 @@ mod write {
                 + self.desired_err.len()
                 + self.persist_ok.len()
                 + self.persist_err.len()
+                + self.ok_chain.as_ref().map_or(0, ConsolidatedChain::len)
         }
 
         /// Returns true if there is no work in this batch.
@@ -557,6 +562,7 @@ mod write {
                 && self.desired_err.is_empty()
                 && self.persist_ok.is_empty()
                 && self.persist_err.is_empty()
+                && self.ok_chain.is_none()
                 && self.persist_frontier.is_none()
                 && !self.force_consolidation
         }
@@ -782,6 +788,17 @@ mod write {
                 persist_err_input.for_each(|_cap, data| {
                     batch.persist_err.append(data);
                 });
+                // Consolidating here moves the cost of holding queued updates onto this worker,
+                // which slows it to the rate the buffer pool absorbs, and leaves the write task
+                // chains it can file without sorting.
+                if let Some(depth) = correction_v2::columnar_queue() {
+                    let mut updates = std::mem::take(&mut batch.desired_ok);
+                    updates.extend(batch.persist_ok.drain(..).map(|(d, t, r)| (d, t, -r)));
+                    if !updates.is_empty() {
+                        let chain = ConsolidatedChain::from_updates(&mut updates, depth);
+                        batch.ok_chain = (!chain.is_empty()).then_some(chain);
+                    }
+                }
 
                 // Accept batch descriptions.
                 descs_input.for_each(|cap, data| {
@@ -1025,6 +1042,9 @@ mod write {
                 }
                 if !batch.persist_err.is_empty() {
                     corrections.err.insert_negated(&mut batch.persist_err);
+                }
+                if let Some(chain) = batch.ok_chain {
+                    corrections.ok.insert_chain(chain);
                 }
                 if let Some(frontier) = batch.persist_frontier {
                     // We will only emit times at or after the `persist` frontier, so now is a good
