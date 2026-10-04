@@ -15,18 +15,19 @@ The process orchestrator used by the emulator and local development applies the 
 So `clusterd` can tell at startup whether it has a scratch filesystem, and that answer never changes.
 
 This document designs the file backend under that constraint.
-The pool owns the whole scratch volume.
-In the cloud each replica pod gets its own scratch filesystem, shared with no other replica.
-RocksDB-backed upsert is being replaced by the pool and is not recommended alongside compute workloads, and lgalloc is disabled, so no other consumer competes for the volume.
-Two places break this assumption until then: the process orchestrator puts every replica's scratch directory on one shared filesystem, and the pager's file backend writes to the same directory.
-The flag is therefore enabled only where the pool is the volume's sole consumer, and in CI, where volumes are large relative to test data.
-The first deployments are the emulator and self-managed installations, followed by FS-backed instances in staging.
+The file backend is meant for deployments where the pool is the scratch volume's sole consumer, and it sizes its capacity from the volume's free space as if it were.
+In the cloud each replica pod gets its own scratch filesystem, shared with no other replica, and RocksDB-backed upsert is being replaced by the pool and is not recommended alongside compute workloads.
+Under the compiled defaults the pool is not alone on the volume: `enable_lgalloc` defaults to on (`src/compute-types/src/dyncfgs.rs`), and lgalloc then keeps its files in the scratch directory, while the pager's file backend uses the scratch directory whenever one is set (`apply_worker_config` in `src/compute/src/compute_state.rs`).
+The process orchestrator additionally puts every replica's scratch directory on one shared filesystem.
+Sole ownership of the volume is therefore a precondition for enabling the flag, so a deployment that enables it must also disable lgalloc and keep the column pager off the file backend.
+CI enables the flag with lgalloc disabled by mzcompose, on volumes that are large relative to test data.
+The first deployments are the emulator and self-managed installations configured that way, followed by FS-backed instances in staging.
 The swap backend's behavior stays the same, and the rest of the pool (slots, budget, residency states, eviction policy, copy-out reads) is reused unchanged.
 
 ## Success criteria
 
 * On a pod with a scratch directory and no swap, pool RSS stays at or below `max(rss target, budget + warm cap)` regardless of state size, while the bytes held in files grow.
-  Measured by the existing pool gauges plus a new `extent_file_bytes` gauge, under the upsert-v2 hydration workload used for the parent design's staging measurement.
+  Measured by the existing pool gauges plus new `extent_file_bytes` and `extent_file_allocated_bytes` gauges, under the upsert-v2 hydration workload used for the parent design's staging measurement.
 * Steady-state chunk turnover performs no filesystem metadata operations.
   The open file count stays equal to the number of extent classes, and `openat`, `unlink`, and `ftruncate` counts stay at zero after warm-up (checked with `strace -c` on a running `clusterd`).
 * Extent I/O bypasses the page cache.
@@ -84,20 +85,19 @@ flowchart TB
 
 ### Backend selection is fixed at pool construction
 
-`Pool::new` takes the backend, and the pool keeps it for its lifetime.
+`Pool::with_backend` takes the backend, and the pool keeps it for its lifetime.
 
 ```rust
 pub enum ExtentBackend {
     /// Compressed extents in the arena, paged to the swap device.
     Swap,
     /// Compressed extents in the arena, demoted to files under `dir`.
-    File(FileStoreConfig),
-}
-
-pub struct FileStoreConfig {
-    pub dir: PathBuf,
-    /// Capacity override for tests; `None` derives capacity from the volume.
-    pub capacity_bytes: Option<u64>,
+    File {
+        dir: PathBuf,
+        /// Capacity override for tests and the harness. `None` derives
+        /// capacity from the volume.
+        capacity_bytes: Option<u64>,
+    },
 }
 ```
 
@@ -105,13 +105,14 @@ pub struct FileStoreConfig {
 An enum fits better than a trait object: there are exactly two variants, and the pool's accounting differs per variant at a handful of match sites, which a trait would hide behind methods that only one implementation uses.
 Making `Pool` generic over the backend is rejected because `Pool` and `ChunkHandle` are named in consumer types across `mz_timely_util`, `mz_compute`, and `mz_storage`, and a type parameter would spread to all of them for a choice that is constant per process.
 
-`mz_timely_util::pool_config` constructs the pool on the first `apply_pool_config` call, so `apply_pool_config` takes the backend as a closure.
-`GLOBAL_POOL` initializes once, and the closure runs only on that first call.
-Later calls never evaluate it, so a changed flag or scratch directory cannot reconfigure the backend and cannot be observed as a mismatch.
+`ExtentBackend` is the only backend type.
+`mz_timely_util::pool_config` constructs the pool on the first `apply_pool_config` call, which takes an `ExtentBackend` by value.
+`GLOBAL_POOL` initializes once, so only the first call's backend takes effect, and a later changed flag or scratch directory cannot reconfigure the backend.
 This is the code-level form of the provisioning invariant.
 
-`apply_worker_config` in `src/compute/src/compute_state.rs` chooses `File` exactly when `context.scratch_directory` is set, the same rule it already applies to `mz_ore::pager::set_backend`.
-If `FileStore::open` fails (unsupported filesystem, permissions, failed alignment probe), the pool falls back to `Swap` with a warning and reports the backend it actually chose in a metric.
+`apply_worker_config` in `src/compute/src/compute_state.rs` resolves the backend from the scratch directory and a flag, see Configuration.
+`build_pool` in `pool_config` creates the store's directory and opens the pool, and it is the one place that falls back to `Swap`.
+If the directory cannot be created or `FileStore::open` fails (unsupported filesystem, permissions, failed alignment probe), the pool runs on `Swap` with one warning and reports the backend it actually chose in a metric.
 On a swapless pod that fallback is today's compression-only behavior, so a failure degrades to the status quo rather than to an outage.
 
 ### Extent homes
@@ -120,25 +121,31 @@ On a swapless pod that fallback is today's compression-only behavior, so a failu
 
 ```rust
 pub(crate) struct Extent {
+    /// The allocation size: the arena class size, or the heap layout.
+    alloc_size: usize,
     /// Stored (encoded) length in bytes.
     comp_len: usize,
-    /// crc32 of the stored bytes; computed and checked only in file mode.
+    /// The pageout observation and its retry budget, exactly as `SwapExtent`
+    /// tracks them today. Meaningful only in the `Arena` and `Heap` homes.
+    resident: bool,
+    incomplete_passes: u8,
+    /// crc32 of the stored bytes, set when a demotion commits.
     crc: u32,
+    /// Whether the file copy was read since demotion.
+    read_since_demotion: bool,
     home: Home,
 }
 
 enum Home {
-    /// An arena slot. In swap mode `resident` and `incomplete_passes` track the
-    /// pageout observation exactly as `SwapExtent` does today; in file mode
-    /// `resident` is always true and `incomplete_passes` is unused.
-    Arena { arena: Arc<ExtentArena>, class: usize, slot: u32, resident: bool, incomplete_passes: u8 },
+    /// An arena slot.
+    Arena { arena: Arc<ExtentArena>, class: usize, slot: u32, ptr: *mut u8 },
     /// Global-allocator fallback for an exhausted arena class. Never leaves RAM.
     Heap { ptr: *mut u8, layout: Layout },
     /// File mode, transient: the arena slot still holds the bytes and stays
     /// readable while a demoter writes them to `file_slot` without the chunk lock.
-    Demoting { arena: Arc<ExtentArena>, class: usize, slot: u32, file_slot: FileSlot },
+    Demoting { arena: Arc<ExtentArena>, class: usize, slot: u32, ptr: *mut u8, file_slot: FileSlot },
     /// File mode: the bytes live only in the extent file.
-    File { file_slot: FileSlot },
+    File { store: Arc<FileStore>, slot: FileSlot },
 }
 ```
 
@@ -165,7 +172,7 @@ stateDiagram-v2
 The file store is a small userspace extent allocator over a fixed set of files.
 
 * **Files.**
-  One file per extent class, using the arena's existing class ladder (`extent_classes`, page-multiple sizes from one page to the first class that fits `max_stored_len` of the largest chunk class).
+  One file per extent class, using the arena's existing class ladder (`extent_classes`, page-multiple sizes from one page to the first class that fits `max_stored_len` of the largest chunk class), which the pool passes to `FileStore::open`.
   Each file is opened `O_RDWR | O_DIRECT | O_CLOEXEC | O_TMPFILE` in the scratch directory, so it has no name and the kernel frees its blocks when the process exits, including on crash.
   Where `O_TMPFILE` fails with `EOPNOTSUPP` or `EISDIR`, the store creates a uniquely named file and unlinks it immediately, which has the same lifetime property after a one-syscall window.
   This matters because an ephemeral volume survives a container restart within a pod, so named files from a crashed predecessor would otherwise occupy the scratch disk.
@@ -182,7 +189,7 @@ The file store is a small userspace extent allocator over a fixed set of files.
   The store charges each allocated slot at its class size against its capacity, and an allocation that would exceed capacity fails.
   Because the pool owns the volume, capacity is `f_bavail * f_frsize` from `statvfs` at open, minus the larger of 1 GiB and 2% of that value.
   `f_bavail` already excludes root-reserved blocks, and the headroom covers filesystem metadata for the preallocated extents plus incidental writers such as logs and core dumps.
-  Tests pass an absolute override through `FileStoreConfig`.
+  Tests pass an absolute override through `capacity_bytes`.
 * **Space return.**
   Freed slots keep their blocks, so reuse never re-allocates and steady state performs no metadata operations.
   Space is returned only on demand: when an allocation fails for capacity while other classes hold free allocated slots, the store punches holes with `FALLOC_FL_PUNCH_HOLE` over free slots of the class with the most free bytes until the allocation fits.
@@ -193,7 +200,7 @@ The file store is a small userspace extent allocator over a fixed set of files.
   The store aligns everything to the page size and probes once at open with a page-aligned write and read, which covers devices with 512-byte and 4 KiB logical blocks (both observed working in phase 0).
   A device whose alignment exceeds the page size fails the probe and gets the buffered fallback.
   Class sizes are page multiples, so offsets are aligned.
-  Writes and reads transfer `comp_len` rounded up to the alignment, which never exceeds the class size.
+  Writes and reads transfer `comp_len` rounded up to the alignment, which never exceeds the class size, and return the transferred length, which the pool counts.
   The arena slot is page-aligned, and the rounded tail lies within the page that already holds the last stored byte, so writing from the arena faults no new pages.
 * **Memory-backed filesystems are rejected.**
   A scratch directory on tmpfs stores extents in RAM charged to the cgroup as shared memory, which defeats the store.
@@ -217,8 +224,9 @@ The protocol follows `spill_process`, which already moves compression out from u
 2. Reserve a file slot of the extent's class.
    If the store cannot place the extent's class but can place another, move the entry to the back and skip that class's entries for the rest of the pass.
    If it can place no class, push the entry back to the front and end the pass.
-3. Compute the crc32 of the stored bytes, set the home to `Demoting`, capture the arena pointer, length, and file slot, and release the lock.
-4. `pwrite` the rounded length at the slot's offset, retrying on `EINTR` and short writes.
+3. Set the home to `Demoting`, capture the arena pointer, length, and file slot, and release the lock.
+4. Compute the crc32 of the stored bytes and `pwrite` the rounded length at the slot's offset, retrying on `EINTR`.
+   A short `O_DIRECT` write is retried whole from the slot's offset a bounded number of times, since resuming mid-buffer could issue an unaligned direct write, and the final attempt's error is classified as under Errors.
 5. Lock the chunk (blocking, since holders are bounded) and commit:
    * If the chunk was freed meanwhile, drop the extent, which returns both the arena slot and the file slot.
    * On success, set the home to `File`, return the arena slot with `MADV_DONTNEED`, move the extent's bytes from `extent_resident_bytes` to `extent_file_bytes`, and count a demotion.
@@ -231,7 +239,7 @@ This is the same deferral `WriteInFlight` already uses for slots, applied one le
 Reads, budget eviction, and admission all work during `Demoting` without change.
 A read decodes from the arena slot, whose bytes are immutable, and eviction and admission never touch an extent's home.
 
-The crc32 is computed on the demoter, off the worker, using the `crc32fast` workspace dependency.
+The crc32 is computed on the demoting thread, a spill thread except in the inline backstop, using the `crc32fast` workspace dependency.
 It is needed because the lz4 block format carries no checksum and corrupted literal bytes decode without error, and the identity codec used below `compress_min_depth` has no structure at all.
 A local ephemeral disk can return corrupted data, and without the checksum that would surface as silently wrong arrangement contents.
 
@@ -310,9 +318,10 @@ The four rungs keep their meaning, with the bottom rung replaced.
 
 New `PoolStats` fields, exported in `src/timely-util/src/pool_config/metrics.rs`:
 
-* `extent_file_bytes` and `extent_file_capacity_bytes`: allocated class bytes on file, and the effective capacity.
-* `extent_file_writes`, `extent_file_write_bytes`, `extent_file_writes_inline`: demotion writes, their transferred bytes, and the subset run on non-spill threads.
-* `extent_file_write_bytes` is split by codec (identity and lz4), for the compression-floor measurement.
+* `extent_file_bytes`, `extent_file_allocated_bytes`, and `extent_file_capacity_bytes`: live slot bytes of demoted extents, the bytes the store holds on the filesystem (live slots plus free slots that were not punched), and the effective capacity.
+* `extent_file_writes` and `extent_file_writes_inline`: demotion writes that reached the device, and the subset run by inline passes rather than spill threads.
+* `extent_file_write_bytes_identity` and `extent_file_write_bytes_compressed`: the bytes those writes transferred, split by codec for the compression-floor measurement.
+  Every write counter counts the same writes, including those whose chunk was freed before the demotion committed, so the bytes and counts divide into each other.
 * `extent_file_reads` and `extent_file_read_bytes`: cold reads and their bytes.
 * `extent_file_read_latency`: fixed log2 buckets from 16 µs to 65.536 ms as atomic counters in `PoolStats`, exported as a Prometheus histogram, since a cumulative sum gives only the mean.
 * `extent_file_repeat_reads`: file reads of extents already read since demotion, from one bit per extent, which decides whether probe paths should admit.
@@ -325,22 +334,22 @@ The metric help strings that currently say "swap-backed" become backend-neutral,
 
 ### Configuration
 
-* `enable_column_paged_batcher_file_extents` (new, boolean): permits the file backend when a scratch directory exists.
-  It is read once, at pool construction, and later changes have no effect, since the backend is fixed for the process.
+* `enable_column_paged_batcher_file_extents` (new, boolean): `apply_worker_config` selects `File` with the directory `pool` under the scratch directory exactly when a scratch directory exists and this flag is on, and `Swap` otherwise.
+  Like any backend, it takes effect only when the pool is installed (see Backend selection).
   Following the repository's flag policy it defaults off in production and on in the test configuration through `system_parameter_default`.
 * The budget, RSS target, spill thread, and eager-backing dyncfgs keep their meaning.
 
-`apply_pool_config` gains a backend closure (`Swap`, or `File { dir }`), which `apply_worker_config` resolves from the scratch directory and the flag on the first call only.
+`apply_worker_config` computes the scratch path once and feeds the pager and the pool from it.
 Capacity has no dyncfg, since the pool owns the volume.
 `StorageInstanceContext` needs no change, because compute's config handler already installs the shared pool whenever either subsystem's spill gate is on.
 
 ### Code organization
 
 * `src/ore/src/pool/extent.rs`: `SwapExtent` becomes `Extent` with `Home`, keeping `ExtentArena` and the swap paths.
-* `src/ore/src/pool/file.rs` (new): `FileStore`, its per-class files and slot allocators, growth, hole punching, aligned I/O, the alignment probe, and a `sys` seam like `region.rs`'s, so tests can inject `ENOSPC`, `EIO`, short reads, and corruption the way `fake_residency::decline_next` injects pageout declines.
-* `src/ore/src/pool.rs`: `ExtentStore`, the demotion protocol in `enforce_compressed_cap`, the unlocked file read in `read_impl`, the deferred drop in `ChunkHandle::drop`, and the new counters.
-* `src/timely-util/src/pool_config.rs` and its metrics: the backend closure of `apply_pool_config` and the new gauges.
-* `src/compute/src/compute_state.rs` and `src/compute-types/src/dyncfgs.rs`: backend choice and the two dyncfgs.
+* `src/ore/src/pool/file.rs` (new): `FileStore`, its per-class files and slot allocators, growth, hole punching, aligned I/O, the alignment probe, and a `sys` seam like `region.rs`'s, so tests can inject `ENOSPC`, `EIO`, short reads and writes, and corruption the way `fake_residency::decline_next` injects pageout declines.
+* `src/ore/src/pool.rs`: `ExtentBackend`, `ExtentStore`, the demotion protocol in `enforce_compressed_cap`, the unlocked file read in `read_impl`, the deferred drop in `ChunkHandle::drop`, and the new counters.
+* `src/timely-util/src/pool_config.rs` and its metrics: `apply_pool_config` taking an `ExtentBackend`, `build_pool` owning directory creation and the fallback to swap, and the new gauges.
+* `src/compute/src/compute_state.rs` and `src/compute-types/src/dyncfgs.rs`: backend choice and the new dyncfg.
 
 ## A file-mode extent's lifetime, end to end
 
@@ -361,10 +370,11 @@ Capacity has no dyncfg, since the pool owns the volume.
   The pageout-observation tests stay swap-only.
 * **File-mode unit tests:** round trip through a file; demotion under tier pressure; a free during `Demoting` leaves no leaked arena or file slot; a free before demotion elides the write; admission from a file extent; a corrupted file extent panics on read; a store-full pass stops without losing accounting and resumes after frees; a write error disables writes and keeps the extent readable; the capacity override; on-demand hole punching lets a full store serve an allocation of another class; the `O_TMPFILE` fallback path.
   File tests are ignored under Miri, which cannot run the file system calls, as `pool_config`'s test already is for `mmap`.
-* **Accounting invariant:** the invariant documented on `note_extent_resident` is extended to cover `extent_file_bytes` and checked after each concurrent stress test.
-* **Benchmark:** the `column_pager` bench and the `column_paged_spill` example get a backend switch and an I/O-mode switch, so swap and each file I/O candidate run the same merge workload under the same budget.
-  This supplies the file-extent numbers the parent design marks as estimates, and the inputs to the I/O interface decision.
-* **Integration:** an mzcompose workflow with a disk-provisioned replica size runs the paged batcher and upsert-v2 with spilling on, checking RSS, `extent_file_bytes`, and the cgroup `file` counter.
+* **Accounting invariant:** the invariant documented on `note_extent_resident` is extended to cover `extent_file_bytes`, and the concurrent stress test checks it against the surviving chunks once its threads stop.
+* **Harnesses:** the `pool_extents` example in `src/ore/examples/` drives a pool directly with `--backend swap|file`, and reports per-phase RSS and CPU, demotion and read rates, the read-latency histogram, and file space.
+  The `correction_mem` example in `src/compute/examples/` takes `--pool-scratch-dir` to run the MV sink's correction buffer over the file backend.
+  These supply the file-extent numbers the parent design marks as estimates, and the inputs to the I/O interface decision.
+* **CI:** mzcompose defaults the flag on, so test replicas with a scratch directory run the file backend once their spill gates install the pool.
 * **Staging:** the parent design's upsert-v2 hydration measurement repeated on a disk-provisioned size, reporting the success-criteria metrics.
 
 ## Rollout
@@ -372,7 +382,7 @@ Capacity has no dyncfg, since the pool owns the volume.
 1. Refactor `SwapExtent` into `Extent` and `Home` with only the swap arms, plus `ExtentStore::Swap`.
    No behavior change, and the existing tests prove it.
 2. Add `FileStore`, demotion, file reads, error handling, and counters, constructed only by tests.
-3. Add the backend closure to `apply_pool_config`, the dyncfgs, the metrics, and the selection in `apply_worker_config`.
+3. Add the backend to `apply_pool_config`, the dyncfg, the metrics, and the selection in `apply_worker_config`.
 4. Run the measurement plan on a local machine, the emulator, self-managed, and staging FS-backed instances, then enable by default where a scratch directory exists.
 5. Delete the pager's file backend as part of the parent design's pager removal.
 
@@ -513,7 +523,7 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
   Compare the demotion elision rate `extent_demotions_elided / (extent_demotions_elided + extent_pageouts)`, file reads per second, and RSS.
   Lower the default if a smaller tier loses little elision and adds no read traffic.
 * **Compression floor.**
-  Compare the identity-coded and lz4 shares of `extent_file_write_bytes`.
+  Compare `extent_file_write_bytes_identity` with `extent_file_write_bytes_compressed`.
   If identity bytes are a material share of device writes, set the floor to 0 in file mode, since a demoted identity extent costs about 5.6 times the lz4 bytes on the measured data (estimate from the parent design).
 * **Spill threads.**
   Watch `spill_in_flight` against `SPILL_IN_FLIGHT_MAX` (64) and the share of evictions that fall back inline.
@@ -521,7 +531,7 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
 * **Repeat reads.**
   If `extent_file_repeat_reads` dominates `extent_file_reads` on the probe workload, wire admission on the probe paths, which is the parent design's pending consumer work.
 * **Stranded space.**
-  After a hydration followed by steady state, compare allocated file bytes with live class bytes.
+  After a hydration followed by steady state, compare `extent_file_allocated_bytes` with `extent_file_bytes`.
   Stranded space below the headroom confirms that on-demand punching rarely fires.
 * **Capacity headroom.**
   Fill the store to capacity and confirm that `ENOSPC` appears only on the `fallocate` growth path, never on `pwrite`, and that the latch never trips.
