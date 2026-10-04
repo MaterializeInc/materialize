@@ -31,8 +31,8 @@ use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
 use mz_expr::{
-    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
-    RowSetFinishingIncremental, permutation_for_arrangement,
+    ErrorScope, EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    RowSetFinishing, RowSetFinishingIncremental, permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -45,7 +45,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{
-    Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, SqlRelationType,
+    Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowArena, RowIterator, SqlRelationType,
     preserves_order,
 };
 use mz_storage_types::sources::SourceData;
@@ -454,6 +454,27 @@ fn mfp_to_safe_plan(
         .map_err(|e| OptimizerError::InternalUnsafeMfpPlan(format!("{:?}", e)))
 }
 
+/// Evaluates `mfp` on constant `rows` the way a dataflow with cell-scoped errors would.
+///
+/// The result leaves the dataflow region, so it evaluates in [`ErrorScope::Boundary`].
+fn evaluate_constant_mfp(
+    mfp: &mz_expr::SafeMfpPlan,
+    rows: &[(Row, Diff)],
+) -> Result<Vec<(Row, Diff)>, EvalError> {
+    let mut result = Vec::with_capacity(rows.len());
+    let mut row_buf = Row::default();
+    for (row, diff) in rows {
+        let arena = RowArena::new();
+        let mut datums = row.unpack();
+        let evaluated =
+            mfp.evaluate_into_scoped(&mut datums, &arena, &mut row_buf, ErrorScope::Boundary)?;
+        if let Some(row) = evaluated {
+            result.push((row.clone(), *diff));
+        }
+    }
+    Ok(result)
+}
+
 /// If it can't convert `mfp` into a `SafeMfpPlan`, this returns an _internal_ error.
 fn permute_oneshot_mfp_around_index(
     mfp: mz_expr::MapFilterProject,
@@ -471,12 +492,16 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
+///
+/// With `cell_errors`, a linear operator around a constant is also evaluated here, because
+/// constant folding leaves erroring map expressions to evaluation.
 pub fn create_fast_path_plan(
     dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
     persist_fast_path_order: bool,
+    cell_errors: bool,
 ) -> Result<Option<FastPathPlan>, OptimizerError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -527,6 +552,23 @@ pub fn create_fast_path_plan(
                             mir = input;
                         }
                     }
+                }
+            }
+            // `FoldConstants` leaves a map expression that errors on a constant to evaluation,
+            // which scopes the error to its cell. Evaluating it here agrees with a dataflow.
+            if cell_errors {
+                let typ = mir.typ();
+                let (mfp, input) = mz_expr::MapFilterProject::extract_from_expression(mir);
+                if let Some((rows, _)) = input.as_const() {
+                    let mfp = mfp_to_safe_plan(mfp)?;
+                    let rows = match rows {
+                        Ok(rows) => evaluate_constant_mfp(&mfp, rows),
+                        Err(e) => Err(e.clone()),
+                    };
+                    return Ok(Some(FastPathPlan::Constant(
+                        rows,
+                        mz_repr::SqlRelationType::from_repr(&typ),
+                    )));
                 }
             }
             // In the case of a linear operator around an indexed view, we

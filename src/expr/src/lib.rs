@@ -30,7 +30,7 @@ pub mod visit;
 
 pub use id::{Id, LocalId, SourceInstanceId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace, TraceSummary};
-pub use linear::plan::{MfpPlan, SafeMfpPlan};
+pub use linear::plan::{ErrorScope, MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{MapFilterProject, memoize_expr};
 pub use relation::func::REPEAT_ROW_NAME;

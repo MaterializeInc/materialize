@@ -16,7 +16,7 @@ use std::rc::Rc;
 use differential_dataflow::VecCollection;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
+use mz_expr::{ErrorScope, EvalError, MapFilterProject, permutation_for_arrangement};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
@@ -68,7 +68,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some((oks, errs)) = &bundle.collection {
+        let (ok_collection, err_collection) = if let Some((oks, errs)) = &bundle.collection {
             (columnar_to_vec(oks.clone()), errs.clone())
         } else {
             let (key, _arrangement) = bundle
@@ -84,9 +84,31 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             // The sink serializes rows, so decode to `Vec` here. This is the
             // sanctioned sink leaf, the same seam as the raw-collection arm
             // above.
-            let (oks, errs) =
-                bundle.as_collection_core(mfp_plan, Some((key.clone(), None)), self.until.clone());
+            let (oks, errs) = bundle.as_collection_core(
+                mfp_plan,
+                Some((key.clone(), None)),
+                self.until.clone(),
+                self.boundary_scope(),
+            );
             (columnar_to_vec(oks), errs)
+        };
+
+        // A sink is a boundary: error datums become collection-scoped errors before any row
+        // leaves the dataflow. Both arms above can carry error datums, the arranged one when its
+        // permutation is the identity and reading the arrangement evaluates nothing.
+        let (ok_collection, mut err_collection) = if self.error_scope() == ErrorScope::Cell {
+            type CB<C> = CapacityContainerBuilder<C>;
+            let (oks, errs) = ok_collection.map_fallible::<CB<_>, CB<_>, _, _, _>(
+                "ElevateCellErrors",
+                |row: Row| {
+                    EvalError::elevate(row.iter())
+                        .map(|()| row)
+                        .map_err(DataflowErrorSer::from)
+                },
+            );
+            (oks, err_collection.concat(errs))
+        } else {
+            (ok_collection, err_collection)
         };
 
         // Attach logging of dataflow errors.

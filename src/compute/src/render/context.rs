@@ -25,7 +25,7 @@ use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCK
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Eval, Id, MfpPlan};
+use mz_expr::{ErrorScope, Eval, EvalError, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
@@ -95,6 +95,8 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
+    /// Whether map errors are scoped to cells, from the instance configuration.
+    pub cell_errors: bool,
 }
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -136,7 +138,26 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
             config_set: Rc::clone(&compute_state.worker_config),
+            cell_errors: compute_state.cell_errors,
         }
+    }
+}
+
+/// The [`ErrorScope`] for MFPs whose output stays inside the dataflow.
+pub(crate) fn inner_error_scope(cell_errors: bool) -> ErrorScope {
+    if cell_errors {
+        ErrorScope::Cell
+    } else {
+        ErrorScope::Row
+    }
+}
+
+/// The [`ErrorScope`] for MFPs whose output leaves the dataflow, such as peeks and sinks.
+pub(crate) fn boundary_error_scope(cell_errors: bool) -> ErrorScope {
+    if cell_errors {
+        ErrorScope::Boundary
+    } else {
+        ErrorScope::Row
     }
 }
 
@@ -183,6 +204,31 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     pub(super) fn error_logger(&self) -> ErrorLogger {
         ErrorLogger::new(self.debug_name.clone())
     }
+
+    /// The [`ErrorScope`] for MFPs whose output stays inside the dataflow.
+    pub(super) fn error_scope(&self) -> ErrorScope {
+        inner_error_scope(self.cell_errors)
+    }
+
+    /// The [`ErrorScope`] for MFPs whose output leaves the dataflow or feeds an operator without
+    /// semantics for error datums.
+    pub(super) fn boundary_scope(&self) -> ErrorScope {
+        boundary_error_scope(self.cell_errors)
+    }
+
+    /// Replaces `bundle` by its unarranged collection with cell-scoped errors elevated.
+    ///
+    /// A no-op when cell-scoped errors are disabled, as no error datums exist then.
+    pub(super) fn elevate_cell_errors(
+        &self,
+        bundle: CollectionBundle<'scope, T>,
+    ) -> CollectionBundle<'scope, T> {
+        if self.error_scope() == ErrorScope::Row {
+            return bundle;
+        }
+        let (oks, errs) = bundle.elevate_cell_errors();
+        CollectionBundle::from_edge(oks, errs)
+    }
 }
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -211,6 +257,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),
+            cell_errors: self.cell_errors,
         }
     }
 }
@@ -933,11 +980,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The `key_val` argument, when present, indicates that a specific arrangement should
     /// be used, and if, in addition, the `val` component is present,
     /// that we can seek to the supplied row.
+    ///
+    /// `scope` chooses where errors in `mfp_plan`'s map expressions land, see [`ErrorScope`].
     pub fn as_collection_core(
         &self,
         mfp_plan: MfpPlan<LirScalarExpr>,
         key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
+        scope: ErrorScope,
     ) -> (
         ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -956,7 +1006,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             false
         };
 
-        if mfp_plan.is_identity() && !has_key_val {
+        // The shortcut evaluates nothing, so it cannot elevate error datums.
+        if mfp_plan.is_identity() && !has_key_val && scope != ErrorScope::Boundary {
             let key = key_val.map(|(k, _v)| k);
             return match key {
                 // Unarranged identity hands the edge straight through, so a columnar
@@ -1008,6 +1059,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     diff.clone(),
                     move |time| !until.less_equal(time),
                     &mut row_builder,
+                    scope,
                 ) {
                     work += 1;
                     match result {
@@ -1031,6 +1083,34 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
         (stream.as_collection(), errors)
     }
+
+    /// Elevates cell-scoped errors in the unarranged collection to collection-scoped errors.
+    ///
+    /// Operators that read rows without defining semantics for error datums call this on their
+    /// input. The result contains no error datums.
+    pub fn elevate_cell_errors(
+        &self,
+    ) -> (
+        ColCollection<'scope, T>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    ) {
+        let (stream, errors) = self.flat_map::<ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+            None,
+            usize::MAX,
+            move |row_datums, time, diff, ok_session, err_session| {
+                match EvalError::elevate(row_datums.iter().copied()) {
+                    Ok(()) => {
+                        let mut row_builder = SharedRow::get();
+                        row_builder.packer().extend(row_datums.iter());
+                        ok_session.give((row_builder.clone(), time, diff));
+                    }
+                    Err(e) => err_session.give((e.into(), time, diff)),
+                }
+                1
+            },
+        );
+        (stream.as_collection(), errors)
+    }
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
@@ -1040,6 +1120,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
         strategy: ArrangementStrategy,
+        scope: ErrorScope,
     ) -> Self
     where
         T: MaybeBucketByTime,
@@ -1078,7 +1159,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let form_raw_collection = collections.raw || will_create_arrangement;
         if form_raw_collection && self.collection.is_none() {
             let (oks, errs) =
-                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until);
+                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, scope);
             // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
             // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
@@ -1650,7 +1731,8 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
                 let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
-                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                let (edge, _errs) =
+                    bundle.as_collection_core(mfp, None, Antichain::new(), ErrorScope::Row);
                 let produced = columnar_to_vec(edge.clone()).inner.capture();
                 let (_arranged, _arrange_errs, _passthrough) =
                     CollectionBundle::<Timestamp>::arrange_collection(
@@ -1691,7 +1773,8 @@ mod tests {
                 let identity = MapFilterProject::<LirScalarExpr>::new(1)
                     .into_plan()
                     .expect("identity mfp");
-                let (out, _errs) = bundle.as_collection_core(identity, None, Antichain::new());
+                let (out, _errs) =
+                    bundle.as_collection_core(identity, None, Antichain::new(), ErrorScope::Row);
                 let captured = columnar_to_vec(out).inner.capture();
                 input.update_at(
                     Row::pack_slice(&[Datum::Int64(1)]),
@@ -1740,7 +1823,8 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
                 let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
-                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                let (edge, _errs) =
+                    bundle.as_collection_core(mfp, None, Antichain::new(), ErrorScope::Row);
                 let captured = columnar_to_vec(edge).inner.capture();
                 // Feed all rows at the same time in one batch so the fold is
                 // within-batch, not a downstream re-consolidation.

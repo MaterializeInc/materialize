@@ -320,6 +320,7 @@ where
                             SnapshotMode::Include,
                             Antichain::new(),
                             None,
+                            mz_expr::ErrorScope::Row,
                             flow_control,
                             false.then_some(|| unreachable!()),
                             async {},
