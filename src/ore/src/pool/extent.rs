@@ -153,7 +153,7 @@ impl ExtentArena {
     }
 
     /// Test hook: the number of slots currently allocated across classes.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn slots_in_use(&self) -> usize {
         self.regions.iter().map(Region::slots_in_use).sum()
     }
@@ -494,7 +494,7 @@ impl Extent {
     }
 
     /// The store and slot of a `File` extent, `None` otherwise.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn file_slot(&self) -> Option<(Arc<FileStore>, FileSlot)> {
         self.file_location()
             .map(|location| (location.store, location.slot))
