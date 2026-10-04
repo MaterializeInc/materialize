@@ -31,6 +31,8 @@
 
 pub mod metrics;
 
+pub use mz_ore::pool::ExtentBackend;
+
 /// Process-wide buffer pool shared by every spill consumer in the process.
 ///
 /// Construction reserves virtual address space only: 1 TiB per chunk size
@@ -39,6 +41,11 @@ pub mod metrics;
 /// configurations where the reservation fails, the pool is permanently
 /// unavailable for this process and [`apply_pool_config`] reports that by
 /// returning `false`.
+///
+/// The first [`apply_pool_config`] call installs the pool, and its backend
+/// fixes the extent store for the process. Later calls only retune the
+/// installed pool, so a changed backend, or a flag or scratch directory that
+/// feeds it, has no effect.
 static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync::OnceLock::new();
 
 /// Whether [`apply_pool_config`] has installed the pool as the process's
@@ -67,21 +74,18 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
     }
 }
 
-/// Builds the pool for `backend`. A file store that cannot be opened falls
-/// back to swap, which needs no scratch space.
-fn build_pool(backend: PoolBackend) -> Option<mz_ore::pool::Pool> {
-    let built = match backend {
-        PoolBackend::Swap => mz_ore::pool::Pool::new(),
-        PoolBackend::File { dir } => {
-            mz_ore::pool::Pool::with_backend(mz_ore::pool::ExtentBackend::File {
-                dir: dir.clone(),
-                capacity_bytes: None,
-            })
+/// Builds the pool for `backend`, creating a file backend's directory. A
+/// file store that cannot be created or opened falls back to swap, which
+/// needs no scratch space. This is the only place that decides the fallback.
+fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
+    let built = match &backend {
+        ExtentBackend::Swap => mz_ore::pool::Pool::new(),
+        ExtentBackend::File { dir, .. } => std::fs::create_dir_all(dir)
+            .and_then(|()| mz_ore::pool::Pool::with_backend(backend.clone()))
             .or_else(|err| {
                 tracing::warn!(%err, ?dir, "buffer pool file store unavailable, using swap");
                 mz_ore::pool::Pool::new()
-            })
-        }
+            }),
     };
     match built {
         Ok(pool) => {
@@ -103,15 +107,12 @@ fn build_pool(backend: PoolBackend) -> Option<mz_ore::pool::Pool> {
 /// that never calls it, because the spill gate is off or it is unconfigured,
 /// never reserves the pool's address space or spawns its spill threads.
 /// Returns `false` (and changes nothing) if the pool is unavailable because
-/// its virtual reservation failed.
-///
-/// `backend` is evaluated exactly once, by the first call, and fixes the
-/// extent store for the process. Later calls never evaluate it and only
-/// apply the tunables in `cfg`.
+/// its virtual reservation failed. `backend` takes effect only on the first
+/// call, see [`GLOBAL_POOL`].
 ///
 /// On success the pool becomes reachable through [`active_pool`] and its
 /// resident budget is retuned in place so live handles stay coherent.
-pub fn apply_pool_config(cfg: PoolPagerConfig, backend: impl FnOnce() -> PoolBackend) -> bool {
+pub fn apply_pool_config(cfg: PoolPagerConfig, backend: ExtentBackend) -> bool {
     let applied = apply_to(&GLOBAL_POOL, cfg, backend);
     if applied {
         POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -124,9 +125,9 @@ pub fn apply_pool_config(cfg: PoolPagerConfig, backend: impl FnOnce() -> PoolBac
 fn apply_to(
     slot: &std::sync::OnceLock<Option<mz_ore::pool::Pool>>,
     cfg: PoolPagerConfig,
-    backend: impl FnOnce() -> PoolBackend,
+    backend: ExtentBackend,
 ) -> bool {
-    let Some(pool) = slot.get_or_init(|| build_pool(backend())) else {
+    let Some(pool) = slot.get_or_init(|| build_pool(backend)) else {
         return false;
     };
     pool.set_budget(cfg.budget_bytes);
@@ -134,19 +135,6 @@ fn apply_to(
     pool.set_spill_threads(cfg.spill_threads);
     pool.set_eager_backing(cfg.eager_backing);
     true
-}
-
-/// The extent store the buffer pool runs on, fixed by the first
-/// [`apply_pool_config`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PoolBackend {
-    /// Compressed extents are paged to the swap device.
-    Swap,
-    /// Compressed extents are demoted to files under `dir`.
-    File {
-        /// A directory on a disk-backed filesystem, created by the caller.
-        dir: std::path::PathBuf,
-    },
 }
 
 /// Inputs to [`apply_pool_config`]. All sizes are absolute bytes; fractions
@@ -184,41 +172,59 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
     fn apply_pool_config_installs_pool() {
-        let ok = apply_pool_config(CONFIG, || PoolBackend::Swap);
+        let ok = apply_pool_config(CONFIG, ExtentBackend::Swap);
         assert!(ok, "pool reservation expected to succeed in tests");
         assert!(active_pool().is_some());
         assert!(global_pool_peek().is_some());
     }
 
-    /// The backend closure runs on the first apply only, and the installed
-    /// backend never changes. Uses its own slot because the process-wide
-    /// pool is installed by whichever test runs first.
+    /// The first apply fixes the backend, and later applies never change
+    /// it or touch the directory they name. Uses its own slot because the
+    /// process-wide pool is installed by whichever test runs first.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
-    fn apply_evaluates_backend_once() {
+    fn first_apply_fixes_backend() {
         let slot = std::sync::OnceLock::new();
-        let calls = std::cell::Cell::new(0);
-        let ok = apply_to(&slot, CONFIG, || {
-            calls.set(calls.get() + 1);
-            PoolBackend::Swap
-        });
+        let ok = apply_to(&slot, CONFIG, ExtentBackend::Swap);
         assert!(ok, "pool reservation expected to succeed in tests");
-        assert_eq!(calls.get(), 1, "the first apply evaluates the backend");
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let ok = apply_to(&slot, CONFIG, || {
-            calls.set(calls.get() + 1);
-            PoolBackend::File {
-                dir: dir.path().to_path_buf(),
-            }
-        });
+        let pool_dir = dir.path().join("pool");
+        let ok = apply_to(
+            &slot,
+            CONFIG,
+            ExtentBackend::File {
+                dir: pool_dir.clone(),
+                capacity_bytes: None,
+            },
+        );
         assert!(ok);
-        assert_eq!(calls.get(), 1, "later applies never evaluate the backend");
+        assert!(!pool_dir.exists(), "a later apply creates no directory");
         let pool = slot.get().cloned().flatten().expect("installed");
         assert_eq!(
             pool.backend_kind(),
             mz_ore::pool::BackendKind::Swap,
             "the backend is fixed by the first application",
         );
+    }
+
+    /// A file backend whose directory cannot be created installs a swap
+    /// pool.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
+    fn unusable_file_backend_falls_back_to_swap() {
+        let file = tempfile::NamedTempFile::new().expect("tempfile");
+        let slot = std::sync::OnceLock::new();
+        let ok = apply_to(
+            &slot,
+            CONFIG,
+            ExtentBackend::File {
+                dir: file.path().join("pool"),
+                capacity_bytes: None,
+            },
+        );
+        assert!(ok, "the fallback installs a pool");
+        let pool = slot.get().cloned().flatten().expect("installed");
+        assert_eq!(pool.backend_kind(), mz_ore::pool::BackendKind::Swap);
     }
 }
