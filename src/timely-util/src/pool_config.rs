@@ -108,7 +108,7 @@ fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
 /// never reserves the pool's address space or spawns its spill threads.
 /// Returns `false` (and changes nothing) if the pool is unavailable because
 /// its virtual reservation failed. `backend` takes effect only on the first
-/// call, see [`GLOBAL_POOL`].
+/// call, see `GLOBAL_POOL`.
 ///
 /// On success the pool becomes reachable through [`active_pool`] and its
 /// resident budget is retuned in place so live handles stay coherent.
