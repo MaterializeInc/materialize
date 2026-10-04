@@ -1,10 +1,10 @@
 # pool_extents on r8gd.4xlarge, file mode
 
-These are the results of `pool-matrix.sh` on the instance in `misc/scratch/pool-file-extents.json`, at commit afca195fa0. The machine runs kernel 7.0.0-1006-aws, and the store sits on the instance-store NVMe formatted ext4 at `/scratch`.
+These are the results of `pool-matrix.sh` on the instance in `misc/scratch/pool-file-extents.json`, run with an earlier revision of the `pool_extents` harness (`src/ore/examples/pool_extents.rs`) than the committed one. The machine runs kernel 7.0.0-1006-aws, and the store sits on the instance-store NVMe formatted ext4 at `/scratch`.
 
 Every run inserts 16384 chunks of 2 MiB, 32 GiB in total. The pool budget is 4096 MiB with 4 spill threads. Bodies are half a repeating pattern and half random, which gives a stored-to-body ratio of 0.504. 30% of chunks die 4096 inserts after their own insert. A churn phase of 8192 replacements follows, then a read phase with 16 readers of 2000 reads each. Rows list only the arguments that differ from that base.
 
-The demotion rate divides the bytes written to the store by the wall time of fill, drain, churn and the second drain. The harness's own "demotion rate" line divided by fill and drain only, which overstated it by about 1.5 times, so this table uses the recomputed value.
+The demotion rate divides the bytes written to the store by the wall time of fill, drain, churn and the second drain. That earlier revision's "demotion rate" line divided by fill and drain only, which overstated it by about 1.5 times, so this table uses the recomputed value, and the committed harness divides by the same four phases.
 
 | Run | Arguments | Tier cap MiB | VmHWM MiB | Demotion GiB/s | Elision rate | Inline share | Spill at max, fill | Read p50 / p99 ms | Reads/s |
 |---|---|---|---|---|---|---|---|---|---|
