@@ -672,6 +672,7 @@ steps:
     label: Lean models
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    inputs: [misc/lean, misc/images/lean]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: lean
@@ -679,6 +680,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
     coverage: skip
     sanitizer: skip
+    ci_glue_exempt: true
 
   - id: mcp
     label: MCP e2e
