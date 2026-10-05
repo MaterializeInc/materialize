@@ -5935,15 +5935,6 @@ class AlterClusterSetAction(Action):
     sources, and sinks forces rehydration and replica teardown/spin-up under
     concurrent DDL and DML."""
 
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            # A SET (SIZE) here or a ReconfigureCluster on the same cluster
-            # leaves a reconfiguration record in flight past the statement
-            # that started it. Replication factor is folded in at cut-over,
-            # so changing it meanwhile is refused.
-            "cannot change replication factor while a reconfiguration is in progress",
-        ] + super().errors_to_ignore(exe)
-
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             # Cluster 0 stays fixed, it hosts sources and sinks.

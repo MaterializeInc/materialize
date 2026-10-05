@@ -646,6 +646,7 @@ in-progress
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET max_replicas_per_cluster = 2
+ALTER SYSTEM SET max_credit_consumption_rate = 0
 
 > ALTER CLUSTER cc_limit_cancel SET (SIZE 'scale=1,workers=1')
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters c ON c.id = recon.cluster_id WHERE c.name = 'cc_limit_cancel'
@@ -659,6 +660,7 @@ scale=1,workers=1 3
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 ALTER SYSTEM RESET max_replicas_per_cluster
+ALTER SYSTEM RESET max_credit_consumption_rate
 
 # ----- The controller reports a reshape that exceeds the replica budget -----
 #
@@ -1699,6 +1701,28 @@ in-progress
 > SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
 scale=1,workers=2 2
 scale=1,workers=4 2
+
+# Budget for the pending baseline's 8 credits, excluding the realized set's
+# 4 credits. RF3 must fail synchronously: its target costs 12, not the 6 it
+# would cost at the realized size. Restating RF2 fits exactly, even though
+# the live overlap exceeds the budget.
+$ set-from-sql var=retarget_credit_limit
+SELECT (sum(s.credits_per_hour) - 4)::text FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size WHERE c.id LIKE 'u%'
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET max_credit_consumption_rate = ${retarget_credit_limit}
+
+! ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 3)
+contains: creating cluster replica would violate max_credit_consumption_rate limit
+
+> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 2)
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=2 2
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+in-progress
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM RESET max_credit_consumption_rate
 
 > ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 3)
 
