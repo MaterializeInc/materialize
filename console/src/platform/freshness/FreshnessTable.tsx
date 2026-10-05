@@ -138,7 +138,9 @@ const columns = [
     ),
   }),
   columnHelper.accessor("peak", {
-    header: "Peak",
+    // Named as Monitoring's Objects page names it, so the same statistic does
+    // not carry two names across the product.
+    header: "pMAX",
     sortingFn: sortingFunctions.numericNullsLast,
     cell: (info) => (
       <StatCell value={info.getValue()} row={info.row.original} />

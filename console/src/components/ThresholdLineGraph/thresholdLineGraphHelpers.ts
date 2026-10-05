@@ -52,12 +52,19 @@ export function generateRainbowPalette(
   );
 }
 
-/** Whether the line's judged value sits strictly above the threshold. */
+/**
+ * Whether the line's judged value reaches the threshold.
+ *
+ * Inclusive, so a value exactly at the threshold breaches. The shaded band
+ * stops at the threshold line, so a point sitting on it is drawn touching the
+ * band, and anything else would have it look breaching while counting as
+ * healthy. Monitoring's Objects page reads its own threshold the same way.
+ */
 export function isBreaching<Datum>(
   line: ThresholdLineSeries<Datum>,
   threshold: number,
 ): boolean {
-  return line.breachValue !== null && line.breachValue > threshold;
+  return line.breachValue !== null && line.breachValue >= threshold;
 }
 
 /**

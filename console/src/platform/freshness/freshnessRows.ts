@@ -195,8 +195,10 @@ export function buildFreshnessRows({
       };
       const object = objectsById.get(line.key);
       const hydration = hydrationByObjectId.get(line.key);
+      // Inclusive, matching `isBreaching` on the graph and the Objects page's
+      // own threshold filter. A row and its line must agree.
       const breaching =
-        line.breachValue !== null && line.breachValue > threshold;
+        line.breachValue !== null && line.breachValue >= threshold;
       const drawn = breaching || selectedKeys.has(line.key);
 
       return {
