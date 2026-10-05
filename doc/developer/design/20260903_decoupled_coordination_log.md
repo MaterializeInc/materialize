@@ -63,10 +63,10 @@ Hydration, burst state and reconfiguration progress are deployment-local.
 Preserve declaration-backed pins and comments through promotion and
 managed/unmanaged conversion, including peers without a local realization.
 
-The remaining query-client closure investigation concerns long serving-coordinator
-publication stalls that may exhaust reclamation grace. Establish the actual
-heartbeat/reclamation sequence without changing grace. Keep this separate from
-planning-snapshot absence, which now consults the live protection writer.
+Empty catalog refreshes no longer submit table writes. Continue the zero-row OCC
+fixture investigation at its race setup: protection acquisition can publish
+metadata and close the intended oracle window. Preserve its before/after witness
+and deadline. Do not change catalog transaction completion semantics for the test.
 
 M2 remains active. Continue integration and upstream reconciliation without
 reopening completed native handover, outage, targeted DDL or bounded-throughput
@@ -79,14 +79,23 @@ deferred pre-feature conversion boundary, separate from native handover. Do not
 weaken the guard or silently skip the check. Use CI for all CPU/RAM-heavy builds
 and tests. Keep local work to editing, lightweight checks and evidence review.
 
-Verify the replacement-MV restart/DROP fixture with its explicitly scoped paired
-heartbeat/grace override. Keep production defaults and its convergence deadline.
+Keep the replacement-MV restart/DROP fixture's explicitly scoped paired
+heartbeat/grace override, production defaults and convergence deadline.
+Verify temporary-object storage retirement with that same paired fixture timing,
+preserving immediate SQL invisibility after promotion.
 The renamed index-DROP/reconnect fixture checks dependent results and progress,
 not physical replacement counters. Native reuse checks export/dataflow continuity.
 
 Investigate retained introspection-input progress behind the observed prewarming
-readiness failure, separately from simulated-version bootstrap contention. Keep
-readiness requirements unchanged. Remove failure-only diagnostics once attributed.
+readiness failure and first-query latency after promotion. Keep readiness and
+latency requirements unchanged. Remove failure-only diagnostics once attributed.
+The approved simulated-version harness repair scopes the Persist version to its
+own clusterd launches, but simulated prewarming still fails to become ready.
+Establish its remaining cause without changing written-plan identity or admission
+checks. Keep this separate from actual compiled-version handover.
+Verify shared workload-class metric enrichment with maintained collection metrics,
+not obsolete controller counters. Paused-index checks use committed compaction
+bounds because replica observations do not exist with zero replicas.
 Publication stalls and missing hydration-history episodes require separate causes,
 not blanket fixture rewrites. Keep the earlier unexplained RTR conflict visible.
 

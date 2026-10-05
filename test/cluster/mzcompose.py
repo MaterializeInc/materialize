@@ -298,46 +298,21 @@ def workflow_test_github_4443(c: Composition) -> None:
     with ExitStack() as stack:
         c.up("materialized")
 
-        # helper function to get command history metrics
-        def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
-            controller_metrics = c.exec(
-                "materialized", "curl", "localhost:6878/metrics", capture=True
-            ).stdout
+        # Native execution owns command history on the replica, not envd.
+        def find_command_history_metrics(c: Composition) -> tuple[int, int]:
             replica_metrics = c.exec(
                 "clusterd1", "curl", "localhost:6878/metrics", capture=True
             ).stdout
-            metrics = controller_metrics + replica_metrics
-
-            controller_command_count, controller_command_count_found = 0, False
-            controller_dataflow_count, controller_dataflow_count_found = 0, False
             replica_command_count, replica_command_count_found = 0, False
             replica_dataflow_count, replica_dataflow_count_found = 0, False
-            for metric in metrics.splitlines():
-                if (
-                    metric.startswith("mz_compute_controller_history_command_count")
-                    and 'instance_id="u2"' in metric
-                ):
-                    controller_command_count += int(metric.split()[1])
-                    controller_command_count_found = True
-                elif (
-                    metric.startswith("mz_compute_controller_history_dataflow_count")
-                    and 'instance_id="u2"' in metric
-                ):
-                    controller_dataflow_count += int(metric.split()[1])
-                    controller_dataflow_count_found = True
-                elif metric.startswith("mz_compute_replica_history_command_count"):
+            for metric in replica_metrics.splitlines():
+                if metric.startswith("mz_compute_replica_history_command_count"):
                     replica_command_count += int(metric.split()[1])
                     replica_command_count_found = True
                 elif metric.startswith("mz_compute_replica_history_dataflow_count"):
                     replica_dataflow_count += int(metric.split()[1])
                     replica_dataflow_count_found = True
 
-            assert (
-                controller_command_count_found
-            ), "command count not found in controller metrics"
-            assert (
-                controller_dataflow_count_found
-            ), "dataflow count not found in controller metrics"
             assert (
                 replica_command_count_found
             ), "command count not found in replica metrics"
@@ -346,8 +321,6 @@ def workflow_test_github_4443(c: Composition) -> None:
             ), "dataflow count not found in replica metrics"
 
             return (
-                controller_command_count,
-                controller_dataflow_count,
                 replica_command_count,
                 replica_dataflow_count,
             )
@@ -409,8 +382,6 @@ def workflow_test_github_4443(c: Composition) -> None:
         # Obtain initial history size and dataflow count.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
         (
-            initial_controller_command_count,
-            controller_dataflow_count,
             initial_replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
@@ -429,15 +400,6 @@ def workflow_test_github_4443(c: Composition) -> None:
             )
             metric_sink_dataflows = int(cursor.fetchall()[0][0])
 
-        assert (
-            initial_controller_command_count > 0
-        ), "controller history cannot be empty"
-        assert (
-            controller_dataflow_count > 0
-        ), "at least one dataflow expected in controller history"
-        assert (
-            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
-        ), "more dataflows than expected in controller history"
         assert initial_replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
@@ -477,8 +439,6 @@ def workflow_test_github_4443(c: Composition) -> None:
         # Check that history size and dataflow count are well-behaved.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
         (
-            controller_command_count,
-            controller_dataflow_count,
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
@@ -492,19 +452,6 @@ def workflow_test_github_4443(c: Composition) -> None:
         # peeks that fail to retire land orders of magnitude above it. A fixed bound would
         # instead need retuning whenever the object count installed at boot changes.
         lingering_dataflow_commands = 3 * MAX_LINGERING_DATAFLOWS
-        assert (
-            controller_command_count
-            <= 2 * initial_controller_command_count + lingering_dataflow_commands
-        ), (
-            "controller history grew more than expected after peeks, got"
-            f" {controller_command_count}, started at {initial_controller_command_count}"
-        )
-        assert (
-            controller_dataflow_count > 0
-        ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
-        assert (
-            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
-        ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count
             <= 2 * initial_replica_command_count + lingering_dataflow_commands
@@ -3905,26 +3852,31 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
 
     c.up("materialized")
 
-    # Create a cluster and wait for it to come up.
+    # Native envd metrics describe maintained collections, not empty controller
+    # instances. Retain the same collection across every workload-class change.
     c.sql("""
         CREATE CLUSTER test SIZE 'scale=1,workers=1';
         SET cluster = test;
-        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        CREATE TABLE workload_input (a int);
+        CREATE INDEX workload_idx ON workload_input (a);
+        SELECT * FROM workload_input;
         """)
+    [(collection_id,)] = c.sql_query("""
+        SELECT global_id FROM mz_indexes
+        JOIN mz_internal.mz_object_global_ids USING (id)
+        WHERE name = 'workload_idx'
+    """)
 
     # Find the internal-http port of the test cluster.
     cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test'")[0][0]
     logs = c.invoke("logs", "materialized", capture=True).stdout
     clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
 
-    def check_workload_class(expected: str | None):
+    def assert_workload_class(expected: str | None):
         """
         Assert that metrics on both envd and clusterd are labeled with the
         given expected workload class.
         """
-
-        # Sleep a bit to give workload class changes time to propagate.
-        time.sleep(1)
 
         envd_metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
@@ -3933,6 +3885,14 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
             "materialized", "curl", f"localhost:{clusterd_port}/metrics", capture=True
         ).stdout
 
+        envd_metrics = "\n".join(
+            line
+            for line in envd_metrics.splitlines()
+            if line.startswith("mz_dataflow_wallclock_lag_seconds{")
+            and f'instance_id="{cluster_id}"' in line
+            and f'collection_id="{collection_id}"' in line
+        )
+        assert envd_metrics, "native collection lag metrics disappeared"
         envd_classes = {
             m.group("value") for m in RE_WORKLOAD_CLASS_LABEL.finditer(envd_metrics)
         }
@@ -3954,6 +3914,19 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
             assert clusterd_classes == {
                 expected
             }, f"clusterd: expected workload class '{expected}', found {clusterd_classes}"
+
+    def check_workload_class(expected: str | None):
+        # Native collection metrics are published periodically, independently of
+        # query completion. Wait for the observed state, not a particular tick.
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                assert_workload_class(expected)
+                return
+            except AssertionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(1)
 
     check_workload_class(None)
 
@@ -4728,33 +4701,47 @@ def workflow_blue_green_deployment(
                     continue
                 raise e
 
-    with c.override(
-        Testdrive(
-            no_reset=True, default_timeout="300s"
-        ),  # pending dataflows can take a while
-        Clusterd(
-            name="clusterd1",
-            workers=1,
+    with (
+        c.override(
+            Testdrive(no_reset=True, default_timeout="300s"),
+            Materialized(
+                additional_system_parameter_defaults={
+                    "unsafe_enable_unsafe_functions": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                },
+                support_external_clusterd=True,
+            ),
         ),
-        Clusterd(
-            name="clusterd2",
-            workers=2,
-            process_names=["clusterd2", "clusterd3"],
-        ),
-        Clusterd(
-            name="clusterd3",
-            workers=2,
-            process_names=["clusterd2", "clusterd3"],
-        ),
-        Materialized(
-            additional_system_parameter_defaults={
-                "unsafe_enable_unsafe_functions": "true",
-                "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            },
-            support_external_clusterd=True,
-        ),
+        ExitStack() as stack,
     ):
-        c.up("materialized", "clusterd1", "clusterd2", "clusterd3")
+        c.up("materialized")
+        c.run_testdrive_files("blue-green-deployment/clusters.td")
+        catalog_options = native_catalog_options(c)
+        for cluster, names, workers in [
+            ("prod", ["clusterd1"], 1),
+            ("prod_deploy", ["clusterd2", "clusterd3"], 2),
+        ]:
+            [(cluster_id, replica_id)] = c.sql_query(
+                "SELECT c.id, r.id FROM mz_clusters c "
+                "JOIN mz_cluster_replicas r ON r.cluster_id = c.id "
+                f"WHERE c.name = '{cluster}' AND r.name = 'replica1'",
+            )
+            for name in names:
+                stack.enter_context(
+                    c.override(
+                        Clusterd(
+                            name=name,
+                            workers=workers,
+                            process_names=names,
+                            options=[
+                                f"--catalog-cluster-id={cluster_id}",
+                                f"--catalog-replica-id={replica_id}",
+                                *catalog_options,
+                            ],
+                        )
+                    )
+                )
+        c.up("clusterd1", "clusterd2", "clusterd3")
         c.run_testdrive_files("blue-green-deployment/setup.td")
 
         threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
@@ -4942,15 +4929,34 @@ def workflow_cluster_drop_concurrent(
         # This should hang until the cluster is dropped
         cursor.execute("FETCH ALL subscribe")
 
-    with c.override(
-        Testdrive(
-            no_reset=True,
+    with (
+        c.override(
+            Testdrive(no_reset=True),
+            Materialized(support_external_clusterd=True),
         ),
-        Clusterd(name="clusterd1"),
-        Materialized(support_external_clusterd=True),
+        ExitStack() as stack,
     ):
-        c.up("materialized", "clusterd1")
+        c.up("materialized")
         c.run_testdrive_files("cluster-drop-concurrent/setup.td")
+        [(cluster_id, replica_id)] = c.sql_query("""
+            SELECT c.id, r.id FROM mz_clusters c
+            JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'drop' AND r.name = 'replica1'
+        """)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *native_catalog_options(c),
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
+        c.sql("SELECT count(*) FROM counter_tbl")
         threads = [
             PropagatingThread(target=fn, name=name)
             for fn, name in ((select, "select"), (subscribe, "subscribe"))
@@ -4965,10 +4971,13 @@ def workflow_cluster_drop_concurrent(
             for thread in threads:
                 try:
                     thread.join(timeout=10)
-                except InternalError_ as e:
+                except (InternalError_, psycopg.errors.UndefinedObject) as e:
+                    # DROP can reach execution or catalog admission first.
                     assert 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
-                    ) or 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
+                    ) or "relation 'materialize.public.counter_tbl' was dropped" in str(
+                        e
+                    ), str(
                         e
                     )
             for thread in threads:
@@ -5441,10 +5450,8 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
 
     def guard_rows(cur: Cursor, key: int) -> int:
         """Rows of `guard` for `key`, which is what the UPDATE's selection reads."""
-        cur.execute(f"SELECT count(*) FROM guard WHERE g = {key}".encode())
-        row = cur.fetchone()
-        assert row is not None
-        return int(row[0])
+        cur.execute(f"SELECT g FROM guard WHERE g = {key}".encode())
+        return len(cur.fetchall())
 
     with c.override(Materialized()):
         c.up("materialized")
@@ -5452,6 +5459,8 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
         # A row here empties the UPDATE's selection. Keyed per attempt, so an
         # attempt never starts from a selection an earlier one already emptied.
         c.sql("CREATE TABLE guard (g int)")
+        c.sql("CREATE INDEX t_idx ON t (k)")
+        c.sql("CREATE INDEX guard_idx ON guard (g)")
 
         sequenced = occ_writes()[0]
         c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
@@ -5464,6 +5473,7 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
             c.sql_cursor() as probe,
             c.sql_cursor() as winner_cur,
             c.sql_cursor() as session,
+            c.sql_cursor() as protection,
         ):
             # A serializable read may pick a timestamp past the oracle's read
             # timestamp, so it sees the winner's append while a strict-serializable
@@ -5478,47 +5488,58 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
             for attempt in range(1, 4):
                 key = attempt
                 c.sql(f"INSERT INTO t VALUES ({key}, 1)")
-                armed = Event()
+                # Acquire and retain protection outside the race. Publishing a
+                # missing grant can itself advance the oracle past the winner.
+                # The witnesses and UPDATE still use fresh statement timestamps.
+                with protection.connection.transaction():
+                    protection.execute("SELECT * FROM t")
+                    protection.fetchall()
+                    protection.execute("SELECT * FROM guard")
+                    protection.fetchall()
+                    guard_rows(probe, key)
+                    guard_rows(session, key)
 
-                def guard_winner(key: int = key) -> None:
-                    armed.wait()
-                    # Takes its timestamp from the oracle, lands its append, then
-                    # parks before applying that timestamp to the oracle.
-                    winner_cur.execute(f"INSERT INTO guard VALUES ({key})".encode())
+                    def guard_winner(key: int = key) -> None:
+                        # Takes its timestamp from the oracle, lands its append,
+                        # then parks before applying that timestamp to the oracle.
+                        winner_cur.execute(f"INSERT INTO guard VALUES ({key})".encode())
 
-                winner = PropagatingThread(target=guard_winner, name="winner")
-                winner.start()
-                control.execute(arm)
-                armed.set()
+                    winner = PropagatingThread(target=guard_winner, name="winner")
+                    try:
+                        control.execute(arm)
+                        winner.start()
+                        try:
+                            # The winner's append is visible in Persist from here on ...
+                            deadline = time.time() + 120
+                            while guard_rows(probe, key) == 0:
+                                assert (
+                                    time.time() < deadline
+                                ), "the winning INSERT never became visible in Persist"
+                                time.sleep(0.1)
+                            # ... and the oracle cannot serve reads at it yet, which is what
+                            # puts us inside the window. This witness says nothing about the
+                            # UPDATE, so it stays valid once the zero-row path waits.
+                            before = guard_rows(session, key)
 
-                # The winner's append is visible in Persist from here on ...
-                deadline = time.time() + 120
-                while guard_rows(probe, key) == 0:
-                    assert (
-                        time.time() < deadline
-                    ), "the winning INSERT never became visible in Persist"
-                    time.sleep(0.1)
-                # ... and the oracle cannot serve reads at it yet, which is what
-                # puts us inside the window. This witness says nothing about the
-                # UPDATE, so it stays valid once the zero-row path waits.
-                before = guard_rows(session, key)
+                            conflicts = occ_writes()[1]
+                            started = time.time()
+                            session.execute(
+                                f"UPDATE t SET v = v + 1 WHERE k = {key} "
+                                f"AND NOT EXISTS (SELECT 1 FROM guard WHERE g = {key})".encode()
+                            )
+                            matched = session.rowcount
+                            elapsed = time.time() - started
+                            after = guard_rows(session, key)
+                            conflicts = occ_writes()[1] - conflicts
 
-                conflicts = occ_writes()[1]
-                started = time.time()
-                session.execute(
-                    f"UPDATE t SET v = v + 1 WHERE k = {key} "
-                    f"AND NOT EXISTS (SELECT 1 FROM guard WHERE g = {key})".encode()
-                )
-                matched = session.rowcount
-                elapsed = time.time() - started
-                after = guard_rows(session, key)
-                conflicts = occ_writes()[1] - conflicts
-
-                control.execute(disarm)
-                # `off` does not interrupt a `sleep` under way, so this waits out
-                # the rest of the window.
-                winner.join(timeout=120)
-                assert not winner.is_alive(), "the winning INSERT never finished"
+                        finally:
+                            # A sleep already under way must finish even on failure.
+                            winner.join(timeout=120)
+                            assert (
+                                not winner.is_alive()
+                            ), "the winning INSERT never finished"
+                    finally:
+                        control.execute(disarm)
 
                 print(
                     f"attempt {attempt}: UPDATE matched {matched} row(s) in "
@@ -6355,7 +6376,11 @@ def workflow_test_github_8734(c: Composition) -> None:
             ALTER CLUSTER test SET (REPLICATION FACTOR 0);
             """)
 
-        check_read_frontiers_not_stuck(c, ["t"])
+        try:
+            check_read_frontiers_not_stuck(c, ["t"])
+        except Exception:
+            protection_evidence("frontier-stuck-before-restart")
+            raise
 
         # Restart envd, then verify that the table's frontier still advances.
         protection_evidence("before-restart")
@@ -7930,7 +7955,37 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     # the replica asynchronously, so wait for the pause to take effect first.
     c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
     wait_for_replica_count(0)
-    check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
+
+    # Without replicas there are no observed index frontiers. The committed
+    # bounds govern protection and reconstruction while execution is paused.
+    index_ids = c.sql_query("""
+        SELECT name, global_id FROM mz_indexes
+        JOIN mz_internal.mz_object_global_ids USING (id)
+        WHERE name IN ('idx1', 'idx2', 'idx3')
+    """)
+    assert {name for name, _ in index_ids} == {"idx1", "idx2", "idx3"}
+
+    def compaction_bounds() -> dict[str, int]:
+        response = requests.get(
+            f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
+            timeout=10,
+        )
+        response.raise_for_status()
+        bounds = response.json()["collection_compaction_bounds"]
+        result = {}
+        for name, global_id in index_ids:
+            frontier = bounds[global_id]["elements"]
+            assert len(frontier) == 1, (name, frontier)
+            result[name] = int(frontier[0])
+        return result
+
+    before = compaction_bounds()
+    time.sleep(3)
+    after = compaction_bounds()
+    for name in before:
+        assert (
+            before[name] < after[name]
+        ), f"compaction bound of {name} is stuck, {before[name]} >= {after[name]}"
 
     # Unpause the cluster; indexes should still be queryable. The controller
     # recreates the replica asynchronously, so wait for it before issuing index

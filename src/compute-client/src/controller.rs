@@ -63,7 +63,6 @@ use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
-use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::Antichain;
@@ -316,43 +315,6 @@ impl ComputeController {
             ComputeInstanceId,
             Option<String>,
         >::new()));
-
-        // Apply a `workload_class` label to all metrics in the registry that
-        // have an `instance_id` label for an instance whose workload class is
-        // known.
-        metrics_registry.register_postprocessor({
-            let instance_workload_classes = Arc::clone(&instance_workload_classes);
-            move |metrics| {
-                let instance_workload_classes = instance_workload_classes
-                    .lock()
-                    .expect("lock poisoned")
-                    .iter()
-                    .map(|(id, workload_class)| (id.to_string(), workload_class.clone()))
-                    .collect::<BTreeMap<String, Option<String>>>();
-                for metric in metrics {
-                    'metric: for metric in metric.mut_metric() {
-                        for label in metric.get_label() {
-                            if label.name() == "instance_id" {
-                                if let Some(workload_class) = instance_workload_classes
-                                    .get(label.value())
-                                    .cloned()
-                                    .flatten()
-                                {
-                                    let mut label = LabelPair::default();
-                                    label.set_name("workload_class".into());
-                                    label.set_value(workload_class.clone());
-
-                                    let mut labels = metric.take_label();
-                                    labels.push(label);
-                                    metric.set_label(labels);
-                                }
-                                continue 'metric;
-                            }
-                        }
-                    }
-                }
-            }
-        });
 
         let metrics = ComputeControllerMetrics::new(metrics_registry, controller_metrics);
 

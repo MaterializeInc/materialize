@@ -89,9 +89,14 @@ impl Controller {
         self.storage
             .create_instance(id, config.workload_class.clone());
         if !self.replica_owned_compute() {
-            self.compute
-                .create_instance(id, config.arranged_logs, config.workload_class)?;
+            self.compute.create_instance(
+                id,
+                config.arranged_logs,
+                config.workload_class.clone(),
+            )?;
         }
+        self.metrics
+            .set_workload_class(id.to_string(), config.workload_class);
         Ok(())
     }
 
@@ -105,9 +110,11 @@ impl Controller {
             .update_instance_workload_class(id, workload_class.clone());
         if !self.replica_owned_compute() {
             self.compute
-                .update_instance_workload_class(id, workload_class)
+                .update_instance_workload_class(id, workload_class.clone())
                 .expect("instance exists");
         }
+        self.metrics
+            .set_workload_class(id.to_string(), workload_class);
     }
 
     /// Drops the specified cluster.
@@ -120,6 +127,7 @@ impl Controller {
         if !self.replica_owned_compute() {
             self.compute.drop_instance(id);
         }
+        self.metrics.set_workload_class(id.to_string(), None);
     }
 
     /// Creates a replica of the specified cluster with the specified identifier

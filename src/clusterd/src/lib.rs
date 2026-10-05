@@ -112,6 +112,10 @@ struct Args {
     )]
     persist_pubsub_url: String,
 
+    /// TestHarness-only Persist version simulation. Does not change written-plan identity.
+    #[clap(long, env = "TEST_PERSIST_BUILD_VERSION", hide = true)]
+    test_persist_build_version: Option<String>,
+
     /// The cluster whose committed catalog state this replica follows.
     #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_timestamp_oracle_url", "catalog_config"])]
     catalog_cluster_id: Option<mz_controller_types::ClusterId>,
@@ -418,6 +422,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .unwrap_or_default();
     let mut persist_cfg =
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
+    if let Some(version) = args.test_persist_build_version {
+        persist_cfg.build_version = version
+            .parse()
+            .context("invalid test Persist build version")?;
+    }
     persist_cfg.is_cc_active = args.is_cc;
     persist_cfg.announce_memory_limit = args.announce_memory_limit;
     // Start with compaction disabled, will get enabled once a cluster receives AllowWrites.

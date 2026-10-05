@@ -1666,9 +1666,13 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_frontiers_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_by_deployment -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_hydration_times_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_operator_hydration_statuses_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
@@ -1707,6 +1711,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview_3h -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview_24h -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_sizes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_sizes_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_size_history -->
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attrdef_all_databases -->

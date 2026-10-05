@@ -765,6 +765,8 @@ impl TestHarness {
         self
     }
 
+    /// Simulates the Persist binary version in this server and its clusterd children.
+    /// Written-plan identity and transport versions still describe the actual binaries.
     pub fn with_code_version(mut self, version: semver::Version) -> Self {
         self.code_version = version;
         self
@@ -860,7 +862,19 @@ impl Listeners {
             suppress_output: false,
             environment_id: config.environment_id.to_string(),
             secrets_dir: data_directory.join("secrets"),
-            command_wrapper: vec![],
+            // Scope version simulation to this harness's child launches, including
+            // replacements. Other concurrently running harnesses keep their version.
+            command_wrapper: if config.code_version != crate::BUILD_INFO.semver_version() {
+                vec![
+                    "env".into(),
+                    format!(
+                        "CLUSTERD_TEST_PERSIST_BUILD_VERSION={}",
+                        config.code_version
+                    ),
+                ]
+            } else {
+                vec![]
+            },
             propagate_crashes: config.propagate_crashes,
             tcp_proxy: None,
             scratch_directory: scratch_dir.path().to_path_buf(),
