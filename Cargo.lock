@@ -6704,10 +6704,13 @@ name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-cluster-client",
  "mz-ore",
  "prometheus",
+ "proptest",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
 ]
 
@@ -6949,7 +6952,6 @@ name = "mz-controller-types"
 version = "0.0.0"
 dependencies = [
  "mz-cluster-client",
- "mz-compute-types",
  "mz-dyncfg",
 ]
 
@@ -8935,6 +8937,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-dyncfg",
  "mz-expr",
  "mz-interchange",

@@ -22,6 +22,7 @@ use mz_ore::now::{AsEpochMillis, NowFn};
 use serde::{Deserialize, Serialize};
 
 pub mod client;
+pub mod instances;
 pub mod metrics;
 
 /// A function that computes the lag between the given time and wallclock time.
