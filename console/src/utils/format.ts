@@ -215,6 +215,40 @@ export function formatDurationForAxis(durationMs: number): string {
   }
 }
 
+/**
+ * A duration a reader compares against another number: a threshold they typed,
+ * or the value in the row above.
+ *
+ * `formatDurationForAxis` rounds to whole minutes and caps at 24 hours. That
+ * suits an axis, where four labels describe a whole chart. It does not suit a
+ * figure, because it collapses real differences: 90s, 100s and 149s all read
+ * "2m", so a threshold of 90s and an object at 100s both display as "2m" while
+ * one exceeds the other.
+ */
+export function formatDurationExact(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+
+  const totalSeconds = durationMs / 1000;
+  if (totalSeconds < 60) {
+    // Trailing zeros dropped, so a whole number of seconds reads as one.
+    return `${parseFloat(totalSeconds.toFixed(2))}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  if (minutes < 60) {
+    return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0
+    ? `${hours}h`
+    : `${hours}h ${remainingMinutes}m`;
+}
+
 export const formatPercentage = (percentage: number, decimals = 2) =>
   `${(percentage * 100).toFixed(decimals)}%`;
 

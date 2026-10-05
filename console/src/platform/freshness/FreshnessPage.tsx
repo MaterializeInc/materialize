@@ -48,7 +48,7 @@ import {
 } from "~/platform/clusters/queries";
 import { useAllClusters } from "~/store/allClusters";
 import { MaterializeTheme } from "~/theme";
-import { formatDurationForAxis } from "~/utils/format";
+import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
 import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
 import {
@@ -207,7 +207,7 @@ const FreshnessContent = ({
             {breaching.length} of {rows.length}
           </b>{" "}
           {rows.length === 1 ? "object" : "objects"} exceeded{" "}
-          {formatDurationForAxis(thresholdControl.settled)} {predicateLabel}
+          {formatDurationExact(thresholdControl.settled)} {predicateLabel}
           {window}.
         </Text>
       </HStack>
@@ -244,7 +244,7 @@ const FreshnessContent = ({
               <Box padding="4" color={colors.foreground.secondary}>
                 <Text as="span" color={colors.accent.green}>
                   No objects exceeded{" "}
-                  {formatDurationForAxis(thresholdControl.settled)}{" "}
+                  {formatDurationExact(thresholdControl.settled)}{" "}
                   {predicateLabel}
                   {window}.
                 </Text>{" "}

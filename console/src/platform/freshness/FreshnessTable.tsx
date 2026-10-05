@@ -24,7 +24,7 @@ import {
 } from "~/platform/maintained-objects/filters";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
-import { formatDurationForAxis } from "~/utils/format";
+import { formatDurationExact } from "~/utils/format";
 
 import { FreshnessRow, UNREADABLE } from "./freshnessRows";
 
@@ -77,7 +77,7 @@ const StatCell = ({
         ? NO_VALUE
         : unreadable
           ? NULL_LAG_TEXT
-          : formatDurationForAxis(value)}
+          : formatDurationExact(value)}
     </Text>
   );
 };
