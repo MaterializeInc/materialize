@@ -58,17 +58,23 @@ pub(super) fn builtins(
         Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
     let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
 
-    // The generated views above, and `mz_builtin_views` itself, are listed in
-    // `mz_builtin_views` with placeholder SQL rather than their real
-    // definitions. See `make_builtin_views`.
+    // Generated views are listed in `mz_builtin_views` with placeholder SQL
+    // rather than their real definitions, which are `VALUES` lists of every
+    // builtin and would otherwise be embedded here a second time. That covers
+    // the three views above, `mz_builtin_views` itself, and the generated
+    // views that other parts of this crate insert into `builtin_items` before
+    // this runs, found by name. See `make_builtin_views`.
+    let mut generated: Vec<&'static BuiltinView> = vec![sources, materialized_views, tables];
+    generated.extend(builtin_items.iter().filter_map(|b| match b {
+        Builtin::View(x) if GENERATED_BUILTIN_VIEWS.contains(&x.name) => Some(*x),
+        _ => None,
+    }));
     let view_iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::View(x) => Some(*x),
         _ => None,
     });
-    let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
-        view_iter,
-        [sources, materialized_views, tables],
-    )));
+    let views: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_views(view_iter, &generated)));
 
     [sources, materialized_views, tables, views]
         .into_iter()
@@ -250,9 +256,14 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
 /// view. The placeholder also embeds the view's qualified name so that the
 /// `definition` and `create_sql` columns stay unique across rows, which the
 /// declared keys rely on.
+/// Names of generated `VALUES` views built elsewhere in this crate (see
+/// `make_mz_object_dependencies_raw`). Add a new generated view here so that
+/// `mz_builtin_views` elides its definition instead of embedding it.
+const GENERATED_BUILTIN_VIEWS: &[&str] = &["mz_object_dependencies_raw"];
+
 fn make_builtin_views<'a>(
     iter: impl Iterator<Item = &'a BuiltinView>,
-    generated: [&BuiltinView; 3],
+    generated: &[&BuiltinView],
 ) -> BuiltinView {
     let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
 
@@ -308,7 +319,16 @@ fn make_builtin_views<'a>(
         ontology: None,
     };
 
-    let full_values = iter.map(|v| make_row(v.oid, v.schema, v.name, &v.access, &v.create_sql()));
+    // A generated view that other generators inserted into `builtin_items`
+    // is also yielded by `iter`; it must appear exactly once, as a placeholder.
+    let is_generated = |v: &BuiltinView| {
+        generated
+            .iter()
+            .any(|g| g.schema == v.schema && g.name == v.name)
+    };
+    let full_values = iter
+        .filter(|v| !is_generated(v))
+        .map(|v| make_row(v.oid, v.schema, v.name, &v.access, &v.create_sql()));
     let placeholder_values = generated.iter().copied().chain([&view]).map(|v| {
         let create_sql = format!(
             "CREATE VIEW {}.{} AS SELECT '<generated builtin view {}.{}: definition elided>'",
