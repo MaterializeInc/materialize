@@ -766,26 +766,17 @@ pub(crate) enum SourceReferencePolicy {
     Required,
 }
 
-/// Which upstream constraints `CREATE TABLE .. FROM SOURCE` drops from the
-/// purified table description.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FilterConstraints {
-    /// Drop every key and treat every column as nullable, so upstream
-    /// constraint changes never invalidate the table.
     ExcludeAll,
-    /// Drop only the keys whose constraint names are listed. An empty set
-    /// keeps every constraint.
     Exclude(BTreeSet<String>),
 }
 
 impl FilterConstraints {
-    /// Keeps every upstream constraint.
     pub(crate) fn none() -> Self {
         FilterConstraints::Exclude(BTreeSet::new())
     }
 
-    /// Builds the filter from the `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL
-    /// CONSTRAINTS` options, which are mutually exclusive.
     fn from_options(
         exclude_constraints: Vec<String>,
         exclude_all_constraints: bool,
@@ -801,7 +792,6 @@ impl FilterConstraints {
         }
     }
 
-    /// Whether any constraint is dropped.
     pub(crate) fn excludes_any(&self) -> bool {
         match self {
             FilterConstraints::ExcludeAll => true,
