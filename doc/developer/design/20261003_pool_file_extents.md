@@ -486,41 +486,51 @@ No swap-mode baseline ran, because the instance has no swap configured.
 
 ## environmentd measurements
 
-A local `bin/environmentd --release` on the same instance tested whether file mode holds state that a swap-less replica otherwise cannot keep.
-The scripts and the per-run table are in `misc/scratch/pool-file-extents-envd/`, with `results-envd-r8gd.4xlarge.md` holding the raw numbers.
-The workload parks TPC-H `lineitem` at scale factor 10 behind a temporal filter that makes every row valid a day from now, so the rows sit in a buffer that cannot drain.
+A local `bin/environmentd --release` on the same instance type compared the file store with swap on a workload whose state a swap-less replica otherwise cannot keep.
+The scripts are in `misc/scratch/pool-file-extents-envd/`, and `results-envd-r8gd.4xlarge.md` there holds the per-run numbers.
+The workload parks TPC-H `lineitem` behind a temporal filter that makes every row valid a day from now, so the rows sit in a buffer that cannot drain.
 An index parks them in the arrange site's chunk batcher, with temporal bucketing on, and a materialized view parks them in the MV sink's correction buffer.
-Each run creates a fresh 8-worker replica, which the process orchestrator runs under a cgroup `MemoryMax` equal to the size's memory limit, with swap off, lgalloc off, and `compute_dataflow_max_inflight_bytes_cc` at 512 MiB.
+Each run creates a fresh 8-worker replica under a cgroup `MemoryMax` equal to the size's memory limit, with lgalloc off and `compute_dataflow_max_inflight_bytes_cc` at 512 MiB in every arm.
 
 Two workload details decide whether anything parks at all.
 A TPC-H load generator without a tick interval has an empty write frontier once its snapshot is written, so future-dated rows would pass straight through to the spine, and the parked view therefore reads `lineitem UNION ALL` an empty table to keep its frontier live.
 A temporal filter against a constant folds to an empty collection, so the filter adds `l_orderkey % 2` to the future timestamp.
-The pool ran with a budget fraction of 0.01 and an RSS target fraction of 0.02 of the instance's 128 GiB, which gives a slot budget of about 1.3 GiB and an RSS target of about 2.6 GiB.
+The pool ran with a budget fraction of 0.01 and an RSS target fraction of 0.02 of the instance's 123 GiB, a slot budget of about 1.2 GiB and an RSS target of about 2.5 GiB.
+The file arms run with swap off, and the swap arms use a swapfile on the same NVMe with the file store off.
 
-| Replica | Backing | Index (chunk batcher) | Materialized view (correction buffer) |
+| Scale factor, replica | Backing | Index (chunk batcher) | Materialized view (correction buffer) |
 |---|---|---|---|
-| 32 GiB | spill off, for reference | hydrated in 21 s, peak 21.3 GiB, settled at 14.1 GiB RSS | hydrated in 25 s, peak 15.2 GiB, settled at 8.2 GiB RSS |
-| 8 GiB | none | exited at 25 s with VmRSS at the limit | exited at 33 s with VmRSS at the limit |
-| 8 GiB | file | hydrated in 31 s, peak 5.5 GiB, settled at 3.0 GiB RSS plus 3.8 GiB on file | hydrated in 36 s, peak 5.2 GiB, settled at 2.7 GiB RSS plus 4.1 GiB on file |
-| 8 GiB | swap | hydrated in 33 s, peak at the limit, settled at 2.9 GiB RSS plus 3.3 GiB of swap | hydrated in 43 s, peak at the limit, settled at 2.6 GiB RSS plus 3.2 GiB of swap |
-| 4 GiB | none or file | exited within 8 s | exited within 4 s |
-| 4 GiB | swap | hydrated in 53 s, settled at 2.6 GiB RSS plus 4.3 GiB of swap | hydrated in 62 s, settled at 2.5 GiB RSS plus 3.7 GiB of swap |
+| 10, 32 GiB | spill off, for reference | 28.9 s, peak 15.7 GiB, settled 13.1 GiB | 32.4 s, peak 10.3 GiB, settled 7.9 GiB |
+| 10, 8 GiB | none | exited at 29.9 s | 34.5 s, peak 7.8 GiB, settled 5.6 GiB |
+| 10, 8 GiB | file | 30.6 s, peak 5.0 GiB, settled 3.0 GiB plus 3.8 GiB on file | 39.0 s, peak 5.0 GiB, settled 2.7 GiB plus 4.1 GiB on file |
+| 10, 8 GiB | swap | 31.1 s, peak 5.1 GiB, settled 2.8 GiB plus 2.9 GiB of swap | 38.5 s, peak 4.8 GiB, settled 2.6 GiB plus 3.0 GiB of swap |
+| 10, 4 GiB | none or file | exited within 7.2 s | exited within 7.9 s |
+| 10, 4 GiB | swap | 38.5 s, settled 2.0 GiB plus 4.0 GiB of swap | 48.7 s, settled 2.0 GiB plus 3.8 GiB of swap |
+| 100, 8 GiB | none | exited at 59.8 s | exited at 45.4 s |
+| 100, 8 GiB | file | 838 s, peak 6.2 GiB, settled 3.8 GiB plus 56.7 GiB on file | 823 s, peak 5.1 GiB, settled 2.7 GiB plus 60.6 GiB on file |
+| 100, 8 GiB | swap | 761 s, peak 5.8 GiB, settled 3.5 GiB plus 43.5 GiB of swap | 815 s, peak 4.9 GiB, settled 2.6 GiB plus 43.5 GiB of swap |
 
-The swap and spill-off rows ran without the 512 MiB read-ahead bound, which the no-backing and file arms need to survive at all, so swap also absorbed persist's read-ahead burst there and its peaks sit at the limit.
-The file and swap rows otherwise share the instance, the environmentd, the pool settings, and the NVMe device, with a 64 GiB swapfile on it for the swap rows.
+Cells give hydration time, peak VmRSS, and VmRSS 180 s after hydration.
 
-* **File mode keeps the parked state at swap's footprint.**
-  Without a backing store the compressed tier has nowhere to go, and both arms died at the memory limit.
-  At 8 GiB with either backing, both arms settled at 2.6 to 3.0 GiB of RSS, under half the unspilled footprint, with 3.2 to 4.1 GiB on the device.
-  File mode holds somewhat more on the device than swap at the same limit, and the difference has not been broken down.
-* **Hydration cost:** at 8 GiB the file runs hydrated in 31 and 36 s, the swap runs in 33 and 43 s, and the unspilled runs on a 32 GiB replica in 21 and 25 s.
-  The swap runs also carried the read-ahead burst, so this is not a like-for-like comparison of the two backings' write paths.
-* **4 GiB replicas die without swap.**
-  The pool's budget and RSS target derive from physical RAM, not the replica's limit, so on this host the pool alone claims about 2.6 GiB before non-pool memory.
-  Sizing the pool from the replica's limit is a prerequisite for small replicas.
+* **File mode keeps the parked state at swap's footprint and speed.**
+  At 8 GiB the file and swap arms hydrate within 10% of each other at both scale factors and settle at about the same RSS, under half the unspilled footprint at scale factor 10.
+  The largest gap is the scale factor 100 index, where file mode took 838 s against swap's 761 s.
+  Without a backing store the index arms die, and the scale factor 10 view survives only 0.2 GiB under its limit.
+* **Swap moves several times the data.**
+  At scale factor 100 the swap arms wrote 238 and 287 GiB to swap and read back 139 and 175 GiB, by host-wide counters, while the file arms ended with 61 and 65 GB on file after 268k and 277k extent writes and 219k and 236k extent reads.
+  The pool's pageouts were within 1% of the file arms' demotions, so the extra traffic comes from the kernel's own reclaim and refaults, which the pool does not control.
+  Averaged over hydration, neither backing came near the device's ceilings, so device bandwidth does not bound this workload.
+* **File mode holds more on the device than swap.**
+  At scale factor 100 the file store held 57 to 61 GiB against 43.5 GiB of swap for the same parked rows, and at scale factor 10 about 1 GiB more.
+  The difference has not been broken down. Class rounding of file slots is one candidate, and `extent_file_allocated_bytes` with live slot bytes can separate it.
+* **Scale factor 100 hydration is slow in both modes.**
+  It takes 21 to 27 times as long as scale factor 10 for 10 times the data.
+  No unspilled reference fits on this host, so the split between spilling and the dataflow itself is unknown and needs a CPU profile.
+* **4 GiB replicas survive only on swap.**
+  The pool's budget and RSS target derive from physical RAM, not the replica's limit, so on this host the pool alone claims about 2.5 GiB before non-pool memory, and only swap can also evict non-pool memory.
+  Sizing the pool from the replica's limit is a prerequisite for small replicas in file mode.
 * **Persist read-ahead is unbounded without lgalloc.**
-  Without the 512 MiB in-flight cap, a cc replica allocated 4 to 9 GiB in the first second of hydration and was OOM-killed at 4 and 8 GiB, whatever the pool's backend, because fetched parts do not enter the pool.
-  Only swap absorbed that burst.
+  Without the 512 MiB in-flight cap, an earlier series OOM-killed every no-backing and file arm at 4 and 8 GiB within 4 s, because fetched parts do not enter the pool, and only swap absorbed the burst.
 * **The pool is not the binding constraint when nothing parks.**
   An earlier unparked index hydration on a 16 GiB replica peaked at 13.7 GiB in file mode against 14.6 GiB without a backing store, because arrangement building and merging, which do not allocate through the pool, dominate the peak.
 
