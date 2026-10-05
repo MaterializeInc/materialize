@@ -426,19 +426,16 @@ struct StorageGuest {
     conn: Option<StorageConn>,
     /// The hosted storage worker state.
     storage_state: StorageState,
-    /// The last time storage maintenance ran.
-    last_maintenance: Instant,
     /// The last time storage statistics were reported.
     last_stats_time: Instant,
 }
 
 impl StorageGuest {
-    /// The longest the worker may park before the guest's next periodic duty (frontier reporting
-    /// or statistics collection) comes due, or `None` when no duty is pending.
+    /// The longest the worker may park before the guest's next statistics collection comes due,
+    /// or `None` when no collection is pending.
     ///
-    /// The maintenance and statistics intervals bound the park. A maintenance deadline in the past
-    /// does not bound it, because maintenance runs on the next wakeup anyway. The initial zero
-    /// maintenance interval would otherwise turn every park into a spin.
+    /// Frontier reporting needs no cap of its own: it runs with the worker's maintenance, whose
+    /// deadline already bounds the park.
     fn park_cap(&self) -> Option<Duration> {
         // Periodic duties run only on a reconciled connection. Without one there is no deadline
         // to meet, and connection and command arrivals unpark the worker.
@@ -450,20 +447,12 @@ impl StorageGuest {
             return None;
         }
 
-        let maintenance_interval = self.storage_state.server_maintenance_interval;
         let stats_interval = self
             .storage_state
             .storage_configuration
             .parameters
             .statistics_collection_interval;
-
-        let next_maintenance =
-            (self.last_maintenance + maintenance_interval).checked_duration_since(Instant::now());
-        let next_stats = stats_interval.saturating_sub(self.last_stats_time.elapsed());
-        match next_maintenance {
-            Some(maintenance) => Some(maintenance.min(next_stats)),
-            None => Some(next_stats),
-        }
+        Some(stats_interval.saturating_sub(self.last_stats_time.elapsed()))
     }
 }
 
@@ -539,7 +528,6 @@ impl Config {
                 client_rx: storage_client_rx,
                 conn: None,
                 storage_state,
-                last_maintenance: Instant::now(),
                 last_stats_time: Instant::now(),
             }
         });
@@ -655,6 +643,7 @@ impl<'w> Worker<'w> {
                     compute_state.report_metrics();
                     compute_state.check_expiration();
                 }
+                self.report_storage_frontiers();
 
                 self.metrics.record_shared_row_metrics();
             } else {
@@ -805,13 +794,6 @@ impl<'w> Worker<'w> {
 
         // Response-producing duties run only on a reconciled connection.
         if conn.reconcile_buf.is_none() {
-            let maintenance_interval = worker.storage_state.server_maintenance_interval;
-            let now = Instant::now();
-            if now >= guest.last_maintenance + maintenance_interval {
-                guest.last_maintenance = now;
-                worker.report_frontier_progress(&conn.response_tx);
-            }
-
             for id in std::mem::take(&mut worker.storage_state.dropped_ids) {
                 worker.send_storage_response(&conn.response_tx, StorageResponse::DroppedId(id));
             }
@@ -833,6 +815,21 @@ impl<'w> Worker<'w> {
         if disconnected {
             guest.conn = None;
         }
+    }
+
+    /// Report the storage guest's frontiers, if it has a reconciled connection.
+    fn report_storage_frontiers(&mut self) {
+        let Some(guest) = self.storage.as_mut() else {
+            return;
+        };
+        let Some(conn) = guest.conn.as_ref().filter(|c| c.reconcile_buf.is_none()) else {
+            return;
+        };
+        StorageWorker {
+            timely_worker: &mut *self.timely_worker,
+            storage_state: &mut guest.storage_state,
+        }
+        .report_frontier_progress(&conn.response_tx);
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
@@ -882,9 +879,11 @@ impl<'w> Worker<'w> {
                 }
             }
 
-            // Keep serving the storage guest while blocked on compute
-            // commands, and avoid unbounded parks that would stall its periodic duties.
+            // Keep serving the storage guest while blocked on compute commands, and avoid
+            // unbounded parks that would stall its periodic duties. Compute maintenance does not
+            // run here, so report storage frontiers on every iteration.
             self.process_storage_guest();
+            self.report_storage_frontiers();
             let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
 
             let start = Instant::now();

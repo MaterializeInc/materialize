@@ -862,7 +862,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "storage_upsert_max_snapshot_batch_buffering",
     "storage_rocksdb_cleanup_tries",
     "storage_suspend_and_restart_delay",
-    "storage_server_maintenance_interval",
     "storage_sink_progress_search",
     "storage_sink_ensure_topic_config",
     "sql_server_max_lsn_wait",

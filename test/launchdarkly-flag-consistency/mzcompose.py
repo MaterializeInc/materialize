@@ -422,7 +422,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     storage_persist_sink_description_lookahead
     storage_record_source_sink_namespaced_errors
     storage_rocksdb_cleanup_tries
-    storage_server_maintenance_interval
     storage_sink_ensure_topic_config
     storage_sink_progress_search
     storage_statistics_retention_duration
