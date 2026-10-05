@@ -497,18 +497,25 @@ A TPC-H load generator without a tick interval has an empty write frontier once 
 A temporal filter against a constant folds to an empty collection, so the filter adds `l_orderkey % 2` to the future timestamp.
 The pool ran with a budget fraction of 0.01 and an RSS target fraction of 0.02 of the instance's 128 GiB, which gives a slot budget of about 1.3 GiB and an RSS target of about 2.6 GiB.
 
-| 8 GiB replica | Index (chunk batcher) | Materialized view (correction buffer) |
-|---|---|---|
-| No spilling, 32 GiB replica, for reference | 14.1 GiB RSS | 8.2 GiB RSS |
-| Spill, no backing store | exited at 25 s with VmRSS at the limit | exited at 33 s with VmRSS at the limit |
-| Spill, file store | hydrated in 31 s, peak 5.5 GiB, settled at 3.0 GiB RSS with 4.1 GB on file | hydrated in 36 s, peak 5.2 GiB, settled at 2.7 GiB RSS with 4.5 GB on file |
+| Replica | Backing | Index (chunk batcher) | Materialized view (correction buffer) |
+|---|---|---|---|
+| 32 GiB | spill off, for reference | hydrated in 21 s, peak 21.3 GiB, settled at 14.1 GiB RSS | hydrated in 25 s, peak 15.2 GiB, settled at 8.2 GiB RSS |
+| 8 GiB | none | exited at 25 s with VmRSS at the limit | exited at 33 s with VmRSS at the limit |
+| 8 GiB | file | hydrated in 31 s, peak 5.5 GiB, settled at 3.0 GiB RSS plus 3.8 GiB on file | hydrated in 36 s, peak 5.2 GiB, settled at 2.7 GiB RSS plus 4.1 GiB on file |
+| 8 GiB | swap | hydrated in 33 s, peak at the limit, settled at 2.9 GiB RSS plus 3.3 GiB of swap | hydrated in 43 s, peak at the limit, settled at 2.6 GiB RSS plus 3.2 GiB of swap |
+| 4 GiB | none or file | exited within 8 s | exited within 4 s |
+| 4 GiB | swap | hydrated in 53 s, settled at 2.6 GiB RSS plus 4.3 GiB of swap | hydrated in 62 s, settled at 2.5 GiB RSS plus 3.7 GiB of swap |
 
-* **File mode keeps the parked state.**
-  Without a backing store the compressed tier has nowhere to go: the relaunched replicas held 4.8 to 5.3 GB of extents in RAM when scraped, and both arms died at the memory limit.
-  With the file store both arms hydrated and settled under half the unspilled footprint.
-  An earlier swap run of the same workload, at 8 and 4 GiB limits and without the read-ahead bound, settled at 2.6 to 2.9 GiB RSS plus 3.3 to 4.4 GiB of swap, so file mode lands at the swap-backed footprint.
-* **Hydration cost:** the file runs hydrated in 31 and 36 s, against 21 to 25 s for the unspilled runs on a 32 GiB replica.
-* **4 GiB replicas die in both modes.**
+The swap and spill-off rows ran without the 512 MiB read-ahead bound, which the no-backing and file arms need to survive at all, so swap also absorbed persist's read-ahead burst there and its peaks sit at the limit.
+The file and swap rows otherwise share the instance, the environmentd, the pool settings, and the NVMe device, with a 64 GiB swapfile on it for the swap rows.
+
+* **File mode keeps the parked state at swap's footprint.**
+  Without a backing store the compressed tier has nowhere to go, and both arms died at the memory limit.
+  At 8 GiB with either backing, both arms settled at 2.6 to 3.0 GiB of RSS, under half the unspilled footprint, with 3.2 to 4.1 GiB on the device.
+  File mode holds somewhat more on the device than swap at the same limit, and the difference has not been broken down.
+* **Hydration cost:** at 8 GiB the file runs hydrated in 31 and 36 s, the swap runs in 33 and 43 s, and the unspilled runs on a 32 GiB replica in 21 and 25 s.
+  The swap runs also carried the read-ahead burst, so this is not a like-for-like comparison of the two backings' write paths.
+* **4 GiB replicas die without swap.**
   The pool's budget and RSS target derive from physical RAM, not the replica's limit, so on this host the pool alone claims about 2.6 GiB before non-pool memory.
   Sizing the pool from the replica's limit is a prerequisite for small replicas.
 * **Persist read-ahead is unbounded without lgalloc.**
