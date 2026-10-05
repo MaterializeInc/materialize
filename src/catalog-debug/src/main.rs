@@ -602,7 +602,9 @@ async fn upgrade_check(
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
-    let secrets_reader = secrets.load().await.context("loading secrets reader")?;
+    let secrets_reader = mz_secrets_loader::load(secrets)
+        .await
+        .context("loading secrets reader")?;
 
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state

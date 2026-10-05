@@ -10,12 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 clap = { workspace = true, features = ["env"] }
-mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
-mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
-mz-orchestrator-process = { path = "../orchestrator-process", default-features = false }
-mz-secrets = { path = "../secrets", default-features = false }
 
 [features]
 default = []

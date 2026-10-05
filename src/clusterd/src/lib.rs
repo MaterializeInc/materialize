@@ -281,9 +281,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         info!("no heap limit announced; disabling memory limiter");
     }
 
-    let secrets_reader = args
-        .secrets
-        .load()
+    let secrets_reader = mz_secrets_loader::load(args.secrets)
         .await
         .context("loading secrets reader")?;
 

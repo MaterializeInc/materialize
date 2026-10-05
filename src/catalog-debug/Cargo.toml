@@ -26,6 +26,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-secrets-cli = { path = "../secrets-cli" }
+mz-secrets-loader = { path = "../secrets-loader" }
 mz-sql = { path = "../sql" }
 serde.workspace = true
 serde_json.workspace = true
