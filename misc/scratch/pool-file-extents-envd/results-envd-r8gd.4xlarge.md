@@ -20,3 +20,18 @@ The settled columns are sampled 180 s after hydration, and pool metrics are scra
 Every exited run reached a VmRSS within 11% of its memory limit before the process disappeared, which matches a cgroup OOM kill, but the journal was not checked for these runs. `memory.peak` reads 0 once the cgroup is gone, so it is blank for them. For exited runs the script scrapes metrics about 30 s after the exit, through the dead process's socket path. The process orchestrator relaunches a replica 5 s after it exits, so these metrics most likely describe the relaunched process partway through its own hydration, not the moment of death. Blank cells are scrapes that returned nothing.
 
 `mz_column_pool_resident_bytes`, the slot tier, sat between 1152 and 1292 MB in every run that reported it. The settled file runs' cgroup `memory.current` was 2951 MiB (index) and 2708 MiB (mv), below their VmRSS, so page cache was negligible.
+
+## Swap and unspilled reference
+
+`park-swap.sh` ran on the same environmentd before `park-matrix.sh`, without `compute_dataflow_max_inflight_bytes_cc`, so persist read-ahead is unbounded in these rows. The swap rows use a 64 GiB swapfile on the same NVMe, with the file store off. The `nospill` rows turn spilling off on a 32 GiB replica.
+
+| Run | Kind | Memory limit | Backing | Outcome | Wall s | Max VmRSS MiB | memory.peak MiB | Settled VmRSS MiB | Settled swap MiB | Settled memory.current MiB | Extent bytes resident | Extent pageouts |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| q-ind-nospill | index | 32 GiB | spill off | hydrated | 21.0 | 21856 | 21910 | 14458 | 0 | 14412 | 0 | 0 |
+| q-ind-swap8 | index | 8 GiB | swap | hydrated | 33.0 | 8238 | 8192 | 2936 | 3373 | 4280 | 1149321216 | 7899 |
+| q-ind-swap4 | index | 4 GiB | swap | hydrated | 52.6 | 4146 | 4096 | 2641 | 4422 | 2628 | 1159397376 | 8899 |
+| q-mv-nospill | mv | 32 GiB | spill off | hydrated | 24.6 | 15598 | 15735 | 8373 | 0 | 8314 | 0 | 0 |
+| q-mv-swap8 | mv | 8 GiB | swap | hydrated | 42.8 | 8239 | 8192 | 2634 | 3312 | 5170 | 1159725056 | 10027 |
+| q-mv-swap4 | mv | 4 GiB | swap | hydrated | 62.3 | 4155 | 4096 | 2577 | 3739 | 2963 | 1160511488 | 9932 |
+
+In the same series, the no-backing and file arms without the read-ahead bound exited within 1.2 to 3.9 s at both limits, which is what led to the bound in `park-matrix.sh`.
