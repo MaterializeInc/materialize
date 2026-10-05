@@ -68,6 +68,42 @@ pub struct MaterializeCertSpec {
     pub private_key_size: Option<i64>,
 }
 
+/// Appearance overrides for an instance's console.
+///
+/// Consoles are otherwise identical, so an operator running several
+/// Materialize instances cannot tell from a browser tab which instance a
+/// console is pointed at.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleAppearance {
+    /// A short name for this instance, such as `dev` or `prod`. The console
+    /// appends it to its browser tab title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// The hue the console accents its interface with. This recolors accented
+    /// elements such as the active navigation item, primary buttons, links and
+    /// focus rings. Colors that carry meaning, such as the red of an error or
+    /// the green of a healthy object, are left alone.
+    ///
+    /// Defaults to Materialize purple.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_color: Option<ConsoleAccentColor>,
+}
+
+/// A hue of the console's palette. The console reads lighter or darker shades
+/// of it to suit the viewer's light or dark theme.
+///
+/// Hues that the console already spends on meaning are deliberately absent:
+/// accenting an instance in red or green would leave an error or an unhealthy
+/// object competing with the furniture for attention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ConsoleAccentColor {
+    Blue,
+    Orange,
+    Purple,
+}
+
 pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
     fn default_labels(&self) -> BTreeMap<String, String> {
         BTreeMap::new()

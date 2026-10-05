@@ -312,7 +312,7 @@ export const LicenseKeyCTAContent = ({
       textAlign="left"
     >
       <HStack align="center" spacing={3}>
-        <BoxIcon color={colors.purple[500]} />
+        <BoxIcon color={colors.accentHue[500]} />
         <Text textStyle="heading-sm">
           {" "}
           {selfManagedMode === "enterprise"
@@ -353,7 +353,7 @@ export const LicenseKeyCTAContent = ({
         Want to learn more?{" "}
         <TextLink
           as="a"
-          color={colors.purple[400]}
+          color={colors.accentHue[400]}
           href={docUrls["/docs/installation/"]}
           target="_blank"
           rel="noreferrer"

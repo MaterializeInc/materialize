@@ -35,13 +35,22 @@ import { SELECT_MENU_Z_INDEX } from "~/layouts/zIndex";
 import colors, { gradients } from "~/theme/colors";
 import * as components from "~/theme/components";
 
+import { type AccentHue } from "./accent";
 import { darkColors, darkShadows } from "./dark";
 import { lightColors, lightShadows } from "./light";
 import type { TextStyles } from "./typography";
 import { typographySystem } from "./typography";
 
 export interface BasePalette {
+  /**
+   * The hue the theme accents itself with, exposed whole for the few places
+   * that need a shade the `accent` tokens don't name.
+   */
+  accentHue: AccentHue;
   accent: {
+    // `purple` and `brightPurple` carry the configured accent, which is
+    // Materialize purple by default but need not be. Every other name here is
+    // literal.
     purple: string;
     brightPurple: string;
     green: string;
@@ -61,6 +70,7 @@ export interface BasePalette {
   };
   background: {
     accent: string;
+    accentActive: string;
     primary: string;
     secondary: string;
     tertiary: string;

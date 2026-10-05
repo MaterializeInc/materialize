@@ -16,7 +16,7 @@ use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
+use crate::crd::{ConsoleAppearance, ManagedResource, MaterializeCertSpec, new_resource_id};
 use mz_server_core::listeners::AuthenticatorKind;
 
 pub mod v1alpha1 {
@@ -87,6 +87,10 @@ pub mod v1alpha1 {
         /// How to authenticate with Materialize.
         #[serde(default)]
         pub authenticator_kind: AuthenticatorKind,
+
+        /// Appearance overrides for this console.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub appearance: Option<ConsoleAppearance>,
 
         // This can be set to override the randomly chosen resource id
         pub resource_id: Option<String>,
