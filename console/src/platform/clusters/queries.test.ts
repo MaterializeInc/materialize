@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
+import { createStore } from "jotai";
 
+import { DatabaseObject } from "~/api/materialize/objects";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 import {
   buildColumns,
@@ -18,9 +20,10 @@ import {
 import server from "~/api/mocks/server";
 import { roleQueryKeys } from "~/platform/roles/queries";
 import { getQueryClient } from "~/queryClient";
+import { allObjects } from "~/store/allObjects";
 import { createProviderWrapper } from "~/test/utils";
 
-import { useOwners } from "./queries";
+import { useFreshnessObjects, useOwners } from "./queries";
 
 const ownersColumns = buildColumns([
   "id",
@@ -135,5 +138,90 @@ describe("useOwners", () => {
     const firstReference = result.current.isOwner;
     rerender();
     expect(result.current.isOwner).toBe(firstReference);
+  });
+});
+
+const buildObject = (
+  overrides: Partial<DatabaseObject> & { id: string },
+): DatabaseObject =>
+  ({
+    name: "orders_mv",
+    objectType: "materialized-view",
+    schemaId: "u1",
+    schemaName: "public",
+    databaseId: "u1",
+    databaseName: "materialize",
+    sourceType: null,
+    isWebhookTable: "false",
+    clusterId: "u1",
+    clusterName: "quickstart",
+    ...overrides,
+  }) as DatabaseObject;
+
+async function renderFreshnessObjects(initial: DatabaseObject[]) {
+  const store = createStore();
+  store.set(allObjects, {
+    data: initial,
+    error: undefined,
+    snapshotComplete: true,
+  });
+  const ProviderWrapper = await createProviderWrapper({ store });
+  // Counted so a test can wait for the re-render the subscribe causes. Without
+  // that wait an identity assertion passes before anything has happened.
+  const renders = { count: 0 };
+  const view = renderHook(
+    () => {
+      renders.count += 1;
+      return useFreshnessObjects("u1");
+    },
+    { wrapper: ProviderWrapper },
+  );
+  return { ...view, store, renders };
+}
+
+describe("useFreshnessObjects", () => {
+  it("keeps its identity when an object on another cluster changes", async () => {
+    // `useAllObjects` emits a new array for any change in the environment. A
+    // new array here rebuilds the stats and rows chain behind it, so a cluster
+    // nobody is looking at would re-render the page.
+    const mine = buildObject({ id: "u10" });
+    const { result, store, renders } = await renderFreshnessObjects([
+      mine,
+      buildObject({ id: "u20", clusterId: "u2", name: "elsewhere" }),
+    ]);
+
+    const first = result.current;
+    expect(first).toHaveLength(1);
+    const before = renders.count;
+
+    store.set(allObjects, {
+      data: [
+        mine,
+        buildObject({ id: "u20", clusterId: "u2", name: "renamed" }),
+      ],
+      error: undefined,
+      snapshotComplete: true,
+    });
+
+    // The subscribe emitted, so the hook ran again. What it returns must be
+    // the array it returned last time.
+    await waitFor(() => expect(renders.count).toBeGreaterThan(before));
+    expect(result.current).toBe(first);
+  });
+
+  it("changes identity when one of its own objects is renamed", async () => {
+    const { result, store } = await renderFreshnessObjects([
+      buildObject({ id: "u10", name: "before" }),
+    ]);
+
+    const first = result.current;
+    store.set(allObjects, {
+      data: [buildObject({ id: "u10", name: "after" })],
+      error: undefined,
+      snapshotComplete: true,
+    });
+
+    await waitFor(() => expect(result.current[0].objectName).toBe("after"));
+    expect(result.current).not.toBe(first);
   });
 });

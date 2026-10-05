@@ -904,6 +904,16 @@ export function useReplicaUtilizationHistory(
 
 export const LINE_MAX_COUNT = 10;
 
+// Separators for the key below. Control characters, which an identifier
+// cannot contain, and a marker because a name can be null and null has to stay
+// distinguishable from the empty string.
+const FIELD_SEP = "\u0000";
+const RECORD_SEP = "\u0001";
+const NULL_MARKER = "\u0002";
+
+const encode = (value: string | null) => value ?? NULL_MARKER;
+const decode = (value: string) => (value === NULL_MARKER ? null : value);
+
 /**
  * The objects on a cluster that the freshness views report on, from the
  * `useAllObjects` subscribe rather than a query.
@@ -916,25 +926,49 @@ export const LINE_MAX_COUNT = 10;
 export function useFreshnessObjects(clusterId: string): FreshnessObject[] {
   const { data: allObjects } = useAllObjects();
 
-  return useMemo(
-    () =>
-      allObjects
-        .filter(
-          (object) =>
-            object.clusterId === clusterId &&
-            (isSystemCluster(clusterId) || !isSystemId(object.id)) &&
-            object.sourceType !== "subsource" &&
-            object.sourceType !== "progress",
-        )
-        .map((object) => ({
-          objectId: object.id,
-          objectName: object.name,
-          schemaName: object.schemaName,
-          databaseName: object.databaseName,
-          objectType: object.objectType,
-        })),
-    [allObjects, clusterId],
-  );
+  // Keyed on content rather than on `allObjects`'s identity. That subscribe
+  // emits a new array for any change anywhere in the environment, so keying on
+  // it would hand this cluster a new `objects` array because some other
+  // cluster changed, rebuilding the whole stats and rows chain behind it.
+  //
+  // Only the fields read downstream are in the key. A rename has to invalidate
+  // it; a column nothing reads must not.
+  const objectsKey = allObjects
+    .filter(
+      (object) =>
+        object.clusterId === clusterId &&
+        (isSystemCluster(clusterId) || !isSystemId(object.id)) &&
+        object.sourceType !== "subsource" &&
+        object.sourceType !== "progress",
+    )
+    .map((object) =>
+      [
+        object.id,
+        encode(object.name),
+        encode(object.schemaName),
+        encode(object.databaseName),
+        object.objectType,
+      ].join(FIELD_SEP),
+    )
+    .join(RECORD_SEP);
+
+  // Rebuilt from the key, so the dependency is the whole truth: nothing else
+  // is read in here.
+  return useMemo(() => {
+    if (objectsKey === "") return [];
+
+    return objectsKey.split(RECORD_SEP).map((record) => {
+      const [objectId, objectName, schemaName, databaseName, objectType] =
+        record.split(FIELD_SEP);
+      return {
+        objectId,
+        objectName: decode(objectName),
+        schemaName: decode(schemaName),
+        databaseName: decode(databaseName),
+        objectType,
+      };
+    });
+  }, [objectsKey]);
 }
 
 /** An object's identity, invariant across the window. */
