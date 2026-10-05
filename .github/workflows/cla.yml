@@ -35,18 +35,29 @@ permissions: {}
 jobs:
   cla-assistant:
     name: cla-assistant
+    if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     permissions:
       actions: write # Re-runs the last failed CLA workflow run on the PR after a signature.
       contents: read
       pull-requests: write # Creates and updates the CLA comment on the PR.
     steps:
+      - name: Create CLA repository token
+        id: cla-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CLA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLA_APP_PRIVATE_KEY }}
+          owner: MaterializeInc
+          repositories: cla
+          permission-contents: write
       - name: CLA Assistant
-        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # 2.6.1 # zizmor: ignore[archived-uses]
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_TOKEN }}
+          # The action reads the token for the remote signatures repository
+          # from this variable. It accepts any token type, not only a PAT.
+          PERSONAL_ACCESS_TOKEN: ${{ steps.cla-token.outputs.token }}
         with:
           remote-organization-name: MaterializeInc
           remote-repository-name: cla
