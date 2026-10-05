@@ -547,7 +547,8 @@ impl ComputeState {
                 let of_ram =
                     |fraction: f64| usize::cast_lossy(f64::cast_lossy(ram) * fraction.max(0.0));
                 let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config);
-                let total = of_ram(fraction).max(128 * MIB);
+                // DO NOT MERGE: a floor of a few chunks makes CI tests spill.
+                let total = of_ram(fraction).max(8 * MIB);
                 // No ordering is enforced between the target and the budget. A
                 // target at or below budget + warm cap leaves no compressed-tier
                 // headroom, which legally collapses the tier. Every backing

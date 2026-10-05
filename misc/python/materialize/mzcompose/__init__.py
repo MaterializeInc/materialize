@@ -90,6 +90,11 @@ def get_minimal_system_parameters(
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
+        # DO NOT MERGE: stress the buffer pool's file store. A zero budget
+        # fraction leaves the pool at its floor, and a zero RSS target demotes
+        # every backed extent to the file store immediately.
+        "column_paged_batcher_budget_fraction": "0",
+        "column_paged_batcher_pool_rss_target_fraction": "0",
         "constraint_based_timestamp_selection": "verify",  # removed from main, keeping it here for old versions
         "enable_compute_peek_response_stash": "true",
         "enable_0dt_deployment_panic_after_timeout": "true",
@@ -308,14 +313,14 @@ def get_variable_system_parameters(
         # takes precedence over `enable_columnar_merge_batcher`, so defaulting it
         # on would take the columnar arm's coverage away rather than add to it.
         VariableSystemParameter(
-            "enable_column_paged_batcher", "false", ["true", "false"]
+            "enable_column_paged_batcher", "true", ["true", "false"]
         ),
         # Varied for the same reason, and because it reaches past the arrange
         # sites: it installs the process buffer pool and enables the column pager
         # storage's upsert stash draws from, so defaulting it on would move several
         # subsystems' memory behavior at once.
         VariableSystemParameter(
-            "enable_column_paged_batcher_spill", "false", ["true", "false"]
+            "enable_column_paged_batcher_spill", "true", ["true", "false"]
         ),
         # On by default so CI exercises the file-backed extent store wherever
         # a replica has a scratch directory. Off in production while it earns
