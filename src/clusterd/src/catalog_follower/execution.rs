@@ -20,8 +20,8 @@ use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::memory::objects::CatalogItem;
 use mz_catalog::read_protection::publication::publication_candidates;
 use mz_catalog::read_protection::{
-    CLIENT_PROTECTION_HEARTBEAT_INTERVAL, CLIENT_PROTECTION_UNCHANGED_GRACE,
-    ClientProtectionReclaimer, ClientReadProtection,
+    ClientProtectionReclaimer, ClientReadProtection, client_protection_heartbeat_interval,
+    client_protection_unchanged_grace,
 };
 use mz_compute::server::ReplicaCompute;
 use mz_compute_client::as_of_selection::{self, CapturedLiveInput};
@@ -815,14 +815,14 @@ impl ReplicaEnactment {
     fn ensure_recent_protection(&self) -> anyhow::Result<()> {
         ensure!(
             self.published_at.elapsed()
-                < CLIENT_PROTECTION_UNCHANGED_GRACE - CLIENT_PROTECTION_HEARTBEAT_INTERVAL,
+                < client_protection_unchanged_grace() - client_protection_heartbeat_interval(),
             "replica protection requires renewal before installation"
         );
         Ok(())
     }
 
     pub fn renewal_due(&self) -> bool {
-        self.published_at.elapsed() >= CLIENT_PROTECTION_HEARTBEAT_INTERVAL
+        self.published_at.elapsed() >= client_protection_heartbeat_interval()
     }
 
     async fn commit_grants(

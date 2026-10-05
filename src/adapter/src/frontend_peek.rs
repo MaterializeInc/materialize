@@ -603,11 +603,14 @@ impl PeekClient {
             &sql_impl_ids,
         )?;
 
-        if let Some((_, wait_future)) =
+        let waited_for_startup_appends = if let Some((_, wait_future)) =
             coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
         {
             wait_future.await;
-        }
+            true
+        } else {
+            false
+        };
 
         let max_query_result_size = Some(session.vars().max_query_result_size());
 
@@ -687,11 +690,15 @@ impl PeekClient {
         let needs_linearized_read_ts =
             Coordinator::needs_linearized_read_ts(&isolation_level, when);
 
+        // A required startup write (such as this session's mz_sessions row) can
+        // commit after catalog validation. Its completion must precede the oracle
+        // read used for data visibility, not just timestamp selection itself.
         let oracle_read_ts = match timeline {
             Some(Timeline::EpochMilliseconds)
                 if needs_linearized_read_ts
                     && !when.must_advance_to_timeline_ts()
                     && isolation_level == IsolationLevel::StrictSerializable
+                    && !waited_for_startup_appends
                     && catalog_read_ts.is_some() =>
             {
                 catalog_read_ts

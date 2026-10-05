@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::durable::TestCatalogStateBuilder;
-use mz_catalog::read_protection::CLIENT_PROTECTION_UNCHANGED_GRACE;
+use mz_catalog::read_protection::client_protection_unchanged_grace;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute_client::protocol::command::ComputeCommand;
@@ -200,7 +200,7 @@ async fn exercise_liveness() {
 
     // Only the local publication clock is aged. Catalog grants, read holds,
     // Persist frontiers, and worker responses all follow their normal APIs.
-    driver.published_at = Instant::now() - CLIENT_PROTECTION_UNCHANGED_GRACE;
+    driver.published_at = Instant::now() - client_protection_unchanged_grace();
     let error = driver
         .install(
             &mut catalog,
@@ -335,7 +335,7 @@ async fn exercise_liveness() {
             .client_incarnations()
             .contains_key(&incarnation)
     );
-    driver.published_at = Instant::now() - CLIENT_PROTECTION_UNCHANGED_GRACE;
+    driver.published_at = Instant::now() - client_protection_unchanged_grace();
     let stale = driver.published_at;
     let error = driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)

@@ -2053,7 +2053,7 @@ mod tests {
         // the same catalog transaction as the requirements.
         for elapsed in [
             std::time::Duration::from_secs(1),
-            read_protection::CLIENT_PROTECTION_HEARTBEAT_INTERVAL,
+            read_protection::client_protection_heartbeat_interval(),
         ] {
             let requirements = client
                 .protection

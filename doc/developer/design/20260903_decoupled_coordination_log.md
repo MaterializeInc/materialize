@@ -79,10 +79,15 @@ deferred pre-feature conversion boundary, separate from native handover. Do not
 weaken the guard or silently skip the check. Use CI for all CPU/RAM-heavy builds
 and tests. Keep local work to editing, lightweight checks and evidence review.
 
-The next fixture corrections concern external-replica native startup, literal-ID
-bootstrap assumptions and asynchronous DROP metadata retirement. Preserve existing
-assertions and metric coverage outside the two literal-ID fixtures. Remaining
-publication stalls and missing hydration-history episodes require separate causes,
+Verify the replacement-MV restart/DROP fixture with its explicitly scoped paired
+heartbeat/grace override. Keep production defaults and its convergence deadline.
+The renamed index-DROP/reconnect fixture checks dependent results and progress,
+not physical replacement counters. Native reuse checks export/dataflow continuity.
+
+Investigate retained introspection-input progress behind the observed prewarming
+readiness failure, separately from simulated-version bootstrap contention. Keep
+readiness requirements unchanged. Remove failure-only diagnostics once attributed.
+Publication stalls and missing hydration-history episodes require separate causes,
 not blanket fixture rewrites. Keep the earlier unexplained RTR conflict visible.
 
 Admission and retirement, not physical liveness, determine required versions. Preserve true

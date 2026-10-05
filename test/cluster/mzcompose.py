@@ -2468,10 +2468,12 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         assert replica_processes() == processes
 
 
-def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
+def workflow_test_compute_dependents_after_index_drop_and_restart(
+    c: Composition,
+) -> None:
     """
-    Test that compute reconciliation replaces changed dataflows, as well as
-    dataflows transitively depending on them.
+    Test that dependent results remain correct and advance after dropping a base
+    index and restarting environmentd while clusterd stays running.
 
     Regression test for database-issues#8444.
     """
@@ -2488,27 +2490,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
             user="mz_system",
         )
 
-        # Helper function to get reconciliation metrics for clusterd.
-        def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
-            metrics = c.exec(
-                process, "curl", "localhost:6878/metrics", capture=True
-            ).stdout
-
-            reused = 0
-            replaced = 0
-            for metric in metrics.splitlines():
-                if metric.startswith(
-                    "mz_compute_reconciliation_reused_dataflows_count_total"
-                ):
-                    reused += int(metric.split()[1])
-                elif metric.startswith(
-                    "mz_compute_reconciliation_replaced_dataflows_count_total"
-                ):
-                    replaced += int(metric.split()[1])
-
-            return reused, replaced
-
-        # Set up a cluster and a number of dataflows that can be reconciled.
+        # Set up a cluster with materialized and transitively indexed dependents.
         c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -2543,6 +2525,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
 
             CREATE TABLE t (a int);
             CREATE INDEX idx ON t (a);
+            INSERT INTO t VALUES (1), (2);
 
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
 
@@ -2552,27 +2535,49 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
             CREATE INDEX idx2 ON v2 (c);
             CREATE VIEW v3 AS SELECT c + 1 AS d FROM v2;
             CREATE INDEX idx3 ON v3 (d);
-
-            SELECT * FROM v3;
             """)
 
-        # Drop the index on the base table. This will change the plan of `mv1` the
-        # next time it is replanned, which should cause reconciliation to replace
-        # it, as well as the other dataflows that depend on `mv1`.
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent("""
+            > SET cluster = cluster1;
+            > SELECT * FROM mv;
+            1
+            2
+            > SELECT * FROM v3;
+            4
+            5
+            """),
+        )
+
         c.sql("DROP INDEX idx")
 
-        # Restart environmentd to trigger a replanning and reconciliation.
+        # Keep clusterd running while environmentd restarts and reconnects.
         c.kill("materialized")
         c.up("materialized")
 
-        # Perform queries to ensure reconciliation has finished.
-        c.sql("""
-            SET cluster = cluster1;
-            SELECT * FROM v3;
-            """)
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent("""
+            > SET cluster = cluster1;
+            > SELECT * FROM mv;
+            1
+            2
+            > SELECT * FROM v3;
+            4
+            5
 
-        reused, replaced = fetch_reconciliation_metrics("clusterd1")
-        assert reused == 0 and replaced == 4, f"{reused=}, {replaced=}"
+            > INSERT INTO t VALUES (3);
+            > SELECT * FROM mv;
+            1
+            2
+            3
+            > SELECT * FROM v3;
+            4
+            5
+            6
+            """),
+        )
 
 
 def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
@@ -3807,8 +3812,8 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     restarts of environmentd.
     """
 
-    # There are three kinds of retained-metrics objects currently:
-    #  * tables (like `mz_cluster_replicas`)
+    # Check retained storage and compute collections:
+    #  * materialized views (like `mz_cluster_replicas`)
     #  * indexes (like `mz_cluster_replicas_ind`)
 
     # Generally, metrics tables are indexed in `mz_catalog_server` and
@@ -3816,13 +3821,20 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     # collect the `since` frontiers we want.
     def collect_sinces() -> tuple[int, int]:
         with c.sql_cursor() as cur:
+            cur.execute("SET auto_route_catalog_queries = false;")
             cur.execute("SET cluster = default;")
+            cur.execute("SELECT * FROM mz_cluster_replicas;")
+            cur.fetchall()
             cur.execute("EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;")
             explain = cur.fetchall()[0][0]
         table_since = parse_since_from_explain(explain)
 
         with c.sql_cursor() as cur:
+            cur.execute("SET auto_route_catalog_queries = false;")
             cur.execute("SET cluster = mz_catalog_server;")
+            # EXPLAIN does not wait for replica installation or its observations.
+            cur.execute("SELECT * FROM mz_cluster_replicas;")
+            cur.fetchall()
             cur.execute("EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;")
             explain = cur.fetchall()[0][0]
         index_since = parse_since_from_explain(explain)
@@ -8720,106 +8732,126 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
         assert match is not None, collection_state
         return f"s{match.group(1)}"
 
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-
-    c.sql("""
-        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        CREATE TABLE t (a int);
-        CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
-        CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
-        CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
-            IN CLUSTER stalled AS SELECT * FROM t;
-        """)
-
-    [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
-    [(plain_mv_id,)] = c.sql_query(
-        "SELECT id FROM mz_materialized_views WHERE name = 'plain_mv'"
-    )
-    [(rp1_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp1'")
-
-    c.sql("""
-        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
-        CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
-            IN CLUSTER stalled AS SELECT * FROM t;
-        ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
-        """)
-    [(rp2_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp2'")
-
-    # Without a replica, no dataflow holds a persist read lease after restart.
-    # Such a lease would delay finalization beyond the runtime of this test.
-    c.kill("materialized")
-    c.up("materialized")
-
-    collection_states = storage_collection_states()
-    mv_state = collection_states[mv_id]
-    rp1_state = collection_states[rp1_id]
-    rp2_state = collection_states[rp2_id]
-    plain_mv_state = collection_states[plain_mv_id]
-    mv_shard = data_shard(mv_state)
-    plain_mv_shard = data_shard(plain_mv_state)
-
-    assert data_shard(rp1_state) == mv_shard
-    assert data_shard(rp2_state) == mv_shard
-    assert "primary: None" in mv_state, mv_state
-    assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
-    assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
-    assert "primary: None" in plain_mv_state, plain_mv_state
-    for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
-        assert "read_policy: LagWriteFrontier" in collection_state, collection_state
-
-    # Keep WAL entries observable: later catalog transactions acknowledge
-    # completed finalization and remove its record.
-    c.sql(
-        "ALTER SYSTEM SET enable_storage_shard_finalization = false",
-        port=6877,
-        user="mz_system",
-    )
-    try:
-        # Drop the staged replacement without applying it, then a plain MV
-        # whose shard must be enqueued for finalization after bootstrap.
-        for name, dropped_id in (("rp2", rp2_id), ("plain_mv", plain_mv_id)):
-            c.sql(f"DROP MATERIALIZED VIEW {name}")
-            # Durable read protection releases asynchronously after DROP.
-            for _ in range(60):
-                metadata = storage_metadata()
-                collection_metadata = metadata["collection_metadata"]
-                unfinalized = metadata["unfinalized_shards"]
-                assert collection_metadata[mv_id] == mv_shard
-                assert mv_shard not in unfinalized, (
-                    f"dropping {name} marked the target's shard {mv_shard} for"
-                    f" finalization. Unfinalized shards: {unfinalized}"
-                )
-                if dropped_id not in collection_metadata and (
-                    name != "plain_mv" or plain_mv_shard in unfinalized
-                ):
-                    break
-                time.sleep(1)
-            assert dropped_id not in collection_metadata, collection_metadata
-        assert plain_mv_shard in unfinalized, (
-            f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
-            f" finalization. Unfinalized shards: {unfinalized}"
+    # All processes in this isolated fixture share compressed protection timing.
+    # Keep the production ratio and the existing DROP convergence deadline.
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            external_metadata_store=True,
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+            support_external_clusterd=True,
+            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         )
-    finally:
+    ):
+        c.down(destroy_volumes=True)
+        c.up("materialized")
+
+        c.sql("""
+            CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
+            CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
+            CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
+                IN CLUSTER stalled AS SELECT * FROM t;
+            """)
+
+        [(mv_id,)] = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'mv'"
+        )
+        [(plain_mv_id,)] = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'plain_mv'"
+        )
+        [(rp1_id,)] = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'rp1'"
+        )
+
+        c.sql("""
+            ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
+            CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
+                IN CLUSTER stalled AS SELECT * FROM t;
+            ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
+            """)
+        [(rp2_id,)] = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'rp2'"
+        )
+
+        # Reconstruct storage ownership without restarting compute dataflows.
+        # Predecessor coordinator grants still require normal reclamation.
+        c.kill("materialized")
+        c.up("materialized")
+
+        collection_states = storage_collection_states()
+        mv_state = collection_states[mv_id]
+        rp1_state = collection_states[rp1_id]
+        rp2_state = collection_states[rp2_id]
+        plain_mv_state = collection_states[plain_mv_id]
+        mv_shard = data_shard(mv_state)
+        plain_mv_shard = data_shard(plain_mv_state)
+
+        assert data_shard(rp1_state) == mv_shard
+        assert data_shard(rp2_state) == mv_shard
+        assert "primary: None" in mv_state, mv_state
+        assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
+        assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
+        assert "primary: None" in plain_mv_state, plain_mv_state
+        for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
+            assert "read_policy: LagWriteFrontier" in collection_state, collection_state
+
+        # Keep WAL entries observable: later catalog transactions acknowledge
+        # completed finalization and remove its record.
         c.sql(
-            "ALTER SYSTEM RESET enable_storage_shard_finalization",
+            "ALTER SYSTEM SET enable_storage_shard_finalization = false",
             port=6877,
             user="mz_system",
         )
+        try:
+            # Drop the staged replacement without applying it, then a plain MV
+            # whose shard must be enqueued for finalization after bootstrap.
+            for name, dropped_id in (("rp2", rp2_id), ("plain_mv", plain_mv_id)):
+                c.sql(f"DROP MATERIALIZED VIEW {name}")
+                # Durable read protection releases asynchronously after DROP.
+                for _ in range(60):
+                    metadata = storage_metadata()
+                    collection_metadata = metadata["collection_metadata"]
+                    unfinalized = metadata["unfinalized_shards"]
+                    assert collection_metadata[mv_id] == mv_shard
+                    assert mv_shard not in unfinalized, (
+                        f"dropping {name} marked the target's shard {mv_shard} for"
+                        f" finalization. Unfinalized shards: {unfinalized}"
+                    )
+                    if dropped_id not in collection_metadata and (
+                        name != "plain_mv" or plain_mv_shard in unfinalized
+                    ):
+                        break
+                    time.sleep(1)
+                assert dropped_id not in collection_metadata, collection_metadata
+            assert plain_mv_shard in unfinalized, (
+                f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
+                f" finalization. Unfinalized shards: {unfinalized}"
+            )
+        finally:
+            c.sql(
+                "ALTER SYSTEM RESET enable_storage_shard_finalization",
+                port=6877,
+                user="mz_system",
+            )
 
-    c.sql(
-        "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"
-        " IN CLUSTER stalled AS SELECT * FROM t"
-    )
+        c.sql(
+            "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"
+            " IN CLUSTER stalled AS SELECT * FROM t"
+        )
 
-    # The target's shard must not have been sealed.
-    upper_empty = c.sql_query("""
-        SELECT write_frontier IS NULL
-        FROM mz_internal.mz_frontiers
-        JOIN mz_materialized_views ON id = object_id
-        WHERE name = 'mv'
-        """)[0][0]
-    assert not upper_empty, "the target MV's shard was sealed, its data is lost"
+        # The target's shard must not have been sealed.
+        upper_empty = c.sql_query("""
+            SELECT write_frontier IS NULL
+            FROM mz_internal.mz_frontiers
+            JOIN mz_materialized_views ON id = object_id
+            WHERE name = 'mv'
+            """)[0][0]
+        assert not upper_empty, "the target MV's shard was sealed, its data is lost"
 
 
 def workflow_test_github_10102(c: Composition) -> None:

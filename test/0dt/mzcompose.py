@@ -1435,7 +1435,30 @@ def workflow_kafka_source_rehydration(
     ):
         c.up("mz_new")
         start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        try:
+            c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        except Exception:
+            # Capture the limiting imports without masking the readiness failure.
+            try:
+                with c.sql_cursor(service="mz_new", user="mz_system", port=6877) as cur:
+                    cur.execute("SET statement_timeout = '10s'")
+                    cur.execute("SET auto_route_catalog_queries = false")
+                    cur.execute("SET cluster = mz_catalog_server")
+                    cur.execute("SET cluster_replica = r1")
+                    cur.execute("""
+                        SELECT i.name, f.export_id, f.import_id, f.worker_id, f.time
+                        FROM mz_introspection.mz_compute_import_frontiers_per_worker f
+                        JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.export_id
+                        JOIN mz_catalog.mz_indexes i ON i.id = g.id
+                        WHERE i.name IN ('mz_source_statistics_with_history_ind',
+                                         'mz_object_arrangement_sizes_ind',
+                                         'mz_compute_hydration_times_ind')
+                        ORDER BY i.name, f.import_id, f.worker_id
+                    """)
+                    print(f"Prewarming import frontiers: {cur.fetchall()}")
+            except Exception as diagnostic_error:
+                print(f"Prewarming frontier diagnostic failed: {diagnostic_error}")
+            raise
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
         # Retire mz_old only after timing the promotion.

@@ -11,7 +11,7 @@ use anyhow::Context;
 use mz_catalog::catalog::Catalog;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_catalog::read_protection::{
-    CLIENT_PROTECTION_HEARTBEAT_INTERVAL, CLIENT_PROTECTION_UNCHANGED_GRACE,
+    client_protection_heartbeat_interval, client_protection_unchanged_grace,
 };
 use mz_controller_types::ClusterId;
 use mz_repr::{GlobalId, Timestamp};
@@ -71,7 +71,7 @@ impl ReplicaEnactment {
                 });
             let max_age = allowed
                 .then(|| {
-                    (CLIENT_PROTECTION_UNCHANGED_GRACE - CLIENT_PROTECTION_HEARTBEAT_INTERVAL)
+                    (client_protection_unchanged_grace() - client_protection_heartbeat_interval())
                         .checked_sub(self.published_at.elapsed())
                 })
                 .flatten();

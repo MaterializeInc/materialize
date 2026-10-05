@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_catalog::read_protection;
 pub(crate) use mz_catalog::read_protection::{
-    CLIENT_PROTECTION_HEARTBEAT_INTERVAL, ClientProtectionReclaimer, ClientReadProtectionClosed,
+    ClientProtectionReclaimer, ClientReadProtectionClosed, client_protection_heartbeat_interval,
 };
 use mz_repr::{GlobalId, Timestamp};
 
@@ -222,11 +222,11 @@ mod tests {
         );
         client.finish_publication(true);
         assert_eq!(
-            client.prepare_publication_if_needed(CLIENT_PROTECTION_HEARTBEAT_INTERVAL - cadence),
+            client.prepare_publication_if_needed(client_protection_heartbeat_interval() - cadence),
             None
         );
         assert_eq!(
-            client.prepare_publication_if_needed(CLIENT_PROTECTION_HEARTBEAT_INTERVAL),
+            client.prepare_publication_if_needed(client_protection_heartbeat_interval()),
             Some(current)
         );
         client.finish_publication(true);
@@ -238,7 +238,7 @@ mod tests {
         client.finish_publication(true);
         assert_eq!(client.prepare_publication_if_needed(cadence), None);
         assert_eq!(
-            client.prepare_publication_if_needed(CLIENT_PROTECTION_HEARTBEAT_INTERVAL),
+            client.prepare_publication_if_needed(client_protection_heartbeat_interval()),
             Some(BTreeMap::new())
         );
         client.finish_publication(true);

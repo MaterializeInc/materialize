@@ -437,7 +437,10 @@ impl Coordinator {
             .catalog()
             .state()
             .resolve_builtin_table_updates(builtin);
-        let notify = self.builtin_table_update().execute(builtin);
+        // Metadata-only catch-up has no table writes to order. Waiting for an
+        // empty group commit can let peer publications win every catalog retry,
+        // starving this coordinator's heartbeat when table writes are delayed.
+        let notify = (!builtin.is_empty()).then(|| self.builtin_table_update().execute(builtin));
         match mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
             Box::pin(self.apply_catalog_implications(None, updates)),
         ))
@@ -452,7 +455,9 @@ impl Coordinator {
                 mz_ore::halt!("cannot enact committed catalog changes, restart required: {cause}")
             }
         }
-        notify.await;
+        if let Some(notify) = notify {
+            notify.await;
+        }
         Ok(())
     }
 

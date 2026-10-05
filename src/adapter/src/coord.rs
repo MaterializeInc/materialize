@@ -4761,7 +4761,7 @@ impl Coordinator {
             let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
             tokio::pin!(subscription_timer);
             let client_heartbeat_delay =
-                crate::query_client::read_protection::CLIENT_PROTECTION_HEARTBEAT_INTERVAL;
+                crate::query_client::read_protection::client_protection_heartbeat_interval();
             let client_heartbeat_timer = tokio::time::sleep(client_heartbeat_delay);
             tokio::pin!(client_heartbeat_timer);
             // Match storage frontier introspection's maintenance cadence. This

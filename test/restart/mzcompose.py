@@ -3518,6 +3518,7 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "enable_catalog_read_protection": str(protected).lower(),
                 },
+                environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
             )
         ):
             _temporary_item_cleanup(c, protected)
@@ -3541,20 +3542,24 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
                 pass
         c.conns.clear()
 
-    def query(sql: str) -> list[tuple]:
+    def query(sql: str, *, system: bool = False) -> list[tuple]:
         try:
+            if system:
+                return c.sql_query(sql, port=6877, user="mz_system")
             return c.sql_query(sql)
         except OperationalError:
             forget_cached_conns()
             raise
 
-    def wait_for(sql: str, expected: list[tuple], what: str) -> None:
+    def wait_for(
+        sql: str, expected: list[tuple], what: str, *, system: bool = False
+    ) -> None:
         """Poll until `sql` returns `expected`."""
         deadline = time.time() + 120
         actual = None
         while time.time() < deadline:
             try:
-                actual = query(sql)
+                actual = query(sql, system=system)
                 if actual == expected:
                     return
             except OperationalError:
@@ -3733,6 +3738,7 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
                 additional_system_parameter_defaults={
                     "enable_catalog_read_protection": "true"
                 },
+                environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
             )
         ):
             c.up("materialized")
@@ -3756,40 +3762,35 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
         (0,)
     ], f"ephemeral catalog items survived the restart: {ephemeral}"
 
-    # The temp table's storage mapping must have moved to the finalization
-    # WAL in the same reclamation, else the metadata row and its persist
-    # shard would leak forever.
-    metadata = c.sql_query(
-        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
-            WHERE data->>'kind' = 'StorageCollectionMetadata'
-              AND data->'value'->>'shard' = '{temp_shard}'""",
-        port=6877,
-        user="mz_system",
-    )
-    assert metadata == [
+    # The comment row dies with its item, independently of storage protection.
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [
         (0,)
-    ], f"temp table's storage metadata survived the restart: {temp_shard}"
-    unfinalized = c.sql_query(
-        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
-            WHERE data->>'kind' = 'UnfinalizedShard'
-              AND data->'key'->>'shard' = '{temp_shard}'""",
-        port=6877,
-        user="mz_system",
-    )
-    assert unfinalized == [
-        (1,)
-    ], f"temp table's shard was not enqueued for finalization: {temp_shard}"
+    ], f"the temp table's comment survived the restart: {comments}"
+
+    # Mapping removal and WAL enqueue are atomic, but protected storage must
+    # wait for predecessor client grants even after promotion removes the Item.
+    storage_cleanup = f"""SELECT
+        (SELECT count(*) FROM mz_internal.mz_catalog_raw
+         WHERE data->>'kind' = 'StorageCollectionMetadata'
+           AND data->'value'->>'shard' = '{temp_shard}'),
+        (SELECT count(*) FROM mz_internal.mz_catalog_raw
+         WHERE data->>'kind' = 'UnfinalizedShard'
+           AND data->'key'->>'shard' = '{temp_shard}')"""
+    if protected:
+        wait_for(
+            storage_cleanup,
+            [(0, 1)],
+            "temporary storage retirement after predecessor protection expires",
+            system=True,
+        )
+    else:
+        assert query(storage_cleanup, system=True) == [(0, 1)], temp_shard
     c.sql(
         "ALTER SYSTEM RESET enable_storage_shard_finalization",
         port=6877,
         user="mz_system",
     )
-
-    # The comment row dies with its item.
-    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
-    assert comments == [
-        (0,)
-    ], f"the temp table's comment survived the restart: {comments}"
 
     # conn_b's socket died with the process; closing is bookkeeping only.
     try:

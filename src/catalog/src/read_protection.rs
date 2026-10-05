@@ -12,7 +12,7 @@
 pub mod publication;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use mz_repr::{GlobalId, Timestamp};
@@ -20,10 +20,37 @@ use mz_storage_types::read_holds::{ChangeTx, ReadHold};
 use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
 
-/// Renew the heartbeat at this interval when no requirements need publication.
-pub const CLIENT_PROTECTION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
-/// Observe an unchanged heartbeat locally for this long before attempting closure.
-pub const CLIENT_PROTECTION_UNCHANGED_GRACE: Duration = Duration::from_secs(300);
+// Test fixtures may compress the timing, but every process sharing their catalog
+// must use the same value from startup. Managed process replicas inherit it from
+// environmentd. Never shorten grace while participants with longer renewal
+// intervals can remain live. This is not a production tuning setting.
+// Deriving grace from heartbeat preserves the writer's renewal safety margin.
+static CLIENT_PROTECTION_TIMING: LazyLock<(Duration, Duration)> = LazyLock::new(|| {
+    let heartbeat_ms = match std::env::var("MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS") {
+        Ok(value) => value
+            .parse::<u64>()
+            .expect("test heartbeat must be milliseconds"),
+        Err(std::env::VarError::NotPresent) => 60_000,
+        Err(error) => panic!("invalid test heartbeat: {error}"),
+    };
+    assert!(heartbeat_ms > 0, "test heartbeat must be positive");
+    let grace_ms = heartbeat_ms.checked_mul(5).expect("test grace overflow");
+    (
+        Duration::from_millis(heartbeat_ms),
+        Duration::from_millis(grace_ms),
+    )
+});
+
+/// Renewal interval when no requirements need publication. Defaults to 60 seconds.
+/// Isolated fixtures may override it with `MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS`.
+pub fn client_protection_heartbeat_interval() -> Duration {
+    CLIENT_PROTECTION_TIMING.0
+}
+
+/// Local unchanged-heartbeat grace before closure. Defaults to 300 seconds.
+pub fn client_protection_unchanged_grace() -> Duration {
+    CLIENT_PROTECTION_TIMING.1
+}
 
 /// New read holds cannot be acquired because this client has been closed.
 #[derive(Debug, thiserror::Error)]
@@ -257,7 +284,7 @@ impl ClientReadProtection {
         let mut state = self.state.lock().expect("read protection mutex poisoned");
         assert!(state.pending.is_none(), "publication already pending");
         let requirements = state.aggregate(BTreeMap::new());
-        if requirements == state.committed && elapsed < CLIENT_PROTECTION_HEARTBEAT_INTERVAL {
+        if requirements == state.committed && elapsed < client_protection_heartbeat_interval() {
             return None;
         }
         state.pending = Some(requirements.clone());
@@ -311,7 +338,7 @@ impl ClientProtectionReclaimer {
             if observation.0 != heartbeat {
                 *observation = (heartbeat, now);
             }
-            if now.saturating_duration_since(observation.1) >= CLIENT_PROTECTION_UNCHANGED_GRACE {
+            if now.saturating_duration_since(observation.1) >= client_protection_unchanged_grace() {
                 candidates.push((id, heartbeat));
             }
         }
