@@ -15,13 +15,11 @@ import {
   AccordionPanel,
   Box,
   HStack,
-  Input,
   Select,
   Text,
   useTheme,
   VStack,
 } from "@chakra-ui/react";
-import debounce from "lodash.debounce";
 import React from "react";
 
 import { isSystemCluster } from "~/api/materialize";
@@ -31,7 +29,12 @@ import { LoadingContainer } from "~/components/LoadingContainer";
 import SearchableSelect, {
   SelectOption,
 } from "~/components/SearchableSelect/SearchableSelect";
+import { ThresholdInput } from "~/components/ThresholdLineGraph/ThresholdInput";
 import { ThresholdLineGraph } from "~/components/ThresholdLineGraph/ThresholdLineGraph";
+import {
+  ThresholdControl,
+  useThresholdControl,
+} from "~/components/ThresholdLineGraph/useThresholdControl";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { ClustersIcon } from "~/icons";
 import {
@@ -47,12 +50,7 @@ import { useAllClusters } from "~/store/allClusters";
 import { MaterializeTheme } from "~/theme";
 import { formatDurationForAxis } from "~/utils/format";
 
-import {
-  OBJECT_TYPE_FILTERS,
-  THRESHOLD_INPUT_SETTLE_MS,
-  THRESHOLD_STEP_MS,
-  TIME_PERIOD_OPTIONS,
-} from "./constants";
+import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
 import {
   buildFreshnessRows,
   buildStats,
@@ -63,7 +61,6 @@ import {
 import { FreshnessTable } from "./FreshnessTable";
 import { useFreshnessHydration } from "./queries";
 import { useFreshnessParams } from "./useFreshnessParams";
-import { useSettledThreshold } from "./useSettledThreshold";
 
 const SectionHeader = ({
   title,
@@ -92,75 +89,19 @@ const SectionHeader = ({
   );
 };
 
-/**
- * The threshold in seconds, as a text field.
- *
- * Holds what is being typed separately from the committed threshold, and
- * commits once typing stops. Committing per keystroke means passing through
- * every intermediate state on the way to the intended one, and the worst of
- * those is the empty field: `Number("")` is `0`, which marks every object as
- * exceeding.
- *
- * Whatever has settled is then taken at face value, including an empty or
- * unparseable field, which commits 0. A reader who clears this and stops has
- * asked for no threshold, and the page is readable in that state.
- */
-export interface ThresholdInputProps {
-  valueMs: number;
-  onChange: (ms: number) => void;
-}
-
-export const ThresholdInput = ({ valueMs, onChange }: ThresholdInputProps) => {
-  const [draft, setDraft] = React.useState<string | undefined>(undefined);
-
-  const commit = React.useMemo(
-    () =>
-      debounce((raw: string) => {
-        const seconds = Number(raw);
-        onChange(Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 0);
-        // Cleared alongside the commit so both land in one render, and the
-        // field goes back to following `valueMs`.
-        setDraft(undefined);
-      }, THRESHOLD_INPUT_SETTLE_MS),
-    [onChange],
-  );
-
-  React.useEffect(() => commit.cancel, [commit]);
-
-  return (
-    <Input
-      type="number"
-      size="sm"
-      width="20"
-      min={0}
-      step={THRESHOLD_STEP_MS / 1000}
-      aria-label="Freshness threshold in seconds"
-      value={draft ?? (valueMs / 1000).toString()}
-      onChange={(e) => {
-        setDraft(e.target.value);
-        commit(e.target.value);
-      }}
-    />
-  );
-};
-
 const FreshnessContent = ({
   clusterId,
   lookbackMs,
   rangeLabel,
   predicate,
-  liveThreshold,
-  settledThreshold,
-  onThresholdChange,
+  thresholdControl,
   typeFilters,
 }: {
   clusterId: string;
   lookbackMs: number;
   rangeLabel: string;
   predicate: Predicate;
-  liveThreshold: number;
-  settledThreshold: number;
-  onThresholdChange: (value: number) => void;
+  thresholdControl: ThresholdControl;
   typeFilters: string[];
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -226,7 +167,7 @@ const FreshnessContent = ({
         statsByKey,
         objectsById,
         hydrationByObjectId,
-        threshold: settledThreshold,
+        threshold: thresholdControl.settled,
         selectedKeys,
       }),
     [
@@ -234,7 +175,7 @@ const FreshnessContent = ({
       statsByKey,
       objectsById,
       hydrationByObjectId,
-      settledThreshold,
+      thresholdControl.settled,
       selectedKeys,
     ],
   );
@@ -264,7 +205,7 @@ const FreshnessContent = ({
             {breaching.length} of {rows.length}
           </b>{" "}
           {rows.length === 1 ? "object" : "objects"} exceeded{" "}
-          {formatDurationForAxis(settledThreshold)} {predicateLabel}
+          {formatDurationForAxis(thresholdControl.settled)} {predicateLabel}
           {window}.
         </Text>
       </HStack>
@@ -282,9 +223,7 @@ const FreshnessContent = ({
               xAccessor={(d) => d.timestamp}
               startTime={startTime}
               endTime={endTime}
-              threshold={liveThreshold}
-              onThresholdChange={onThresholdChange}
-              thresholdStep={THRESHOLD_STEP_MS}
+              {...thresholdControl.graphProps}
               formatValue={formatDurationForAxis}
               thresholdLabel="Freshness threshold"
               graphLabel="Object freshness over time"
@@ -302,7 +241,8 @@ const FreshnessContent = ({
             {breaching.length === 0 ? (
               <Box padding="4" color={colors.foreground.secondary}>
                 <Text as="span" color={colors.accent.green}>
-                  No objects exceeded {formatDurationForAxis(settledThreshold)}{" "}
+                  No objects exceeded{" "}
+                  {formatDurationForAxis(thresholdControl.settled)}{" "}
                   {predicateLabel}
                   {window}.
                 </Text>{" "}
@@ -350,11 +290,7 @@ const FreshnessPage = () => {
     setPredicate,
     setObjectTypes,
   } = useFreshnessParams();
-  const {
-    live: liveThreshold,
-    settled: settledThreshold,
-    onChange: onThresholdChange,
-  } = useSettledThreshold(threshold, setThreshold);
+  const thresholdControl = useThresholdControl(threshold, setThreshold);
 
   // Filter out system clusters
   const selectable = React.useMemo(
@@ -395,8 +331,8 @@ const FreshnessPage = () => {
               Highlight objects that exceeded
             </Text>
             <ThresholdInput
-              valueMs={liveThreshold}
-              onChange={onThresholdChange}
+              {...thresholdControl.inputProps}
+              ariaLabel="Freshness threshold in seconds"
             />
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
               seconds
@@ -484,9 +420,7 @@ const FreshnessPage = () => {
                 lookbackMs={timePeriodMinutes * 60_000}
                 rangeLabel={rangeLabel}
                 predicate={predicate}
-                liveThreshold={liveThreshold}
-                settledThreshold={settledThreshold}
-                onThresholdChange={onThresholdChange}
+                thresholdControl={thresholdControl}
                 typeFilters={objectTypes}
               />
             </React.Suspense>

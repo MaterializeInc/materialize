@@ -40,30 +40,6 @@ export const DEFAULT_TIME_PERIOD_MINUTES = 60;
  */
 export const DEFAULT_THRESHOLD_MS = 2_000;
 
-/** A tenth of a second: finer than the measurement, coarse enough to drag to. */
-export const THRESHOLD_STEP_MS = 100;
-
-/**
- * How long the threshold must sit still before the rest of the page follows it.
- *
- * The drag handle has to track the cursor every frame, but the work behind it
- * does not: writing the search param re-renders the route, and rebuilding the
- * table re-renders a row per object. Both at pointer-move rate is what made
- * dragging stutter. Short enough that a reader who stops moving sees the table
- * catch up as one motion rather than as a delay.
- */
-export const THRESHOLD_SETTLE_MS = 120;
-
-/**
- * How long the threshold field waits after a keystroke before committing.
- *
- * Longer than `THRESHOLD_SETTLE_MS`, which paces a drag: a pointer emits
- * continuously and 120ms of stillness means the reader has stopped, while
- * typing has gaps that long between digits. Committing inside one would read
- * "2" on the way to "25".
- */
-export const THRESHOLD_INPUT_SETTLE_MS = 400;
-
 /**
  * The object types this page offers to filter by.
  *

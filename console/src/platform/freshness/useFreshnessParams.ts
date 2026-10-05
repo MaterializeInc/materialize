@@ -130,9 +130,12 @@ export function useFreshnessParams(): FreshnessParams {
     [setSearchParams],
   );
 
-  // Stable identities. A caller debouncing one of these memoizes on it, and a
-  // setter rebuilt every render would rebuild the debounce with it, leaving
-  // every call to fire on its own timer.
+  // NOTE: these are not stable across a param change. They reach
+  // `setSearchParams`, which react-router rebuilds whenever `searchParams`
+  // changes, so changing any one param gives every setter a new identity. A
+  // caller holding a timer must keep the setter in a ref rather than in a
+  // dependency array, or an unrelated param moving will cancel its pending
+  // call. See `useSettledThreshold`.
   const setClusterId = React.useCallback(
     (id: string) => set(CLUSTER_SEARCH_PARAM, id),
     [set],
