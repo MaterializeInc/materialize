@@ -1,17 +1,17 @@
 ---
 source: src/timely-util/src/pool_config/metrics.rs
-revision: de580d5215
+revision: 24a45d84c0
 ---
 
 # timely-util::pool_config::metrics
 
-Prometheus metrics for the process-wide buffer pool.
+Prometheus metrics for the process-wide buffer pool and columnar chunk work counters.
 
 ## `register(registry: &MetricsRegistry)`
 
-Installs all buffer-pool gauges into `registry`. Idempotent via a `OnceLock`: repeated calls after the first are no-ops.
+Installs all buffer-pool gauges and the columnar chunk work counters into `registry`. Idempotent via a `OnceLock`: repeated calls after the first are no-ops. The chunk work counters are delegated to `crate::columnar::chunk::metrics::register`.
 
-All metrics are `ComputedUIntGauge` instances that peek at the pool's `PoolStats` at scrape time via `global_pool_peek()`. They report `0` until something initializes the pool. This design ensures that monitoring a process that never uses the pool does not trigger the pool's virtual address reservation as a side effect.
+Buffer-pool metrics are `ComputedUIntGauge` instances that peek at the pool's `PoolStats` at scrape time via `global_pool_peek()`. They report `0` until something initializes the pool. This design ensures that monitoring a process that never uses the pool does not trigger the pool's virtual address reservation as a side effect.
 
 ## Metrics registered
 

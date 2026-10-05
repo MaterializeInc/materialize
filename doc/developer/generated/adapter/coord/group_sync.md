@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/group_sync.rs
-revision: 605cc6fd1a
+revision: 2085eb6397
 ---
 
 # adapter::coord::group_sync
@@ -14,6 +14,6 @@ Roles to grant are those in the target set that are absent from both sync-manage
 
 `GroupSyncDiff` bundles the resulting `grants` and `revokes` operation vectors for the caller to apply as a single catalog transaction.
 
-`Coordinator::maybe_sync_jwt_groups` is the top-level entry point called during connection startup: it checks whether sync is enabled (via `OIDC_GROUP_ROLE_SYNC_ENABLED`), short-circuits when no group claim is present (`groups == None`), and delegates to `sync_jwt_groups`. Errors are either propagated as `AdapterError::OidcGroupSyncFailed` (strict mode, `OIDC_GROUP_ROLE_SYNC_STRICT`) or suppressed with a warning notice (fail-open default). Notices about unmatched groups, reserved-name groups, and sync errors are sent to the client via `notice_tx`.
+`Coordinator::maybe_sync_jwt_groups` is the top-level entry point called during connection startup: it checks whether sync is enabled (via `OIDC_GROUP_ROLE_SYNC_ENABLED`), short-circuits when no group claim is present (`groups == None`), and delegates to `sync_jwt_groups`. Errors are either propagated as `AdapterError::OidcGroupSyncFailed` (strict mode, `OIDC_GROUP_ROLE_SYNC_STRICT`) or suppressed with a warning notice (fail-open default). Notices about reserved-name groups and sync errors are sent to the client via `notice_tx`.
 
-`Coordinator::sync_jwt_groups` resolves each group name to a catalog role via exact (case-sensitive) lookup (`try_get_role_by_name`), filtering out reserved names (`mz_`/`pg_` prefixes) and self-references (where the group resolves to the user's own role). It then calls `compute_group_sync_diff` and executes the resulting grant/revoke ops via `catalog_transact`.
+`Coordinator::sync_jwt_groups` resolves each group name to a catalog role via exact (case-sensitive) lookup (`try_get_role_by_name`), filtering out reserved names (`mz_`/`pg_` prefixes) and self-references (where the group resolves to the user's own role). Groups with no matching catalog role are skipped silently at `debug` log level; no notice is sent to the client. It then calls `compute_group_sync_diff` and executes the resulting grant/revoke ops via `catalog_transact`.

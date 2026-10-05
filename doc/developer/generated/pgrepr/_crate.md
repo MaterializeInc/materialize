@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/lib.rs
-revision: c317ceee3c
+revision: 0e35544577
 ---
 
 # mz-pgrepr
@@ -16,7 +16,7 @@ Provides representation and serialization of PostgreSQL data types for use in Ma
 
 ## Key types
 
-* `Value` — a PostgreSQL datum; supports text and binary encoding via `mz_pgwire_common::Format`.
+* `Value` — a PostgreSQL datum; supports text and binary encoding via `mz_pgrepr_consts::Format`.
 * `Type` — the type of a `Value`, with typmod encoding/decoding.
 * `TextEncodeSettings` — session parameters that govern text encoding (e.g. `extra_float_digits`); `TextEncodeSettings::STABLE` is used by all non-session callers.
 * `values_from_row` — converts an `mz_repr::RowRef` to a vector of `Option<Value>` for pgwire responses.
@@ -25,7 +25,7 @@ Provides representation and serialization of PostgreSQL data types for use in Ma
 
 ## Dependencies
 
-Direct dependencies include `mz-repr` (for `Datum` and ADT types), `mz-pgwire-common` (for `Format`), `mz-pgrepr-consts` (for OIDs), `postgres-types` (for `ToSql`/`FromSql`), `bytes`, `byteorder`, `chrono`, `dec`, and `uuid`.
+Direct dependencies include `mz-repr` (for `Datum` and ADT types), `mz-pgrepr-consts` (for `Format` and OIDs), `postgres-types` (for `ToSql`/`FromSql`), `bytes`, `byteorder`, `chrono`, `dec`, and `uuid`.
 
 ## Downstream consumers
 
