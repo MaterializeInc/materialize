@@ -1561,6 +1561,10 @@ fn test_frontend_occ_write_visible_to_linearizable_read() {
 #[allow(clippy::disallowed_methods)]
 fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "false".to_string(),
+        )
         .unsafe_mode()
         .start_blocking();
     server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
