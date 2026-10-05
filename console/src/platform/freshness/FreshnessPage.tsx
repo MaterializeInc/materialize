@@ -16,6 +16,7 @@ import {
   Box,
   HStack,
   Select,
+  Spinner,
   Text,
   useTheme,
   VStack,
@@ -23,6 +24,7 @@ import {
 import React from "react";
 
 import { isSystemCluster } from "~/api/materialize";
+import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { DataPoint } from "~/components/FreshnessGraph/types";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -290,7 +292,11 @@ const FreshnessContent = ({
 
 const FreshnessPage = () => {
   const { colors } = useTheme<MaterializeTheme>();
-  const { data: clusters } = useAllClusters();
+  const {
+    data: clusters,
+    error: clustersError,
+    snapshotComplete: clustersReady,
+  } = useAllClusters();
   const {
     clusterId,
     threshold,
@@ -319,6 +325,27 @@ const FreshnessPage = () => {
     TIME_PERIOD_OPTIONS[
       String(timePeriodMinutes) as keyof typeof TIME_PERIOD_OPTIONS
     ] ?? `${timePeriodMinutes}m`;
+
+  // The heading stays and the body swaps, so the page does not flash empty on
+  // every load. The control bar goes with the body: its cluster picker has
+  // nothing to offer until the subscribe lands.
+  if (clustersError || !clustersReady) {
+    return (
+      <MainContentContainer>
+        <PageHeader variant="compact" sticky boxProps={{ pb: "4" }}>
+          <PageHeading>Freshness</PageHeading>
+        </PageHeader>
+        {clustersError ? (
+          <Alert
+            variant="error"
+            message="An error occurred loading clusters."
+          />
+        ) : (
+          <Spinner data-testid="loading-spinner" />
+        )}
+      </MainContentContainer>
+    );
+  }
 
   return (
     <MainContentContainer>
