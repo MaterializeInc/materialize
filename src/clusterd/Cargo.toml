@@ -31,6 +31,7 @@ mz-ore = { path = "../ore", features = ["async", "panic", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-prof-http = { path = "../prof-http" }
 mz-secrets-cli = { path = "../secrets-cli" }
+mz-secrets-loader = { path = "../secrets-loader" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-storage-types = { path = "../storage-types" }

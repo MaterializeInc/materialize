@@ -8,13 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use clap::ValueEnum;
-use mz_aws_secrets_controller::AwsSecretsClient;
-use mz_orchestrator_kubernetes::secrets::KubernetesSecretsReader;
-use mz_orchestrator_process::secrets::ProcessSecretsReader;
-use mz_secrets::SecretsReader;
 
 #[derive(clap::Parser, Clone, Debug)]
 pub struct SecretsReaderCliArgs {
@@ -58,28 +53,6 @@ pub enum SecretsControllerKind {
 }
 
 impl SecretsReaderCliArgs {
-    /// Loads the secrets reader specified by the command-line arguments.
-    pub async fn load(self) -> Result<Arc<dyn SecretsReader>, anyhow::Error> {
-        match self.secrets_reader {
-            SecretsControllerKind::LocalFile => {
-                let dir = self.secrets_reader_local_file_dir.expect("clap enforced");
-                Ok(Arc::new(ProcessSecretsReader::new(dir)))
-            }
-            SecretsControllerKind::Kubernetes => {
-                let context = self
-                    .secrets_reader_kubernetes_context
-                    .expect("clap enforced");
-                Ok(Arc::new(
-                    KubernetesSecretsReader::new(context, self.secrets_reader_name_prefix).await?,
-                ))
-            }
-            SecretsControllerKind::AwsSecretsManager => {
-                let prefix = self.secrets_reader_aws_prefix.expect("clap enforced");
-                Ok(Arc::new(AwsSecretsClient::new(&prefix).await))
-            }
-        }
-    }
-
     /// Turn this struct back into arguments. Useful for passing through to other services.
     ///
     /// Expects the correct arguments to be filled in, based on the `clap` requirements.

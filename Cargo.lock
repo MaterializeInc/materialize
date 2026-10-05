@@ -6567,6 +6567,7 @@ dependencies = [
  "mz-persist-types",
  "mz-repr",
  "mz-secrets-cli",
+ "mz-secrets-loader",
  "mz-sql",
  "mz-storage-types",
  "serde",
@@ -6756,6 +6757,7 @@ dependencies = [
  "mz-persist-client",
  "mz-prof-http",
  "mz-secrets-cli",
+ "mz-secrets-loader",
  "mz-service",
  "mz-storage",
  "mz-storage-types",
@@ -8380,12 +8382,19 @@ dependencies = [
 name = "mz-secrets-cli"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+]
+
+[[package]]
+name = "mz-secrets-loader"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
  "mz-aws-secrets-controller",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
  "mz-secrets",
+ "mz-secrets-cli",
 ]
 
 [[package]]
