@@ -135,12 +135,14 @@ type ChartTooltipData = { row: StackedDailyRow };
 type AccountSpendChartGraphProps = ParentSizeProvidedProps & {
   rows: StackedDailyRow[];
   accountIds: string[];
+  labelFor: Map<string, string>;
   colorFor: Map<string, string>;
 };
 
 const AccountSpendChartGraph = ({
   rows,
   accountIds,
+  labelFor,
   colorFor,
   width,
   height,
@@ -331,7 +333,9 @@ const AccountSpendChartGraph = ({
                         borderRadius="sm"
                         backgroundColor={colorFor.get(id)}
                       />
-                      <Text textStyle="text-small">{shortAccountId(id)}</Text>
+                      <Text textStyle="text-small">
+                        {labelFor.get(id) ?? shortAccountId(id)}
+                      </Text>
                     </HStack>
                     <Text textStyle="text-small">
                       {formatCurrency(tooltipData.row[id] as number)}
@@ -348,6 +352,7 @@ const AccountSpendChartGraph = ({
 const AccountSpendChart = (props: {
   rows: StackedDailyRow[];
   accountIds: string[];
+  labelFor: Map<string, string>;
   colorFor: Map<string, string>;
 }) => (
   <Box height={chartHeightPx} data-testid="account-spend-chart-container">
@@ -648,9 +653,17 @@ const AccountSpendBreakdown = ({
   timeRange,
   setTimeRange,
 }: AccountSpendBreakdownProps) => {
-  const { accountIds, rows, colorFor, totalSpend } = useAccountSpendPivot(
-    days,
-    regionFilter,
+  const { accountIds, rows, colorFor, orderedAccounts, totalSpend } =
+    useAccountSpendPivot(days, regionFilter);
+  const labelFor = useMemo(
+    () =>
+      new Map(
+        orderedAccounts.map((account) => [
+          account.external_customer_id,
+          accountLabel(account),
+        ]),
+      ),
+    [orderedAccounts],
   );
 
   return (
@@ -684,6 +697,7 @@ const AccountSpendBreakdown = ({
           <AccountSpendChart
             rows={rows}
             accountIds={accountIds}
+            labelFor={labelFor}
             colorFor={colorFor}
           />
         </Box>
