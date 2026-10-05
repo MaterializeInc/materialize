@@ -52,6 +52,28 @@ impl std::fmt::Display for ReplicaRemoved {
 
 impl std::error::Error for ReplicaRemoved {}
 
+/// Keeps native ingress alive until the caller handles the follower's terminal
+/// result. Dropping it while Timely can still poll is an execution-owner failure,
+/// including when catalog following ends with an intentional deployment fence.
+pub(crate) struct NativeOwner {
+    compute: Option<ReplicaCompute>,
+    storage: Option<mz_storage::server::ReplicaStorage>,
+    execution: Option<execution::ReplicaEnactment>,
+}
+
+impl NativeOwner {
+    pub(crate) fn new(
+        compute: Option<ReplicaCompute>,
+        storage: Option<mz_storage::server::ReplicaStorage>,
+    ) -> Self {
+        Self {
+            compute,
+            storage,
+            execution: None,
+        }
+    }
+}
+
 pub(crate) struct Config {
     pub environment_id: EnvironmentId,
     pub reconstruction: ReplicaCatalogConfig,
@@ -235,8 +257,7 @@ pub(crate) async fn run(
     config: Config,
     persist_clients: Arc<PersistClientCache>,
     registry: MetricsRegistry,
-    endpoint: Option<ReplicaCompute>,
-    storage_endpoint: Option<mz_storage::server::ReplicaStorage>,
+    owner: &mut NativeOwner,
 ) -> anyhow::Result<()> {
     let build = config
         .reconstruction
@@ -290,7 +311,7 @@ pub(crate) async fn run(
     let build = build.to_string();
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
-    let mut execution = if let Some(endpoint) = endpoint {
+    if owner.compute.is_some() {
         let (incarnation, publication_started) = loop {
             let (_, updates) = catalog.sync_to_current_updates().await?;
             absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
@@ -349,19 +370,18 @@ pub(crate) async fn run(
             config.persist_location.clone(),
             persist_clients.cfg().state_version_target(),
         );
-        Some(execution::ReplicaEnactment::new(
-            endpoint,
+        owner.execution = Some(execution::ReplicaEnactment::new(
+            owner.compute.take().expect("native compute endpoint"),
             instance,
             incarnation,
             publication_started,
             config.cluster_id,
             config.replica_id,
             &registry,
-            storage_endpoint,
-        ))
-    } else {
-        None
-    };
+            owner.storage.take(),
+        ));
+    }
+    let execution = &mut owner.execution;
     // None forces initial configuration in both lanes, even without catalog effects.
     let mut configured_persist_state_version = None;
     let mut last_report = tokio::time::Instant::now();
@@ -376,10 +396,10 @@ pub(crate) async fn run(
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
-        let (_, updates) = wait(&mut execution, catalog.sync_to_current_updates()).await?;
+        let (_, updates) = wait(&mut *execution, catalog.sync_to_current_updates()).await?;
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
-        if let Some(execution) = &mut execution {
+        if let Some(execution) = &mut *execution {
             execution.ensure_live(&catalog)?;
             if execution.renewal_due() {
                 if let Err(error) = execution
@@ -460,7 +480,7 @@ pub(crate) async fn run(
         }
         let result: anyhow::Result<_> = async {
             wait(
-                &mut execution,
+                &mut *execution,
                 effects.observe_plans(
                     &catalog,
                     config.cluster_id,
@@ -479,7 +499,7 @@ pub(crate) async fn run(
                         .chain(plan.physical_plan.persist_sink_ids())
                 })
                 .collect();
-            if let Some(execution) = &execution {
+            if let Some(execution) = &*execution {
                 wanted.extend(execution.storage_wanted(
                     &catalog,
                     config.cluster_id,
@@ -487,7 +507,7 @@ pub(crate) async fn run(
                 ));
             }
             let metadata = wait(
-                &mut execution,
+                &mut *execution,
                 storage_metadata::resolve(
                     &catalog,
                     &wanted,
@@ -506,7 +526,7 @@ pub(crate) async fn run(
             Ok((metadata_revision, metadata)) => {
                 pending_metadata = !metadata.pending.is_empty();
                 let mut pending = !effects.pending.is_empty() || pending_metadata;
-                if let Some(execution) = &mut execution {
+                if let Some(execution) = &mut *execution {
                     if execution.renewal_due() {
                         if let Err(error) = execution
                             .publish(
@@ -657,7 +677,7 @@ pub(crate) async fn run(
             Err(error) => {
                 failures["observation"].inc();
                 pending_metadata = true;
-                if let Some(execution) = &mut execution {
+                if let Some(execution) = &mut *execution {
                     // Missing metadata cannot prevent renewal of existing protection.
                     if let Err(error) = execution
                         .publish(
@@ -686,7 +706,7 @@ pub(crate) async fn run(
                 delay = (delay * 2).min(Duration::from_secs(10));
             }
         }
-        match &mut execution {
+        match &mut *execution {
             Some(execution) => execution.io.idle(delay).await,
             None => tokio::time::sleep(delay).await,
         }

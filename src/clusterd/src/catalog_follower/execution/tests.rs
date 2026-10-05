@@ -79,14 +79,14 @@ async fn startup_rejects_mismatched_plan_versions() {
             timestamp_oracle: config.timestamp_oracle.clone(),
             build_info: config.build_info,
         };
+        let mut owner = follower::NativeOwner::new(None, None);
         let error = timeout(
             Duration::from_secs(5),
             follower::run(
                 rejected,
                 Arc::clone(&fixture.clients),
                 MetricsRegistry::new(),
-                None,
-                None,
+                &mut owner,
             ),
         )
         .await
@@ -593,7 +593,8 @@ pub(super) async fn start_runtime(
     drop(server);
     // A returned follower, including an error, is always a failure in this test.
     mz_ore::task::spawn(|| "native follower test", async move {
-        let result = follower::run(config, clients, registry, Some(endpoint), None).await;
+        let mut owner = follower::NativeOwner::new(Some(endpoint), None);
+        let result = follower::run(config, clients, registry, &mut owner).await;
         panic!("native follower stopped: {result:?}");
     });
 

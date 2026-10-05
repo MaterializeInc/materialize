@@ -2416,13 +2416,22 @@ async fn test_session_linearizability(isolation_level: &str) {
         .await
         .unwrap();
 
-    let source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
+    // A completed read establishes the session's timestamp floor. EXPLAIN
+    // selects a hypothetical timestamp without advancing the session oracle.
+    let row = mz_client
+        .query_one(
+            &format!("SELECT count(*), mz_now()::text FROM {pg_table_name}"),
+            &[],
+        )
+        .await
+        .unwrap();
+    let source_ts: u64 = row.get::<_, String>(1).parse().unwrap();
     let join_ts =
         test_util::get_explain_timestamp(&format!("{pg_table_name}, t"), &mz_client).await;
 
-    // Since the query on the join was done after the query on the view, it should have a higher or
-    // equal timestamp in strict serializable mode.
-    assert!(join_ts >= source_ts);
+    // Both strict and strong-session serializability preserve the completed
+    // read's timestamp floor when selecting a timestamp for another input set.
+    assert!(join_ts >= source_ts, "{join_ts} >= {source_ts}");
 
     mz_client
         .batch_execute("SET transaction_isolation = serializable")

@@ -651,14 +651,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let replica_owned = endpoint.is_some();
         let registry = metrics_registry.clone();
         mz_ore::task::spawn(|| "catalog_follower", async move {
-            if let Err(error) = catalog_follower::run(
-                config,
-                persist_clients,
-                registry,
-                endpoint,
-                storage_endpoint,
-            )
-            .await
+            let mut owner = catalog_follower::NativeOwner::new(endpoint, storage_endpoint);
+            if let Err(error) =
+                catalog_follower::run(config, persist_clients, registry, &mut owner).await
             {
                 if replica_owned {
                     if error.is::<catalog_follower::ReplicaRemoved>() {
@@ -675,6 +670,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
                 }
                 error!(%error, "catalog follower stopped");
+            }
+            if replica_owned {
+                mz_ore::halt!("execution-critical catalog follower returned unexpectedly");
             }
         });
     }

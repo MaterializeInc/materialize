@@ -81,23 +81,43 @@ and tests. Keep local work to editing, lightweight checks and evidence review.
 
 Keep the replacement-MV restart/DROP fixture's explicitly scoped paired
 heartbeat/grace override, production defaults and convergence deadline.
-Verify temporary-object storage retirement with that same paired fixture timing,
+Temporary-object storage retirement uses that same paired fixture timing,
 preserving immediate SQL invisibility after promotion.
 The renamed index-DROP/reconnect fixture checks dependent results and progress,
 not physical replacement counters. Native reuse checks export/dataflow continuity.
 
 Investigate retained introspection-input progress behind the observed prewarming
-readiness failure and first-query latency after promotion. Keep readiness and
-latency requirements unchanged. Remove failure-only diagnostics once attributed.
-The approved simulated-version harness repair scopes the Persist version to its
-own clusterd launches, but simulated prewarming still fails to become ready.
-Establish its remaining cause without changing written-plan identity or admission
-checks. Keep this separate from actual compiled-version handover.
-Verify shared workload-class metric enrichment with maintained collection metrics,
+readiness failure. The post-promotion timer includes adapter startup: CI137668's
+3.495s interval spends 3.122s before SQL serving begins, leaving 0.373s afterward.
+Whether startup belongs in promotion or the three-second first-query contract
+awaits confirmation. Keep the timer, readiness and latency requirements unchanged.
+The simulated-version harness scopes Persist identity to its own clusterd launches
+through the CLI's CLUSTERD_ environment prefix. Written-plan identity and admission
+checks stay unchanged. Its temporary logging diagnostics are removed.
+Shared workload-class enrichment uses maintained collection metrics,
 not obsolete controller counters. Paused-index checks use committed compaction
 bounds because replica observations do not exist with zero replicas.
+The refresh-input stall is limited by a removed replica's still-valid grant,
+not the maintained refresh requirement. A request is pending to use the existing
+paired fixture timing and wait for that specific incarnation before unchanged
+advancement samples. Do not change production grace. Attribute the paused-index
+stall to its independently observed removed-replica grant as well. Eventual
+reclamation remains unverified in these fixtures. The proposed exact retained-peek
+history assertion awaits approval, without raising aggregate bounds.
 Publication stalls and missing hydration-history episodes require separate causes,
 not blanket fixture rewrites. Keep the earlier unexplained RTR conflict visible.
+
+Scheduled unmanaged-to-managed conversion retains shared RF 1 while local
+normalizers alternate between 1 and 0. A proposed canonical shared RF 0 after
+adoption validation awaits contract confirmation. Preserve replica identity,
+peer membership and dependent results, without scheduler writes to shared intent.
+
+Native endpoints remain caller-owned through follower termination classification.
+CI137666 exercises deployment retirement without ingress panics. Its Zippy run
+still exhausts the overall budget with catalog-cluster hydration incomplete in
+generation 6, after five promotions and two long but completed sink actions.
+Keep that separate from the earlier sink timeout. The completed-read timestamp
+fixture passes both isolation tests in CI137666, with no oracle semantics change.
 
 Admission and retirement, not physical liveness, determine required versions. Preserve true
 binary identity separately from the authorized format target, including for

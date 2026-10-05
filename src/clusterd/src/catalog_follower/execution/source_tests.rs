@@ -311,14 +311,8 @@ async fn start_runtime(
     drop(compute);
     drop(storage);
     mz_ore::task::spawn(|| "native source follower test", async move {
-        let result = follower::run(
-            config,
-            clients,
-            registry,
-            Some(compute_endpoint),
-            Some(storage_endpoint),
-        )
-        .await;
+        let mut owner = follower::NativeOwner::new(Some(compute_endpoint), Some(storage_endpoint));
+        let result = follower::run(config, clients, registry, &mut owner).await;
         panic!("native source follower stopped: {result:?}");
     });
     factory
