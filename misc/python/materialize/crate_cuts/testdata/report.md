@@ -40,45 +40,40 @@ against the baseline.
 Workspace dependency edges whose removal shrinks the closure, ranked
 by workspace pairs saved per referenced item. Removing an edge means
 moving the referencing items, or the referenced items, across the
-crate boundary.
+crate boundary. Edges whose removal only drops the dependency itself
+from closures are left out, since only absorbing it would remove them.
 
-### 1. `util` to `logging`
-
-* Saves 7 workspace pairs, 68 rebuild lines, 7 all pairs.
-* Referencing items: `util/lib.rs: retry().`.
-* Referenced items: `log().`.
-
-### 2. `app` to `server`
+### 1. `app` to `server`
 
 * Saves 6 workspace pairs, 34 rebuild lines, 9 all pairs.
 * Referencing items: `app/main.rs: main().`.
 * Referenced items: `serve().`.
 
-### 3. `types` to `util`
+### 2. `types` to `util`
 
 * Saves 6 workspace pairs, 44 rebuild lines, 6 all pairs.
 * Referencing items: `types/heavy.rs: Encoder#encode().`.
 * Referenced items: `retry().`.
 
-### 4. `server` to `client`
+### 3. `server` to `client`
 
 * Saves 4 workspace pairs, 52 rebuild lines, 4 all pairs.
 * Referencing items: `server/lib.rs: serve().`.
 * Referenced items: `Client#`.
 
-### 5. `tool` to `types`
+### 4. `tool` to `types`
 
 * Saves 3 workspace pairs, 20 rebuild lines, 6 all pairs.
 * Referencing items: `tool/lib.rs: check().`.
 * Referenced items: `Schema#`.
 
-### 6. `tool2` to `types`
+### 5. `tool2` to `types`
 
 * Saves 3 workspace pairs, 20 rebuild lines, 6 all pairs.
 * Referencing items: `tool2/lib.rs: lint().`.
 * Referenced items: `Row#`.
 
-### 7. `client` to `types`
+### 6. `client` to `types`
 
 * Saves 1 workspace pairs, 35 rebuild lines, 3 all pairs.
 * Referencing items: `client/lib.rs: Client#`, `client/lib.rs: Client#fetch().`.

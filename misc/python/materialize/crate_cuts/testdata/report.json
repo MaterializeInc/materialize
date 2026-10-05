@@ -72,6 +72,7 @@
     "rebuild_lines": 34,
     "all_pairs": 9
    },
+   "decouples": true,
    "files": [
     "app/main.rs"
    ],
@@ -90,6 +91,7 @@
     "rebuild_lines": 35,
     "all_pairs": 3
    },
+   "decouples": true,
    "files": [
     "client/lib.rs"
    ],
@@ -110,6 +112,7 @@
     "rebuild_lines": 0,
     "all_pairs": 0
    },
+   "decouples": true,
    "files": [],
    "referrers": [],
    "symbols": []
@@ -122,6 +125,7 @@
     "rebuild_lines": 52,
     "all_pairs": 4
    },
+   "decouples": true,
    "files": [
     "server/lib.rs"
    ],
@@ -140,6 +144,7 @@
     "rebuild_lines": 0,
     "all_pairs": 0
    },
+   "decouples": true,
    "files": [
     "server/lib.rs"
    ],
@@ -158,6 +163,7 @@
     "rebuild_lines": 20,
     "all_pairs": 6
    },
+   "decouples": true,
    "files": [
     "tool/lib.rs"
    ],
@@ -176,6 +182,7 @@
     "rebuild_lines": 20,
     "all_pairs": 6
    },
+   "decouples": true,
    "files": [
     "tool2/lib.rs"
    ],
@@ -194,6 +201,7 @@
     "rebuild_lines": 44,
     "all_pairs": 6
    },
+   "decouples": true,
    "files": [
     "types/heavy.rs"
    ],
@@ -212,6 +220,7 @@
     "rebuild_lines": 68,
     "all_pairs": 7
    },
+   "decouples": false,
    "files": [
     "util/lib.rs"
    ],

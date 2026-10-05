@@ -96,6 +96,11 @@ class EdgeCut:
     # Items of `dependency` that `crate` references.
     symbols: list[str]
     delta: Metrics
+    # False when `crate` is the only consumer of `dependency` and removing the
+    # edge drops nothing but `dependency` itself from closures. The savings
+    # then only materialize by absorbing `dependency` into `crate`, after
+    # which edits to its code rebuild the same crates as before.
+    decouples: bool
 
 
 def edge_cuts(model: Model) -> list[EdgeCut]:
@@ -105,8 +110,10 @@ def edge_cuts(model: Model) -> list[EdgeCut]:
     using the macro, which no reference list helps with.
     """
     before = metrics(model)
+    workspace = model.workspace()
+    closures = {x: model.closure(x) for x in workspace}
     out = []
-    for pkg_id in model.workspace():
+    for pkg_id in workspace:
         pkg = model.crates[pkg_id]
         for dep in sorted(pkg.deps):
             dep_pkg = model.crates[dep]
@@ -128,6 +135,10 @@ def edge_cuts(model: Model) -> list[EdgeCut]:
             pkg.deps.discard(dep)
             model.invalidate()
             after = metrics(model)
+            others = ~model.bit[dep]
+            decouples = any(
+                dep in model.crates[c].deps for c in workspace if c != pkg_id
+            ) or any(closures[x] & ~model.closure(x) & others for x in workspace)
             pkg.deps.add(dep)
             model.invalidate()
             out.append(
@@ -138,6 +149,7 @@ def edge_cuts(model: Model) -> list[EdgeCut]:
                     sorted(referrers),
                     sorted(symbols),
                     before.minus(after),
+                    decouples,
                 )
             )
     return out

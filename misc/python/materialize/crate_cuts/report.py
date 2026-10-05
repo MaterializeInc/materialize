@@ -37,6 +37,7 @@ def report_json(model: Model, r: Results) -> dict[str, Any]:
                 "crate": name(e.crate),
                 "dependency": name(e.dependency),
                 "delta": asdict(e.delta),
+                "decouples": e.decouples,
                 "files": e.files,
                 "referrers": e.referrers,
                 "symbols": e.symbols,
@@ -162,11 +163,12 @@ def render(model: Model, r: Results, top: int) -> str:
         "Workspace dependency edges whose removal shrinks the closure, ranked",
         "by workspace pairs saved per referenced item. Removing an edge means",
         "moving the referencing items, or the referenced items, across the",
-        "crate boundary.",
+        "crate boundary. Edges whose removal only drops the dependency itself",
+        "from closures are left out, since only absorbing it would remove them.",
         "",
     ]
     edges = sorted(
-        (e for e in edges if e.delta.workspace_pairs > 0 and e.symbols),
+        (e for e in edges if e.delta.workspace_pairs > 0 and e.symbols and e.decouples),
         key=lambda e: (
             -e.delta.workspace_pairs / len(e.symbols),
             e.crate,
