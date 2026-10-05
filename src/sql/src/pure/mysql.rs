@@ -30,7 +30,8 @@ use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
 use super::references::RetrievedSourceReferences;
 use super::{
-    PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport, SourceReferencePolicy,
+    FilterConstraints, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport,
+    SourceReferencePolicy,
 };
 
 /// The name of the fake database that we use for MySQL sources
@@ -338,12 +339,10 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     exclude_columns: Vec<UnresolvedItemName>,
-    // NOTE: at most one of `exclude_constraints` and `exclude_all_constraints`
-    // may be set, and only when exactly one export is purified, as `CREATE
-    // TABLE .. FROM SOURCE` does, since constraint names are validated against
-    // that single table's keys. Both invariants are enforced below.
-    exclude_constraints: &BTreeSet<String>,
-    exclude_all_constraints: bool,
+    // NOTE: constraints may only be excluded when exactly one export is
+    // purified, as `CREATE TABLE .. FROM SOURCE` does, since constraint names
+    // are validated against that single table's keys. Enforced below.
+    filter_constraints: &FilterConstraints,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -397,11 +396,7 @@ pub(super) async fn purify_source_exports(
 
     super::validate_source_export_names(&requested_exports)?;
 
-    if !exclude_constraints.is_empty() && exclude_all_constraints {
-        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
-    }
-    if (!exclude_constraints.is_empty() || exclude_all_constraints) && requested_exports.len() != 1
-    {
+    if filter_constraints.excludes_any() && requested_exports.len() != 1 {
         sql_bail!(
             "EXCLUDE CONSTRAINTS and EXCLUDE ALL CONSTRAINTS apply to exactly one table, \
              but {} tables were referenced",
@@ -421,17 +416,19 @@ pub(super) async fn purify_source_exports(
             let table = requested_export.meta.mysql_table().expect("is mysql");
             let table_ref = table.table_ref();
 
-            let missing_exclude_constraints: Vec<_> = exclude_constraints
-                .iter()
-                .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
-                .cloned()
-                .collect();
-            if !missing_exclude_constraints.is_empty() {
-                return Err(MySqlSourcePurificationError::ConstraintsNotFound {
-                    table: format!("{}.{}", table.schema_name, table.name),
-                    constraints: missing_exclude_constraints,
+            if let FilterConstraints::Exclude(names) = filter_constraints {
+                let missing: Vec<_> = names
+                    .iter()
+                    .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(MySqlSourcePurificationError::ConstraintsNotFound {
+                        table: format!("{}.{}", table.schema_name, table.name),
+                        constraints: missing,
+                    }
+                    .into());
                 }
-                .into());
             }
 
             // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
@@ -459,16 +456,18 @@ pub(super) async fn purify_source_exports(
                     _ => err.into(),
                 })?;
             let mut parsed_table = parsed_table;
-            parsed_table
-                .keys
-                .retain(|k| !exclude_constraints.contains(&k.name));
-            if exclude_all_constraints {
-                // Marking columns as nullable allows dropping (and adding) the
-                // NOT NULL constraint without an outage.
-                parsed_table.keys.clear();
-                for c in &mut parsed_table.columns {
-                    if let Some(column_type) = &mut c.column_type {
-                        column_type.nullable = true;
+            match filter_constraints {
+                FilterConstraints::Exclude(names) => {
+                    parsed_table.keys.retain(|k| !names.contains(&k.name));
+                }
+                FilterConstraints::ExcludeAll => {
+                    // Marking columns as nullable allows dropping (and adding) the
+                    // NOT NULL constraint without an outage.
+                    parsed_table.keys.clear();
+                    for c in &mut parsed_table.columns {
+                        if let Some(column_type) = &mut c.column_type {
+                            column_type.nullable = true;
+                        }
                     }
                 }
             }

@@ -33,7 +33,10 @@ use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
 use super::references::RetrievedSourceReferences;
-use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, SourceReferencePolicy};
+use super::{
+    FilterConstraints, PartialItemName, PurifiedExportDetails, PurifiedSourceExport,
+    SourceReferencePolicy,
+};
 
 /// Ensure that we have select permissions on all tables; we have to do this before we
 /// start snapshotting because if we discover we cannot `COPY` from a table while
@@ -374,17 +377,15 @@ pub(super) struct PurifiedSourceExports {
 /// already reflect. Reading it earlier leaves a window in which replication trusts a Relation
 /// message describing a schema older than the one captured here.
 ///
-/// `exclude_constraints` and `exclude_all_constraints` are only ever non-empty or true for
-/// `CREATE TABLE .. FROM SOURCE`, which purifies exactly one export, so constraint names are
-/// validated against that single table's constraints.
+/// `filter_constraints` only excludes anything for `CREATE TABLE .. FROM SOURCE`, which purifies
+/// exactly one export, so constraint names are validated against that single table's constraints.
 pub(super) async fn purify_source_exports(
     client: &Client,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     mut exclude_columns: Vec<UnresolvedItemName>,
-    exclude_constraints: &BTreeSet<String>,
-    exclude_all_constraints: bool,
+    filter_constraints: &FilterConstraints,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
     initial_lsn: MzOffset,
@@ -439,11 +440,7 @@ pub(super) async fn purify_source_exports(
 
     super::validate_source_export_names(&requested_exports)?;
 
-    if !exclude_constraints.is_empty() && exclude_all_constraints {
-        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
-    }
-    if (!exclude_constraints.is_empty() || exclude_all_constraints) && requested_exports.len() != 1
-    {
+    if filter_constraints.excludes_any() && requested_exports.len() != 1 {
         sql_bail!(
             "EXCLUDE CONSTRAINTS and EXCLUDE ALL CONSTRAINTS apply to exactly one table, \
              but {} tables were referenced",
@@ -484,20 +481,22 @@ pub(super) async fn purify_source_exports(
             let text_columns = text_column_map.remove(&desc.oid);
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
-            let missing_exclude_constraints: Vec<_> = exclude_constraints
-                .iter()
-                .filter(|n| !desc.keys.iter().any(|k| &&k.name == n))
-                .cloned()
-                .collect();
-            if !missing_exclude_constraints.is_empty() {
-                return Err(PgSourcePurificationError::ConstraintsNotFound {
-                    table: PartialItemName {
-                        database: None,
-                        schema: Some(desc.namespace.clone()),
-                        item: desc.name.clone(),
-                    },
-                    constraints: missing_exclude_constraints,
-                });
+            if let FilterConstraints::Exclude(names) = filter_constraints {
+                let missing: Vec<_> = names
+                    .iter()
+                    .filter(|n| !desc.keys.iter().any(|k| &&k.name == n))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(PgSourcePurificationError::ConstraintsNotFound {
+                        table: PartialItemName {
+                            database: None,
+                            schema: Some(desc.namespace.clone()),
+                            item: desc.name.clone(),
+                        },
+                        constraints: missing,
+                    });
+                }
             }
 
             if let Some(exclude_cols) = &exclude_columns {
@@ -517,14 +516,17 @@ pub(super) async fn purify_source_exports(
                     .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
             }
 
-            desc.keys.retain(|k| !exclude_constraints.contains(&k.name));
-
-            if exclude_all_constraints {
-                // Marking columns as nullable allows dropping (and adding) the
-                // NOT NULL constraint without an outage.
-                desc.keys.clear();
-                for c in &mut desc.columns {
-                    c.nullable = true;
+            match filter_constraints {
+                FilterConstraints::Exclude(names) => {
+                    desc.keys.retain(|k| !names.contains(&k.name));
+                }
+                FilterConstraints::ExcludeAll => {
+                    // Marking columns as nullable allows dropping (and adding) the
+                    // NOT NULL constraint without an outage.
+                    desc.keys.clear();
+                    for c in &mut desc.columns {
+                        c.nullable = true;
+                    }
                 }
             }
 
