@@ -2668,6 +2668,44 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_cluster_replica_size_sync() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let mut bootstrap_args = test_bootstrap_args();
+        // Builtin cluster replicas use the default size.
+        let in_use = bootstrap_args.default_cluster_replica_size.clone();
+        let unused = "scale=1,workers=2".to_string();
+        let changed = "scale=1,workers=4".to_string();
+
+        let catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        assert_eq!(
+            catalog.cluster_replica_sizes().0,
+            bootstrap_args.cluster_replica_size_map.0
+        );
+        catalog.expire().await;
+
+        let config_sizes = &mut bootstrap_args.cluster_replica_size_map.0;
+        config_sizes.remove(&in_use);
+        config_sizes.remove(&unused);
+        config_sizes.get_mut(&changed).expect("test size").cpu_exclusive = true;
+        let catalog = Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+            .await
+            .expect("unable to open debug catalog");
+        let sizes = &catalog.cluster_replica_sizes().0;
+        assert!(sizes[&in_use].disabled);
+        assert!(!sizes.contains_key(&unused));
+        assert_eq!(
+            sizes[&changed],
+            bootstrap_args.cluster_replica_size_map.0[&changed]
+        );
+        catalog.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_effective_search_path() {
         Catalog::with_debug(|catalog| async move {

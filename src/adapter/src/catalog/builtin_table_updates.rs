@@ -26,6 +26,7 @@ use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
     CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table, TableDataSource, Type,
 };
+use mz_controller::clusters::ReplicaAllocation;
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
@@ -713,57 +714,57 @@ impl CatalogState {
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }
 
-    pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    pub fn pack_replica_size_update(
+        size: &str,
+        alloc: &ReplicaAllocation,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = Vec::new();
-        for (size, alloc) in &self.cluster_replica_sizes.0 {
-            // Just invent something when the limits are `None`, which only happens in non-prod
-            // environments (tests, process orchestrator, etc.)
-            let DiskLimit(ByteSize(disk_bytes)) =
-                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+        // Just invent something when the limits are `None`, which only happens in non-prod
+        // environments (tests, process orchestrator, etc.)
+        let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
 
-            // The disk column of mz_clusters / mz_cluster_replicas MVs needs
-            // `swap_enabled` and `disk_bytes`; expose them through a parallel
-            // internal table. Unlike the public sizes table below, we write
-            // here unconditionally — `cluster_replica_size_has_disk` previously
-            // indexed the in-memory map without checking `disabled`, so a
-            // managed cluster pinned to a disabled size still resolved its
-            // `disk` column from the real allocation. Writing disabled rows
-            // here preserves that behavior.
-            let internal_row = Row::pack_slice(&[
-                size.as_str().into(),
-                Datum::from(alloc.swap_enabled),
-                disk_bytes.into(),
-            ]);
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-                internal_row,
-                Diff::ONE,
-            ));
+        // The disk column of mz_clusters / mz_cluster_replicas MVs needs
+        // `swap_enabled` and `disk_bytes`; expose them through a parallel
+        // internal table. Unlike the public sizes table below, we write
+        // here unconditionally — `cluster_replica_size_has_disk` previously
+        // indexed the in-memory map without checking `disabled`, so a
+        // managed cluster pinned to a disabled size still resolved its
+        // `disk` column from the real allocation. Writing disabled rows
+        // here preserves that behavior.
+        let internal_row = Row::pack_slice(&[
+            size.into(),
+            Datum::from(alloc.swap_enabled),
+            disk_bytes.into(),
+        ]);
+        updates.push(BuiltinTableUpdate::row(
+            &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+            internal_row,
+            diff,
+        ));
 
-            if alloc.disabled {
-                continue;
-            }
-
-            let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
-            let MemoryLimit(ByteSize(memory_bytes)) =
-                (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
-
-            let row = Row::pack_slice(&[
-                size.as_str().into(),
-                u64::cast_from(alloc.scale).into(),
-                u64::cast_from(alloc.workers).into(),
-                cpu_limit.as_nanocpus().into(),
-                memory_bytes.into(),
-                disk_bytes.into(),
-                (alloc.credits_per_hour).into(),
-            ]);
-
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_CLUSTER_REPLICA_SIZES,
-                row,
-                Diff::ONE,
-            ));
+        if alloc.disabled {
+            return updates;
         }
+
+        let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
+        let MemoryLimit(ByteSize(memory_bytes)) = (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
+
+        let row = Row::pack_slice(&[
+            size.into(),
+            u64::cast_from(alloc.scale).into(),
+            u64::cast_from(alloc.workers).into(),
+            cpu_limit.as_nanocpus().into(),
+            memory_bytes.into(),
+            disk_bytes.into(),
+            (alloc.credits_per_hour).into(),
+        ]);
+
+        updates.push(BuiltinTableUpdate::row(
+            &*MZ_CLUSTER_REPLICA_SIZES,
+            row,
+            diff,
+        ));
 
         updates
     }

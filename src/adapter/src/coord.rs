@@ -2992,13 +2992,6 @@ impl Coordinator {
             self.initialize_read_policies(&policies, cw).await;
         }
 
-        // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.extend(
-            self.catalog().state().resolve_builtin_table_updates(
-                self.catalog().state().pack_all_replica_size_updates(),
-            ),
-        );
-
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
         // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin
