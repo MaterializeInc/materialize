@@ -562,6 +562,9 @@ impl ComputeState {
                     eager_backing,
                     rss_target_bytes: rss_target,
                 });
+                if let Some(pool) = mz_timely_util::pool_config::active_pool() {
+                    pool.set_overflow_handoff(COLUMN_PAGED_BATCHER_OVERFLOW_HANDOFF.get(config));
+                }
                 if applied {
                     info!(
                         compute_spill,

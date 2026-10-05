@@ -203,6 +203,8 @@ pub struct PoolStats {
     pub inserts: u64,
     /// Inserts written directly to an extent because resident admission was full.
     pub direct_extent_inserts: u64,
+    /// Inserts the budget denied that took a slot anyway and went to the spill threads.
+    pub overflow_handoffs: u64,
     /// Chunks freed (handle dropped).
     pub frees: u64,
     /// Backing writes elided: chunks dead before their compression
@@ -289,6 +291,7 @@ pub struct PoolStats {
 #[derive(Debug, Default)]
 struct Counters {
     direct_extent_inserts: AtomicU64,
+    overflow_handoffs: AtomicU64,
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
     spill_cancelled: AtomicU64,
@@ -383,6 +386,9 @@ struct PoolInner {
     extent_residents: AtomicU64,
     /// Single-flight claim for budget enforcement.
     enforcing: Mutex<()>,
+    /// Whether an insert the budget denies hands its chunk to the spill threads, see
+    /// [`Pool::set_overflow_handoff`].
+    overflow_handoff: std::sync::atomic::AtomicBool,
     /// Set by an insert turned away from `enforcing`. The holder re-runs its
     /// pass while it is set, so a caller turned away after the holder's final
     /// counter read still has its bytes enforced rather than dropped.
@@ -580,6 +586,7 @@ impl Pool {
             live_chunks: AtomicU64::new(0),
             extent_residents: AtomicU64::new(0),
             enforcing: Mutex::new(()),
+            overflow_handoff: std::sync::atomic::AtomicBool::new(false),
             enforce_pending: std::sync::atomic::AtomicBool::new(false),
             counters: Counters::default(),
             spill: Spill::default(),
@@ -639,11 +646,27 @@ impl Pool {
                 .oversize_payloads
                 .fetch_add(1, Ordering::Relaxed);
         }
+        // Whether the budget denied this insert and the chunk goes to the spill threads from a
+        // slot over budget, rather than being compressed here.
+        let mut overflow = false;
         if class.is_some() {
             if !inner.reserve_insert(len_bytes) {
                 inner.enforce_budget();
                 if !inner.reserve_insert(len_bytes) {
-                    return self.insert_extent(len, class, hints, codec, fill);
+                    // Compressing on the caller serializes it with the caller's own work, the
+                    // merge producing this chunk, while the spill threads may sit idle. Taking
+                    // the slot over budget lets the two overlap. The spill threads' in-flight cap
+                    // bounds how far over budget this goes, and once it is reached the caller
+                    // compresses as before.
+                    if inner.overflow_handoff.load(Ordering::Relaxed) && inner.spill_eligible() {
+                        overflow = true;
+                        inner
+                            .counters
+                            .resident_bytes
+                            .fetch_add(u64::cast_from(len_bytes), Ordering::Relaxed);
+                    } else {
+                        return self.insert_extent(len, class, hints, codec, fill);
+                    }
                 }
             }
         } else {
@@ -712,6 +735,15 @@ impl Pool {
                 .queue(band(meta.depth))
                 .push_back(Arc::downgrade(&meta));
         }
+        if overflow {
+            let mut state = meta.state();
+            if inner.spill_handoff(&meta, &mut state) {
+                inner
+                    .counters
+                    .overflow_handoffs
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
         inner.enforce_budget();
         ChunkHandle { meta }
     }
@@ -773,6 +805,7 @@ impl Pool {
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
             direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
+            overflow_handoffs: c.overflow_handoffs.load(Ordering::Relaxed),
             frees: c.frees.load(Ordering::Relaxed),
             writes_elided: c.writes_elided.load(Ordering::Relaxed),
             evictions_compress: c.evictions_compress.load(Ordering::Relaxed),
@@ -798,6 +831,14 @@ impl Pool {
             oversize_payloads: c.oversize_payloads.load(Ordering::Relaxed),
             live_chunks: self.0.live_chunks.load(Ordering::Relaxed),
         }
+    }
+
+    /// Set whether an insert the budget denies, even after enforcement, takes a slot anyway and
+    /// hands the chunk to the spill threads while they have room, instead of compressing it on the
+    /// calling thread. Off by default. The overshoot above budget and slack is bounded by the spill
+    /// threads' in-flight cap, plus one chunk per concurrent inserter racing the cap check.
+    pub fn set_overflow_handoff(&self, enabled: bool) {
+        self.0.overflow_handoff.store(enabled, Ordering::Relaxed);
     }
 
     /// Enables or disables off-worker eviction I/O. The first call with
@@ -3318,6 +3359,40 @@ mod tests {
         assert_eq!(pool.stats().resident_bytes, 0);
         assert_eq!(pool.stats().live_chunks, 0);
         assert_eq!(pool.stats().extent_resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // inserts past the spill threads' in-flight cap
+    fn overflow_handoff_queues_denied_inserts_up_to_the_cap() {
+        let budget = 2 * SMALL * 8;
+        let pool = test_pool(budget);
+        // Spill participation without threads keeps handed-off chunks queued, so the in-flight
+        // count only grows.
+        pool.enable_spill_without_threads();
+        pool.set_overflow_handoff(true);
+        let total = SPILL_IN_FLIGHT_MAX + 16;
+        let mut handles = Vec::new();
+        for seed in 0..u64::cast_from(total) {
+            handles.push(insert(&pool, &mut payload(SMALL, seed)));
+        }
+        let stats = pool.stats();
+        assert!(stats.overflow_handoffs > 0, "denied inserts went to the spill queue");
+        assert!(
+            stats.direct_extent_inserts > 0,
+            "past the in-flight cap, denied inserts compress on the caller"
+        );
+        let in_flight = usize::cast_from(stats.spill_in_flight);
+        assert!(in_flight <= SPILL_IN_FLIGHT_MAX, "{in_flight} chunks in flight");
+        let slack = usize::cast_from(insert_slack(u64::cast_from(budget)));
+        let bound = budget + slack + (SPILL_IN_FLIGHT_MAX + 1) * SMALL * 8;
+        assert!(
+            usize::cast_from(stats.resident_bytes) <= bound,
+            "resident {} exceeds {bound}",
+            stats.resident_bytes
+        );
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
+        }
     }
 
     #[mz_ore::test]

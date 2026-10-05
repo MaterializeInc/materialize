@@ -388,6 +388,15 @@ pub const MV_SINK_ASYNC_YIELD_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether an insert the buffer pool's budget denies hands its chunk to the spill threads instead
+/// of compressing it on the inserting thread. See [`mz_ore::pool::Pool::set_overflow_handoff`].
+pub const COLUMN_PAGED_BATCHER_OVERFLOW_HANDOFF: Config<bool> = Config::new(
+    "column_paged_batcher_overflow_handoff",
+    false,
+    "Hand budget-denied buffer pool inserts to the spill threads instead of compressing on the caller.",
+    ParameterScope::Replica,
+);
+
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -901,6 +910,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_QUEUE_GEOMETRIC_DEPTH)
         .add(&CORRECTION_V2_QUEUE_DEPTH_UNIT_BYTES)
         .add(&MV_SINK_ASYNC_YIELD_INTERVAL)
+        .add(&COLUMN_PAGED_BATCHER_OVERFLOW_HANDOFF)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)

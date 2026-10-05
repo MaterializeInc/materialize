@@ -42,6 +42,7 @@ pub fn register(registry: &MetricsRegistry) {
         // `_total` name suffix, not the metric type, marks a field as
         // monotonic.
         gauge(registry, metric!(name: "mz_column_pool_direct_extent_inserts_total", help: "Inserts written directly to an extent because resident admission was full."), |s| s.direct_extent_inserts);
+        gauge(registry, metric!(name: "mz_column_pool_overflow_handoffs_total", help: "Inserts the budget denied that took a slot anyway and went to the spill threads."), |s| s.overflow_handoffs);
         gauge(registry, metric!(name: "mz_column_pool_resident_bytes", help: "Uncompressed bytes resident in the buffer pool."), |s| s.resident_bytes);
         gauge(registry, metric!(name: "mz_column_pool_oversize_bytes", help: "Bytes held by oversize chunks that bypass pool paging."), |s| s.oversize_bytes);
         gauge(registry, metric!(name: "mz_column_pool_inserts_total", help: "Chunks inserted into the buffer pool."), |s| s.inserts);

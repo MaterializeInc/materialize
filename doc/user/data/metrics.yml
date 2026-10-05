@@ -663,6 +663,10 @@ metrics:
   help: 'Live pool chunks, whatever their residency: for backlog-shaped consumers, the un-drained backlog in chunks.'
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_overflow_handoffs_total
+  help: Inserts the budget denied that took a slot anyway and went to the spill threads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_oversize_bytes
   help: Bytes held by oversize chunks that bypass pool paging.
   source: src/timely-util/src/pool_config/metrics.rs
