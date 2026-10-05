@@ -801,3 +801,117 @@ pub(crate) fn any_columnar_stats() -> impl Strategy<Value = ColumnarStats> {
             })
     })
 }
+
+/// Redacts scalar values in a [DynStats::debug_json] rendering.
+///
+/// When [mz_ore::str::redaction_enabled], scalar leaves are rendered as strings
+/// masked like [mz_ore::str::redact]. Object keys are left as is, so callers
+/// must only pass objects whose keys are schema names (column names,
+/// `lower`/`upper`, etc.). Objects keyed by user data go through
+/// [redact_json_object_keys].
+pub(crate) fn redact_json(v: serde_json::Value) -> serde_json::Value {
+    if !mz_ore::str::redaction_enabled() {
+        return v;
+    }
+    redact_json_masked(v)
+}
+
+/// Builds a JSON object whose keys are user data (e.g. jsonb object keys),
+/// masking the keys the same way [redact_json] masks scalars.
+///
+/// Values are inserted as given. Distinct keys can mask to the same string, so
+/// every entry is kept by suffixing repeats with an ASCII counter (`<XX>`,
+/// `<XX>2`, ...). Masked keys never contain ASCII digits, so a suffixed key
+/// cannot equal any other masked key.
+pub(crate) fn redact_json_object_keys(
+    entries: impl IntoIterator<Item = (String, serde_json::Value)>,
+) -> serde_json::Value {
+    if !mz_ore::str::redaction_enabled() {
+        return entries
+            .into_iter()
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+    }
+    redact_json_object_keys_masked(entries)
+}
+
+fn redact_json_object_keys_masked(
+    entries: impl IntoIterator<Item = (String, serde_json::Value)>,
+) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let mut seen = std::collections::BTreeMap::<String, usize>::new();
+    for (k, v) in entries {
+        let masked = mask_str(&k);
+        let count = seen.entry(masked.clone()).or_insert(0);
+        *count += 1;
+        let key = if *count == 1 {
+            masked
+        } else {
+            format!("{masked}{count}")
+        };
+        out.insert(key, v);
+    }
+    out.into()
+}
+
+fn mask_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('<');
+    out.extend(s.chars().map(mz_ore::str::redact_char));
+    out.push('>');
+    out
+}
+
+fn redact_json_masked(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    fn mask(s: String) -> Value {
+        Value::String(mask_str(&s))
+    }
+    match v {
+        Value::Null => Value::Null,
+        Value::Bool(x) => mask(x.to_string()),
+        Value::Number(x) => mask(x.to_string()),
+        Value::String(x) => mask(x),
+        Value::Array(xs) => Value::Array(xs.into_iter().map(redact_json_masked).collect()),
+        Value::Object(kvs) => Value::Object(
+            kvs.into_iter()
+                .map(|(k, v)| (k, redact_json_masked(v)))
+                .collect(),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{redact_json_masked, redact_json_object_keys_masked};
+
+    // Tests the masking directly: `redact_json` itself is a passthrough in
+    // test builds because soft assertions are enabled.
+    #[mz_ore::test]
+    fn redact_json_masks_scalars() {
+        assert_eq!(
+            redact_json_masked(json!("TEST_STRING")),
+            json!("<XXXX_XXXXXX>")
+        );
+        assert_eq!(redact_json_masked(json!(1.234)), json!("<#.###>"));
+        assert_eq!(redact_json_masked(json!(true)), json!("<XXXX>"));
+        assert_eq!(redact_json_masked(json!(null)), json!(null));
+        assert_eq!(
+            redact_json_masked(json!({"lower": "abc1", "upper": [2, "d"]})),
+            json!({"lower": "<XXX#>", "upper": ["<#>", "<X>"]})
+        );
+    }
+
+    #[mz_ore::test]
+    fn redact_json_object_keys_masks_and_keeps_collisions() {
+        let entries = [("ab", 1), ("cd", 2), ("ef", 3), ("k1", 4)]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), json!(v)));
+        assert_eq!(
+            redact_json_object_keys_masked(entries),
+            json!({"<XX>": 1, "<XX>2": 2, "<XX>3": 3, "<X#>": 4})
+        );
+    }
+}
