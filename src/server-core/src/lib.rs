@@ -29,7 +29,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
-use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use openssl::ssl::{AlpnError, SslAcceptor, SslContext, SslFiletype, SslMethod, select_next_proto};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
 use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
@@ -484,7 +484,14 @@ pub struct TlsCertConfig {
 
 impl TlsCertConfig {
     /// Returns the SSL context to use in TlsConfigs.
-    pub fn load_context(&self) -> Result<SslContext, anyhow::Error> {
+    ///
+    /// When `enable_http2_alpn` is true, the context advertises both HTTP/2 and
+    /// HTTP/1.1 via ALPN. Callers that terminate TLS but proxy the decrypted
+    /// bytes to an upstream server (like balancerd) should pass `false` unless
+    /// the upstream is known to support HTTP/2. Otherwise, clients negotiate
+    /// HTTP/2 with the proxy but the upstream receives h2 frames it cannot
+    /// parse.
+    pub fn load_context(&self, enable_http2_alpn: bool) -> Result<SslContext, anyhow::Error> {
         // Mozilla publishes three presets: old, intermediate, and modern. They
         // recommend the intermediate preset for general purpose servers, which
         // is what we use, as it is compatible with nearly every client released
@@ -492,6 +499,18 @@ impl TlsCertConfig {
         // ciphers. We once tried to use the modern preset, but it was
         // incompatible with Fivetran, and presumably other JDBC-based tools.
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+        // Negotiate HTTP/2 or HTTP/1.1 via ALPN for clients that request it.
+        // This context is shared with pgwire listeners, but pgwire clients do
+        // not send the ALPN extension, in which case `NOACK` omits ALPN from
+        // the handshake entirely rather than rejecting the connection.
+        let alpn_list: &[u8] = if enable_http2_alpn {
+            b"\x02h2\x08http/1.1"
+        } else {
+            b"\x08http/1.1"
+        };
+        builder.set_alpn_select_callback(move |_ssl, client_protos| {
+            select_next_proto(alpn_list, client_protos).ok_or(AlpnError::NOACK)
+        });
         builder.set_certificate_chain_file(&self.cert)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
         Ok(builder.build().into_context())
@@ -505,13 +524,14 @@ impl TlsCertConfig {
     pub fn reloading_context(
         &self,
         mut ticker: ReloadTrigger,
+        enable_http2_alpn: bool,
     ) -> Result<ReloadingSslContext, anyhow::Error> {
-        let context = Arc::new(RwLock::new(self.load_context()?));
+        let context = Arc::new(RwLock::new(self.load_context(enable_http2_alpn)?));
         let updater_context = Arc::clone(&context);
         let config = self.clone();
         mz_ore::task::spawn(|| "TlsCertConfig reloading_context", async move {
             while let Some(chan) = ticker.next().await {
-                let result = match config.load_context() {
+                let result = match config.load_context(enable_http2_alpn) {
                     Ok(ctx) => {
                         *updater_context.write().expect("poisoned") = ctx;
                         Ok(())
