@@ -3270,17 +3270,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@materializeinc/sql-lexer@npm:^26.43.0":
-  version: 26.43.0
-  resolution: "@materializeinc/sql-lexer@npm:26.43.0"
-  checksum: 10c0/29c38990195b6ca4bb6e5e1ce8f7521443723fbee6b81d65b43785a2de3b9e12b1152fff8324f491e0a23becc1da8ce8c2a9f66d6e8c043034c4e419a78fab78
+"@materializeinc/sql-lexer@npm:^26.44.1":
+  version: 26.44.1
+  resolution: "@materializeinc/sql-lexer@npm:26.44.1"
+  checksum: 10c0/bb8edb4625354ec8670557700e46b57ccd0d4b65dc952e9f88e0b27206312d1399942729896316b233307075a56664f79c1980ee19f8b1e49aaf54674b0e7d41
   languageName: node
   linkType: hard
 
-"@materializeinc/sql-pretty@npm:^26.43.0":
-  version: 26.43.0
-  resolution: "@materializeinc/sql-pretty@npm:26.43.0"
-  checksum: 10c0/1d44444f0d6976bbdb250695a8b287ab1ae163ae0965dafe5f3e6f61bec69106b2da82056fafd9912f398c10d8593d3c799005f6af63e4a05734b01c954bd5a9
+"@materializeinc/sql-pretty@npm:^26.44.1":
+  version: 26.44.1
+  resolution: "@materializeinc/sql-pretty@npm:26.44.1"
+  checksum: 10c0/9e356ec7210d29543f2bad77cbdcb5770e309c40c11db2e6f8046d768aef1fd8e989b8eccab5483739eae75bdff8652f4f37caf008c69b09bf7673e0599722d7
   languageName: node
   linkType: hard
 
@@ -3317,10 +3317,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@nodable/entities@npm:^3.0.0":
-  version: 3.0.0
-  resolution: "@nodable/entities@npm:3.0.0"
-  checksum: 10c0/5e57422ce08d9f83a7ad09d8f90953e2e63b3274c3f941bf7ddf64f290473e70d47acbd6c8b9e60169c2a8c5c2424c4131bdd99b937792413f55a4a146f76658
+"@nodable/entities@npm:^3.0.1":
+  version: 3.1.0
+  resolution: "@nodable/entities@npm:3.1.0"
+  checksum: 10c0/a1a2a081949a72da17846dc44962dc95a2bf5268867407fc4f6b686acda4dc5e9fd85f0398999969309b9f7fe0fbe85947a91c1ddac47eba8f9b58224c36f6fb
   languageName: node
   linkType: hard
 
@@ -5446,11 +5446,12 @@ __metadata:
   linkType: hard
 
 "@types/jsonwebtoken@npm:^9":
-  version: 9.0.7
-  resolution: "@types/jsonwebtoken@npm:9.0.7"
+  version: 9.0.10
+  resolution: "@types/jsonwebtoken@npm:9.0.10"
   dependencies:
+    "@types/ms": "npm:*"
     "@types/node": "npm:*"
-  checksum: 10c0/e1cd0e48fcae21b1d4378887a23453bd7212b480a131b11bcda2cdeb0687d03c9646ee5ba592e04cfaf76f7cc80f179950e627cdb3ebc90a5923bce49a35631a
+  checksum: 10c0/0688ac8fb75f809201cb7e18a12b9d80ce539cb9dd27e1b01e11807cb1a337059e899b8ee3abc3f2c9417f02e363a3069d9eab9ef9724b1da1f0e10713514f94
   languageName: node
   linkType: hard
 
@@ -9311,11 +9312,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"fast-xml-parser@npm:^5.11.1":
-  version: 5.11.1
-  resolution: "fast-xml-parser@npm:5.11.1"
+"fast-xml-parser@npm:^5.11.2":
+  version: 5.11.2
+  resolution: "fast-xml-parser@npm:5.11.2"
   dependencies:
-    "@nodable/entities": "npm:^3.0.0"
+    "@nodable/entities": "npm:^3.0.1"
     fast-xml-builder: "npm:^1.2.0"
     is-unsafe: "npm:^2.0.0"
     path-expression-matcher: "npm:^1.6.2"
@@ -9323,7 +9324,7 @@ __metadata:
     xml-naming: "npm:^0.3.0"
   bin:
     fxparser: src/cli/cli.js
-  checksum: 10c0/04a1cf600130c4fc146e9f5bcb0a0e88354c5b9725debfa849f9028afd90b77a3e4c9339a3a7f5d22d749b74ac78567428eb1385679319fabf4d6f03065248d6
+  checksum: 10c0/8e8f947b150c0ecc97fb2a7298faa3e9d3e6720a7773446f17bbadf6f6ef4aff5c3e6ef9b6df81dc9b0abe9480bbcbe13b2ce4b1a27098de31e9190681116312
   languageName: node
   linkType: hard
 
@@ -11783,8 +11784,8 @@ __metadata:
     "@juggle/resize-observer": "npm:^3.4.0"
     "@lezer/common": "npm:^1.5.3"
     "@lezer/highlight": "npm:^1.2.4"
-    "@materializeinc/sql-lexer": "npm:^26.43.0"
-    "@materializeinc/sql-pretty": "npm:^26.43.0"
+    "@materializeinc/sql-lexer": "npm:^26.44.1"
+    "@materializeinc/sql-pretty": "npm:^26.44.1"
     "@playwright/test": "npm:^1.63.0"
     "@rehookify/datepicker": "npm:^6.6.8"
     "@rolldown/plugin-babel": "npm:^0.2.4"
@@ -11858,7 +11859,7 @@ __metadata:
     eslint-plugin-simple-import-sort: "npm:^14.0.0"
     eslint-plugin-unicorn: "npm:^76.0.0"
     fast-deep-equal: "npm:^3.1.3"
-    fast-xml-parser: "npm:^5.11.1"
+    fast-xml-parser: "npm:^5.11.2"
     framer-motion: "npm:^12.38.0"
     globals: "npm:^17.12.0"
     intersection-observer: "npm:^0.12.2"
@@ -11882,7 +11883,7 @@ __metadata:
     openapi-typescript: "npm:^7.13.0"
     p-retry: "npm:^4.6.1"
     papaparse: "npm:^5.7.0"
-    pg: "npm:^8.23.0"
+    pg: "npm:^8.23.1"
     pg-error-enum: "npm:^2.0.1"
     picocolors: "npm:^1.1.1"
     popper-max-size-modifier: "npm:^0.2.0"
@@ -12953,17 +12954,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg-cloudflare@npm:^1.4.0":
-  version: 1.4.0
-  resolution: "pg-cloudflare@npm:1.4.0"
-  checksum: 10c0/553764d00055052648393cda53c1feb065991d6f9fbfdeb56cf8396c5b33377ab2897aaf5dc9cd3933d09023a1f01e8b1ca755431dcf5fd71c92ea277e2888f1
+"pg-cloudflare@npm:^1.4.1":
+  version: 1.4.1
+  resolution: "pg-cloudflare@npm:1.4.1"
+  checksum: 10c0/32e62c987073472e81c0dc218f850b1212b4e2c1f35d50433d87d054fe268f549ebaf8fc6c1227ab24c12b318f3e3a2a191ffbdfb2daa30b39aa6802ab8fe2f6
   languageName: node
   linkType: hard
 
-"pg-connection-string@npm:^2.14.0":
-  version: 2.14.0
-  resolution: "pg-connection-string@npm:2.14.0"
-  checksum: 10c0/c26d85970f782de72b90aa45b4acfa34df90242fc08bc676e8827297164044dbfb40a2cf20b0646bd02662a6b14c5ed27f322db627e41e582f2b705bc41e8b47
+"pg-connection-string@npm:^2.14.1":
+  version: 2.14.1
+  resolution: "pg-connection-string@npm:2.14.1"
+  checksum: 10c0/7321eed97579b4972a714909e7a444beb2186780fe7fd86ea719ff7c8f1fad07d7e5f85722c4992245b23683ed7d2fe2bdda8f7469fed4c016bb5c3379c575ca
   languageName: node
   linkType: hard
 
@@ -12997,10 +12998,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg-protocol@npm:^1.16.0":
-  version: 1.16.0
-  resolution: "pg-protocol@npm:1.16.0"
-  checksum: 10c0/8ea4a8f4970aa0ca1e5bf9a482da0a41a043d7470fbaf7592736971146b09a2a4003d953c0091b72fc30bf7a7994a0b7fdf897bf50cd219787bd22806b3ffb04
+"pg-protocol@npm:^1.16.1":
+  version: 1.16.1
+  resolution: "pg-protocol@npm:1.16.1"
+  checksum: 10c0/84e8bf05c3548c8ffcad29247c075f8f1cf477600c92a7eb0ab27c6c4cbdbe1280433582bfba91f629b1f68bcaf4ae26436a898f430e884d7887543931e8ade6
   languageName: node
   linkType: hard
 
@@ -13017,14 +13018,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg@npm:^8.23.0":
-  version: 8.23.0
-  resolution: "pg@npm:8.23.0"
+"pg@npm:^8.23.1":
+  version: 8.23.1
+  resolution: "pg@npm:8.23.1"
   dependencies:
-    pg-cloudflare: "npm:^1.4.0"
-    pg-connection-string: "npm:^2.14.0"
+    pg-cloudflare: "npm:^1.4.1"
+    pg-connection-string: "npm:^2.14.1"
     pg-pool: "npm:^3.14.0"
-    pg-protocol: "npm:^1.16.0"
+    pg-protocol: "npm:^1.16.1"
     pg-types: "npm:2.2.0"
     pgpass: "npm:1.0.5"
   peerDependencies:
@@ -13035,7 +13036,7 @@ __metadata:
   peerDependenciesMeta:
     pg-native:
       optional: true
-  checksum: 10c0/11ce12a71b4239588c18f078531c378d5bcdbcb9ea892e080a6e71f91aaece2b4b8fd93ee5777f94210f9258ff56161f8ed1a45050c32d295aaca037bba12ee8
+  checksum: 10c0/084ce2bcd025705105d4d9a4c4438b178117acbaae5c766e3d3c9fb812cc55d826a212189e19937b8e3b0a8914a3c3e4ba78ad62af73890f37406a676c1f9e0c
   languageName: node
   linkType: hard
 
