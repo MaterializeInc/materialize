@@ -527,6 +527,9 @@ impl ComputeState {
             // other. The correction buffer has a gate of its own.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
             mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
+            // The pool budget, when a gate installs the pool: the default unit of the MV sink's
+            // geometric queue depth hint.
+            let mut pool_budget = 0;
             if !(compute_spill || storage_spill || sink_spill) {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
@@ -546,6 +549,7 @@ impl ComputeState {
                     |fraction: f64| usize::cast_lossy(f64::cast_lossy(ram) * fraction.max(0.0));
                 let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config);
                 let total = of_ram(fraction).max(128 * MIB);
+                pool_budget = total;
                 // No ordering is enforced between the target and the budget. A
                 // target at or below budget + warm cap leaves no compressed-tier
                 // headroom, which legally collapses the tier. Every backing
@@ -583,9 +587,15 @@ impl ComputeState {
             mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
             mz_ore::pool::set_read_prefetch(COLUMN_PAGED_BATCHER_READ_PREFETCH.get(config));
             crate::sink::correction_v2::set_single_read(CORRECTION_V2_SINGLE_READ.get(config));
+            let queue_unit = match CORRECTION_V2_QUEUE_DEPTH_UNIT_BYTES.get(config) {
+                0 => pool_budget,
+                unit => unit,
+            };
             crate::sink::correction_v2::set_columnar_queue(
                 CORRECTION_V2_COLUMNAR_QUEUE.get(config),
                 u8::try_from(CORRECTION_V2_QUEUE_DEPTH.get(config)).unwrap_or(u8::MAX),
+                CORRECTION_V2_QUEUE_GEOMETRIC_DEPTH.get(config),
+                u64::cast_from(queue_unit),
             );
         }
 

@@ -499,7 +499,7 @@ mod write {
     use mz_timely_util::activator::ArcActivator;
     use std::sync::atomic;
 
-    use crate::sink::correction_v2::{self, ConsolidatedChain, DataBytes};
+    use crate::sink::correction_v2::{self, ConsolidatedChain, DataBytes, QueueDepth};
 
     /// Commands sent from the Timely operator to the Tokio write task.
     enum WriteCommand {
@@ -554,6 +554,11 @@ mod write {
                 + self.persist_ok.len()
                 + self.persist_err.len()
                 + self.ok_chain.as_ref().map_or(0, ConsolidatedChain::len)
+        }
+
+        /// The serialized bytes of the batch's queued chain.
+        fn chain_bytes(&self) -> usize {
+            self.ok_chain.as_ref().map_or(0, ConsolidatedChain::bytes)
         }
 
         /// Returns true if there is no work in this batch.
@@ -712,6 +717,10 @@ mod write {
                         if let WriteCommand::Batch(batch) = &cmd {
                             correction_v2::WRITE_QUEUE_UPDATES
                                 .fetch_sub(u64::cast_from(batch.len()), atomic::Ordering::Relaxed);
+                            correction_v2::WRITE_QUEUE_BYTES.fetch_sub(
+                                u64::cast_from(batch.chain_bytes()),
+                                atomic::Ordering::Relaxed,
+                            );
                         }
                         corrections =
                             apply_command(sink_id, corrections, &writer, cmd, &resp_tx).await;
@@ -854,6 +863,10 @@ mod write {
                     correction_v2::WRITE_QUEUE_COMMANDS.fetch_add(1, atomic::Ordering::Relaxed);
                     correction_v2::WRITE_QUEUE_UPDATES
                         .fetch_add(u64::cast_from(batch.len()), atomic::Ordering::Relaxed);
+                    correction_v2::WRITE_QUEUE_BYTES.fetch_add(
+                        u64::cast_from(batch.chain_bytes()),
+                        atomic::Ordering::Relaxed,
+                    );
                     cmd_tx
                         .send(WriteCommand::Batch(batch))
                         .expect("write task unexpectedly gone");
@@ -893,6 +906,10 @@ mod write {
                                 .fetch_add(1, atomic::Ordering::Relaxed);
                             correction_v2::WRITE_QUEUE_UPDATES
                                 .fetch_add(u64::cast_from(flush.len()), atomic::Ordering::Relaxed);
+                            correction_v2::WRITE_QUEUE_BYTES.fetch_add(
+                                u64::cast_from(flush.chain_bytes()),
+                                atomic::Ordering::Relaxed,
+                            );
                             cmd_tx
                                 .send(WriteCommand::Batch(flush))
                                 .expect("write task unexpectedly gone");
@@ -913,14 +930,21 @@ mod write {
     fn take_queued_chain(
         pending: &mut Vec<(Row, Timestamp, Diff)>,
         pending_bytes: &mut usize,
-        depth: Option<u8>,
+        depth: Option<QueueDepth>,
     ) -> Option<ConsolidatedChain<Row>> {
         *pending_bytes = 0;
         if pending.is_empty() {
             return None;
         }
-        // With the queue switched off since the updates arrived, the default hint applies.
-        let chain = ConsolidatedChain::from_updates(pending, depth.unwrap_or(1));
+        // With the queue switched off since the updates arrived, the default hint applies. A
+        // geometric hint describes the chunk's place in the queue, so once filed the chunks
+        // count as fresh, like the stage's.
+        let (hint, filed) = match depth {
+            None => (1, 1),
+            Some(QueueDepth::Fixed(depth)) => (depth, depth),
+            Some(geometric @ QueueDepth::Geometric { .. }) => (geometric.depth(), 0),
+        };
+        let chain = ConsolidatedChain::from_updates(pending, hint, filed);
         (!chain.is_empty()).then_some(chain)
     }
 

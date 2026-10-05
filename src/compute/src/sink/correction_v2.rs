@@ -357,7 +357,12 @@ impl<D: Data> CorrectionV2<D> {
             // If the since is the empty frontier, discard all updates.
             return;
         };
-        let (stale, mut rest) = chain.chain.split_at_time(since_ts);
+        let ConsolidatedChain {
+            chain: mut whole,
+            filed_depth,
+        } = chain;
+        whole.set_depth(filed_depth);
+        let (stale, mut rest) = whole.split_at_time(since_ts);
         if !stale.is_empty() {
             let mut updates: Vec<_> = stale.iter().collect();
             self.insert(&mut updates);
@@ -1243,6 +1248,15 @@ impl<D: Data> Chain<D> {
         self.chunks.is_empty()
     }
 
+    /// Set the generational depth of every chunk, which the correction buffer's merges derive
+    /// their outputs' depth from. The pool keeps the hint each chunk was inserted with.
+    fn set_depth(&mut self, depth: u8) {
+        for chunk in &mut self.chunks {
+            chunk.depth = depth;
+        }
+        self.depth = depth;
+    }
+
     /// Push a chunk onto the chain.
     ///
     /// All updates in the chunk must sort after all updates already in the chain, in
@@ -1403,13 +1417,21 @@ impl<D: Data> Chain<D> {
 /// waiting for the task take the pool's spillable form rather than owned rows on the heap.
 pub struct ConsolidatedChain<D: Data> {
     chain: Chain<D>,
+    /// The depth the chunks take in the correction buffer once filed, which can differ from the
+    /// hint they were minted with.
+    filed_depth: u8,
 }
 
 impl<D: Data> ConsolidatedChain<D> {
     /// Consolidate `updates`, emptying it, and mint the result into chunks at `depth`.
     ///
-    /// `depth` is the generational depth hint the pool receives, see [`Chunk::depth`].
-    pub fn from_updates(updates: &mut Vec<(D, Timestamp, Diff)>, depth: u8) -> Self {
+    /// `depth` is the generational depth hint the pool receives, see [`Chunk::depth`]. Once
+    /// filed into the correction buffer, the chunks count as `filed_depth` for its merges.
+    pub fn from_updates(
+        updates: &mut Vec<(D, Timestamp, Diff)>,
+        depth: u8,
+        filed_depth: u8,
+    ) -> Self {
         consolidate(updates);
         let mut builder = ChainBuilder::at_depth(depth);
         for update in updates.drain(..) {
@@ -1417,7 +1439,13 @@ impl<D: Data> ConsolidatedChain<D> {
         }
         Self {
             chain: builder.finish(),
+            filed_depth,
         }
+    }
+
+    /// The serialized size of the chain's chunks, in bytes.
+    pub fn bytes(&self) -> usize {
+        self.chain.size
     }
 
     /// The number of updates in the chain.
@@ -1883,25 +1911,73 @@ static STAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static WRITE_QUEUE_COMMANDS: AtomicU64 = AtomicU64::new(0);
 /// Updates in MV sink write commands sent to a write task and not yet received, process-wide.
 pub(crate) static WRITE_QUEUE_UPDATES: AtomicU64 = AtomicU64::new(0);
+/// Serialized bytes of [`ConsolidatedChain`]s sent to a write task and not yet received,
+/// process-wide.
+pub(crate) static WRITE_QUEUE_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Whether the MV sink queues its `ok` updates as [`ConsolidatedChain`]s.
 static COLUMNAR_QUEUE: AtomicBool = AtomicBool::new(false);
 /// The generational depth hint of chunks minted for the MV sink's write queue.
 static QUEUE_DEPTH: AtomicU8 = AtomicU8::new(1);
+/// Whether queued chunks take a depth hint from the bytes queued ahead of them.
+static QUEUE_GEOMETRIC: AtomicBool = AtomicBool::new(false);
+/// The unit of the geometric depth hint, in bytes queued ahead.
+static QUEUE_UNIT_BYTES: AtomicU64 = AtomicU64::new(0);
 
-/// Set whether the MV sink queues its `ok` updates for the write task as [`ConsolidatedChain`]s,
-/// and the depth hint their chunks are minted at. Consulted at every activation, so changes apply
-/// to running sinks.
-pub fn set_columnar_queue(enabled: bool, depth: u8) {
-    COLUMNAR_QUEUE.store(enabled, atomic::Ordering::Relaxed);
-    QUEUE_DEPTH.store(depth, atomic::Ordering::Relaxed);
+/// How chunks queued for the MV sink's write task choose their depth hint.
+#[derive(Debug, Clone, Copy)]
+pub enum QueueDepth {
+    /// Every queued chunk takes this depth.
+    Fixed(u8),
+    /// A chunk takes a depth from the bytes queued ahead of it at mint, in units of
+    /// `unit_bytes`: 0 below one unit, 1 below three, 2 below seven, 3 beyond.
+    Geometric {
+        /// The bytes queued ahead of a chunk that keep it at depth 0.
+        unit_bytes: u64,
+    },
 }
 
-/// The columnar queue setting: `Some(depth)` when enabled, see [`set_columnar_queue`].
-pub fn columnar_queue() -> Option<u8> {
-    COLUMNAR_QUEUE
-        .load(atomic::Ordering::Relaxed)
-        .then(|| QUEUE_DEPTH.load(atomic::Ordering::Relaxed))
+impl QueueDepth {
+    /// The depth hint for a chunk minted now.
+    pub fn depth(&self) -> u8 {
+        match *self {
+            Self::Fixed(depth) => depth,
+            Self::Geometric { unit_bytes } => {
+                // The pool's eviction queues are FIFO within a depth band, which under a backlog
+                // evicts the queue's head, the chunks the write task needs next. A chunk minted
+                // behind a longer queue is consumed later, so it takes a deeper, earlier-evicted
+                // band. The hint is fixed at mint and does not follow the chunk as the queue drains.
+                let ahead = WRITE_QUEUE_BYTES.load(atomic::Ordering::Relaxed);
+                let units = ahead.checked_div(unit_bytes).unwrap_or(0);
+                u8::try_from(units.saturating_add(1).ilog2()).map_or(3, |d| d.min(3))
+            }
+        }
+    }
+}
+
+/// Set whether the MV sink queues its `ok` updates for the write task as [`ConsolidatedChain`]s,
+/// and how their chunks choose a depth hint: the fixed `depth`, or with `geometric` a depth from
+/// the bytes queued ahead in units of `unit_bytes`. Consulted at every activation, so changes
+/// apply to running sinks.
+pub fn set_columnar_queue(enabled: bool, depth: u8, geometric: bool, unit_bytes: u64) {
+    COLUMNAR_QUEUE.store(enabled, atomic::Ordering::Relaxed);
+    QUEUE_DEPTH.store(depth, atomic::Ordering::Relaxed);
+    QUEUE_GEOMETRIC.store(geometric, atomic::Ordering::Relaxed);
+    QUEUE_UNIT_BYTES.store(unit_bytes, atomic::Ordering::Relaxed);
+}
+
+/// The columnar queue setting, `None` when disabled, see [`set_columnar_queue`].
+pub fn columnar_queue() -> Option<QueueDepth> {
+    if !COLUMNAR_QUEUE.load(atomic::Ordering::Relaxed) {
+        return None;
+    }
+    Some(if QUEUE_GEOMETRIC.load(atomic::Ordering::Relaxed) {
+        QueueDepth::Geometric {
+            unit_bytes: QUEUE_UNIT_BYTES.load(atomic::Ordering::Relaxed),
+        }
+    } else {
+        QueueDepth::Fixed(QUEUE_DEPTH.load(atomic::Ordering::Relaxed))
+    })
 }
 
 /// Whether [`CorrectionV2::drain_before`] taps the merge into `emitted`.
@@ -1953,6 +2029,7 @@ pub fn register_metrics(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_compute_correction_pool_read_nanoseconds_total", help: "Wall-clock nanoseconds spent reading MV sink correction chunk bodies out of the buffer pool, page faults included."), &POOL_READ_NANOS);
         gauge(registry, metric!(name: "mz_compute_correction_stage_bytes", help: "Bytes of owned updates held in MV sink correction buffer stages."), &STAGE_BYTES);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_commands", help: "MV sink write commands queued for the write task."), &WRITE_QUEUE_COMMANDS);
+        gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_chain_bytes", help: "Serialized bytes of consolidated chains queued for the MV sink write task."), &WRITE_QUEUE_BYTES);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_updates", help: "Updates in MV sink write commands queued for the write task."), &WRITE_QUEUE_UPDATES);
     });
 }
@@ -2750,7 +2827,7 @@ mod tests {
             let mut both = desired;
             both.extend(written.drain(..).map(|(d, t, r)| (d, t, -r)));
             let depth = u8::try_from(step % 2).expect("fits");
-            chained.insert_chain(ConsolidatedChain::from_updates(&mut both, depth));
+            chained.insert_chain(ConsolidatedChain::from_updates(&mut both, depth, 1 - depth));
 
             let upper = Antichain::from_elem(Timestamp::from(upper));
             let mut out1: Vec<_> = staged.updates_before(&upper).collect();
@@ -2762,6 +2839,19 @@ mod tests {
             staged.advance_since(upper.clone());
             chained.advance_since(upper);
         }
+    }
+
+    #[mz_ore::test]
+    fn geometric_queue_depth_bands() {
+        let depth = QueueDepth::Geometric { unit_bytes: 100 };
+        let expected = [(0, 0), (99, 0), (100, 1), (299, 1), (300, 2), (699, 2), (700, 3)];
+        for (ahead, want) in expected.into_iter().chain([(u64::MAX, 3)]) {
+            WRITE_QUEUE_BYTES.store(ahead, atomic::Ordering::Relaxed);
+            assert_eq!(depth.depth(), want, "{ahead} bytes ahead");
+        }
+        WRITE_QUEUE_BYTES.store(0, atomic::Ordering::Relaxed);
+        let unset = QueueDepth::Geometric { unit_bytes: 0 };
+        assert_eq!(unset.depth(), 0, "a zero unit keeps every chunk at depth 0");
     }
 
     /// A since jump across many distinct buffered timestamps must collapse them onto the since.

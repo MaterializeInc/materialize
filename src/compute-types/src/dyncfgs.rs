@@ -360,6 +360,24 @@ pub const CORRECTION_V2_QUEUE_DEPTH: Config<u32> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether chunks queued for the MV sink's write task take their depth hint from the bytes queued
+/// ahead of them instead of [`CORRECTION_V2_QUEUE_DEPTH`].
+pub const CORRECTION_V2_QUEUE_GEOMETRIC_DEPTH: Config<bool> = Config::new(
+    "compute_correction_v2_queue_geometric_depth",
+    false,
+    "Hint queued MV sink chunks deeper the more bytes are queued ahead of them.",
+    ParameterScope::Replica,
+);
+
+/// The bytes queued ahead that keep a queued chunk at depth 0 under
+/// [`CORRECTION_V2_QUEUE_GEOMETRIC_DEPTH`]. Zero uses the buffer pool's budget.
+pub const CORRECTION_V2_QUEUE_DEPTH_UNIT_BYTES: Config<usize> = Config::new(
+    "compute_correction_v2_queue_depth_unit_bytes",
+    0,
+    "Unit of the geometric depth hint for queued MV sink chunks, in bytes; 0 uses the pool budget.",
+    ParameterScope::Replica,
+);
+
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -870,6 +888,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_SINGLE_READ)
         .add(&CORRECTION_V2_COLUMNAR_QUEUE)
         .add(&CORRECTION_V2_QUEUE_DEPTH)
+        .add(&CORRECTION_V2_QUEUE_GEOMETRIC_DEPTH)
+        .add(&CORRECTION_V2_QUEUE_DEPTH_UNIT_BYTES)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
