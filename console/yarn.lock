@@ -3135,7 +3135,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@kobalte/core@npm:^0.13.4":
+"@kobalte/core@npm:^0.13.14":
   version: 0.13.14
   resolution: "@kobalte/core@npm:0.13.14"
   dependencies:
@@ -4261,7 +4261,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@solid-primitives/keyed@npm:^1.2.0, @solid-primitives/keyed@npm:^1.2.2":
+"@solid-primitives/keyed@npm:^1.2.0, @solid-primitives/keyed@npm:^1.5.3":
   version: 1.5.3
   resolution: "@solid-primitives/keyed@npm:1.5.3"
   peerDependencies:
@@ -4317,7 +4317,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@solid-primitives/resize-observer@npm:^2.0.26":
+"@solid-primitives/resize-observer@npm:^2.0.26, @solid-primitives/resize-observer@npm:^2.2.0":
   version: 2.2.0
   resolution: "@solid-primitives/resize-observer@npm:2.2.0"
   dependencies:
@@ -4701,12 +4701,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/match-sorter-utils@npm:^8.19.4":
-  version: 8.19.4
-  resolution: "@tanstack/match-sorter-utils@npm:8.19.4"
+"@tanstack/match-sorter-utils@npm:^9.1.2":
+  version: 9.1.2
+  resolution: "@tanstack/match-sorter-utils@npm:9.1.2"
   dependencies:
     remove-accents: "npm:0.5.0"
-  checksum: 10c0/935022e3d639f19472131d289f3e1202253ff34301717c337e9bac0eeae6a0bd56450ed8ae2f7eb7ac9dfefa7ceaa7d126d8c5441021968b4a9eabc3ac4f8ba1
+  checksum: 10c0/38d7211d816cffd3411ada08bf5dea086c1eed9baf4e016c2f2c58bd65148e8f143acf0a567bfcd7077b5b247d0f65a8ea80b3edd6c59bbdb8e3cde40885ddf6
   languageName: node
   linkType: hard
 
@@ -4717,29 +4717,29 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/query-core@npm:5.103.2":
-  version: 5.103.2
-  resolution: "@tanstack/query-core@npm:5.103.2"
-  checksum: 10c0/52362dd214a487b2194728a79c7fd1bd7af1831f21928030866a8ad28877eaec050e7215a6f3b3a0c4fdf601644ae8edb652e4cef7270f6f82d7371d2bbe9f41
+"@tanstack/query-core@npm:5.104.0":
+  version: 5.104.0
+  resolution: "@tanstack/query-core@npm:5.104.0"
+  checksum: 10c0/e080454f308dc41bf0e52e46aac455af3112f454519d369740aacaec4d260a3bfddde569204908ff7a6e1b1b84f8e065e0ac1375555e2bc1b023d398c0b44f96
   languageName: node
   linkType: hard
 
-"@tanstack/query-devtools@npm:5.103.2":
-  version: 5.103.2
-  resolution: "@tanstack/query-devtools@npm:5.103.2"
+"@tanstack/query-devtools@npm:5.104.0":
+  version: 5.104.0
+  resolution: "@tanstack/query-devtools@npm:5.104.0"
   dependencies:
-    "@kobalte/core": "npm:^0.13.4"
-    "@solid-primitives/keyed": "npm:^1.2.2"
-    "@solid-primitives/resize-observer": "npm:^2.0.26"
+    "@kobalte/core": "npm:^0.13.14"
+    "@solid-primitives/keyed": "npm:^1.5.3"
+    "@solid-primitives/resize-observer": "npm:^2.2.0"
     "@solid-primitives/storage": "npm:^1.3.11"
-    "@tanstack/match-sorter-utils": "npm:^8.19.4"
-    "@tanstack/query-core": "npm:5.103.2"
+    "@tanstack/match-sorter-utils": "npm:^9.1.2"
+    "@tanstack/query-core": "npm:5.104.0"
     clsx: "npm:^2.1.1"
-    goober: "npm:^2.1.16"
-    solid-js: "npm:^1.9.7"
+    goober: "npm:^2.1.19"
+    solid-js: "npm:^1.9.15"
     solid-transition-group: "npm:^0.2.3"
-    superjson: "npm:^2.2.2"
-  checksum: 10c0/df4c65d1cfa2412917b6ded353f3a0dda4b963b8b391c76bf8d9c897c206a33ef85f2ad2417f100ab3d68f4d76791d8d364c1f15b52339b6eeb7ae63c6cc4ab8
+    superjson: "npm:^2.2.6"
+  checksum: 10c0/6c7e3e9676bef4b4f35181f9da0ca34bbc4cae480c4c0d9cb31de2835e2cab058d4a92305e7f8c375d9f8960fb87a5848830830749bb8570e6475be9e4cb4f09
   languageName: node
   linkType: hard
 
@@ -4755,27 +4755,27 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-query-devtools@npm:^5.103.2":
-  version: 5.103.2
-  resolution: "@tanstack/react-query-devtools@npm:5.103.2"
+"@tanstack/react-query-devtools@npm:^5.104.0":
+  version: 5.104.0
+  resolution: "@tanstack/react-query-devtools@npm:5.104.0"
   dependencies:
-    "@tanstack/query-devtools": "npm:5.103.2"
+    "@tanstack/query-devtools": "npm:5.104.0"
   peerDependencies:
-    "@tanstack/react-query": ^5.103.2
+    "@tanstack/react-query": ^5.104.0
     "@types/react": ^18 || ^19
     react: ^18 || ^19
-  checksum: 10c0/88551fdf67e5f98d206cad609d6e9a02f067942c9c84ced19e82a9149c58070f63740c108792c3381eed9e5357e4b6ff2e751c1e6ce0697eba596afdfcb87811
+  checksum: 10c0/2fb3e8988d34c3709b0c439b2b768d96f4435d04021f1fb2c5fa458a51c3a7525fb97204f25916a14ade4435216760a6a92fa81a3c91df0457f41a6e79e9a439
   languageName: node
   linkType: hard
 
-"@tanstack/react-query@npm:^5.103.2":
-  version: 5.103.2
-  resolution: "@tanstack/react-query@npm:5.103.2"
+"@tanstack/react-query@npm:^5.104.0":
+  version: 5.104.0
+  resolution: "@tanstack/react-query@npm:5.104.0"
   dependencies:
-    "@tanstack/query-core": "npm:5.103.2"
+    "@tanstack/query-core": "npm:5.104.0"
   peerDependencies:
     react: ^18 || ^19
-  checksum: 10c0/7845c13af6761c00141ef6025c4ee385bff8f16e053f8583ba1b95db47a2c1df9764a751080981226658f45487881933517d24813f47c98238b8dbdd6acee80a
+  checksum: 10c0/efcf6328c95847c99e4b41c6e68f74d303b8e9eef673473648643dd2fcc8d9d3368223f27a4e510526f3fa3fd5508554e804141a67a9cf37c90842f8639cb430
   languageName: node
   linkType: hard
 
@@ -9883,7 +9883,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"goober@npm:^2.1.16":
+"goober@npm:^2.1.19":
   version: 2.1.19
   resolution: "goober@npm:2.1.19"
   peerDependencies:
@@ -11799,8 +11799,8 @@ __metadata:
     "@tanstack/db": "npm:0.9.2"
     "@tanstack/eslint-plugin-query": "npm:^5.103.2"
     "@tanstack/react-db": "npm:0.4.1"
-    "@tanstack/react-query": "npm:^5.103.2"
-    "@tanstack/react-query-devtools": "npm:^5.103.2"
+    "@tanstack/react-query": "npm:^5.104.0"
+    "@tanstack/react-query-devtools": "npm:^5.104.0"
     "@tanstack/react-table": "npm:^8.21.3"
     "@testing-library/dom": "npm:^10.4.2"
     "@testing-library/jest-dom": "npm:^6.9.1"
@@ -14558,7 +14558,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"solid-js@npm:^1.9.7":
+"solid-js@npm:^1.9.15":
   version: 1.9.15
   resolution: "solid-js@npm:1.9.15"
   dependencies:
@@ -15013,7 +15013,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"superjson@npm:^2.2.2":
+"superjson@npm:^2.2.6":
   version: 2.2.6
   resolution: "superjson@npm:2.2.6"
   dependencies:
