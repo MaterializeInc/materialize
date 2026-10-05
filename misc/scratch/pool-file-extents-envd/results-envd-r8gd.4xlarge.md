@@ -1,37 +1,34 @@
 # Parked TPC-H on environmentd, r8gd.4xlarge
 
-These are the results of `park-matrix.sh` on the instance in `misc/scratch/pool-file-extents.json` (128 GiB RAM, kernel 7.0.0-1006-aws, instance-store NVMe formatted ext4 at `/scratch`, swap off). `bin/environmentd --release` ran with `envd-start.sh` defaults: lz4 on, `column_paged_batcher_budget_fraction` 0.01 and `column_paged_batcher_pool_rss_target_fraction` 0.02 of physical RAM, which gives a slot budget of about 1.3 GiB and an RSS target of about 2.6 GiB. `setup-tpch.sh 10` ingested TPC-H at scale factor 10, and `mkempty.sh` created the empty table that keeps the parked view's frontier live.
+These are the results of `run-fair.sh` on the instance in `misc/scratch/pool-file-extents.json` (123 GiB usable RAM, 16 vCPUs, kernel 7.0.0-1006-aws, instance-store NVMe formatted ext4 at `/scratch`), at commit 85cb1dc125. `bin/environmentd --release` ran with `envd-start.sh` defaults: lz4 on, `column_paged_batcher_budget_fraction` 0.01 and `column_paged_batcher_pool_rss_target_fraction` 0.02 of physical RAM, which gives a slot budget of about 1.2 GiB and an RSS target of about 2.5 GiB. `setup-tpch.sh` ingested TPC-H, which took 4 minutes at scale factor 10 and 30 minutes at 100, and `mkempty.sh` created the empty table that keeps the parked view's frontier live.
 
-`park-matrix.sh` turns on `enable_compute_temporal_bucketing`, sets `compute_dataflow_max_inflight_bytes_cc` to 512 MiB, and disables lgalloc. Each row is one `park-arm.sh` run on a fresh 8-worker replica, whose process runs under a systemd scope with `MemoryMax` set to the size's memory limit. `index` parks every row in the arrange site's chunk batcher, and `mv` parks every row in the MV sink's correction buffer. "No backing" runs with spill on and the file backend off, so on a swap-less host the compressed tier stays in RAM.
+`park-fair.sh` turns on `enable_compute_temporal_bucketing`, sets `compute_dataflow_max_inflight_bytes_cc` to 512 MiB for every arm, and `park-arm.sh` disables lgalloc. Each row is one `park-arm.sh` run on a fresh 8-worker replica, whose process runs under a systemd scope with `MemoryMax` set to the size's memory limit. `ind` parks every row in the arrange site's chunk batcher, and `mv` parks every row in the MV sink's correction buffer. Arm suffixes name the backing and the memory limit in GiB: `nospill` turns spilling off, `noback` spills with the file store off and swap off, `file` uses the file store with swap off, and `swap` uses a swapfile on the same NVMe (64 GiB at scale factor 10, 200 GiB at 100) with the file store off.
 
-The settled columns are sampled 180 s after hydration, and pool metrics are scraped after that sample.
+The settled columns are sampled 180 s after hydration, and pool metrics are scraped after that sample. Swapped-out and swapped-in GiB are host-wide `pswpout` and `pswpin` deltas over the run, which `park-arm.sh` recorded only for the scale factor 100 runs. Only one replica ran at a time, but environmentd and the idle source cluster share the host.
 
-| Run | Kind | Memory limit | Backing | Outcome | Wall s | Max VmRSS MiB | memory.peak MiB | Settled VmRSS MiB | Extent bytes resident | Extent bytes on file | File writes | File reads |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| r-ind-noback8 | index | 8 GiB | none | exited | 25.4 | 8146 | | | 5255004160 | 0 | 0 | 0 |
-| r-ind-file8 | index | 8 GiB | file | hydrated | 31.1 | 5635 | 5570 | 3022 | 1159118848 | 4103340032 | 6612 | 3142 |
-| r-ind-noback4 | index | 4 GiB | none | exited | 7.9 | 3915 | | | 183173120 | 0 | 0 | 0 |
-| r-ind-file4 | index | 4 GiB | file | exited | 5.7 | 3977 | | | | | | |
-| r-mv-noback8 | mv | 8 GiB | none | exited | 33.5 | 8091 | | | 4773642240 | 0 | 0 | 0 |
-| r-mv-file8 | mv | 8 GiB | file | hydrated | 36.3 | 5292 | 5239 | 2779 | 1160249344 | 4451467264 | 9979 | 7128 |
-| r-mv-noback4 | mv | 4 GiB | none | exited | 3.7 | 4102 | | | | | | |
-| r-mv-file4 | mv | 4 GiB | file | exited | 3.5 | 3680 | | | 0 | 0 | 0 | 0 |
+| Run | Outcome | Wall s | Max VmRSS MiB | memory.peak MiB | Settled VmRSS MiB | Settled memory.current MiB | Settled swap MiB | Extent bytes resident | Extent bytes on file | File writes | File reads | Pageouts | Swapped out GiB | Swapped in GiB |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| f10-ind-nospill32 | hydrated | 28.9 | 16086 | 16247 | 13439 | 13391 | 0 | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-noback8 | exited | 29.9 | 8137 |  |  |  |  | 5267177472 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-file8 | hydrated | 30.6 | 5164 | 5258 | 3038 | 2967 | 0 | 1159315456 | 4112646144 | 7262 | 3774 | 7262 |  |  |
+| f10-ind-swap8 | hydrated | 31.1 | 5209 | 8192 | 2915 | 5810 | 2965 | 1160183808 | 0 | 0 | 0 | 6788 |  |  |
+| f10-ind-noback4 | exited | 5.4 | 4014 |  |  |  |  | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-file4 | exited | 7.2 | 3981 |  |  |  |  | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-swap4 | hydrated | 38.5 | 4148 | 4096 | 1997 | 1940 | 4135 | 1160118272 | 0 | 0 | 0 | 6928 |  |  |
+| f10-mv-nospill32 | hydrated | 32.4 | 10567 | 10562 | 8117 | 8058 | 0 | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-mv-noback8 | hydrated | 34.5 | 7952 | 8018 | 5687 | 5626 | 0 | 5581357056 | 0 | 0 | 0 | 0 |  |  |
+| f10-mv-file8 | hydrated | 39.0 | 5075 | 5069 | 2741 | 2671 | 0 | 1160249344 | 4426301440 | 10004 | 7168 | 10004 |  |  |
+| f10-mv-swap8 | hydrated | 38.5 | 4872 | 8030 | 2683 | 5678 | 3056 | 1159725056 | 0 | 0 | 0 | 9324 |  |  |
+| f10-mv-noback4 | exited | 7.9 | 4072 |  |  |  |  | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-mv-file4 | exited | 5.5 | 3956 |  |  |  |  |  |  |  |  |  |  |  |
+| f10-mv-swap4 | hydrated | 48.7 | 4157 | 4096 | 2020 | 1963 | 3844 | 1159266304 | 0 | 0 | 0 | 8542 |  |  |
+| f100-ind-noback8 | exited | 59.8 | 8122 |  |  |  |  | 2220539904 | 0 | 0 | 0 | 0 | 0.0 | 0.0 |
+| f100-ind-file8 | hydrated | 837.6 | 6366 | 8192 | 3871 | 5678 | 0 | 1158250496 | 60862758912 | 268119 | 219026 | 268111 | 0.0 | 0.0 |
+| f100-ind-swap8 | hydrated | 760.9 | 5990 | 8192 | 3576 | 5811 | 44496 | 1159331840 | 0 | 0 | 0 | 266217 | 237.7 | 138.7 |
+| f100-mv-noback8 | exited | 45.4 | 8189 |  |  |  |  | 4391469056 | 0 | 0 | 0 | 0 | 0.0 | 0.0 |
+| f100-mv-file8 | hydrated | 823.2 | 5246 | 8192 | 2720 | 5731 | 0 | 1159200768 | 65081933824 | 277451 | 236029 | 277435 | 0.0 | 0.0 |
+| f100-mv-swap8 | hydrated | 815.3 | 5007 | 8192 | 2619 | 5763 | 44501 | 1160118272 | 0 | 0 | 0 | 274401 | 287.2 | 175.1 |
 
-Every exited run reached a VmRSS within 11% of its memory limit before the process disappeared, which matches a cgroup OOM kill, but the journal was not checked for these runs. `memory.peak` reads 0 once the cgroup is gone, so it is blank for them. For exited runs the script scrapes metrics about 30 s after the exit, through the dead process's socket path. The process orchestrator relaunches a replica 5 s after it exits, so these metrics most likely describe the relaunched process partway through its own hydration, not the moment of death. Blank cells are scrapes that returned nothing.
+Every exited run reached a VmRSS within 4% of its memory limit before the process disappeared, which matches a cgroup OOM kill, but the journal was not checked. `memory.peak` reads 0 once the cgroup is gone, so it is blank for exited runs. For exited runs the script scrapes metrics about 30 s after the exit, through the dead process's socket path. The process orchestrator relaunches a replica 5 s after it exits, so these metrics most likely describe the relaunched process partway through its own hydration, and blank cells are scrapes that returned nothing.
 
-`mz_column_pool_resident_bytes`, the slot tier, sat between 1152 and 1292 MB in every run that reported it. The settled file runs' cgroup `memory.current` was 2951 MiB (index) and 2708 MiB (mv), below their VmRSS, so page cache was negligible.
-
-## Swap and unspilled reference
-
-`park-swap.sh` ran on the same environmentd before `park-matrix.sh`, without `compute_dataflow_max_inflight_bytes_cc`, so persist read-ahead is unbounded in these rows. The swap rows use a 64 GiB swapfile on the same NVMe, with the file store off. The `nospill` rows turn spilling off on a 32 GiB replica.
-
-| Run | Kind | Memory limit | Backing | Outcome | Wall s | Max VmRSS MiB | memory.peak MiB | Settled VmRSS MiB | Settled swap MiB | Settled memory.current MiB | Extent bytes resident | Extent pageouts |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| q-ind-nospill | index | 32 GiB | spill off | hydrated | 21.0 | 21856 | 21910 | 14458 | 0 | 14412 | 0 | 0 |
-| q-ind-swap8 | index | 8 GiB | swap | hydrated | 33.0 | 8238 | 8192 | 2936 | 3373 | 4280 | 1149321216 | 7899 |
-| q-ind-swap4 | index | 4 GiB | swap | hydrated | 52.6 | 4146 | 4096 | 2641 | 4422 | 2628 | 1159397376 | 8899 |
-| q-mv-nospill | mv | 32 GiB | spill off | hydrated | 24.6 | 15598 | 15735 | 8373 | 0 | 8314 | 0 | 0 |
-| q-mv-swap8 | mv | 8 GiB | swap | hydrated | 42.8 | 8239 | 8192 | 2634 | 3312 | 5170 | 1159725056 | 10027 |
-| q-mv-swap4 | mv | 4 GiB | swap | hydrated | 62.3 | 4155 | 4096 | 2577 | 3739 | 2963 | 1160511488 | 9932 |
-
-In the same series, the no-backing and file arms without the read-ahead bound exited within 1.2 to 3.9 s at both limits, which is what led to the bound in `park-matrix.sh`.
+A cgroup's `memory.current` counts page cache, which here is mostly persist's local blob files. That is why the swap arms' and the scale factor 100 file arms' `memory.peak` reach or approach the limit while their VmRSS stays well below it. None of them was OOM-killed.
