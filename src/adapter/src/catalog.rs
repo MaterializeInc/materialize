@@ -2691,7 +2691,10 @@ mod tests {
         let config_sizes = &mut bootstrap_args.cluster_replica_size_map.0;
         config_sizes.remove(&in_use);
         config_sizes.remove(&unused);
-        config_sizes.get_mut(&changed).expect("test size").cpu_exclusive = true;
+        config_sizes
+            .get_mut(&changed)
+            .expect("test size")
+            .cpu_exclusive = true;
         let catalog = Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
             .await
             .expect("unable to open debug catalog");
