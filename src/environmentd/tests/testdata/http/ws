@@ -417,6 +417,127 @@ ws-text fixid=true
 {"type":"Error","payload":{"message":"Evaluation error: division by zero","code":"22012"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+# Execution time notices (emit_execution_time_notice) precede the CommandComplete of
+# the statement they describe. Plan insights are turned off so that only the timing
+# notices show.
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET emit_plan_insights_notice = off"}, {"query": "SET emit_execution_time_notice = on"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# The INSERT commits before its CommandComplete, so its time includes the commit.
+
+ws-text fixtiming=true
+{"queries": [{"query": "CREATE TABLE timing_t (a int)"}, {"query": "INSERT INTO timing_t VALUES (1)"}, {"query": "SELECT a FROM timing_t"}, {"query": "SELECT a FROM timing_t WHERE a < 0"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"CREATE TABLE"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (committed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"committed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (first_row)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>,\"strategy\":\"standard\"}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (empty_result)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>,\"strategy\":\"standard\"}"}}
+{"type":"CommandComplete","payload":"SELECT 0"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Inside an explicit transaction the write is only staged, and COMMIT reports the commit.
+
+ws-text fixtiming=true
+{"queries": [{"query": "BEGIN"}, {"query": "INSERT INTO timing_t VALUES (2)"}, {"query": "COMMIT"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"BEGIN"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"COMMIT"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# The implicit commit reverts SET LOCAL, and the revert follows the statement's own
+# parameter status.
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET LOCAL application_name = 'timing'"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"timing"}}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET client_min_messages = warning"}, {"query": "SELECT 1"}, {"query": "SET client_min_messages = notice"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# A write that returns rows is timed as a write.
+
+ws-text fixtiming=true
+{"queries": [{"query": "INSERT INTO timing_t VALUES (3) RETURNING a"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["3"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (committed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"committed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# In a simple request only the write is staged. The statements after it are not writes.
+
+ws-text fixtiming=true
+{"query": "INSERT INTO timing_t VALUES (4); SET application_name = 'timing2'; SELECT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"timing2"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (first_row)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>,\"strategy\":\"constant\"}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET emit_execution_time_notice = off"}, {"query": "SELECT 1"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----

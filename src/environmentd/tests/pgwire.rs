@@ -515,6 +515,145 @@ async fn test_startup_params_survive_reset() {
     }
 }
 
+/// The kinds of the execution time notices in `notices` that were not read yet. A notice
+/// precedes its statement's completion message, so it has arrived by the time the statement's
+/// future resolves.
+fn execution_time_kinds(
+    notices: &mut mpsc::UnboundedReceiver<postgres::error::DbError>,
+) -> Vec<String> {
+    let mut kinds = Vec::new();
+    while let Ok(notice) = notices.try_recv() {
+        if *notice.code() == SqlState::from_code("MZ012") {
+            let detail: serde_json::Value = serde_json::from_str(notice.detail().unwrap()).unwrap();
+            kinds.push(detail["kind"].as_str().unwrap().to_string());
+        }
+    }
+    kinds
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_execution_time_notice() {
+    let server = test_util::TestHarness::default().start().await;
+    let (notice_tx, mut notices) = mpsc::unbounded_channel();
+    let mut client = server
+        .connect()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+    // pgwire commits the implicit transaction after the statement's CommandComplete, so a write
+    // is reported as staged, over the simple and the extended protocol.
+    client
+        .batch_execute("INSERT INTO t VALUES (1), (2)")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["staged"]);
+    client
+        .execute("INSERT INTO t VALUES (3)", &[])
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["staged"]);
+    client.simple_query("SELECT a FROM t").await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["first_row"]);
+    client
+        .simple_query("SELECT a FROM t WHERE a < 0")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["empty_result"]);
+
+    client
+        .batch_execute("SET client_min_messages = warning")
+        .await
+        .unwrap();
+    execution_time_kinds(&mut notices);
+    client.simple_query("SELECT a FROM t").await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), Vec::<String>::new());
+    client
+        .batch_execute("RESET client_min_messages")
+        .await
+        .unwrap();
+    execution_time_kinds(&mut notices);
+
+    // A portal executed in steps reports on the step that saw the first row.
+    let txn = client.transaction().await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+    let portal = txn.bind("SELECT a FROM t", &[]).await.unwrap();
+    txn.query_portal(&portal, 1).await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["first_row"]);
+    txn.query_portal(&portal, 1).await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), Vec::<String>::new());
+    txn.commit().await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+
+    // SUBSCRIBE reports no execution time, also when fetched through a cursor.
+    let txn = client.transaction().await.unwrap();
+    txn.batch_execute("DECLARE c CURSOR FOR SUBSCRIBE t")
+        .await
+        .unwrap();
+    execution_time_kinds(&mut notices);
+    txn.batch_execute("FETCH 1 c").await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), Vec::<String>::new());
+    txn.rollback().await.unwrap();
+}
+
+/// Asserts the kind that writes reading a table report over pgwire, with frontend
+/// read-then-write sequencing on or off.
+#[allow(clippy::disallowed_methods)]
+async fn assert_read_then_write_kinds(frontend_occ: bool, kind: &str) {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            frontend_occ.to_string(),
+        )
+        .start()
+        .await;
+    let (notice_tx, mut notices) = mpsc::unbounded_channel();
+    let client = server
+        .connect()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1)")
+        .await
+        .unwrap();
+    execution_time_kinds(&mut notices);
+    for write in [
+        "UPDATE t SET a = a + 1",
+        "INSERT INTO t SELECT a FROM t",
+        "DELETE FROM t WHERE a > 1",
+    ] {
+        client.batch_execute(write).await.unwrap();
+        assert_eq!(execution_time_kinds(&mut notices), [kind], "{write}");
+    }
+}
+
+// Frontend read-then-write sequencing applies a write that reads a table when it executes, so it
+// reports `committed` although pgwire commits after `CommandComplete`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_execution_time_notice_frontend_read_then_write() {
+    assert_read_then_write_kinds(true, "committed").await;
+}
+
+// The coordinator stages such a write for the implicit commit after `CommandComplete`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_execution_time_notice_coordinator_read_then_write() {
+    assert_read_then_write_kinds(false, "staged").await;
+}
+
 // SQL-529: DISCARD ALL has to reset session variables over the extended query
 // protocol as well as the simple one. tokio-postgres `execute`/`query` run over
 // the extended protocol, while `batch_execute` runs over the simple one, so the

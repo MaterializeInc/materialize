@@ -80,7 +80,10 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, ExecutionTime, ExecutionTimeKind, PeekClient,
+    PeekResponseUnary, StartupResponse,
+};
 
 /// A handle to a running coordinator.
 ///
@@ -2155,6 +2158,15 @@ pub struct RecordFirstRowStream {
     pub no_more_rows: bool,
     /// Whether the first-to-last-byte metric has already been recorded for this stream.
     pub metric_recorded: bool,
+    strategy: Option<StatementExecutionStrategy>,
+    /// When the result first became available, reported at most once through
+    /// [`RecordFirstRowStream::take_execution_time`].
+    ///
+    /// NOTE: Unlike `recorded_first_row_instant`, this skips empty batches, which
+    /// can precede the first row: a stashed peek response sends its inline rows,
+    /// possibly none, before reading back the stashed rows from blob storage.
+    execution_time: Option<ExecutionTime>,
+    execution_time_reported: bool,
 }
 
 impl RecordFirstRowStream {
@@ -2175,6 +2187,9 @@ impl RecordFirstRowStream {
             recorded_first_row_instant: None,
             no_more_rows: false,
             metric_recorded: false,
+            strategy,
+            execution_time: None,
+            execution_time_reported: false,
         }
     }
 
@@ -2207,16 +2222,53 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        let msg = self.rows.next().await;
+        let mut msg = self.rows.next().await;
         if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
                 .observe(self.execute_started.elapsed().as_secs_f64());
             self.recorded_first_row_instant = Some(Instant::now());
         }
-        if msg.is_none() {
-            self.no_more_rows = true;
+        match &mut msg {
+            Some(PeekResponseUnary::Rows(rows)) => {
+                if self.execution_time.is_none() && rows.peek().is_some() {
+                    self.record_execution_time(ExecutionTimeKind::FirstRow);
+                }
+            }
+            None => {
+                self.no_more_rows = true;
+                if self.execution_time.is_none() {
+                    self.record_execution_time(ExecutionTimeKind::EmptyResult);
+                }
+            }
+            _ => {}
         }
         msg
+    }
+
+    fn record_execution_time(&mut self, kind: ExecutionTimeKind) {
+        self.execution_time = Some(ExecutionTime {
+            kind,
+            elapsed: self.execute_started.elapsed(),
+            strategy: self.strategy,
+        });
+    }
+
+    /// Makes [`RecordFirstRowStream::take_execution_time`] return nothing, for a
+    /// `SUBSCRIBE`, which reports no execution time.
+    pub fn without_execution_time(mut self) -> Self {
+        self.execution_time_reported = true;
+        self
+    }
+
+    /// Returns the execution time once it is known, at most once per stream, so
+    /// that a portal executed in several steps reports it on one step only.
+    pub fn take_execution_time(&mut self) -> Option<ExecutionTime> {
+        if self.execution_time_reported {
+            return None;
+        }
+        let time = self.execution_time.clone()?;
+        self.execution_time_reported = true;
+        Some(time)
     }
 }

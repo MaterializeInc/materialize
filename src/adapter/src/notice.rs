@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
@@ -23,7 +24,9 @@ use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
 use tokio_postgres::error::SqlState;
 
-use crate::TimestampExplanation;
+use crate::session::Session;
+use crate::statement_logging::StatementExecutionStrategy;
+use crate::{ExecuteResponse, TimestampExplanation};
 
 /// Notices that can occur in the adapter layer.
 ///
@@ -140,6 +143,7 @@ pub enum AdapterNotice {
     },
     Welcome(String),
     PlanInsights(String),
+    ExecutionTime(ExecutionTime),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
     /// A cluster contains sources that run on only one replica, yet the
@@ -222,6 +226,7 @@ impl AdapterNotice {
             AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
+            AdapterNotice::ExecutionTime(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
@@ -234,6 +239,7 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::ExecutionTime(time) => Some(time.detail_json()),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
                 "Adding replicas to the cluster does not make these sources more fault tolerant \
                  and does not increase their ingestion throughput."
@@ -345,6 +351,7 @@ impl AdapterNotice {
             AdapterNotice::StartupOnlyVarUpdated { .. } => SqlState::WARNING,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
+            AdapterNotice::ExecutionTime(_) => SqlState::from_code(EXECUTION_TIME_NOTICE_CODE),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
@@ -535,6 +542,12 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
+            AdapterNotice::ExecutionTime(time) => write!(
+                f,
+                "execution time: {:.3} ms ({})",
+                time.elapsed.as_secs_f64() * 1000.0,
+                time.kind.name()
+            ),
             AdapterNotice::IntrospectionClusterUsage => write!(
                 f,
                 "The mz_introspection cluster has been renamed to mz_catalog_server."
@@ -584,5 +597,96 @@ pub struct DroppedInUseIndex {
 impl From<PlanNotice> for AdapterNotice {
     fn from(notice: PlanNotice) -> AdapterNotice {
         AdapterNotice::PlanNotice(notice)
+    }
+}
+
+/// The SQLSTATE of [`AdapterNotice::ExecutionTime`], which clients dispatch on.
+pub const EXECUTION_TIME_NOTICE_CODE: &str = "MZ012";
+
+/// A statement's server-side execution time, reported when `emit_execution_time_notice` is on.
+///
+/// The interval starts when execution of the bound statement starts, so parsing, describing, and
+/// binding are excluded. Where it ends depends on [`ExecutionTimeKind`].
+#[derive(Clone, Debug)]
+pub struct ExecutionTime {
+    pub kind: ExecutionTimeKind,
+    pub elapsed: Duration,
+    /// How a read was executed. `None` for statements that are not peeks.
+    pub strategy: Option<StatementExecutionStrategy>,
+}
+
+impl ExecutionTime {
+    /// Reclassifies the time of a write that returned rows, whose first row says nothing
+    /// about whether the write was applied.
+    ///
+    /// `staged` is as for [`ExecutionTimeKind::for_write`], and `commit` how long the
+    /// statement's result waited for the commit of its implicit transaction.
+    pub fn for_returning_write(mut self, staged: bool, commit: Duration) -> Self {
+        self.kind = ExecutionTimeKind::for_write(staged);
+        self.elapsed += commit;
+        self.strategy = None;
+        self
+    }
+
+    /// The machine-readable payload clients parse, carried in the notice's detail field.
+    fn detail_json(&self) -> String {
+        let micros = u64::try_from(self.elapsed.as_micros()).unwrap_or(u64::MAX);
+        serde_json::json!({
+            "kind": self.kind.name(),
+            "duration_us": micros,
+            "strategy": self.strategy.map(|s| s.name()),
+        })
+        .to_string()
+    }
+}
+
+/// Where the interval of an [`ExecutionTime`] ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionTimeKind {
+    /// A read observed its first row. Delivering the rows to the client is excluded.
+    FirstRow,
+    /// A read finished without producing a row.
+    EmptyResult,
+    /// A statement other than a write completed. For `COMMIT` this includes the commit.
+    Completed,
+    /// A write was staged into a transaction whose commit happens later and is excluded.
+    Staged,
+    /// A write was applied durably, when it executed or by the commit its result waited for.
+    Committed,
+}
+
+impl ExecutionTimeKind {
+    /// Whether a statement that returned `response` is a write, whose kind comes from
+    /// [`ExecutionTimeKind::for_write`]. Must be called before the statement's commit, which
+    /// applies the writes that a `Copied` response is recognized by.
+    pub fn is_write(response: &ExecuteResponse, session: &Session) -> bool {
+        // `COPY ... TO` an object store also responds with `Copied`, but stages no rows.
+        matches!(
+            response,
+            ExecuteResponse::Inserted(_)
+                | ExecuteResponse::Updated(_)
+                | ExecuteResponse::Deleted(_)
+        ) || (matches!(response, ExecuteResponse::Copied(_)) && session.has_staged_writes())
+    }
+
+    /// The kind for a write whose result is about to be reported. `staged` is whether the
+    /// transaction still holds writes for a later commit to apply. Otherwise the write was
+    /// applied when it executed, or by a commit that its result waited for.
+    pub fn for_write(staged: bool) -> Self {
+        if staged {
+            ExecutionTimeKind::Staged
+        } else {
+            ExecutionTimeKind::Committed
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            ExecutionTimeKind::FirstRow => "first_row",
+            ExecutionTimeKind::EmptyResult => "empty_result",
+            ExecutionTimeKind::Completed => "completed",
+            ExecutionTimeKind::Staged => "staged",
+            ExecutionTimeKind::Committed => "committed",
+        }
     }
 }

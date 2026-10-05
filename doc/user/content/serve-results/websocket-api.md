@@ -174,6 +174,44 @@ The payload has the following structure:
 }
 ```
 
+##### Execution time notice
+
+With the [`emit_execution_time_notice`](/sql/set/#other-configuration-parameters)
+configuration parameter on, a notice with code `MZ012` precedes the
+`CommandComplete` of each successful statement other than `SUBSCRIBE`. A
+`client_min_messages` of `warning` or higher suppresses it. Its `detail` is a
+JSON object:
+
+```
+{
+    "duration_us": <microseconds>,
+    "kind": <"first_row"|"empty_result"|"completed"|"staged"|"committed">,
+    "strategy": <"fast-path"|"persist-fast-path"|"standard"|"constant"|null>
+}
+```
+
+The duration starts when Materialize begins executing the statement, after
+parsing and binding it. Where it ends depends on `kind`:
+
+- `first_row`: a query's first row is ready. Sending the rows to the client is
+  not included.
+- `empty_result`: a query finished without returning rows.
+- `completed`: a statement other than a write completed. For `COMMIT`, this
+  includes the commit.
+- `staged`: a write was added to a transaction that commits later.
+- `committed`: a write was applied, either when it executed or by the commit of
+  its implicit transaction. For a write with `RETURNING`, the duration is the
+  time to its first row plus the time of that commit.
+
+`strategy` reports how a query was executed: from an index (`fast-path`), by
+reading storage directly (`persist-fast-path`), by a temporary dataflow
+(`standard`), or without a cluster (`constant`).
+
+Over the PostgreSQL wire protocol, the notice precedes `CommandComplete` or
+`PortalSuspended`, and `COPY ... TO STDOUT` and `COPY ... FROM STDIN` get none.
+An implicit transaction commits after `CommandComplete` there, so a write that
+waits for that commit reports `staged`.
+
 #### `Error`
 
 Executing a statement resulted in an error.

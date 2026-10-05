@@ -4644,6 +4644,7 @@ class SetSessionVariableAction(Action):
             "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
             "max_query_result_size": ["100000", "1000000", "1000000000"],
             "emit_timestamp_notice": ["true", "false"],
+            "emit_execution_time_notice": ["true", "false"],
             "emit_trace_id_notice": ["true", "false"],
             # Only UTC is accepted, the rejection of other time zones is
             # deliberate error path coverage.
