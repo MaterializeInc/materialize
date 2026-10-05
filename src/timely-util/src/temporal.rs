@@ -54,6 +54,11 @@ impl<T: PartialOrd> BucketRange<T> {
     pub fn contains(&self, time: &T) -> bool {
         *time >= self.start && self.end.as_ref().is_none_or(|end| *time < *end)
     }
+
+    /// The upper bound (exclusive), or `None` when the bucket covers the rest of the domain.
+    pub fn end(&self) -> Option<&T> {
+        self.end.as_ref()
+    }
 }
 
 /// A sorted list of buckets, representing data bucketed by timestamp.

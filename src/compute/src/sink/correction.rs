@@ -34,7 +34,7 @@ use crate::logging::compute::{
     ArrangementHeapSizeOperator, ArrangementHeapSizeOperatorDrop, ComputeEvent,
     Logger as ComputeLogger,
 };
-use crate::sink::correction_v2::{CorrectionV2, Data};
+use crate::sink::correction_v2::{ConsolidatedChain, CorrectionV2, Data};
 
 /// A data structure suitable for storing updates in a self-correcting persist sink.
 ///
@@ -86,6 +86,14 @@ impl<D: Data> Correction<D> {
         match self {
             Self::V1(c) => c.insert_negated(updates),
             Self::V2(c) => c.insert_negated(updates),
+        }
+    }
+
+    /// Insert a consolidated chain of updates.
+    pub fn insert_chain(&mut self, chain: ConsolidatedChain<D>) {
+        match self {
+            Self::V1(c) => c.insert(&mut chain.into_updates()),
+            Self::V2(c) => c.insert_chain(chain),
         }
     }
 

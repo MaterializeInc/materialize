@@ -147,7 +147,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicUsize};
+use std::sync::atomic::{self, AtomicBool, AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::bytes::indexed;
@@ -333,6 +333,61 @@ impl<D: Data> CorrectionV2<D> {
         }
 
         self.insert_inner(updates);
+    }
+
+    /// Insert a consolidated chain of updates, bypassing the stage.
+    ///
+    /// Whole chunks move into `pending_low` or their chain buckets without being read. Only a
+    /// chunk straddling the boundary, a bucket edge or the `since` is copied, and updates at
+    /// times before the `since` take the staged path to be advanced.
+    pub fn insert_chain(&mut self, chain: ConsolidatedChain<D>) {
+        let Some(&since_ts) = self.since.as_option() else {
+            // If the since is the empty frontier, discard all updates.
+            return;
+        };
+        let (stale, mut rest) = chain.chain.split_at_time(since_ts);
+        if !stale.is_empty() {
+            let mut updates: Vec<_> = stale.iter().collect();
+            self.insert(&mut updates);
+        }
+
+        // Updates at times below the boundary become a pending low chain.
+        let low = match self.boundary.as_option() {
+            Some(&boundary) => {
+                let (low, high) = rest.split_at_time(boundary);
+                rest = high;
+                low
+            }
+            None => std::mem::replace(&mut rest, Chain::new()),
+        };
+        if !low.is_empty() {
+            self.account_chain_created(&low);
+            self.pending_low.push(low);
+        }
+
+        // Updates at or beyond the boundary go into their chain buckets, one bucket range at a
+        // time.
+        while let Some(first) = rest.chunks.first().map(Chunk::first_time) {
+            let range = self
+                .chain
+                .range_of(&first)
+                .expect("bucket chain covers all times at or beyond the boundary");
+            let part = match range.end() {
+                Some(&end) => {
+                    let (part, high) = rest.split_at_time(end);
+                    rest = high;
+                    part
+                }
+                None => std::mem::replace(&mut rest, Chain::new()),
+            };
+            let bucket = self
+                .chain
+                .find_mut(&range.start)
+                .expect("bucket chain covers all times at or beyond the boundary");
+            bucket.push_chain(part);
+        }
+
+        self.update_metrics();
     }
 
     /// Insert a batch of updates into the stage, flushing it when full.
@@ -1252,6 +1307,60 @@ impl<D: Data> Chain<D> {
 
         (lower, upper)
     }
+}
+
+/// Updates sorted by (time, data) and consolidated, held in chunks the buffer pool may spill.
+///
+/// The MV sink builds these on the Timely worker and hands them to its write task, so updates
+/// waiting for the task take the pool's spillable form rather than owned rows on the heap.
+pub struct ConsolidatedChain<D: Data> {
+    chain: Chain<D>,
+}
+
+impl<D: Data> ConsolidatedChain<D> {
+    /// Consolidate `updates`, emptying it, and mint the result into chunks at `depth`.
+    ///
+    /// `depth` is the generational depth hint the pool receives, see [`Chunk::depth`].
+    pub fn from_updates(updates: &mut Vec<(D, Timestamp, Diff)>, depth: u8) -> Self {
+        consolidate(updates);
+        let mut builder = ChainBuilder::at_depth(depth);
+        for update in updates.drain(..) {
+            builder.push_owned(&update);
+        }
+        Self {
+            chain: builder.finish(),
+        }
+    }
+
+    /// Whether the chain holds no updates.
+    pub fn is_empty(&self) -> bool {
+        self.chain.is_empty()
+    }
+
+    /// The chain's updates as owned values, reading each chunk out of the pool.
+    pub fn into_updates(self) -> Vec<(D, Timestamp, Diff)> {
+        self.chain.iter().collect()
+    }
+}
+
+/// Whether the MV sink queues its `ok` updates as [`ConsolidatedChain`]s.
+static COLUMNAR_QUEUE: AtomicBool = AtomicBool::new(false);
+/// The generational depth hint of chunks minted for the MV sink's write queue.
+static QUEUE_DEPTH: AtomicU8 = AtomicU8::new(1);
+
+/// Set whether the MV sink queues its `ok` updates for the write task as [`ConsolidatedChain`]s,
+/// and the depth hint their chunks are minted at. Consulted at every activation, so changes apply
+/// to running sinks.
+pub fn set_columnar_queue(enabled: bool, depth: u8) {
+    COLUMNAR_QUEUE.store(enabled, atomic::Ordering::Relaxed);
+    QUEUE_DEPTH.store(depth, atomic::Ordering::Relaxed);
+}
+
+/// The columnar queue setting: `Some(depth)` when enabled, see [`set_columnar_queue`].
+pub fn columnar_queue() -> Option<u8> {
+    COLUMNAR_QUEUE
+        .load(atomic::Ordering::Relaxed)
+        .then(|| QUEUE_DEPTH.load(atomic::Ordering::Relaxed))
 }
 
 /// A builder that constructs a [`Chain`] from a stream of updates.
@@ -2315,6 +2424,58 @@ mod tests {
         out1.sort();
         out2.sort();
         assert_eq!(out1, out2);
+    }
+
+    /// Drive the same workload through `insert`/`insert_negated` and through `insert_chain`, with
+    /// chains that straddle the since, the boundary and bucket edges, and compare every read.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn insert_chain_matches_staged_inserts() {
+        let sink_metrics = sink_metrics();
+        let new = || {
+            CorrectionV2::<String>::new(
+                sink_metrics.clone(),
+                sink_metrics.for_worker(0),
+                None,
+                3.0,
+                8 * 1024,
+            )
+        };
+        let (mut staged, mut chained) = (new(), new());
+        let updates = |lo: u64, hi: u64| -> Vec<(String, Timestamp, Diff)> {
+            (lo..hi)
+                .flat_map(|t| {
+                    (0..50).map(move |k| (format!("{k}-{}", t % 7), Timestamp::from(t), Diff::ONE))
+                })
+                .collect()
+        };
+        let mut written: Vec<(String, Timestamp, Diff)> = Vec::new();
+        let steps = [
+            (0, 40, 5),
+            (3, 60, 20),
+            (10, 80, 21),
+            (0, 200, 90),
+            (85, 300, 300),
+        ];
+        for (step, (lo, hi, upper)) in steps.into_iter().enumerate() {
+            let desired = updates(lo, hi);
+            staged.insert(&mut desired.clone());
+            staged.insert_negated(&mut written.clone());
+            let mut both = desired;
+            both.extend(written.drain(..).map(|(d, t, r)| (d, t, -r)));
+            let depth = u8::try_from(step % 2).expect("fits");
+            chained.insert_chain(ConsolidatedChain::from_updates(&mut both, depth));
+
+            let upper = Antichain::from_elem(Timestamp::from(upper));
+            let mut out1: Vec<_> = staged.updates_before(&upper).collect();
+            let mut out2: Vec<_> = chained.updates_before(&upper).collect();
+            out1.sort();
+            out2.sort();
+            assert_eq!(out1, out2, "diverged at step {step}");
+            written = out1;
+            staged.advance_since(upper.clone());
+            chained.advance_since(upper);
+        }
     }
 
     /// A since jump across many distinct buffered timestamps must collapse them onto the since.

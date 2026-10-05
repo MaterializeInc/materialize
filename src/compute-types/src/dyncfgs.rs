@@ -336,6 +336,24 @@ pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the MV sink hands its `ok` updates to the write task as consolidated, pool-backed
+/// chunks instead of owned rows.
+pub const CORRECTION_V2_COLUMNAR_QUEUE: Config<bool> = Config::new(
+    "compute_correction_v2_columnar_queue",
+    false,
+    "Queue MV sink updates for the write task as consolidated, pool-backed chunks.",
+    ParameterScope::Replica,
+);
+
+/// The generational depth hint of chunks queued for the MV sink's write task, see
+/// [`CORRECTION_V2_COLUMNAR_QUEUE`].
+pub const CORRECTION_V2_QUEUE_DEPTH: Config<u32> = Config::new(
+    "compute_correction_v2_queue_depth",
+    1,
+    "Generational depth hint of chunks queued for the MV sink's write task.",
+    ParameterScope::Replica,
+);
+
 /// The summary to apply to the frontier in temporal bucketing in compute.
 pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
@@ -835,6 +853,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
+        .add(&CORRECTION_V2_COLUMNAR_QUEUE)
+        .add(&CORRECTION_V2_QUEUE_DEPTH)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
