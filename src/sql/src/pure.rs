@@ -781,15 +781,15 @@ impl FilterConstraints {
         exclude_constraints: Vec<String>,
         exclude_all_constraints: bool,
     ) -> Result<Self, PlanError> {
-        match (exclude_constraints.is_empty(), exclude_all_constraints) {
-            (false, true) => {
-                sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS")
-            }
-            (_, true) => Ok(FilterConstraints::ExcludeAll),
-            (_, false) => Ok(FilterConstraints::Exclude(
+        if !exclude_all_constraints {
+            return Ok(FilterConstraints::Exclude(
                 exclude_constraints.into_iter().collect(),
-            )),
+            ));
         }
+        if !exclude_constraints.is_empty() {
+            sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+        }
+        Ok(FilterConstraints::ExcludeAll)
     }
 
     pub(crate) fn excludes_any(&self) -> bool {
