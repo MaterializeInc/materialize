@@ -19,6 +19,7 @@ import {
 import { assert } from "~/util";
 
 import { COMMAND_INTERRUPTED_MESSAGE } from "../constants";
+import { parseExecutionTimeNotice } from "../executionTime";
 import {
   CommandOutput,
   CommandResult,
@@ -155,7 +156,14 @@ const addNoticeToLatestCommandResult = assign<WebSocketFsmContext, NoticeEvent>(
     latestCommandOutput: ({ latestCommandOutput }, event) => {
       const latestCommandResult = getLatestCommandResult(latestCommandOutput);
 
-      latestCommandResult.notices.push(event.notice);
+      // The server sends the execution time before the statement's
+      // CommandComplete, so the latest result is the statement it describes.
+      const executionTime = parseExecutionTimeNotice(event.notice);
+      if (executionTime) {
+        latestCommandResult.executionTime = executionTime;
+      } else {
+        latestCommandResult.notices.push(event.notice);
+      }
       return latestCommandOutput;
     },
   },
