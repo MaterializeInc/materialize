@@ -33,10 +33,12 @@
 //!
 //!  * **`write`**: per-activation, the Timely closure first appends all observed input data into
 //!    a single `WriteCommand::Batch` and only then sends a `WriteCommand::WriteBatch` (issued from
-//!    `maybe_start_batch` after frontier checks). The Tokio task processes commands FIFO, so a
-//!    `WriteBatch` is guaranteed to see every `Batch` from the same activation already applied to
-//!    the corrections buffer. Reversing this order would let the task write a batch that is
-//!    missing updates the Timely closure already observed.
+//!    `maybe_start_batch` after frontier checks). With the columnar queue, `ok` updates may wait
+//!    on the Timely side across activations, and the closure sends them in a `Batch` of their own
+//!    before any `WriteBatch`. The Tokio task processes commands FIFO, so a `WriteBatch` is
+//!    guaranteed to see every update the Timely closure observed already applied to the
+//!    corrections buffer. Reversing this order would let the task write a batch that is missing
+//!    updates the Timely closure already observed.
 //!
 //!  * **`append`**: per-activation, the Timely closure forwards messages in the order
 //!    `Description` → `Batch` → `BatchesFrontier`. The first two carry the data the task needs
@@ -52,7 +54,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
+use mz_compute_types::dyncfgs::{CORRECTION_V2_CHUNK_SIZE, MV_SINK_ADVANCE_PERSIST_FRONTIERS};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
@@ -498,6 +500,8 @@ mod write {
 
     use mz_timely_util::activator::ArcActivator;
 
+    use crate::sink::correction_v2::{self, ConsolidatedChain, DataBytes};
+
     /// Commands sent from the Timely operator to the Tokio write task.
     enum WriteCommand {
         /// A coalesced batch of work gathered during a single operator activation.
@@ -522,6 +526,9 @@ mod write {
         persist_ok: Vec<(Row, Timestamp, Diff)>,
         /// Negative contributions from the `persist` err input.
         persist_err: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+        /// The `desired` and negated `persist` ok contributions, consolidated into pool-backed
+        /// chunks. Replaces `desired_ok` and `persist_ok` when the columnar queue is enabled.
+        ok_chain: Option<ConsolidatedChain<Row>>,
         /// The new persist frontier, if it advanced this activation.
         persist_frontier: Option<Antichain<Timestamp>>,
         /// Whether a consolidation of the corrections buffer should be forced.
@@ -535,6 +542,7 @@ mod write {
                 desired_err: Vec::new(),
                 persist_ok: Vec::new(),
                 persist_err: Vec::new(),
+                ok_chain: None,
                 persist_frontier: None,
                 force_consolidation: false,
             }
@@ -546,6 +554,7 @@ mod write {
                 && self.desired_err.is_empty()
                 && self.persist_ok.is_empty()
                 && self.persist_err.is_empty()
+                && self.ok_chain.is_none()
                 && self.persist_frontier.is_none()
                 && !self.force_consolidation
         }
@@ -654,6 +663,9 @@ mod write {
         // (snapshot updates not advanced) reproduces the original `UpdateNotBeyondLower` panic.
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
+        // The bytes of `ok` updates the operator coalesces before minting a queued chain, see
+        // `take_queued_chain`.
+        let queue_chain_bytes = CORRECTION_V2_CHUNK_SIZE.get(&worker_config);
 
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
         // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
@@ -733,6 +745,11 @@ mod write {
             // Whether a batch write is currently in flight in the Tokio task.
             let mut batch_in_flight: Option<(BatchDescription, Capability<Timestamp>)> = None;
 
+            // `ok` updates, `persist` ones negated, waiting to fill a queued chain, and their
+            // bytes.
+            let mut pending_ok: Vec<(Row, Timestamp, Diff)> = Vec::new();
+            let mut pending_bytes = 0;
+
             // CorrectionLogger lives on the Timely thread and drains events from
             // the channel each activation. On drop, it drains remaining events and
             // retracts all logged state.
@@ -766,6 +783,17 @@ mod write {
                 persist_err_input.for_each(|_cap, data| {
                     batch.persist_err.append(data);
                 });
+                // Consolidating here moves the cost of holding queued updates onto this worker,
+                // which slows it to the rate the buffer pool absorbs, and leaves the write task
+                // chains it can file without sorting.
+                let queue_depth = correction_v2::columnar_queue();
+                if queue_depth.is_some() || !pending_ok.is_empty() {
+                    let negated = batch.persist_ok.drain(..).map(|(d, t, r)| (d, t, -r));
+                    for update in batch.desired_ok.drain(..).chain(negated) {
+                        pending_bytes += update.0.data_bytes() + size_of::<(Timestamp, Diff)>();
+                        pending_ok.push(update);
+                    }
+                }
 
                 // Accept batch descriptions.
                 descs_input.for_each(|cap, data| {
@@ -794,6 +822,19 @@ mod write {
 
                 if state.should_force_consolidation() {
                     batch.force_consolidation = true;
+                }
+
+                // Small activations would each mint a chain below the pool's minimum spill size,
+                // which then waits on the heap, so updates ship once they fill a chain or when
+                // the batch carries frontier or consolidation work the write task must see them
+                // for.
+                if queue_depth.is_none()
+                    || pending_bytes >= queue_chain_bytes
+                    || batch.persist_frontier.is_some()
+                    || batch.force_consolidation
+                {
+                    batch.ok_chain =
+                        take_queued_chain(&mut pending_ok, &mut pending_bytes, queue_depth);
                 }
 
                 if !batch.is_empty() {
@@ -825,6 +866,18 @@ mod write {
 
                 // If no batch in flight, try to write a new batch.
                 if batch_in_flight.is_none() {
+                    // A batch write reads every update before its upper, so the pending ones
+                    // must reach the write task first.
+                    if !pending_ok.is_empty() && state.batch_ready() {
+                        let mut flush = BatchUpdates::new();
+                        flush.ok_chain =
+                            take_queued_chain(&mut pending_ok, &mut pending_bytes, queue_depth);
+                        if !flush.is_empty() {
+                            cmd_tx
+                                .send(WriteCommand::Batch(flush))
+                                .expect("write task unexpectedly gone");
+                        }
+                    }
                     if let Some((desc, cap)) = state.maybe_start_batch(&cmd_tx) {
                         batch_in_flight = Some((desc, cap));
                     }
@@ -833,6 +886,22 @@ mod write {
         });
 
         batches_output_stream
+    }
+
+    /// Mint the pending `ok` updates into a queued chain at the queue's depth hint, emptying them.
+    /// Returns `None` if they consolidate away.
+    fn take_queued_chain(
+        pending: &mut Vec<(Row, Timestamp, Diff)>,
+        pending_bytes: &mut usize,
+        depth: Option<u8>,
+    ) -> Option<ConsolidatedChain<Row>> {
+        *pending_bytes = 0;
+        if pending.is_empty() {
+            return None;
+        }
+        // With the queue switched off since the updates arrived, the default hint applies.
+        let chain = ConsolidatedChain::from_updates(pending, depth.unwrap_or(1));
+        (!chain.is_empty()).then_some(chain)
     }
 
     /// How many updates the batch read-back hands over per chunk.
@@ -981,6 +1050,9 @@ mod write {
                 }
                 if !batch.persist_err.is_empty() {
                     corrections.err.insert_negated(&mut batch.persist_err);
+                }
+                if let Some(chain) = batch.ok_chain {
+                    corrections.ok.insert_chain(chain);
                 }
                 if let Some(frontier) = batch.persist_frontier {
                     // We will only emit times at or after the `persist` frontier, so now is a good
@@ -1183,20 +1255,25 @@ mod write {
             self.trace("set batch description");
         }
 
+        /// Whether a batch description is waiting and can be written: all `persist` updates
+        /// before its `lower` and all `desired` updates before its `upper` have been seen.
+        fn batch_ready(&self) -> bool {
+            let Some((desc, _cap)) = self.batch_description.as_ref() else {
+                return false;
+            };
+            let persist_ready =
+                PartialOrder::less_equal(&desc.lower, self.persist_frontiers.frontier());
+            let desired_ready =
+                PartialOrder::less_equal(&desc.upper, self.desired_frontiers.frontier());
+            persist_ready && desired_ready
+        }
+
         /// Check if a batch can be written and send a write command to the Tokio task if so.
         fn maybe_start_batch(
             &mut self,
             cmd_tx: &mpsc::UnboundedSender<WriteCommand>,
         ) -> Option<(BatchDescription, Capability<Timestamp>)> {
-            let (desc, _cap) = self.batch_description.as_ref()?;
-
-            // We can write a new batch if we have seen all `persist` updates before `lower` and
-            // all `desired` updates before `upper`.
-            let persist_ready =
-                PartialOrder::less_equal(&desc.lower, self.persist_frontiers.frontier());
-            let desired_ready =
-                PartialOrder::less_equal(&desc.upper, self.desired_frontiers.frontier());
-            if !persist_ready || !desired_ready {
+            if !self.batch_ready() {
                 return None;
             }
 
