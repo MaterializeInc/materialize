@@ -359,8 +359,7 @@ impl Coordinator {
             // path: there may be no replica at all (window closed), and
             // an in-window replica is bounced to the new shape without a
             // hydrate-overlap to wait on. Reject it rather than return an
-            // instant success that waited for nothing, mirroring the
-            // planner's rejection of a `WAIT` without a shape change.
+            // instant success that waited for nothing.
             if scheduled_direct && !matches!(strategy, AlterClusterPlanStrategy::None) {
                 return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
             }
@@ -386,6 +385,8 @@ impl Coordinator {
 
         match (&config.variant, &new_config.variant) {
             (Managed(_), Managed(_)) => {
+                // RF-only changes without an in-flight reconfiguration apply
+                // directly. Any WAIT clause has no effect on this path.
                 self.sequence_alter_cluster_managed_to_managed(
                     session,
                     cluster_id,

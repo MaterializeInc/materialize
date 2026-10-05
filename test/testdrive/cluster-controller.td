@@ -1741,8 +1741,9 @@ scale=1,workers=4 2
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
 in-progress
 
-# A combined size/factor alter can force the new target through in one step.
-> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4', REPLICATION FACTOR 1) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+# An RF-only alter can update the timeout and force the new target through
+# without restating the pending size.
+> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 1) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
 
 > SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
 scale=1,workers=4 1
