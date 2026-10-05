@@ -16,8 +16,10 @@
 //! * [`engine`]: the one wasmtime configuration every process uses.
 //! * `wasi`: a deterministic WASI preview1 implementation.
 //! * [`call`]: compiled modules and single calls in fresh instances.
+//! * [`codec`]: datums to and from the guest's Arrow batches.
 
 pub mod call;
+pub mod codec;
 pub mod engine;
 mod wasi;
 
