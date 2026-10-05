@@ -61,10 +61,11 @@ export const OnboardingSteps = ({ user }: { user: User }) => {
   return (
     <Flex
       width="100%"
-      height="100%"
+      minHeight="100%"
+      flexShrink="0"
       alignItems="center"
       justifyContent="center"
-      overflow="hidden"
+      overflowX="clip"
     >
       <Flex
         alignItems="center"
