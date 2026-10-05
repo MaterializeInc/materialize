@@ -203,11 +203,9 @@ const FreshnessTableInner = ({
     getRowId: (row) => row.key,
   });
 
-  const onRowClick = React.useMemo(
-    () =>
-      onToggleRow ? (row: FreshnessRow) => onToggleRow(row.key) : undefined,
-    [onToggleRow],
-  );
+  const onRowClick = onToggleRow
+    ? (row: FreshnessRow) => onToggleRow(row.key)
+    : undefined;
 
   return (
     <VStack spacing="4" alignItems="stretch" width="100%">

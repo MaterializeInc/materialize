@@ -295,13 +295,9 @@ const FreshnessPage = () => {
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
   // Filter out system clusters
-  const selectable = React.useMemo(
-    () =>
-      clusters
-        .filter((c) => !isSystemCluster(c.id))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [clusters],
-  );
+  const selectable = clusters
+    .filter((c) => !isSystemCluster(c.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const selected = selectable.find((c) => c.id === clusterId) ?? selectable[0];
   const options: SelectOption[] = selectable.map((c) => ({
     id: c.id,

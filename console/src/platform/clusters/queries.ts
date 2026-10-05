@@ -1124,10 +1124,7 @@ export function useClusterFreshness({
   lookbackMs,
   objects,
 }: ClusterFreshnessParams) {
-  const objectIds = useMemo(
-    () => objects.map((object) => object.objectId),
-    [objects],
-  );
+  const objectIds = objects.map((object) => object.objectId);
 
   // The binned series and the latest readings go in separate requests because
   // they go stale at different rates. A bin cannot change faster than its own
