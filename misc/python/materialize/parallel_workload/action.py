@@ -362,8 +362,7 @@ class Action:
                     "unknown schema",  # schema was dropped
                     # The database was dropped concurrently: DropDatabaseAction
                     # can land on an emptied database, and
-                    # DropDatabaseCascadeAction (disabled until SQL-518 is
-                    # fixed) drops non-empty ones.
+                    # DropDatabaseCascadeAction drops non-empty ones.
                     "unknown database",
                     "invalid database",  # CREATE SCHEMA wording for a vanished database
                     "the transaction's active cluster has been dropped",  # cluster was dropped
@@ -6571,14 +6570,7 @@ ddl_action_list = ActionList(
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
         (DropDatabaseAction, 1),
-        # TODO: Reenable once a concurrent DROP DATABASE CASCADE can no longer
-        # panic the coordinator. A staged create (e.g. the source executor's
-        # CREATE SECRET) whose target database is dropped between staging and
-        # finish hits resolve_full_name -> get_database (panicking OrdMap index)
-        # in catalog transact_op. Only CASCADE can drop a non-empty database,
-        # so this is the precise trigger.
-        # See https://linear.app/materializeinc/issue/SQL-518
-        # (DropDatabaseCascadeAction, 1),
+        (DropDatabaseCascadeAction, 1),
         (CreateSchemaAction, 1),
         (DropSchemaAction, 1),
         (DropSchemaCascadeAction, 1),
