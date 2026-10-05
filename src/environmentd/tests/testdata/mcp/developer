@@ -182,6 +182,20 @@ mcp-developer
 200 OK
 {"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
+# An unknown method with params gets the same error, not a 422. Clients probe
+# for server/discover this way.
+mcp-developer
+{"jsonrpc":"2.0","id":42,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+# An unknown notification with params is still a notification.
+mcp-developer
+{"jsonrpc":"2.0","method":"notifications/other","params":{}}
+----
+202 Accepted
+
 # No id, so 202 with an empty body per the Streamable HTTP transport.
 mcp-developer
 {"jsonrpc":"2.0","method":"notifications/initialized"}
