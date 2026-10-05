@@ -175,7 +175,7 @@
     "lint-staged": "^16.2.7",
     "miragejs": "^0.1.48",
     "module-alias": "^2.3.4",
-    "msw": "^2.6.4",
+    "msw": "^3.0.1",
     "openapi-typescript": "^7.13.0",
     "p-retry": "^4.6.1",
     "pg": "^8.23.1",
