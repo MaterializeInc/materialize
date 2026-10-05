@@ -358,7 +358,7 @@ impl<D: Data> CorrectionV2<D> {
                 rest = high;
                 low
             }
-            None => std::mem::replace(&mut rest, Chain::new()),
+            None => std::mem::take(&mut rest),
         };
         if !low.is_empty() {
             self.account_chain_created(&low);
@@ -378,7 +378,7 @@ impl<D: Data> CorrectionV2<D> {
                     rest = high;
                     part
                 }
-                None => std::mem::replace(&mut rest, Chain::new()),
+                None => std::mem::take(&mut rest),
             };
             let bucket = self
                 .chain
@@ -1139,6 +1139,12 @@ struct Chain<D: Data> {
     depth: u8,
 }
 
+impl<D: Data> Default for Chain<D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<D: Data> Chain<D> {
     /// Construct an empty chain.
     fn new() -> Self {
@@ -1318,9 +1324,8 @@ pub struct ConsolidatedChain<D: Data> {
 }
 
 impl<D: Data> ConsolidatedChain<D> {
-    /// Consolidate `updates`, emptying it, and mint the result into chunks at `depth`.
-    ///
-    /// `depth` is the generational depth hint the pool receives, see [`Chunk::depth`].
+    /// Consolidate `updates`, emptying it, and mint the result into chunks at the generational
+    /// depth `depth`, which the buffer pool receives as the chunks' hint.
     pub fn from_updates(updates: &mut Vec<(D, Timestamp, Diff)>, depth: u8) -> Self {
         consolidate(updates);
         let mut builder = ChainBuilder::at_depth(depth);
