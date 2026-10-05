@@ -59,6 +59,10 @@ sleep 5
 ) > "$OUT/samples" &
 SAMPLER=$!
 
+# Host-wide swap and fault counters, so a run's deltas show how much the kernel
+# paged. Only one replica runs at a time.
+vmstat() { awk '$1 ~ /^(pswpin|pswpout|pgmajfault)$/ {printf "%s=%s ", $1, $2}' /proc/vmstat; }
+echo "vmstat before: $(vmstat)" > "$OUT/vmstat"
 START=$(date +%s.%N)
 if [ "$KIND" = index ]; then
   $USR -c "CREATE VIEW v_$OBJ AS SELECT * FROM (SELECT * FROM lineitem UNION ALL SELECT * FROM li_empty) WHERE mz_now() >= ($FUTURE + l_orderkey % 2)::mz_timestamp"
@@ -83,6 +87,8 @@ for wait in 30 90 180; do
   echo "t+${wait}s VmRSS MiB=$(( $(awk '/VmRSS/ {print $2}' "/proc/$PID/status") / 1024 )) memory.current MiB=$(( $(cat "$CG/memory.current") / 1048576 )) scratch used MiB=$(df -m --output=used /scratch | tail -1) cgroup swap MiB=$(( $(cat "$CG/memory.swap.current" 2>/dev/null || echo 0) / 1048576 ))" | tee -a "$OUT/result"
 done
 
+echo "vmstat after: $(vmstat)" >> "$OUT/vmstat"
+cat "$OUT/vmstat" >> "$OUT/result"
 curl -s --unix-socket "$ADDR" "http://localhost/metrics" > "$OUT/metrics" 2>/dev/null
 grep -E '^mz_column_pool' "$OUT/metrics" > "$OUT/pool_metrics"
 echo "memory.peak MiB=$(( $(cat "$CG/memory.peak" 2>/dev/null || echo 0) / 1048576 )) oom_kill=$(awk '$1=="oom_kill" {print $2}' "$CG/memory.events" 2>/dev/null)" | tee -a "$OUT/result"
