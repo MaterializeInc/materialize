@@ -50,6 +50,7 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
+mz-storage-types-base = { path = "../storage-types-base" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
@@ -97,4 +98,4 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
-proptest = ["dep:proptest", "dep:proptest-derive", "mz-cluster-client/proptest", "mz-repr/proptest", "mz-expr/proptest"]
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-cluster-client/proptest", "mz-repr/proptest", "mz-expr/proptest", "mz-storage-types-base/proptest"]

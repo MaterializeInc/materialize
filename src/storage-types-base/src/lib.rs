@@ -7,17 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+//! Plain data types of storage connections and sinks.
+//!
+//! This crate must not depend on clients for external systems (Kafka, AWS, databases), so that
+//! crates naming these types, such as `mz-compute-types`, do not pull those clients in.
+//! `mz-storage-types` re-exports the types at their usual paths and owns their behavior.
 
-//! Shared types for the `mz-compute*` crates
-
-pub mod config;
-pub mod dataflows;
-pub mod dyncfgs;
-pub mod explain;
-pub mod plan;
+pub mod connections;
 pub mod sinks;
-pub mod sources;
-
-/// Identifier of a compute instance.
-pub type ComputeInstanceId = mz_cluster_client::instances::StorageInstanceId;

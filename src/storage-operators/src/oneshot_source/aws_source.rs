@@ -20,7 +20,7 @@ use futures::stream::{BoxStream, TryStreamExt};
 use mz_ore::future::InTask;
 use mz_repr::CatalogItemId;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::connections::aws::AwsConnection;
+use mz_storage_types::connections::aws::{AwsConnection, AwsConnectionExt};
 use serde::{Deserialize, Serialize};
 
 use crate::oneshot_source::util::IntoRangeHeaderValue;

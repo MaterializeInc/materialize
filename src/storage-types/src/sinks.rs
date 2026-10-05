@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
 use mz_expr::MirScalarExpr;
-use mz_pgcopy::CopyFormatParams;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
+pub use mz_storage_types_base::sinks::{S3SinkFormat, S3UploadInfo};
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -635,27 +635,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
             KafkaSinkFormatType::Bytes => KafkaSinkFormatType::Bytes,
         }
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum S3SinkFormat {
-    /// Encoded using the PG `COPY` protocol, with one of its supported formats.
-    PgCopy(CopyFormatParams<'static>),
-    /// Encoded as Parquet.
-    Parquet,
-}
-
-/// Info required to copy the data to s3.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct S3UploadInfo {
-    /// The s3 uri path to write the data to.
-    pub uri: String,
-    /// The max file size of each file uploaded to S3.
-    pub max_file_size: u64,
-    /// The relation desc of the data to be uploaded to S3.
-    pub desc: RelationDesc,
-    /// The selected sink format.
-    pub format: S3SinkFormat,
 }
 
 pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);

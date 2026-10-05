@@ -16,8 +16,8 @@ use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelati
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::time_dependence::TimeDependence;
 use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
-use mz_storage_types::time_dependence::TimeDependence;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 

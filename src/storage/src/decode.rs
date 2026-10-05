@@ -26,6 +26,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::aws::AwsConnectionExt;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{
     AvroEncoding, CsvDecoderState, DataEncoding, RegexEncoding,

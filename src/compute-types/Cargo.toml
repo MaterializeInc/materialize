@@ -14,11 +14,12 @@ columnar.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
 itertools.workspace = true
+mz-cluster-client = { path = "../cluster-client" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
-mz-storage-types = { path = "../storage-types" }
+mz-storage-types-base = { path = "../storage-types-base" }
 serde.workspace = true
 timely.workspace = true
 tracing.workspace = true
