@@ -3068,6 +3068,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_batched_mfp"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["storage_source_batched_mfp"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
@@ -3279,6 +3281,7 @@ class FlipFlagsAction(Action):
             "compute_dataflow_max_inflight_bytes_cc",
             "subscribe_max_buffered_bytes",
             "compute_flat_map_fuel",
+            "compute_mfp_batch_rows",
             "consolidating_vec_growth_dampener",
             "compute_hydration_concurrency",
             "copy_to_s3_parquet_row_group_file_ratio",

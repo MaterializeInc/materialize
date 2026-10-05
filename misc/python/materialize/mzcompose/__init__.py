@@ -181,6 +181,12 @@ def get_minimal_system_parameters(
         # intervals, so the ceiling stays ahead of the data.
         config["storage_persist_sink_description_lookahead"] = "5s"
 
+    if version >= MzVersion.parse_mz("v26.46.0-dev"):
+        # Exercise batched MFP evaluation in compute and in the persist source
+        # while it defaults off in production.
+        config["enable_compute_batched_mfp"] = "true"
+        config["storage_source_batched_mfp"] = "true"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 
@@ -743,6 +749,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_server_maintenance_interval",
     "compute_dataflow_max_inflight_bytes_cc",
     "compute_flat_map_fuel",
+    "compute_mfp_batch_rows",
     "compute_temporal_bucketing_summary",
     "consolidating_vec_growth_dampener",
     "copy_to_s3_parquet_row_group_file_ratio",

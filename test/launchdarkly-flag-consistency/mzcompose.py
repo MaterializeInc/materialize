@@ -251,6 +251,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_coalesce_case_transform
     enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
+    enable_compute_batched_mfp
     enable_compute_correction_v2_spill
     enable_compute_half_join2
     enable_compute_index_peek_offload
@@ -427,6 +428,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     storage_server_maintenance_interval
     storage_sink_ensure_topic_config
     storage_sink_progress_search
+    storage_source_batched_mfp
     storage_statistics_retention_duration
     storage_suspend_and_restart_delay
     storage_upsert_max_snapshot_batch_buffering

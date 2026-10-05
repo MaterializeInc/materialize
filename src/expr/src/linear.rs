@@ -1584,6 +1584,27 @@ pub mod plan {
     use crate::{Columns, Eval};
     use crate::{EvalError, MapFilterProject, MirScalarExpr};
 
+    /// The input rows of a batch that [`SafeMfpPlan::evaluate_batch`]
+    /// evaluates, read by index.
+    pub trait BatchInput<'a> {
+        /// The number of rows.
+        fn len(&self) -> usize;
+
+        /// Replaces the contents of `datums` with the input datums of row
+        /// `index`.
+        fn read(&self, index: usize, datums: &mut Vec<Datum<'a>>);
+    }
+
+    impl<'a> BatchInput<'a> for [Vec<Datum<'a>>] {
+        fn len(&self) -> usize {
+            <[_]>::len(self)
+        }
+
+        fn read(&self, index: usize, datums: &mut Vec<Datum<'a>>) {
+            datums.clone_from(&self[index]);
+        }
+    }
+
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     #[serde(bound(deserialize = "E: serde::de::DeserializeOwned"))]
@@ -1694,6 +1715,30 @@ pub mod plan {
                 expression += 1;
             }
             Ok(true)
+        }
+
+        /// Evaluates the plan's maps and filters on a batch of rows, calling
+        /// `each` with every row's index, outcome, and datums, in row order.
+        ///
+        /// A row's outcome is the one [`Self::evaluate_inner`] gives for it
+        /// alone: `Ok(true)` if it passed every predicate, in which case its
+        /// datums hold all of its columns and [`MapFilterProject::projection`]
+        /// selects the output, `Ok(false)` if a predicate rejected it, or the
+        /// error it produced. The datums are valid only for the call.
+        pub fn evaluate_batch<'a, I, F>(&'a self, input: &I, arena: &'a RowArena, mut each: F)
+        where
+            I: BatchInput<'a> + ?Sized,
+            F: FnMut(usize, Result<bool, EvalError>, &[Datum<'a>]),
+        {
+            // TODO: Evaluate steps whose expressions all have batch kernels a
+            // column at a time. Steps without them stay on this loop, which
+            // costs no more than evaluating rows one at a time.
+            let mut datums = Vec::new();
+            for index in 0..input.len() {
+                input.read(index, &mut datums);
+                let outcome = self.evaluate_inner(&mut datums, arena);
+                each(index, outcome, &datums);
+            }
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -1914,26 +1959,56 @@ pub mod plan {
         ) -> impl Iterator<
             Item = Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
         > + use<Err, V, E> {
-            match self.mfp.evaluate_inner(datums, arena) {
-                Err(e) => {
-                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
-                }
-                Ok(true) => {}
-                Ok(false) => {
-                    return None.into_iter().chain(None);
-                }
+            let outcome = self.mfp.evaluate_inner(datums, arena);
+            self.finish_batch_row(outcome, datums, arena, time, diff, valid_time, row_builder)
+        }
+
+        /// Evaluates the non-temporal maps and filters on a batch of rows. See
+        /// [`SafeMfpPlan::evaluate_batch`]; [`Self::finish_batch_row`]
+        /// completes each row.
+        pub fn evaluate_batch<'a, I, F>(&'a self, input: &I, arena: &'a RowArena, each: F)
+        where
+            I: BatchInput<'a> + ?Sized,
+            F: FnMut(usize, Result<bool, EvalError>, &[Datum<'a>]),
+        {
+            self.mfp.evaluate_batch(input, arena, each)
+        }
+
+        /// Completes one row of a batch from its outcome in
+        /// [`Self::evaluate_batch`]: applies the temporal bounds and projects
+        /// it. Together the two give the same results as [`Self::evaluate`].
+        pub fn finish_batch_row<
+            'b,
+            'a: 'b,
+            Err: From<EvalError>,
+            V: Fn(&mz_repr::Timestamp) -> bool,
+        >(
+            &'a self,
+            outcome: Result<bool, EvalError>,
+            datums: &'b [Datum<'a>],
+            arena: &'a RowArena,
+            time: mz_repr::Timestamp,
+            diff: Diff,
+            valid_time: V,
+            row_builder: &mut Row,
+        ) -> impl Iterator<
+            Item = Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        > + use<Err, V, E> {
+            match outcome {
+                Err(e) => Some(Err((e.into(), time, diff))).into_iter().chain(None),
+                Ok(false) => None.into_iter().chain(None),
+                Ok(true) => evaluate_temporal(
+                    &self.lower_bounds,
+                    &self.upper_bounds,
+                    &self.mfp.mfp.projection,
+                    datums,
+                    arena,
+                    time,
+                    diff,
+                    valid_time,
+                    row_builder,
+                ),
             }
-            evaluate_temporal(
-                &self.lower_bounds,
-                &self.upper_bounds,
-                &self.mfp.mfp.projection,
-                datums,
-                arena,
-                time,
-                diff,
-                valid_time,
-                row_builder,
-            )
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -2057,5 +2132,93 @@ pub mod plan {
         } else {
             None.into_iter().chain(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, Diff, ReprScalarType, Row, RowArena, Timestamp};
+
+    use crate::func::{AddInt64, CastInt64ToMzTimestamp, DivInt64, Gt, Gte, Lt};
+    use crate::{EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, UnmaterializableFunc};
+
+    type Output = Vec<Result<(Row, Timestamp, Diff), (EvalError, Timestamp, Diff)>>;
+
+    #[mz_ore::test]
+    fn evaluate_batch_matches_evaluate() {
+        let int = |i| MirScalarExpr::literal_ok(Datum::Int64(i), ReprScalarType::Int64);
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let ts = |e: MirScalarExpr| {
+            e.call_unary(UnaryFunc::CastInt64ToMzTimestamp(CastInt64ToMzTimestamp))
+        };
+        // #2 = #0 / #1, which fails when #1 is 0. Rows with #2 > 1 are valid
+        // from time #0 until time #0 + 10.
+        let plan = MapFilterProject::new(2)
+            .map([MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), DivInt64)])
+            .filter([
+                MirScalarExpr::column(2).call_binary(int(1), Gt),
+                mz_now().call_binary(ts(MirScalarExpr::column(0)), Gte),
+                mz_now().call_binary(
+                    ts(MirScalarExpr::column(0).call_binary(int(10), AddInt64)),
+                    Lt,
+                ),
+            ])
+            .project([0, 2])
+            .into_plan()
+            .unwrap();
+        assert!(!plan.is_identity());
+
+        let inputs = [
+            [Datum::Int64(10), Datum::Int64(2)],
+            [Datum::Int64(10), Datum::Int64(0)],
+            [Datum::Int64(10), Datum::Int64(20)],
+            [Datum::Null, Datum::Int64(1)],
+            [Datum::Int64(30), Datum::Int64(3)],
+        ];
+        let time = Timestamp::from(15u64);
+        let arena = RowArena::new();
+        let mut row_builder = Row::default();
+
+        let per_row: Vec<Output> = inputs
+            .iter()
+            .map(|input| {
+                let mut datums = input.to_vec();
+                plan.evaluate::<EvalError, _>(
+                    &mut datums,
+                    &arena,
+                    time,
+                    Diff::ONE,
+                    |_| true,
+                    &mut row_builder,
+                )
+                .collect()
+            })
+            .collect();
+
+        let rows: Vec<Vec<Datum>> = inputs.iter().map(|input| input.to_vec()).collect();
+        let mut batched: Vec<Output> = Vec::new();
+        plan.evaluate_batch(&rows[..], &arena, |index, outcome, datums| {
+            assert_eq!(index, batched.len(), "rows arrive in order");
+            batched.push(
+                plan.finish_batch_row::<EvalError, _>(
+                    outcome,
+                    datums,
+                    &arena,
+                    time,
+                    Diff::ONE,
+                    |_| true,
+                    &mut row_builder,
+                )
+                .collect(),
+            );
+        });
+
+        assert_eq!(per_row, batched);
+        assert_eq!(
+            per_row.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![2, 1, 0, 0, 2],
+            "an insertion and a retraction, an error, two filtered rows, and another pair"
+        );
+        assert!(per_row[1][0].is_err());
     }
 }

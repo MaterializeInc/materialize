@@ -554,6 +554,24 @@ pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether compute evaluates MFPs over batches of rows rather than one row at
+/// a time.
+pub const ENABLE_COMPUTE_BATCHED_MFP: Config<bool> = Config::new(
+    "enable_compute_batched_mfp",
+    false,
+    "Whether compute evaluates MFPs over batches of rows rather than one row at a time.",
+    ParameterScope::Replica,
+);
+
+/// The most rows compute evaluates an MFP over at once, when
+/// `enable_compute_batched_mfp` is set.
+pub const COMPUTE_MFP_BATCH_ROWS: Config<usize> = Config::new(
+    "compute_mfp_batch_rows",
+    16 * 1024,
+    "The most rows compute evaluates an MFP over at once.",
+    ParameterScope::Replica,
+);
+
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
@@ -854,6 +872,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&COMPUTE_FLAT_MAP_FUEL)
+        .add(&ENABLE_COMPUTE_BATCHED_MFP)
+        .add(&COMPUTE_MFP_BATCH_ROWS)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)

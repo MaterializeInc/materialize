@@ -21,7 +21,10 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    COMPUTE_MFP_BATCH_ROWS, ENABLE_COMPUTE_BATCHED_MFP, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
+    TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
@@ -50,7 +53,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::{ColCollection, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums, flat_map_rows_batched};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -924,6 +927,71 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 }
 
+/// The number of rows to evaluate MFPs over at once, or `None` to evaluate
+/// them one row at a time.
+pub(crate) fn mfp_batch_rows(config_set: &ConfigSet) -> Option<usize> {
+    ENABLE_COMPUTE_BATCHED_MFP
+        .get(config_set)
+        .then(|| COMPUTE_MFP_BATCH_ROWS.get(config_set))
+}
+
+/// Applies `mfp` to `oks`, evaluating it over batches of up to `batch_rows`
+/// rows.
+///
+/// `max_demand` is the number of leading input columns `mfp` reads.
+fn batched_mfp_operator<'scope, T>(
+    oks: ColCollection<'scope, T>,
+    mfp: MfpPlan<LirScalarExpr>,
+    max_demand: usize,
+    batch_rows: usize,
+    until: Antichain<mz_repr::Timestamp>,
+) -> (
+    ColCollection<'scope, T>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    let (stream, errs) = flat_map_rows_batched::<_, ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+        oks,
+        "BatchedMfp",
+        max_demand,
+        batch_rows,
+        move |rows, updates, outputs| {
+            let arena = RowArena::new();
+            let mut row_builder = SharedRow::get();
+            mfp.evaluate_batch(rows, &arena, |i, outcome, datums| {
+                let (time, diff) = &updates[i];
+                for result in mfp.finish_batch_row(
+                    outcome,
+                    datums,
+                    &arena,
+                    time.event_time(),
+                    diff.clone(),
+                    |t| !until.less_equal(t),
+                    &mut row_builder,
+                ) {
+                    // Copy the whole time, and re-populate event time.
+                    let output = match result {
+                        Ok((row, event_time, diff)) => {
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            Ok((row, time, diff))
+                        }
+                        Err((e, event_time, diff)) => {
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            Err((e, time, diff))
+                        }
+                    };
+                    outputs.push((i, output));
+                }
+            });
+        },
+    );
+    (stream.as_collection(), errs.as_collection())
+}
+
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -933,11 +1001,16 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The `key_val` argument, when present, indicates that a specific arrangement should
     /// be used, and if, in addition, the `val` component is present,
     /// that we can seek to the supplied row.
+    ///
+    /// With `mfp_batch_rows`, `mfp` is evaluated over batches of up to that
+    /// many rows rather than one row at a time, except when seeking to a row.
+    /// The results are the same either way.
     pub fn as_collection_core(
         &self,
         mfp_plan: MfpPlan<LirScalarExpr>,
         key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
+        mfp_batch_rows: Option<usize>,
     ) -> (
         ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -981,6 +1054,18 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             let plan = mfp_mir_to_lir_plan(mir_mfp);
             (plan, max_demand)
         };
+
+        // Seeking to a row needs the fused arrangement path below, which is
+        // per row.
+        if let Some(batch_rows) = mfp_batch_rows
+            && !has_key_val
+        {
+            let key = key_val.map(|(key, _)| key);
+            let (oks, errs) = self.as_specific_collection(key.as_deref());
+            let (oks, mfp_errs) =
+                batched_mfp_operator(oks, mfp_plan, max_demand, batch_rows, until);
+            return (oks, errs.concat(mfp_errs));
+        }
 
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
@@ -1077,8 +1162,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
         let form_raw_collection = collections.raw || will_create_arrangement;
         if form_raw_collection && self.collection.is_none() {
-            let (oks, errs) =
-                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until);
+            let (oks, errs) = self.as_collection_core(
+                input_mfp,
+                input_key.map(|k| (k, None)),
+                until,
+                mfp_batch_rows(config_set),
+            );
             // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
             // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
@@ -1650,7 +1739,7 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
                 let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
-                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new(), None);
                 let produced = columnar_to_vec(edge.clone()).inner.capture();
                 let (_arranged, _arrange_errs, _passthrough) =
                     CollectionBundle::<Timestamp>::arrange_collection(
@@ -1691,7 +1780,8 @@ mod tests {
                 let identity = MapFilterProject::<LirScalarExpr>::new(1)
                     .into_plan()
                     .expect("identity mfp");
-                let (out, _errs) = bundle.as_collection_core(identity, None, Antichain::new());
+                let (out, _errs) =
+                    bundle.as_collection_core(identity, None, Antichain::new(), None);
                 let captured = columnar_to_vec(out).inner.capture();
                 input.update_at(
                     Row::pack_slice(&[Datum::Int64(1)]),
@@ -1740,7 +1830,7 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
                 let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
-                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new(), None);
                 let captured = columnar_to_vec(edge).inner.capture();
                 // Feed all rows at the same time in one batch so the fold is
                 // within-batch, not a downstream re-consolidation.
@@ -1758,6 +1848,58 @@ mod tests {
 
     /// Keying by column 0 and thinning the value to column 1 reconstructs the original
     /// two-column row. The decode below belongs to the capture harness.
+    #[mz_ore::test]
+    fn as_collection_core_batched_matches_per_row() {
+        // #2 = #0 / #1, which fails when #1 is 0; keep rows with #2 > 1.
+        let int = |i| LirScalarExpr::literal_ok(Datum::Int64(i), ReprScalarType::Int64);
+        let mfp = MapFilterProject::<LirScalarExpr>::new(2)
+            .map([LirScalarExpr::column(0)
+                .call_binary(LirScalarExpr::column(1), mz_expr::func::DivInt64)])
+            .filter([LirScalarExpr::column(2).call_binary(int(1), mz_expr::func::Gt)])
+            .project(vec![0, 2])
+            .into_plan()
+            .expect("mfp");
+        // Rows at two times, so they arrive under different capabilities.
+        let updates = vec![
+            (Row::pack_slice(&[Datum::Int64(10), Datum::Int64(2)]), 0u64),
+            (Row::pack_slice(&[Datum::Int64(10), Datum::Int64(0)]), 0),
+            (Row::pack_slice(&[Datum::Int64(10), Datum::Int64(20)]), 1),
+            (Row::pack_slice(&[Datum::Int64(30), Datum::Int64(3)]), 1),
+            (Row::pack_slice(&[Datum::Int64(40), Datum::Int64(4)]), 1),
+        ];
+
+        let run = |batch_rows: Option<usize>| {
+            let mfp = mfp.clone();
+            let updates = updates.clone();
+            timely::execute_directly(move |worker| {
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    let (mut input, collection) = scope.new_collection();
+                    let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                    let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
+                    let (oks, errs) =
+                        bundle.as_collection_core(mfp, None, Antichain::new(), batch_rows);
+                    let oks = columnar_to_vec(oks).inner.capture();
+                    let errs = errs.inner.capture();
+                    for (row, time) in updates {
+                        input.update_at(row, Timestamp::from(time), Diff::ONE);
+                    }
+                    input.advance_to(Timestamp::from(2u64));
+                    input.flush();
+                    (oks, errs)
+                })
+            })
+        };
+
+        let (per_row_oks, per_row_errs) = run(None);
+        let (batched_oks, batched_errs) = run(Some(2));
+        let per_row_oks = extract_row_updates(per_row_oks);
+        assert_eq!(per_row_oks.len(), 3, "three rows pass the filter");
+        assert_eq!(extract_row_updates(batched_oks), per_row_oks);
+        let per_row_errs = extract_err(per_row_errs);
+        assert_eq!(per_row_errs.len(), 1, "one row divides by zero");
+        assert_eq!(extract_err(batched_errs), per_row_errs);
+    }
+
     #[mz_ore::test]
     fn as_specific_collection_materializes_columnar() {
         let rows = test_rows();
