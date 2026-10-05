@@ -399,7 +399,7 @@ def create_clusterd_service(
     # parameter instead, so the benchmark default and any --this-params or
     # --other-params override apply to the cluster being measured.
     unified_cluster = (additional_system_parameter_defaults or {}).get(
-        "enable_unified_cluster", "false"
+        "enable_unified_cluster", "true"
     ) == "true"
     return Clusterd(image=clusterd_image, unified_cluster=unified_cluster)
 
