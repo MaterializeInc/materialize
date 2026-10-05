@@ -573,6 +573,8 @@ pub(in crate::http) enum StatementResult {
         desc: RelationDesc,
         rows_stream: RecordFirstRowStream,
         max_result_size: usize,
+        /// Whether the statement ends its statement group, see [`commit_if_ends_group`].
+        ends_group: bool,
     },
     Subscribe {
         desc: RelationDesc,
@@ -632,8 +634,8 @@ pub enum SqlResult {
 
 impl SqlResult {
     /// Convert adapter Row results into the buffered web row result format. Error
-    /// if the row format does not match the expected descriptor, or if the
-    /// result exceeds `max_query_result_size`.
+    /// if the row format does not match the expected descriptor, if the result
+    /// exceeds `max_query_result_size`, or if [`commit_if_ends_group`] fails.
     ///
     /// This buffers the whole result, so it is used only by the JSON transport,
     /// whose response is a single document. The WebSocket transport streams rows
@@ -647,6 +649,7 @@ impl SqlResult {
         mut rows_stream: RecordFirstRowStream,
         max_query_result_size: usize,
         desc: &RelationDesc,
+        ends_group: bool,
     ) -> Result<SqlResult, Error>
     where
         S: ResultSender,
@@ -725,6 +728,11 @@ impl SqlResult {
             }
         }
 
+        // TODO: `SqlResult::Rows` has no `parameters` field, so the parameters the commit
+        // reverted (a `SET LOCAL` earlier in the group) are dropped.
+        if let Err(err) = commit_if_ends_group(client, ends_group).await {
+            return Ok(SqlResult::err(client, err));
+        }
         let tag = format!("SELECT {}", rows.len());
         Ok(SqlResult::Rows {
             tag,
@@ -738,6 +746,22 @@ impl SqlResult {
         SqlResult::Err {
             error: error.into(),
             notices: make_notices(client),
+        }
+    }
+
+    /// Builds the result of a statement that returned no rows, after [`commit_if_ends_group`].
+    async fn complete(
+        client: &mut SessionClient,
+        tag: String,
+        mut params: Vec<ParameterStatus>,
+        ends_group: bool,
+    ) -> SqlResult {
+        match commit_if_ends_group(client, ends_group).await {
+            Ok(reverted) => {
+                params.extend(reverted);
+                SqlResult::ok(client, tag, params)
+            }
+            Err(err) => SqlResult::err(client, err),
         }
     }
 
@@ -924,12 +948,20 @@ impl ResultSender for SqlResponse {
                 desc,
                 rows_stream,
                 max_result_size,
+                ends_group,
             } => {
                 // The JSON transport is a single buffered document, so the rows
                 // must be collected before the response is serialized.
                 // `SqlResult::rows` bounds that buffer against `max_result_size`.
-                let res = match SqlResult::rows(self, client, rows_stream, max_result_size, &desc)
-                    .await
+                let res = match SqlResult::rows(
+                    self,
+                    client,
+                    rows_stream,
+                    max_result_size,
+                    &desc,
+                    ends_group,
+                )
+                .await
                 {
                     Ok(res) => res,
                     Err(e) => return (Err(e), None),
@@ -1016,8 +1048,16 @@ impl ResultSender for WebSocket {
                 ref desc,
                 mut rows_stream,
                 max_result_size,
-            } => match stream_ws_peek_rows(self, client, desc, &mut rows_stream, max_result_size)
-                .await
+                ends_group,
+            } => match stream_ws_peek_rows(
+                self,
+                client,
+                desc,
+                &mut rows_stream,
+                max_result_size,
+                ends_group,
+            )
+            .await
             {
                 Ok(result) => result,
                 // A write failure means the remote broke the connection, which we
@@ -1234,6 +1274,7 @@ async fn stream_ws_peek_rows(
     desc: &RelationDesc,
     rows_stream: &mut RecordFirstRowStream,
     max_result_size: usize,
+    ends_group: bool,
 ) -> Result<
     (
         bool,
@@ -1326,18 +1367,27 @@ async fn stream_ws_peek_rows(
                 ));
             }
             None => {
+                let reverted = match commit_if_ends_group(client, ends_group).await {
+                    Ok(reverted) => reverted,
+                    Err(err) => {
+                        return Ok(ws_peek_result(
+                            client,
+                            true,
+                            vec![WebSocketResponse::Error(err.into())],
+                        ));
+                    }
+                };
                 // An empty successful result still owes the client a `Rows`
                 // descriptor before `CommandComplete`.
                 if !sent_rows_desc {
                     send_ws_response(ws, WebSocketResponse::Rows(desc.into())).await?;
                 }
-                return Ok(ws_peek_result(
-                    client,
-                    false,
-                    vec![WebSocketResponse::CommandComplete(format!(
-                        "SELECT {rows_returned}"
-                    ))],
-                ));
+                let command_complete =
+                    WebSocketResponse::CommandComplete(format!("SELECT {rows_returned}"));
+                let (is_err, mut msgs, stmt_logging) =
+                    ws_peek_result(client, false, vec![command_complete]);
+                msgs.extend(reverted.into_iter().map(WebSocketResponse::ParameterStatus));
+                return Ok((is_err, msgs, stmt_logging));
             }
         }
     }
@@ -1386,7 +1436,7 @@ async fn execute_stmt_group<S: ResultSender>(
     stmt_group: Vec<(Statement<Raw>, String, Vec<Option<String>>)>,
 ) -> Result<Result<(), ()>, Error> {
     let num_stmts = stmt_group.len();
-    for (stmt, sql, params) in stmt_group {
+    for (idx, (stmt, sql, params)) in stmt_group.into_iter().enumerate() {
         assert!(
             num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
@@ -1406,7 +1456,8 @@ async fn execute_stmt_group<S: ResultSender>(
             let _ = send_and_retire(err.into(), client, sender).await?;
             return Ok(Err(()));
         }
-        let res = execute_stmt(client, sender, stmt, sql, params).await?;
+        let ends_group = idx + 1 == num_stmts;
+        let res = execute_stmt(client, sender, stmt, sql, params, ends_group).await?;
         let is_err = send_and_retire(res, client, sender).await?;
 
         if is_err.is_err() {
@@ -1590,8 +1641,9 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
                 Ok(Err(()))
             }
         };
-        // At the end of each group, commit implicit transactions. Do that here so that any `?`
-        // early return can still be handled here.
+        // The statement that ends a group commits its implicit transaction before its result
+        // (`commit_if_ends_group`). This commits an implicit transaction that a group left open:
+        // a group that ends in a SUBSCRIBE, or that returned early through `?`.
         if client.session().transaction().is_implicit() {
             let ended = client.end_transaction(EndTransactionAction::Commit).await;
             if let Err(err) = ended {
@@ -1614,6 +1666,7 @@ async fn execute_stmt<S: ResultSender>(
     stmt: Statement<Raw>,
     sql: String,
     raw_params: Vec<Option<String>>,
+    ends_group: bool,
 ) -> Result<StatementResult, Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
@@ -1764,34 +1817,25 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::ValidatedConnection
-        | ExecuteResponse::Prepare => SqlResult::ok(
+        | ExecuteResponse::Prepare => SqlResult::complete(
             client,
             tag.expect("ok only called on tag-generating results"),
             Vec::default(),
+            ends_group,
         )
+        .await
         .into(),
         ExecuteResponse::TransactionCommitted { params }
         | ExecuteResponse::TransactionRolledBack { params }
         | ExecuteResponse::DiscardedAll { params } => {
-            let notify_set: mz_ore::collections::HashSet<_> = client
-                .session()
-                .vars()
-                .notify_set()
-                .map(|v| v.name().to_string())
-                .collect();
-            let params = params
-                .into_iter()
-                .filter(|(name, _value)| notify_set.contains(*name))
-                .map(|(name, value)| ParameterStatus {
-                    name: name.to_string(),
-                    value,
-                })
-                .collect();
-            SqlResult::ok(
+            let params = notify_params(client, params);
+            SqlResult::complete(
                 client,
                 tag.expect("ok only called on tag-generating results"),
                 params,
+                ends_group,
             )
+            .await
             .into()
         }
         ExecuteResponse::SetVariable { name, .. } => {
@@ -1807,11 +1851,13 @@ async fn execute_stmt<S: ResultSender>(
                     value: var.value(),
                 });
             };
-            SqlResult::ok(
+            SqlResult::complete(
                 client,
                 tag.expect("ok only called on tag-generating results"),
                 params,
+                ends_group,
             )
+            .await
             .into()
         }
         ExecuteResponse::SendingRowsStreaming {
@@ -1834,6 +1880,7 @@ async fn execute_stmt<S: ResultSender>(
                 desc: desc.relation_desc.expect("RelationDesc must exist"),
                 rows_stream,
                 max_result_size,
+                ends_group,
             }
         }
         ExecuteResponse::SendingRowsImmediate { rows } => {
@@ -1848,6 +1895,7 @@ async fn execute_stmt<S: ResultSender>(
                 desc: desc.relation_desc.expect("RelationDesc must exist"),
                 rows_stream,
                 max_result_size,
+                ends_group,
             }
         }
         ExecuteResponse::Subscribing {
@@ -1875,6 +1923,47 @@ async fn execute_stmt<S: ResultSender>(
         )
         .into(),
     })
+}
+
+/// Commits the implicit transaction if the statement ends its statement group, and returns
+/// the parameters the commit reverted.
+///
+/// Callers must report the statement's completion only after this returns, and an error as
+/// the statement's result: PostgreSQL commits before the last statement's `CommandComplete`,
+/// so a client sees the statement's success or the commit's failure, never both.
+async fn commit_if_ends_group(
+    client: &mut SessionClient,
+    ends_group: bool,
+) -> Result<Vec<ParameterStatus>, AdapterError> {
+    if !ends_group || !client.session().transaction().is_implicit() {
+        return Ok(Vec::new());
+    }
+    let response = client.end_transaction(EndTransactionAction::Commit).await?;
+    match response {
+        ExecuteResponse::TransactionCommitted { params } => Ok(notify_params(client, params)),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// The session parameters among `params` that clients are notified about.
+fn notify_params(
+    client: &mut SessionClient,
+    params: BTreeMap<&'static str, String>,
+) -> Vec<ParameterStatus> {
+    let notify_set: mz_ore::collections::HashSet<_> = client
+        .session()
+        .vars()
+        .notify_set()
+        .map(|v| v.name().to_string())
+        .collect();
+    params
+        .into_iter()
+        .filter(|(name, _value)| notify_set.contains(*name))
+        .map(|(name, value)| ParameterStatus {
+            name: name.to_string(),
+            value,
+        })
+        .collect()
 }
 
 fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
