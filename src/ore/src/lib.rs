@@ -95,6 +95,7 @@ pub mod str;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod task;
+pub mod temporal;
 #[cfg_attr(nightly_doc_features, doc(cfg(any(test, feature = "test"))))]
 #[cfg(any(test, feature = "test"))]
 pub mod test;

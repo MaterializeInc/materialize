@@ -21,21 +21,12 @@ use mz_ore::cast::CastFrom;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
-/// Timestamp extension for timestamps that can advance by `2^exponent`.
-///
-/// Most likely, this is only relevant for totally ordered timestamps.
-pub trait BucketTimestamp: Timestamp {
-    /// The number of bits in the timestamp.
-    const DOMAIN: usize = size_of::<Self>() * 8;
-    /// Advance this timestamp by `2^exponent`. Returns `None` if the
-    /// timestamp would overflow.
-    fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
-}
+pub use mz_ore::temporal::BucketTimestamp;
 
 /// A type that can be split into two parts based on a timestamp.
 pub trait Bucket: Sized {
     /// The timestamp type associated with this storage.
-    type Timestamp: BucketTimestamp;
+    type Timestamp: BucketTimestamp + Timestamp;
     /// Split self in two, based on the timestamp. The result is a pair of self, where the first
     /// element contains all data with a timestamp strictly less than `timestamp`, and the second
     /// all other data.
@@ -237,18 +228,6 @@ impl<S: Bucket> BucketChain<S> {
 mod tests {
     use super::*;
 
-    impl BucketTimestamp for u8 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u8.checked_shl(bits)?)
-        }
-    }
-
-    impl BucketTimestamp for u64 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits)?)
-        }
-    }
-
     struct TestStorage<T> {
         inner: Vec<T>,
     }
@@ -259,7 +238,7 @@ mod tests {
         }
     }
 
-    impl<T: BucketTimestamp> Bucket for TestStorage<T> {
+    impl<T: BucketTimestamp + Timestamp> Bucket for TestStorage<T> {
         type Timestamp = T;
         fn split(self, timestamp: &T, fuel: &mut i64) -> (Self, Self) {
             *fuel = fuel.saturating_sub(self.inner.len().try_into().expect("must fit"));
@@ -268,7 +247,7 @@ mod tests {
         }
     }
 
-    fn collect_and_sort<T: BucketTimestamp>(peeled: Vec<TestStorage<T>>) -> Vec<T> {
+    fn collect_and_sort<T: BucketTimestamp + Timestamp>(peeled: Vec<TestStorage<T>>) -> Vec<T> {
         let mut collected: Vec<_> = peeled
             .iter()
             .flat_map(|b| b.inner.iter().cloned())
