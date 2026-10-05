@@ -37,272 +37,38 @@ use crate::communication::initialize_networking;
 
 type PartitionedClient<C, R> = Partitioned<LocalClient<C, R>, C, R>;
 
-/// A client managing access to the local portion of a Timely cluster
-pub struct ClusterClient<C>
-where
-    C: ClusterSpec,
-    (C::Command, C::Response): Partitionable<C::Command, C::Response>,
-{
-    /// The actual client to talk to the cluster
-    inner: Option<PartitionedClient<C::Command, C::Response>>,
-    /// The running timely instance
-    timely_container: Arc<Mutex<TimelyContainer<C>>>,
-}
+/// The endpoints a client connection hands to one worker: the connection nonce, the command
+/// receiver, and the response sender.
+pub type ClientConnection<C, R> = (Uuid, mpsc::UnboundedReceiver<C>, mpsc::UnboundedSender<R>);
 
-/// Metadata about timely workers in this process.
-pub struct TimelyContainer<C: ClusterSpec> {
-    /// Channels over which to send endpoints for wiring up a new Client
-    client_txs: Vec<
-        mpsc::UnboundedSender<(
-            Uuid,
-            mpsc::UnboundedReceiver<C::Command>,
-            mpsc::UnboundedSender<C::Response>,
-        )>,
-    >,
-    /// Thread guards that keep worker threads alive
-    worker_guards: WorkerGuards<()>,
-}
+/// Per-worker channels over which a client delivers new [`ClientConnection`]s, indexed by local
+/// worker index.
+pub type ClientConnectionSenders<C, R> = Arc<Vec<mpsc::UnboundedSender<ClientConnection<C, R>>>>;
 
-impl<C: ClusterSpec> TimelyContainer<C> {
-    /// The threads of the Timely workers in this process.
-    pub fn worker_threads(&self) -> Vec<Thread> {
-        self.worker_guards
-            .guards()
-            .iter()
-            .map(|h| h.thread().clone())
-            .collect()
-    }
-}
-
-/// A client to a secondary ("guest") command stream served by workers of
-/// an existing Timely cluster. Like [`ClusterClient`], but the per-worker client channels are
-/// provided externally instead of coming from a [`TimelyContainer`] built for this command type.
-pub struct GuestClusterClient<Cmd, Resp>
-where
-    (Cmd, Resp): Partitionable<Cmd, Resp>,
-{
-    /// Per-worker channels over which to send endpoints for wiring up a new client.
-    client_txs: Arc<
-        Vec<
-            mpsc::UnboundedSender<(
-                Uuid,
-                mpsc::UnboundedReceiver<Cmd>,
-                mpsc::UnboundedSender<Resp>,
-            )>,
-        >,
-    >,
-    /// The worker threads, for unparking on send.
+/// The Timely workers of this process.
+pub struct TimelyCluster {
+    /// Thread guards that keep worker threads alive.
+    ///
+    /// Behind a mutex only to make the cluster `Sync`. Nothing locks it.
+    _worker_guards: Mutex<WorkerGuards<()>>,
+    /// The threads of the Timely workers.
     worker_threads: Vec<Thread>,
-    /// The actual client to talk to the cluster.
-    inner: Option<PartitionedClient<Cmd, Resp>>,
 }
 
-impl<Cmd, Resp> GuestClusterClient<Cmd, Resp>
-where
-    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
-    Resp: fmt::Debug + Send,
-    (Cmd, Resp): Partitionable<Cmd, Resp>,
-{
-    /// Create a new `GuestClusterClient`.
-    pub fn new(
-        client_txs: Arc<
-            Vec<
-                mpsc::UnboundedSender<(
-                    Uuid,
-                    mpsc::UnboundedReceiver<Cmd>,
-                    mpsc::UnboundedSender<Resp>,
-                )>,
-            >,
-        >,
-        worker_threads: Vec<Thread>,
-    ) -> Self {
-        Self {
-            client_txs,
-            worker_threads,
-            inner: None,
-        }
-    }
-
-    fn connect(&mut self, nonce: Uuid) {
-        let mut command_txs = Vec::new();
-        let mut response_rxs = Vec::new();
-        for client_tx in self.client_txs.iter() {
-            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-            client_tx
-                .send((nonce, cmd_rx, resp_tx))
-                .expect("worker not dropped");
-
-            command_txs.push(cmd_tx);
-            response_rxs.push(resp_rx);
-        }
-
-        self.inner = Some(LocalClient::new_partitioned(
-            response_rxs,
-            command_txs,
-            self.worker_threads.clone(),
-        ));
-    }
-}
-
-impl<Cmd, Resp> fmt::Debug for GuestClusterClient<Cmd, Resp>
-where
-    (Cmd, Resp): Partitionable<Cmd, Resp>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GuestClusterClient").finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl<Cmd, Resp> GenericClient<Cmd, Resp> for GuestClusterClient<Cmd, Resp>
-where
-    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
-    Resp: fmt::Debug + Send,
-    (Cmd, Resp): Partitionable<Cmd, Resp>,
-{
-    async fn send(&mut self, cmd: Cmd) -> Result<(), Error> {
-        match cmd.try_into_protocol_nonce() {
-            Ok(nonce) => {
-                self.connect(nonce);
-                Ok(())
-            }
-            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
-        }
-    }
-
-    /// # Cancel safety
+impl TimelyCluster {
+    /// Builds a Timely cluster using the given config, running `run_worker` on each worker.
     ///
-    /// This method is cancel safe, see [`ClusterClient::recv`].
-    async fn recv(&mut self) -> Result<Option<Resp>, Error> {
-        if let Some(client) = self.inner.as_mut() {
-            client.recv().await
-        } else {
-            future::pending().await
-        }
-    }
-}
-
-impl<C> ClusterClient<C>
-where
-    C: ClusterSpec,
-    (C::Command, C::Response): Partitionable<C::Command, C::Response>,
-{
-    /// Create a new `ClusterClient`.
-    pub fn new(timely_container: Arc<Mutex<TimelyContainer<C>>>) -> Self {
-        Self {
-            timely_container,
-            inner: None,
-        }
-    }
-
-    /// Connect to the Timely cluster with the given client nonce.
-    fn connect(&mut self, nonce: Uuid) -> Result<(), Error> {
-        let timely = self.timely_container.lock().expect("poisoned");
-
-        let mut command_txs = Vec::new();
-        let mut response_rxs = Vec::new();
-        for client_tx in &timely.client_txs {
-            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-
-            client_tx
-                .send((nonce, cmd_rx, resp_tx))
-                .expect("worker not dropped");
-
-            command_txs.push(cmd_tx);
-            response_rxs.push(resp_rx);
-        }
-
-        self.inner = Some(LocalClient::new_partitioned(
-            response_rxs,
-            command_txs,
-            timely.worker_threads(),
-        ));
-        Ok(())
-    }
-}
-
-impl<C> fmt::Debug for ClusterClient<C>
-where
-    C: ClusterSpec,
-    (C::Command, C::Response): Partitionable<C::Command, C::Response>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ClusterClient")
-            .field("inner", &self.inner)
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl<C> GenericClient<C::Command, C::Response> for ClusterClient<C>
-where
-    C: ClusterSpec,
-    (C::Command, C::Response): Partitionable<C::Command, C::Response>,
-{
-    async fn send(&mut self, cmd: C::Command) -> Result<(), Error> {
-        // Changing this debug statement requires changing the replica-isolation test
-        tracing::debug!("ClusterClient send={:?}", &cmd);
-
-        match cmd.try_into_protocol_nonce() {
-            Ok(nonce) => self.connect(nonce),
-            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
-        }
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<C::Response>, Error> {
-        if let Some(client) = self.inner.as_mut() {
-            // `Partitioned::recv` is documented as cancel safe.
-            client.recv().await
-        } else {
-            future::pending().await
-        }
-    }
-}
-
-/// Specification for a Timely cluster to which a [`ClusterClient`] connects.
-///
-/// This trait is used to make the [`ClusterClient`] generic over the compute and storage cluster
-/// implementations.
-#[async_trait]
-pub trait ClusterSpec: Clone + Send + Sync + 'static {
-    /// The cluster command type.
-    type Command: fmt::Debug + Send + TryIntoProtocolNonce;
-    /// The cluster response type.
-    type Response: fmt::Debug + Send;
-
-    /// The name of this cluster ("compute" or "storage").
-    const NAME: &str;
-
-    /// Run the given Timely worker.
-    fn run_worker(
-        &self,
-        timely_worker: &mut TimelyWorker,
-        client_rx: mpsc::UnboundedReceiver<(
-            Uuid,
-            mpsc::UnboundedReceiver<Self::Command>,
-            mpsc::UnboundedSender<Self::Response>,
-        )>,
-    );
-
-    /// Build a Timely cluster using the given config.
-    async fn build_cluster(
-        &self,
+    /// `name` identifies the cluster in log spans and worker thread names.
+    pub async fn build<F>(
+        name: &'static str,
         config: TimelyConfig,
         tokio_executor: Handle,
-    ) -> Result<TimelyContainer<Self>, Error> {
+        run_worker: F,
+    ) -> Result<Self, Error>
+    where
+        F: Fn(&mut TimelyWorker) + Send + Sync + 'static,
+    {
         info!("Building timely container with config {config:?}");
-        let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| mpsc::unbounded_channel())
-            .unzip();
-        let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
         let refill = if config.enable_zero_copy_lgalloc {
             BytesRefill {
@@ -373,31 +139,155 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             worker_config.set::<ExertionLogic>("differential/default_exert_logic".to_string(), arc);
         }
 
-        let spec = self.clone();
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let worker_idx = timely_worker.index();
 
             // Per worker tracing span, lets us identify Timely clusters and workers in the logs.
-            let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
+            let span = info_span!("timely", name, worker_id = worker_idx);
             let _span_guard = span.enter();
 
-            // Every Timely instance in this process names its threads `timely:work-N`, restarting
-            // the index at 0, so storage and compute worker threads collide under the same OS
-            // thread name. Rename to disambiguate them for profilers and `top -H`.
-            mz_ore::process::set_current_thread_name(&format!("{}:{worker_idx}", Self::NAME));
+            // Timely names its threads `timely:work-N`, restarting the index at 0 for every
+            // Timely instance in the process. Rename to identify the cluster for profilers and
+            // `top -H`.
+            mz_ore::process::set_current_thread_name(&format!("{name}:{worker_idx}"));
 
             let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[worker_idx % config.workers]
-                .take()
-                .unwrap();
-            spec.run_worker(timely_worker, client_rx);
+            run_worker(timely_worker);
         })
         .map_err(|e| anyhow!(e))?;
 
-        Ok(TimelyContainer {
-            client_txs,
-            worker_guards,
+        let worker_threads = worker_guards
+            .guards()
+            .iter()
+            .map(|h| h.thread().clone())
+            .collect();
+
+        Ok(Self {
+            _worker_guards: Mutex::new(worker_guards),
+            worker_threads,
         })
+    }
+
+    /// The threads of the Timely workers in this process.
+    pub fn worker_threads(&self) -> &[Thread] {
+        &self.worker_threads
+    }
+}
+
+/// Creates the per-worker channels over which clients deliver new connections to `workers`
+/// workers.
+///
+/// The receivers are indexed by local worker index, and each worker takes its own.
+pub fn client_connection_channels<C, R>(
+    workers: usize,
+) -> (
+    ClientConnectionSenders<C, R>,
+    Vec<mpsc::UnboundedReceiver<ClientConnection<C, R>>>,
+) {
+    let (txs, rxs) = (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
+    (Arc::new(txs), rxs)
+}
+
+/// A client managing access to the local portion of a Timely cluster.
+///
+/// Several clients, each for its own command stream, can connect to the same cluster. The
+/// workers serve each stream from their own end of that stream's [`ClientConnectionSenders`].
+pub struct ClusterClient<C, R>
+where
+    (C, R): Partitionable<C, R>,
+{
+    /// Per-worker channels over which to send endpoints for wiring up a new connection.
+    client_txs: ClientConnectionSenders<C, R>,
+    /// The running Timely cluster, whose worker threads are unparked on send.
+    cluster: Arc<TimelyCluster>,
+    /// The actual client to talk to the cluster.
+    inner: Option<PartitionedClient<C, R>>,
+}
+
+impl<C, R> ClusterClient<C, R>
+where
+    C: fmt::Debug + Send + TryIntoProtocolNonce,
+    R: fmt::Debug + Send,
+    (C, R): Partitionable<C, R>,
+{
+    /// Create a new `ClusterClient`.
+    pub fn new(client_txs: ClientConnectionSenders<C, R>, cluster: Arc<TimelyCluster>) -> Self {
+        Self {
+            client_txs,
+            cluster,
+            inner: None,
+        }
+    }
+
+    /// Connect to the Timely cluster with the given client nonce.
+    fn connect(&mut self, nonce: Uuid) {
+        let mut command_txs = Vec::new();
+        let mut response_rxs = Vec::new();
+        for client_tx in self.client_txs.iter() {
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            client_tx
+                .send((nonce, cmd_rx, resp_tx))
+                .expect("worker not dropped");
+
+            command_txs.push(cmd_tx);
+            response_rxs.push(resp_rx);
+        }
+
+        self.inner = Some(LocalClient::new_partitioned(
+            response_rxs,
+            command_txs,
+            self.cluster.worker_threads().to_vec(),
+        ));
+    }
+}
+
+impl<C, R> fmt::Debug for ClusterClient<C, R>
+where
+    C: fmt::Debug,
+    R: fmt::Debug,
+    (C, R): Partitionable<C, R>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClusterClient")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<C, R> GenericClient<C, R> for ClusterClient<C, R>
+where
+    C: fmt::Debug + Send + TryIntoProtocolNonce,
+    R: fmt::Debug + Send,
+    (C, R): Partitionable<C, R>,
+{
+    async fn send(&mut self, cmd: C) -> Result<(), Error> {
+        // Changing this debug statement requires changing the replica-isolation test
+        tracing::debug!("ClusterClient send={:?}", &cmd);
+
+        match cmd.try_into_protocol_nonce() {
+            Ok(nonce) => {
+                self.connect(nonce);
+                Ok(())
+            }
+            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
+    async fn recv(&mut self) -> Result<Option<R>, Error> {
+        if let Some(client) = self.inner.as_mut() {
+            // `Partitioned::recv` is documented as cancel safe.
+            client.recv().await
+        } else {
+            future::pending().await
+        }
     }
 }
 

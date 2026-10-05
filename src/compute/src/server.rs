@@ -16,11 +16,12 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::thread::Thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use mz_cluster::client::{ClusterClient, ClusterSpec, GuestClusterClient};
+use mz_cluster::client::{
+    ClientConnection, ClusterClient, TimelyCluster, client_connection_channels,
+};
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -128,7 +129,6 @@ impl ComputeRuntimeRole {
 }
 
 /// Configures the server with compute-specific metrics.
-#[derive(Clone)]
 struct Config {
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
@@ -149,19 +149,30 @@ struct Config {
     /// NOTE: per compute runtime, not global. A process running a maintenance and an interactive
     /// runtime calls `serve` twice and admits the bound once per call.
     pub peek_permits: Arc<PeekPermits>,
+    /// Per-worker channels delivering compute client connections, indexed by local worker index.
+    pub client_rxs: Mutex<Vec<Option<ComputeClientRx>>>,
     /// Configuration for hosting storage objects on this cluster, if enabled.
-    pub storage_guest: Option<Arc<StorageGuestConfig>>,
+    pub storage_guest: Option<StorageGuestConfig>,
 }
 
+/// A per-worker channel delivering compute client connections.
+type ComputeClientRx = mpsc::UnboundedReceiver<ClientConnection<ComputeCommand, ComputeResponse>>;
+
 /// A per-worker channel delivering storage client connections.
-type StorageClientRx = mpsc::UnboundedReceiver<(
-    Uuid,
-    mpsc::UnboundedReceiver<StorageCommand>,
-    mpsc::UnboundedSender<StorageResponse>,
-)>;
+type StorageClientRx = mpsc::UnboundedReceiver<ClientConnection<StorageCommand, StorageResponse>>;
+
+/// Caller-provided configuration for hosting storage objects on the compute cluster.
+pub struct StorageHostContext {
+    /// Function to get wall time now.
+    pub now: NowFn,
+    /// Configuration for source and sink connections.
+    pub connection_context: ConnectionContext,
+    /// Other configuration for storage instances.
+    pub instance_context: StorageInstanceContext,
+}
 
 /// Configuration for hosting storage objects on the compute cluster.
-pub struct StorageGuestConfig {
+struct StorageGuestConfig {
     /// Per-worker channels delivering storage client connections, indexed by local worker index.
     client_rxs: Mutex<Vec<Option<StorageClientRx>>>,
     /// Metrics for storage objects.
@@ -177,6 +188,10 @@ pub struct StorageGuestConfig {
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
+///
+/// With a `storage` context, the cluster additionally hosts storage objects, processing storage
+/// commands received over a separate client connection, and a builder for storage clients is
+/// returned alongside the one for compute clients.
 pub async fn serve(
     timely_config: TimelyConfig,
     role: ComputeRuntimeRole,
@@ -185,65 +200,30 @@ pub async fn serve(
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
-) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
-    let workers_per_process = timely_config.workers;
-    let config = Config {
-        persist_clients,
-        txns_ctx,
-        tracing_handle,
-        metrics: ComputeMetrics::register_with(metrics_registry, role),
-        context,
-        metrics_registry: metrics_registry.clone(),
-        workers_per_process,
-        peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
-        storage_guest: None,
-    };
-
-    let (_worker_threads, client_builder) = serve_inner(config, timely_config).await?;
-    Ok(client_builder)
-}
-
-/// Initiates a timely dataflow computation that processes compute commands and additionally hosts
-/// storage objects, processing storage commands received over a separate client connection.
-///
-/// Returns client builders for both the compute and the storage side.
-pub async fn serve_unified(
-    timely_config: TimelyConfig,
-    role: ComputeRuntimeRole,
-    metrics_registry: &MetricsRegistry,
-    persist_clients: Arc<PersistClientCache>,
-    txns_ctx: TxnsContext,
-    tracing_handle: Arc<TracingHandle>,
-    context: ComputeInstanceContext,
-    now: NowFn,
-    storage_connection_context: ConnectionContext,
-    storage_instance_context: StorageInstanceContext,
+    storage: Option<StorageHostContext>,
 ) -> Result<
     (
         impl Fn() -> Box<dyn ComputeClient> + use<>,
-        impl Fn() -> Box<dyn StorageClient> + use<>,
+        Option<impl Fn() -> Box<dyn StorageClient> + use<>>,
     ),
     Error,
 > {
     let workers_per_process = timely_config.workers;
 
-    // Per-worker channels over which storage client connections are delivered.
-    let mut storage_client_txs = Vec::new();
-    let mut storage_client_rxs = Vec::new();
-    for _ in 0..workers_per_process {
-        let (tx, rx) = mpsc::unbounded_channel();
-        storage_client_txs.push(tx);
-        storage_client_rxs.push(Some(rx));
-    }
-
-    let storage_guest = StorageGuestConfig {
-        client_rxs: Mutex::new(storage_client_rxs),
-        metrics: StorageMetrics::register_with(metrics_registry),
-        now,
-        connection_context: storage_connection_context,
-        instance_context: storage_instance_context,
-        shared_rocksdb_write_buffer_manager: Default::default(),
-    };
+    let (compute_client_txs, compute_client_rxs) = client_connection_channels(workers_per_process);
+    let mut storage_client_txs = None;
+    let storage_guest = storage.map(|storage| {
+        let (txs, rxs) = client_connection_channels(workers_per_process);
+        storage_client_txs = Some(txs);
+        StorageGuestConfig {
+            client_rxs: Mutex::new(rxs.into_iter().map(Some).collect()),
+            metrics: StorageMetrics::register_with(metrics_registry),
+            now: storage.now,
+            connection_context: storage.connection_context,
+            instance_context: storage.instance_context,
+            shared_rocksdb_write_buffer_manager: Default::default(),
+        }
+    });
 
     let config = Config {
         persist_clients,
@@ -254,28 +234,10 @@ pub async fn serve_unified(
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
         peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
-        storage_guest: Some(Arc::new(storage_guest)),
+        client_rxs: Mutex::new(compute_client_rxs.into_iter().map(Some).collect()),
+        storage_guest,
     };
 
-    let (worker_threads, compute_client_builder) = serve_inner(config, timely_config).await?;
-
-    let storage_client_txs = Arc::new(storage_client_txs);
-    let storage_client_builder = move || {
-        let client =
-            GuestClusterClient::new(Arc::clone(&storage_client_txs), worker_threads.clone());
-        let client: Box<dyn StorageClient> = Box::new(client);
-        client
-    };
-
-    Ok((compute_client_builder, storage_client_builder))
-}
-
-/// Builds the Timely cluster for the given config and returns its worker threads along with a
-/// builder for compute clients to it.
-async fn serve_inner(
-    config: Config,
-    timely_config: TimelyConfig,
-) -> Result<(Vec<Thread>, impl Fn() -> Box<dyn ComputeClient> + use<>), Error> {
     mz_timely_util::column_pager::metrics::register(
         &config.metrics_registry,
         mz_timely_util::column_pager::tiered_policy(),
@@ -284,18 +246,27 @@ async fn serve_inner(
     mz_cluster::client::register_exert_policy_metrics(&config.metrics_registry);
 
     let tokio_executor = tokio::runtime::Handle::current();
+    let cluster = TimelyCluster::build("compute", timely_config, tokio_executor, move |worker| {
+        config.run_worker(worker)
+    })
+    .await?;
+    let cluster = Arc::new(cluster);
 
-    let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
-    let worker_threads = timely_container.worker_threads();
-    let timely_container = Arc::new(Mutex::new(timely_container));
-
-    let client_builder = move || {
-        let client = ClusterClient::new(Arc::clone(&timely_container));
+    let storage_client_builder = storage_client_txs.map(|client_txs| {
+        let cluster = Arc::clone(&cluster);
+        move || {
+            let client = ClusterClient::new(Arc::clone(&client_txs), Arc::clone(&cluster));
+            let client: Box<dyn StorageClient> = Box::new(client);
+            client
+        }
+    });
+    let compute_client_builder = move || {
+        let client = ClusterClient::new(Arc::clone(&compute_client_txs), Arc::clone(&cluster));
         let client: Box<dyn ComputeClient> = Box::new(client);
         client
     };
 
-    Ok((worker_threads, client_builder))
+    Ok((compute_client_builder, storage_client_builder))
 }
 
 /// Error type returned on connection nonce changes.
@@ -507,21 +478,9 @@ struct StorageConn {
     reconcile_buf: Option<Vec<StorageCommand>>,
 }
 
-impl ClusterSpec for Config {
-    type Command = ComputeCommand;
-    type Response = ComputeResponse;
-
-    const NAME: &str = "compute";
-
-    fn run_worker(
-        &self,
-        timely_worker: &mut TimelyWorker,
-        client_rx: mpsc::UnboundedReceiver<(
-            Uuid,
-            mpsc::UnboundedReceiver<ComputeCommand>,
-            mpsc::UnboundedSender<ComputeResponse>,
-        )>,
-    ) {
+impl Config {
+    /// Runs the given Timely worker.
+    fn run_worker(&self, timely_worker: &mut TimelyWorker) {
         if self.context.worker_core_affinity {
             set_core_affinity(timely_worker.index());
         }
@@ -530,6 +489,9 @@ impl ClusterSpec for Config {
         let metrics = self.metrics.for_worker(worker_id);
 
         let local_index = worker_id % self.workers_per_process;
+        let client_rx = self.client_rxs.lock().expect("poisoned")[local_index]
+            .take()
+            .expect("each worker takes its compute client_rx exactly once");
 
         // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.
@@ -545,7 +507,7 @@ impl ClusterSpec for Config {
                 activator_slot: Rc::clone(&activator_slot),
             });
             let internal_cmd_tx = InternalCommandSender::new(internal_tx, activator_slot);
-            (Arc::clone(cfg), storage_client_rx, internal_cmd_tx)
+            (cfg, storage_client_rx, internal_cmd_tx)
         });
 
         // Create the command channel that broadcasts commands from worker 0 to other workers. We
