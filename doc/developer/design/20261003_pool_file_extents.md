@@ -375,6 +375,8 @@ Capacity has no dyncfg, since the pool owns the volume.
   The `correction_mem` example in `src/compute/examples/` takes `--pool-scratch-dir` to run the MV sink's correction buffer over the file backend.
   These supply the file-extent numbers the parent design marks as estimates, and the inputs to the I/O interface decision.
 * **CI:** mzcompose defaults the flag on, so test replicas with a scratch directory run the file backend once their spill gates install the pool.
+  Every mzcompose replica has a scratch directory, and the correction-buffer and upsert spill gates default on there, so the store opens in most runs.
+  Demotion starts only once the pool exceeds its RSS target, a fraction of the CI host's RAM, so a test writes to the store only when it holds that much spilled data.
 * **Staging:** the parent design's upsert-v2 hydration measurement repeated on a disk-provisioned size, reporting the success-criteria metrics.
 
 ## Rollout
@@ -481,6 +483,39 @@ No swap-mode baseline ran, because the instance has no swap configured.
 * **Stranded space:** after churn, allocated file space exceeded live slot bytes by 0.9 to 1.7 GiB, well under the 17 GiB headroom, and no hole punching fired.
 * **Repeat reads:** these made up 52 to 82% of file reads. The harness reads random live chunks without admission, so this measures the harness's access pattern, not a workload's.
   The admission decision needs a real probe workload.
+
+## environmentd measurements
+
+A local `bin/environmentd --release` on the same instance tested whether file mode holds state that a swap-less replica otherwise cannot keep.
+The scripts and the per-run table are in `misc/scratch/pool-file-extents-envd/`, with `results-envd-r8gd.4xlarge.md` holding the raw numbers.
+The workload parks TPC-H `lineitem` at scale factor 10 behind a temporal filter that makes every row valid a day from now, so the rows sit in a buffer that cannot drain.
+An index parks them in the arrange site's chunk batcher, with temporal bucketing on, and a materialized view parks them in the MV sink's correction buffer.
+Each run creates a fresh 8-worker replica, which the process orchestrator runs under a cgroup `MemoryMax` equal to the size's memory limit, with swap off, lgalloc off, and `compute_dataflow_max_inflight_bytes_cc` at 512 MiB.
+
+Two workload details decide whether anything parks at all.
+A TPC-H load generator without a tick interval has an empty write frontier once its snapshot is written, so future-dated rows would pass straight through to the spine, and the parked view therefore reads `lineitem UNION ALL` an empty table to keep its frontier live.
+A temporal filter against a constant folds to an empty collection, so the filter adds `l_orderkey % 2` to the future timestamp.
+The pool ran with a budget fraction of 0.01 and an RSS target fraction of 0.02 of the instance's 128 GiB, which gives a slot budget of about 1.3 GiB and an RSS target of about 2.6 GiB.
+
+| 8 GiB replica | Index (chunk batcher) | Materialized view (correction buffer) |
+|---|---|---|
+| No spilling, 32 GiB replica, for reference | 14.1 GiB RSS | 8.2 GiB RSS |
+| Spill, no backing store | exited at 25 s with VmRSS at the limit | exited at 33 s with VmRSS at the limit |
+| Spill, file store | hydrated in 31 s, peak 5.5 GiB, settled at 3.0 GiB RSS with 4.1 GB on file | hydrated in 36 s, peak 5.2 GiB, settled at 2.7 GiB RSS with 4.5 GB on file |
+
+* **File mode keeps the parked state.**
+  Without a backing store the compressed tier has nowhere to go: the relaunched replicas held 4.8 to 5.3 GB of extents in RAM when scraped, and both arms died at the memory limit.
+  With the file store both arms hydrated and settled under half the unspilled footprint.
+  An earlier swap run of the same workload, at 8 and 4 GiB limits and without the read-ahead bound, settled at 2.6 to 2.9 GiB RSS plus 3.3 to 4.4 GiB of swap, so file mode lands at the swap-backed footprint.
+* **Hydration cost:** the file runs hydrated in 31 and 36 s, against 21 to 25 s for the unspilled runs on a 32 GiB replica.
+* **4 GiB replicas die in both modes.**
+  The pool's budget and RSS target derive from physical RAM, not the replica's limit, so on this host the pool alone claims about 2.6 GiB before non-pool memory.
+  Sizing the pool from the replica's limit is a prerequisite for small replicas.
+* **Persist read-ahead is unbounded without lgalloc.**
+  Without the 512 MiB in-flight cap, a cc replica allocated 4 to 9 GiB in the first second of hydration and was OOM-killed at 4 and 8 GiB, whatever the pool's backend, because fetched parts do not enter the pool.
+  Only swap absorbed that burst.
+* **The pool is not the binding constraint when nothing parks.**
+  An earlier unparked index hydration on a 16 GiB replica peaked at 13.7 GiB in file mode against 14.6 GiB without a backing store, because arrangement building and merging, which do not allocate through the pool, dominate the peak.
 
 ## Decisions
 
