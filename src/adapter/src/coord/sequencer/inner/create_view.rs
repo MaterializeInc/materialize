@@ -18,7 +18,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, RelationDesc, Row};
 use mz_sql::ast::ExplainStage;
-use mz_sql::catalog::CatalogError;
+use mz_sql::catalog::{CatalogError, ObjectType};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
@@ -278,9 +278,14 @@ impl Coordinator {
             session.role_metadata().clone(),
         );
 
+        let replace_target = plan
+            .replace
+            .map(|id| (id, self.catalog().get_entry(&id).name().clone()));
+
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,
             plan,
+            replace_target,
             resolved_ids,
             explain_ctx,
         }))
@@ -292,6 +297,7 @@ impl Coordinator {
         CreateViewOptimize {
             validity,
             plan,
+            replace_target,
             resolved_ids,
             explain_ctx,
         }: CreateViewOptimize,
@@ -337,6 +343,7 @@ impl Coordinator {
                                     item_id,
                                     global_id,
                                     plan,
+                                    replace_target,
                                     optimized_expr,
                                     resolved_ids,
                                 })
@@ -392,15 +399,18 @@ impl Coordinator {
                             column_names,
                             temporary,
                         },
-                    drop_ids,
                     if_not_exists,
                     ..
                 },
+            replace_target,
             optimized_expr,
             resolved_ids,
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        let drop_ids =
+            self.revalidate_or_replace_drop_ids(session, ObjectType::View, replace_target)?;
+
         let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
             catalog::Op::DropObjects(
