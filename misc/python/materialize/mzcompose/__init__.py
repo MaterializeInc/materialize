@@ -129,11 +129,6 @@ def get_minimal_system_parameters(
         ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
-        # Introspection goldens depend on the replica topology, so tests need
-        # one consistent value rather than a varying one.
-        "enable_unified_cluster": (
-            "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
-        ),
         "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
@@ -196,6 +191,15 @@ def get_minimal_system_parameters(
     # against the old binary.
     if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
+
+    # The replica topology switch. Removed in v26.46, where storage objects
+    # always run on the compute Timely cluster. Older binaries still read it,
+    # and introspection goldens depend on the topology, so pin the unified
+    # topology for the binaries that support it.
+    if version < MzVersion.parse_mz("v26.46.0-dev"):
+        config["enable_unified_cluster"] = (
+            "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
+        )
 
     return config
 

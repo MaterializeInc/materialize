@@ -24,7 +24,6 @@
 //!     --compute-controller-listen-addr 127.0.0.1:2101 \
 //!     --storage-controller-listen-addr 127.0.0.1:2100 \
 //!     --compute-timely-config 'TIMELY_CONFIG_JSON' \
-//!     --storage-timely-config 'TIMELY_CONFIG_JSON' \
 //!     --process 0 --scratch-directory /tmp/clusterd-scratch
 //! ```
 //!
