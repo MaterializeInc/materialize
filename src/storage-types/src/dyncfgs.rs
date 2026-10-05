@@ -229,6 +229,17 @@ pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether Kafka sinks attach a `materialize-sink-id` header, holding the
+/// sink's `GlobalId`, to every message they produce.
+///
+/// Environment-scoped because it changes the messages the sink produces.
+pub const KAFKA_SINK_EMIT_SINK_ID_HEADER: Config<bool> = Config::new(
+    "kafka_sink_emit_sink_id_header",
+    false,
+    "Whether Kafka sinks attach a `materialize-sink-id` header to every message they produce.",
+    ParameterScope::Environment,
+);
+
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -581,6 +592,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
+        .add(&KAFKA_SINK_EMIT_SINK_ID_HEADER)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)

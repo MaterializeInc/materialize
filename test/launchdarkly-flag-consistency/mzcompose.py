@@ -313,6 +313,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     kafka_retry_backoff
     kafka_retry_backoff_max
     kafka_sink_batch_num_messages
+    kafka_sink_emit_sink_id_header
     kafka_socket_keepalive
     keep_n_privatelink_status_history_entries
     keep_n_sink_status_history_entries
