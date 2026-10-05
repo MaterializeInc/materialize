@@ -21,7 +21,8 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
 use mz_expr::{
-    BatchInput, ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc,
+    BatchInput, ColumnSpecs, EvalError, Interpreter, MfpBatchSizer, MfpPlan, ResultSpec,
+    UnmaterializableFunc,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -587,6 +588,7 @@ where
         let mut pending_work = VecDeque::new();
         let mut datum_vec = DatumVec::new();
         let mut row_builder = Row::default();
+        let mut mfp_batch_sizer = MfpBatchSizer::new(MFP_BATCH_ROWS);
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
@@ -631,6 +633,7 @@ where
                         &mut row_builder,
                         &mut work,
                         yield_fuel,
+                        &mut mfp_batch_sizer,
                         give,
                     ),
                     mfp => decode_part(
@@ -812,8 +815,8 @@ impl<'a> BatchInput<'a> for PendingRows<'a> {
 /// The most rows [`decode_part_batched`] evaluates at once.
 const MFP_BATCH_ROWS: usize = 16 * 1024;
 
-/// [`decode_part`], but evaluating the MFP over batches of up to [`MFP_BATCH_ROWS`] decoded
-/// rows, with the same results.
+/// [`decode_part`], but evaluating the MFP over batches of decoded rows that `sizer` sizes, up to
+/// [`MFP_BATCH_ROWS`], with the same results.
 fn decode_part_batched<E, F>(
     part: &mut PendingPart,
     panic_on_audit_failure: bool,
@@ -824,6 +827,7 @@ fn decode_part_batched<E, F>(
     row_builder: &mut Row,
     work: &mut usize,
     yield_fuel: usize,
+    sizer: &mut MfpBatchSizer,
     mut give: F,
 ) -> bool
 where
@@ -836,15 +840,19 @@ where
     loop {
         // Each pending row costs at least one unit of work, so the batch stops growing once
         // evaluating it would exhaust the fuel.
-        let limit = MFP_BATCH_ROWS.min(yield_fuel.saturating_sub(*work)).max(1);
+        let limit = sizer.rows().min(yield_fuel.saturating_sub(*work)).max(1);
         let mut exhausted = true;
         pending.clear();
+        let mut pending_bytes = 0;
         while let Some(((key, val), time, diff)) = fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
             }
             match (key, val) {
-                (SourceData(Ok(row)), ()) => pending.push((row, time, diff.into())),
+                (SourceData(Ok(row)), ()) => {
+                    pending_bytes += row.byte_len();
+                    pending.push((row, time, diff.into()));
+                }
                 (SourceData(Err(err)), ()) => {
                     if let Some(stats) = &is_filter_pushdown_audit {
                         report_err_audit_violation(stats, name, &err, panic_on_audit_failure);
@@ -855,7 +863,10 @@ where
                     *work += 1;
                 }
             }
-            if pending.len() >= limit || *work + pending.len() >= yield_fuel {
+            if pending.len() >= limit
+                || pending_bytes >= MfpBatchSizer::TARGET_BYTES
+                || *work + pending.len() >= yield_fuel
+            {
                 exhausted = false;
                 break;
             }
@@ -881,6 +892,7 @@ where
                 give_mfp_result(result, cap_time, until, work, &mut give);
             }
         });
+        sizer.observe(pending.len(), arena.allocated_bytes() + pending_bytes);
 
         if exhausted {
             return true;

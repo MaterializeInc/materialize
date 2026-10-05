@@ -935,7 +935,7 @@ pub(crate) fn mfp_batch_rows(config_set: &ConfigSet) -> Option<usize> {
         .then(|| COMPUTE_MFP_BATCH_ROWS.get(config_set))
 }
 
-/// Applies `mfp` to `oks`, evaluating it over batches of up to `batch_rows`
+/// Applies `mfp` to `oks`, evaluating it over batches of at most `batch_rows`
 /// rows.
 ///
 /// `max_demand` is the number of leading input columns `mfp` reads.
@@ -987,6 +987,7 @@ where
                     outputs.push((i, output));
                 }
             });
+            arena.allocated_bytes()
         },
     );
     (stream.as_collection(), errs.as_collection())
@@ -1846,8 +1847,6 @@ mod tests {
         assert_eq!(extract_row_updates(captured), expected);
     }
 
-    /// Keying by column 0 and thinning the value to column 1 reconstructs the original
-    /// two-column row. The decode below belongs to the capture harness.
     #[mz_ore::test]
     fn as_collection_core_batched_matches_per_row() {
         // #2 = #0 / #1, which fails when #1 is 0; keep rows with #2 > 1.
@@ -1900,6 +1899,8 @@ mod tests {
         assert_eq!(extract_err(batched_errs), per_row_errs);
     }
 
+    /// Keying by column 0 and thinning the value to column 1 reconstructs the original
+    /// two-column row. The decode below belongs to the capture harness.
     #[mz_ore::test]
     fn as_specific_collection_materializes_columnar() {
         let rows = test_rows();

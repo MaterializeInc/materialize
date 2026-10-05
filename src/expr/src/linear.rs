@@ -16,6 +16,8 @@ use crate::scalar::optimizable::OptimizableExpr;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
+pub mod batch;
+
 /// A compound operator that can be applied row-by-row.
 ///
 /// This operator integrates the map, filter, and project operators.
