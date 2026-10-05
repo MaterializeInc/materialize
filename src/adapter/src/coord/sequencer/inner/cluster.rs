@@ -287,22 +287,12 @@ impl Coordinator {
             return Err(AdapterError::AlterClusterScheduleWhileReconfiguring);
         }
 
-        // Replication factor is one of the dimensions the cut-over sets
-        // atomically from the record's target (`fold_reconfiguration_target`),
-        // so a change applied independently while a reconfiguration is in
-        // flight would be silently clobbered at cut-over. Refused even when the
-        // same statement also re-targets the shape, so a record's target
-        // replication factor is always the one it started with.
-        if reconfiguration_in_flight && !matches!(options.replication_factor, Unchanged) {
-            return Err(AdapterError::AlterClusterReplicationFactorWhileReconfiguring);
-        }
-
         // A no-op `ALTER` short-circuits, except that an `ALTER` back to the
         // realized shape while a reconfiguration is in flight produces a
         // byte-identical `new_config` and is still meaningful: it must reach
         // the reshape path below to cancel the record.
         let cancels_or_retargets =
-            reconfiguration_in_flight && alter_changes_replica_shape(options);
+            reconfiguration_in_flight && alter_changes_reconfiguration_target(options);
         if new_config == config && !cancels_or_retargets {
             return Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                 ObjectType::Cluster,
@@ -345,7 +335,7 @@ impl Coordinator {
         if let (Managed(old_managed), Managed(new_managed)) = (&config.variant, &new_config.variant)
         {
             let needs_record = if reconfiguration_in_flight {
-                alter_changes_replica_shape(options)
+                alter_changes_reconfiguration_target(options)
             } else {
                 new_managed.replica_config_shape() != old_managed.replica_config_shape()
             };
@@ -1922,18 +1912,16 @@ fn reconfiguration_wait_result(
     }
 }
 
-/// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
-/// `AVAILABILITY ZONES`, either `INTROSPECTION` option, or `EXPERIMENTAL
-/// ARRANGEMENT COMPRESSION`). These dimensions use a durable reconfiguration
-/// record for MANUAL clusters. Scheduled clusters without an in-flight record
-/// take the direct realized-config path instead.
+/// Whether an `ALTER` statement sets a reconfiguration target dimension.
 ///
 /// A statement-level check, used while a reconfiguration is in flight: an
-/// `ALTER` back to the realized shape sets a shape option without changing its
+/// `ALTER` back to the realized configuration sets an option without changing its
 /// value, yet must reach the reshape path to cancel the record. With nothing
 /// in flight the routing compares values instead (see
 /// `sequence_alter_cluster_stage`).
-fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
+/// Replication-factor changes must update the in-flight target rather than the
+/// realized config, or cut-over would overwrite them with the target's factor.
+fn alter_changes_reconfiguration_target(options: &PlanClusterOption) -> bool {
     use mz_sql::plan::AlterOptionParameter::Unchanged;
     let PlanClusterOption {
         availability_zones,
@@ -1942,13 +1930,14 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
         arrangement_compression,
         managed: _,
         replicas: _,
-        replication_factor: _,
+        replication_factor,
         size,
         schedule: _,
         workload_class: _,
         auto_scaling_strategy: _,
     } = options;
     !matches!(size, Unchanged)
+        || !matches!(replication_factor, Unchanged)
         || !matches!(availability_zones, Unchanged)
         || !matches!(introspection_debugging, Unchanged)
         || !matches!(introspection_interval, Unchanged)
