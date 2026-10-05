@@ -20,6 +20,7 @@ import { capitalizeSentence } from "~/util";
 import CommandResultNotice from "./CommandResultNotice";
 import { ERROR_NOTICE_OUTPUT_MAX_WIDTH, TABLE_PAGE_SIZE } from "./constants";
 import ErrorOutput from "./ErrorOutput";
+import { formatExecutionTime } from "./executionTime";
 import formatRows from "./formatRows";
 import SqlSelectTable, { TablePagination } from "./SqlSelectTable";
 import {
@@ -29,6 +30,9 @@ import {
 } from "./store/shell";
 import { calculateCommandDuration, formatCommandDuration } from "./timings";
 import useCommandOutputPagination from "./useCommandOutputPagination";
+
+const ROUND_TRIP_HELP =
+  "Returned in: the time until the result arrived, including the network, measured from sending the input or, for its later statements, from the previous result.";
 
 const CommandResult = ({
   commandResultIndex,
@@ -48,6 +52,7 @@ const CommandResult = ({
     rows,
     cols,
     notices,
+    executionTime,
   } = commandResult;
   const isSubscribeManager =
     commandOutput.commandResultsDisplayStates[commandResultIndex]
@@ -112,7 +117,8 @@ const CommandResult = ({
   const timeTaken = calculateCommandDuration(commandResultIndex, commandOutput);
 
   const timeTakenStr = timeTaken
-    ? `Returned in ${formatCommandDuration(timeTaken)}`
+    ? `Returned in ${formatCommandDuration(timeTaken)}` +
+      (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
     : null;
 
   // A cancelled query and a dropped connection both surface as errors so that
@@ -169,7 +175,11 @@ const CommandResult = ({
             {timeTakenStr}
           </Code>
           <Tooltip
-            label="The total time to submit, execute, receive, and render the query results over the network."
+            label={
+              executionTime
+                ? `${ROUND_TRIP_HELP} The second number is measured by Materialize: for a query, until its first row was ready, excluding delivering the rows; for other statements, until they completed.`
+                : ROUND_TRIP_HELP
+            }
             placement="right"
             color={colors.foreground.secondary}
             background={colors.background.secondary}

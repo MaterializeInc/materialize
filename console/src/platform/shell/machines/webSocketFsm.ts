@@ -20,6 +20,10 @@ import { assert } from "~/util";
 
 import { COMMAND_INTERRUPTED_MESSAGE } from "../constants";
 import {
+  EXECUTION_TIME_NOTICE_CODE,
+  parseExecutionTimeNotice,
+} from "../executionTime";
+import {
   CommandOutput,
   CommandResult,
   createDefaultCommandOutput,
@@ -155,7 +159,18 @@ const addNoticeToLatestCommandResult = assign<WebSocketFsmContext, NoticeEvent>(
     latestCommandOutput: ({ latestCommandOutput }, event) => {
       const latestCommandResult = getLatestCommandResult(latestCommandOutput);
 
-      latestCommandResult.notices.push(event.notice);
+      if (event.notice.code === EXECUTION_TIME_NOTICE_CODE) {
+        // The server sends the execution time before the statement's
+        // CommandComplete, so the latest result is the statement it describes.
+        // One this Console cannot read, e.g. of a kind added later, is
+        // dropped, which leaves the round trip alone.
+        const executionTime = parseExecutionTimeNotice(event.notice);
+        if (executionTime) {
+          latestCommandResult.executionTime = executionTime;
+        }
+      } else {
+        latestCommandResult.notices.push(event.notice);
+      }
       return latestCommandOutput;
     },
   },
@@ -322,7 +337,7 @@ export const webSocketFsm = createMachine<
           actions: completeLatestCommandResult,
         },
         NOTICE: {
-          target: "commandInProgressHasRows",
+          target: "commandInProgressDefault",
           actions: addNoticeToLatestCommandResult,
         },
         ERROR: {

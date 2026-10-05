@@ -27,3 +27,23 @@ The SQL Shell also includes:
 - A [Quickstart](/get-started/quickstart/) tutorial. You can close the
   Quickstart by clicking the **Close Quickstart** button in the top-right
   corner.
+
+## Query timing
+
+Below each result, the SQL Shell shows how long the statement took, for
+example `Returned in 148.0ms · 12.0ms to first row (served from an index)`:
+
+- **Returned in** is the time until the statement's result arrived in your
+  browser, including the network. It is measured from sending your input or,
+  for the second and later statements of one input, from the previous result.
+- The second number is measured by Materialize:
+  - For a query, it ends when the first row is ready, so it does not include
+    sending the rows to your browser. A query without rows shows the time to its
+    empty result.
+  - For a write outside an explicit transaction, it includes the commit. Inside
+    `BEGIN ... COMMIT`, a write shows its time before the commit, and `COMMIT`
+    shows the commit.
+  - For other statements, it ends when the statement completes.
+
+`SUBSCRIBE` results, and environments that do not report the second number,
+show the round trip only.
