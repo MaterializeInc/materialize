@@ -465,10 +465,9 @@ impl StorageGuest {
     /// The longest the worker may park before the guest's next periodic duty (frontier reporting
     /// or statistics collection) comes due, or `None` when no duty is pending.
     ///
-    /// Mirrors the parking of storage's own server loop: the maintenance and statistics intervals
-    /// bound the park. A maintenance deadline in the past does not bound it, because maintenance
-    /// runs on the next wakeup anyway. The initial zero maintenance interval would otherwise turn
-    /// every park into a spin.
+    /// The maintenance and statistics intervals bound the park. A maintenance deadline in the past
+    /// does not bound it, because maintenance runs on the next wakeup anyway. The initial zero
+    /// maintenance interval would otherwise turn every park into a spin.
     fn park_cap(&self) -> Option<Duration> {
         // Periodic duties run only on a reconciled connection. Without one there is no deadline
         // to meet, and connection and command arrivals unpark the worker.
@@ -545,7 +544,7 @@ impl ClusterSpec for Config {
                 rx: internal_rx,
                 activator_slot: Rc::clone(&activator_slot),
             });
-            let internal_cmd_tx = InternalCommandSender::from_parts(internal_tx, activator_slot);
+            let internal_cmd_tx = InternalCommandSender::new(internal_tx, activator_slot);
             (Arc::clone(cfg), storage_client_rx, internal_cmd_tx)
         });
 
@@ -560,13 +559,10 @@ impl ClusterSpec for Config {
 
         // Create the storage guest state.
         let storage = guest_setup.map(|(cfg, storage_client_rx, internal_cmd_tx)| {
-            let storage_state = StorageState::new_guest(
+            let storage_state = StorageState::new(
                 timely_worker.index(),
                 timely_worker.peers(),
                 internal_cmd_tx,
-                // The host dispatches internal commands from the unified command channel, so
-                // the guest reads no receiver of its own.
-                None,
                 cfg.metrics.clone(),
                 cfg.now.clone(),
                 cfg.connection_context.clone(),
@@ -769,26 +765,16 @@ impl<'w> Worker<'w> {
     /// Dispatch a storage-internal command from the command channel to
     /// the storage guest. This is where all storage dataflow rendering happens.
     fn handle_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
-        let mut guest = self
+        let guest = self
             .storage
-            .take()
+            .as_mut()
             .expect("the command channel carries storage commands only when a guest is hosted");
 
-        let mut worker = StorageWorker {
+        StorageWorker {
             timely_worker: &mut *self.timely_worker,
-            client_rx: guest.client_rx,
-            storage_state: guest.storage_state,
-        };
-        worker.handle_internal_storage_command(cmd);
-
-        let StorageWorker {
-            timely_worker: _,
-            client_rx,
-            storage_state,
-        } = worker;
-        guest.client_rx = client_rx;
-        guest.storage_state = storage_state;
-        self.storage = Some(guest);
+            storage_state: &mut guest.storage_state,
+        }
+        .handle_internal_storage_command(cmd);
     }
 
     /// Process the storage guest's per-iteration duties: accept client
@@ -796,7 +782,7 @@ impl<'w> Worker<'w> {
     /// `InitializationComplete`), forward async worker responses, and report frontiers, dropped
     /// collections, status updates, and statistics.
     fn process_storage_guest(&mut self) {
-        let Some(mut guest) = self.storage.take() else {
+        let Some(guest) = self.storage.as_mut() else {
             return;
         };
 
@@ -818,8 +804,7 @@ impl<'w> Worker<'w> {
 
         let mut worker = StorageWorker {
             timely_worker: &mut *self.timely_worker,
-            client_rx: guest.client_rx,
-            storage_state: guest.storage_state,
+            storage_state: &mut guest.storage_state,
         };
 
         // Handle responses from the async worker. Only worker 0 does async processing, so only
@@ -831,15 +816,7 @@ impl<'w> Worker<'w> {
             worker.handle_async_worker_response(response);
         }
 
-        let Some(mut conn) = guest.conn.take() else {
-            let StorageWorker {
-                timely_worker: _,
-                client_rx,
-                storage_state,
-            } = worker;
-            guest.client_rx = client_rx;
-            guest.storage_state = storage_state;
-            self.storage = Some(guest);
+        let Some(conn) = guest.conn.as_mut() else {
             return;
         };
 
@@ -891,15 +868,9 @@ impl<'w> Worker<'w> {
             }
         }
 
-        let StorageWorker {
-            timely_worker: _,
-            client_rx,
-            storage_state,
-        } = worker;
-        guest.client_rx = client_rx;
-        guest.storage_state = storage_state;
-        guest.conn = (!disconnected).then_some(conn);
-        self.storage = Some(guest);
+        if disconnected {
+            guest.conn = None;
+        }
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {

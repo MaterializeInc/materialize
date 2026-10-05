@@ -106,7 +106,8 @@ parameter change took effect on replica restart. Following the repository
 convention, the parameter defaulted off in production and on in CI, so
 sqllogictest, testdrive, and the nightly suites exercised the unified topology
 continuously before it was enabled anywhere real. After the rollout reached
-all of production, the parameter and the two-cluster topology were removed.
+all of production, the parameter and the two-cluster topology were removed,
+along with storage's own server loop and command sequencer.
 
 ### Semantics change: shared blast radius
 
