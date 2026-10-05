@@ -47,6 +47,7 @@ import {
   useFreshnessObjects,
 } from "~/platform/clusters/queries";
 import { useAllClusters } from "~/store/allClusters";
+import { useAllObjects } from "~/store/allObjects";
 import { MaterializeTheme } from "~/theme";
 import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
@@ -106,6 +107,9 @@ const FreshnessContent = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const objects = useFreshnessObjects(clusterId);
+  // Distinguishes a cluster that has nothing on it from one whose objects have
+  // not arrived yet. Both are an empty list, and they are not the same state.
+  const { snapshotComplete } = useAllObjects();
   const {
     data: {
       historicalData,
@@ -189,28 +193,35 @@ const FreshnessContent = ({
     () => rows.filter((row) => row.breaching),
     [rows],
   );
-  const ok = breaching.length === 0;
   const predicateLabel = PREDICATE_LABELS[predicate];
   const window =
     predicate === "current" ? "" : ` in the ${rangeLabel.toLowerCase()}`;
 
+  // Before the headline, the graph and the tables, because each of them would
+  // otherwise render its own "0" and the page would read as a passing health
+  // check for a cluster with nothing on it.
+  if (objects.length === 0) {
+    return snapshotComplete ? (
+      <Box padding="4" color={colors.foreground.secondary}>
+        No objects on this cluster.
+      </Box>
+    ) : (
+      <Box height="320px" width="100%">
+        <LoadingContainer />
+      </Box>
+    );
+  }
+
   return (
     <VStack alignItems="stretch" width="100%" spacing="4">
-      <HStack spacing="2" alignItems="center">
-        <Box
-          boxSize="2.5"
-          borderRadius="full"
-          background={ok ? colors.accent.green : colors.accent.red}
-        />
-        <Text textStyle="text-base">
-          <b>
-            {breaching.length} of {rows.length}
-          </b>{" "}
-          {rows.length === 1 ? "object" : "objects"} exceeded{" "}
-          {formatDurationExact(thresholdControl.settled)} {predicateLabel}
-          {window}.
-        </Text>
-      </HStack>
+      <Text textStyle="text-base">
+        <b>
+          {breaching.length} of {rows.length}
+        </b>{" "}
+        {rows.length === 1 ? "object" : "objects"} exceeded{" "}
+        {formatDurationExact(thresholdControl.settled)} {predicateLabel}
+        {window}.
+      </Text>
 
       <Accordion allowMultiple defaultIndex={[0, 1]}>
         <AccordionItem>
