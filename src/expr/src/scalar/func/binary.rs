@@ -10,6 +10,7 @@
 //! Utilities for binary functions.
 
 use mz_ore::assert_none;
+use mz_repr::batch::DatumBatch;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::{Eval, EvalError};
@@ -23,6 +24,18 @@ pub(crate) trait LazyBinaryFunc {
         temp_storage: &'a RowArena,
         exprs: &[&'a impl Eval],
     ) -> Result<Datum<'a>, EvalError>;
+
+    /// Evaluates over one batch per argument, all of the same length,
+    /// yielding one row per input row. `None` when this function has no
+    /// batch form.
+    fn eval_batch<'a>(
+        &self,
+        batches: &[&'a DatumBatch<EvalError>],
+        temp_storage: &'a RowArena,
+    ) -> Option<DatumBatch<EvalError>> {
+        let _ = (batches, temp_storage);
+        None
+    }
 
     /// The output SqlColumnType of this function.
     fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
@@ -90,6 +103,16 @@ pub(crate) trait EagerBinaryFunc {
 
     fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
+    /// Batch form of [`Self::call`], derived from the batch forms of the
+    /// argument and result types. `None` when either lacks one.
+    fn call_batch<'a>(
+        &self,
+        batches: &[&'a DatumBatch<EvalError>],
+        temp_storage: &'a RowArena,
+    ) -> Option<DatumBatch<EvalError>> {
+        crate::scalar::func::batch::call_binary(self, batches, temp_storage)
+    }
+
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
 
@@ -142,6 +165,14 @@ pub(crate) trait EagerBinaryFunc {
 }
 
 impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
+    fn eval_batch<'a>(
+        &self,
+        batches: &[&'a DatumBatch<EvalError>],
+        temp_storage: &'a RowArena,
+    ) -> Option<DatumBatch<EvalError>> {
+        self.call_batch(batches, temp_storage)
+    }
+
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],

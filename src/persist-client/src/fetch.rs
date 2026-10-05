@@ -11,6 +11,7 @@
 
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1104,6 +1105,20 @@ pub(crate) struct EncodedPart<T> {
     ts_rewrite: Option<Antichain<T>>,
 }
 
+/// The structured decoders of a [`FetchedPart`] together with a run of its rows.
+#[derive(Debug)]
+pub struct StructuredChunk<'a, K: Codec, V: Codec, T, D> {
+    /// The key decoder, indexed by the positions in `range`.
+    pub key: &'a <K::Schema as Schema<K>>::Decoder,
+    /// The value decoder, indexed by the positions in `range`.
+    pub val: &'a <V::Schema as Schema<V>>::Decoder,
+    /// The rows this chunk covers.
+    pub range: Range<usize>,
+    /// For each row in `range`, its time and diff after the fetch filter, or
+    /// `None` when the filter drops the row or its diff is zero.
+    pub updates: Vec<Option<(T, D)>>,
+}
+
 impl<K, V, T, D> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
@@ -1111,6 +1126,56 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64 + Send + Sync,
 {
+    /// The structured decoders and the next `max_len` undecoded rows of this
+    /// part, advancing past them. A `max_len` of zero probes for structured
+    /// decoders without consuming any row.
+    ///
+    /// Returns `None` when the part has no structured decoders or no rows
+    /// remain. Unlike [`Self::next_with_storage`] this does not consolidate
+    /// adjacent identical rows, and the two must not be mixed on one part: a
+    /// row that `next_with_storage` has stashed for consolidation would be
+    /// lost.
+    pub fn next_structured_chunk(
+        &mut self,
+        max_len: usize,
+    ) -> Option<StructuredChunk<'_, K, V, T, D>> {
+        debug_assert!(
+            self.peek_stash.is_none(),
+            "structured chunks must not be mixed with row-at-a-time reads"
+        );
+        let (key, val) = match &self.part {
+            EitherOrBoth::Right(decoders) | EitherOrBoth::Both(_, decoders) => {
+                (&decoders.0, &decoders.1)
+            }
+            EitherOrBoth::Left(_) => return None,
+        };
+        let start = self.part_cursor;
+        if start >= self.timestamps.len() {
+            return None;
+        }
+        let end = start.saturating_add(max_len).min(self.timestamps.len());
+        self.part_cursor = end;
+        let updates = (start..end)
+            .map(|index| {
+                let mut t = T::decode(self.timestamps.values()[index].to_le_bytes());
+                if !self.ts_filter.filter_ts(&mut t) {
+                    return None;
+                }
+                let d = D::decode(self.diffs.values()[index].to_le_bytes());
+                if d.is_zero() {
+                    return None;
+                }
+                Some((t, d))
+            })
+            .collect();
+        Some(StructuredChunk {
+            key,
+            val,
+            range: start..end,
+            updates,
+        })
+    }
+
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
     ///
     /// When `result_override` is specified, return it instead of decoding data.

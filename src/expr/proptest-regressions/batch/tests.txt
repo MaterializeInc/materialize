@@ -1,0 +1,16 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9a3abe566ac79e79dbe8612b03e64fa73780a5381bae7bbaaabd90c940d75994 # shrinks to mfp = MapFilterProject { expressions: [], predicates: [(1, CallBinary(Gt(Gt), CallBinary(AddInt64(AddInt64), Literal(Ok(Row{[Null]}), ReprColumnType { scalar_type: Int64, nullable: true }), Column(0)), Column(0)))], projection: [], input_arity: 3 }, rows = []

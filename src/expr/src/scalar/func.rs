@@ -55,6 +55,7 @@ use crate::{EvalError, like_pattern};
 
 #[macro_use]
 mod macros;
+mod batch;
 mod binary;
 mod encoding;
 pub(crate) mod format;

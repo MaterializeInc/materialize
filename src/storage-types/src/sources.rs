@@ -1432,6 +1432,14 @@ pub enum SourceDataRowColumnarDecoder {
 }
 
 impl SourceDataRowColumnarDecoder {
+    /// The row decoder, or `None` for a relation with no columns.
+    pub fn as_rows(&self) -> Option<&RowColumnarDecoder> {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => Some(decoder),
+            SourceDataRowColumnarDecoder::EmptyRow => None,
+        }
+    }
+
     pub fn decode(&self, idx: usize, row: &mut Row) {
         match self {
             SourceDataRowColumnarDecoder::Row(decoder) => decoder.decode(idx, row),
@@ -1492,6 +1500,18 @@ impl SourceDataColumnarDecoder {
             row_decoder,
             err_decoder: errs.clone(),
         })
+    }
+}
+
+impl SourceDataColumnarDecoder {
+    /// The decoder for the rows of `Ok` entries.
+    pub fn rows(&self) -> &SourceDataRowColumnarDecoder {
+        &self.row_decoder
+    }
+
+    /// Whether entry `idx` is an `Err`.
+    pub fn is_err(&self, idx: usize) -> bool {
+        !self.err_decoder.is_null(idx)
     }
 }
 
