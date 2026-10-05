@@ -1092,8 +1092,11 @@ export function buildFreshnessData(
         yAccessor: (d: DataPoint) => {
           const dataPointLag = d.lag[objectId];
           if (dataPointLag) {
-            // We want it to show up at the bottom.
-            return dataPointLag.queryable ? dataPointLag.totalMs : 0;
+            // `null` breaks the line rather than drawing a point. A reading
+            // that could not be taken has no height, and drawing it at zero
+            // put the worst state at the bottom of the plot, which reads as
+            // the healthiest line on the chart.
+            return dataPointLag.queryable ? dataPointLag.totalMs : null;
           }
           return null;
         },

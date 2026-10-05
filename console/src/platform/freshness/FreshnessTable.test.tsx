@@ -12,9 +12,10 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
 import { renderComponent } from "~/test/utils";
 
-import { FreshnessRow } from "./freshnessRows";
+import { FreshnessRow, UNREADABLE } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
 
 const buildRow = (overrides: Partial<FreshnessRow>): FreshnessRow => ({
@@ -29,7 +30,6 @@ const buildRow = (overrides: Partial<FreshnessRow>): FreshnessRow => ({
   p90: 9_000,
   breachValue: 9_000,
   breaching: true,
-  notQueryable: false,
   color: "#ff0000",
   ...overrides,
 });
@@ -119,6 +119,30 @@ describe("FreshnessTable", () => {
 
     await userEvent.click(await screen.findByText("users_idx"));
     expect(onToggleRow).toHaveBeenCalledWith("u2");
+  });
+
+  it("names an unreadable reading rather than printing Infinity", async () => {
+    // `UNREADABLE` is `Infinity`, so the cell is the one place it could reach
+    // the screen.
+    await renderComponent(
+      <FreshnessTable
+        rows={[
+          buildRow({
+            key: "u9",
+            objectName: "unreadable_mv",
+            current: UNREADABLE,
+            peak: UNREADABLE,
+            p90: 400,
+            breachValue: UNREADABLE,
+            breaching: true,
+          }),
+        ]}
+      />,
+    );
+
+    const row = (await screen.findByText("unreadable_mv")).closest("tr");
+    expect(within(row!).getAllByText(NULL_LAG_TEXT)).toHaveLength(2);
+    expect(screen.queryByText(/∞|Infinity/)).not.toBeInTheDocument();
   });
 
   it("opens sorted worst first", async () => {

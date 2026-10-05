@@ -26,7 +26,7 @@ import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { formatDurationForAxis } from "~/utils/format";
 
-import { FreshnessRow } from "./freshnessRows";
+import { FreshnessRow, UNREADABLE } from "./freshnessRows";
 
 const PAGE_SIZE = 25;
 
@@ -65,35 +65,21 @@ const StatCell = ({
   row: FreshnessRow;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const breaching = row.breaching && row.breachValue === value;
+  const unreadable = value === UNREADABLE;
+  const marked = unreadable || (row.breaching && row.breachValue === value);
 
   return (
     <Text
-      color={breaching ? colors.accent.red : undefined}
-      fontWeight={breaching ? "500" : undefined}
+      color={marked ? colors.accent.red : undefined}
+      fontWeight={marked ? "500" : undefined}
     >
-      {value === null ? NO_VALUE : formatDurationForAxis(value)}
+      {value === null
+        ? NO_VALUE
+        : unreadable
+          ? NULL_LAG_TEXT
+          : formatDurationForAxis(value)}
     </Text>
   );
-};
-
-/**
- * The "Now" cell, which is where an unreadable object is called out.
- *
- * Such a row carries `breachValue: Infinity` so it sorts and highlights as the
- * worst one. Naming the state here is what keeps that number off the screen.
- */
-const NowCell = ({ row }: { row: FreshnessRow }) => {
-  const { colors } = useTheme<MaterializeTheme>();
-
-  if (row.notQueryable) {
-    return (
-      <Text color={colors.accent.red} fontWeight="500">
-        {NULL_LAG_TEXT}
-      </Text>
-    );
-  }
-  return <StatCell value={row.current} row={row} />;
 };
 
 const HydrationCell = ({ row }: { row: FreshnessRow }) => {
@@ -147,7 +133,9 @@ const columns = [
     // `numericNullsLast` rather than the text collation, which compares 12.48
     // as (12, 48) against 12.5 as (12, 5) and calls the first one larger.
     sortingFn: sortingFunctions.numericNullsLast,
-    cell: (info) => <NowCell row={info.row.original} />,
+    cell: (info) => (
+      <StatCell value={info.row.original.current} row={info.row.original} />
+    ),
   }),
   columnHelper.accessor("peak", {
     header: "Peak",

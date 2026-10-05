@@ -19,6 +19,7 @@ import {
   computeStats,
   judgeLines,
   Predicate,
+  UNREADABLE,
 } from "./freshnessRows";
 import { HydrationCounts } from "./queries";
 
@@ -62,13 +63,12 @@ const buildData = (series: Record<string, Reading[]>, length: number) =>
 
 const data = buildData(SERIES, 5);
 
-// Mirrors the accessor `useClusterFreshness` builds, including its mapping of
-// an unreadable reading to 0 so the line draws at the bottom of the graph. The
-// statistics must not inherit that 0.
+// Mirrors the accessor `useClusterFreshness` builds. `null` for an unreadable
+// reading breaks the line rather than drawing it at the bottom of the plot.
 const accessorFor = (key: string) => (d: DataPoint) => {
   const reading = d.lag[key];
   if (!reading) return null;
-  return reading.queryable ? reading.totalMs : 0;
+  return reading.queryable ? reading.totalMs : null;
 };
 
 const lines = Object.keys(SERIES).map((key) => ({
@@ -93,11 +93,18 @@ const objectsById = new Map<string, FreshnessObject>(
 /**
  * What the latest-reading query returns: each object's newest reading, which
  * the binned series cannot supply once a bin spans more than a minute.
+ *
+ * An object with no reading is absent from the map. One whose newest reading
+ * came back NULL maps to `null`. The two mean opposite things, and only the
+ * second says the object could not be read.
  */
 const latestByObjectId = new Map<string, number | null>(
-  Object.entries(SERIES).map(([key, readings]) => {
+  Object.entries(SERIES).flatMap(([key, readings]) => {
     const last = readings.at(-1);
-    return [key, typeof last === "number" ? last : null];
+    if (last === "missing") return [];
+    return [
+      [key, last === "unreadable" ? null : last] as [string, number | null],
+    ];
   }),
 );
 
@@ -142,22 +149,20 @@ describe("computeStats", () => {
       current: null,
       peak: null,
       p90: null,
-      notQueryable: false,
     });
   });
 
-  it("does not let an unreadable reading score as zero lag", () => {
+  it("counts an unreadable reading as worse than any lag", () => {
     const stats = computeStats(
       "unreadable",
       data,
       latestByObjectId.get("unreadable"),
     );
-    // The graph's accessor returns 0 for these readings so the line draws at
-    // the bottom. Inheriting that would score the worst state as the best.
-    expect(accessorFor("unreadable")(data[4]!)).toBe(0);
-    expect(stats.notQueryable).toBe(true);
-    expect(stats.peak).toBe(420);
-    expect(stats.current).toBeNull();
+    // The graph breaks its line at these readings rather than drawing them.
+    expect(accessorFor("unreadable")(data[4]!)).toBeNull();
+    // The statistics still see them, as the worst value there is.
+    expect(stats.peak).toBe(UNREADABLE);
+    expect(stats.current).toBe(UNREADABLE);
   });
 
   it('takes "Now" from the latest reading, not the worst in the last bin', () => {
@@ -171,6 +176,52 @@ describe("computeStats", () => {
     const stats = computeStats("spiky", data, 430);
     expect(stats.current).toBe(430);
     expect(stats.peak).toBe(9_000);
+  });
+
+  it("lets one unreadable reading in sixty pass p90", () => {
+    // The reviewer's case: unreadable once about twenty hours ago, healthy
+    // since. It has to still breach "at any moment", because that reading was
+    // the worst thing in the window. It must not breach "right now", and one
+    // bad reading in sixty is not more than 10% of them.
+    const series = buildData(
+      {
+        mv: Array.from({ length: 60 }, (_, i) =>
+          i === 10 ? ("unreadable" as const) : 400,
+        ),
+      },
+      60,
+    );
+    const stats = computeStats("mv", series, 400);
+
+    expect(stats.peak).toBe(UNREADABLE);
+    expect(stats.p90).toBe(400);
+    expect(stats.current).toBe(400);
+
+    const line = { key: "mv", yAccessor: () => null };
+    const byKey = new Map([["mv", stats]]);
+    const breaches = (predicate: Predicate) => {
+      const value = judgeLines([line], series, predicate, byKey)[0].breachValue;
+      return value !== null && value > 2_000;
+    };
+
+    expect(breaches("current")).toBe(false);
+    expect(breaches("p90")).toBe(false);
+    expect(breaches("peak")).toBe(true);
+  });
+
+  it("breaches p90 once a tenth of the readings are bad, of either kind", () => {
+    // Three unreadable and four slow is seven of sixty. Neither kind reaches
+    // the bar alone, and together they do.
+    const series = buildData(
+      {
+        mv: Array.from({ length: 60 }, (_, i) =>
+          i < 3 ? ("unreadable" as const) : i < 7 ? 9_000 : 400,
+        ),
+      },
+      60,
+    );
+    const stats = computeStats("mv", series, 400);
+    expect(stats.p90).toBe(9_000);
   });
 
   it("discards a short spike that the peak keeps", () => {
@@ -247,7 +298,7 @@ describe("buildFreshnessRows", () => {
       "unreadable",
     ]);
     expect(rows.find((r) => r.key === "unreadable")).toMatchObject({
-      notQueryable: true,
+      peak: UNREADABLE,
     });
   });
 

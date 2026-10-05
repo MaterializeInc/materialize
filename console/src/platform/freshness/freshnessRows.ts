@@ -37,8 +37,6 @@ export interface FreshnessRow {
   /** The statistic the active predicate judges this row by. */
   breachValue: number | null;
   breaching: boolean;
-  /** The object reported an unreadable lag; its numbers are not comparable. */
-  notQueryable: boolean;
   /** The color its line is drawn in, or undefined when it is not drawn. */
   color: string | undefined;
 }
@@ -47,11 +45,6 @@ export interface ObjectStats {
   current: number | null;
   peak: number | null;
   p90: number | null;
-  /**
-   * The object reported an unreadable lag at some point in the window.
-   * Counts as a breach at any threshold.
-   */
-  notQueryable: boolean;
 }
 
 /**
@@ -66,6 +59,13 @@ export interface ObjectStats {
  * readings p99 *is* the peak and the two predicates would select identically.
  * Each reading is also already a maximum over its bin, so these are
  * percentiles of maxima rather than of the underlying lag.
+ *
+ * A reading that could not be taken counts as `UNREADABLE`, which is
+ * `Infinity`, so it ranks above every measured lag and lands in the
+ * denominator. It therefore counts once, the same as one reading over the
+ * threshold: six unreadable readings out of sixty no more breach p90 than six
+ * slow ones do. A flag that overrode the percentile instead would let a single
+ * unreadable reading outrank fifty-nine healthy ones.
  */
 export function computeStats(
   key: string,
@@ -73,24 +73,16 @@ export function computeStats(
   latest: number | null | undefined,
 ): ObjectStats {
   const values: number[] = [];
-  let notQueryable = false;
 
   for (const d of data) {
     const reading = d.lag[key];
-    // No reading for this object in this bin says nothing about it.
+    // No reading at all says nothing about the object, so it is not a reading.
     if (reading === undefined) continue;
-    // A reading whose lag is NULL is a measurement, and its answer is that the
-    // object could not be read. Reading it through the graph's accessor would
-    // hand back 0, which scores the worst state as the best one.
-    if (!reading.queryable) {
-      notQueryable = true;
-      continue;
-    }
-    values.push(reading.totalMs);
+    values.push(reading.queryable ? reading.totalMs : UNREADABLE);
   }
 
   if (values.length === 0) {
-    return { current: latest ?? null, peak: null, p90: null, notQueryable };
+    return { current: currentFrom(latest), peak: null, p90: null };
   }
 
   const sorted = [...values].sort((a, b) => a - b);
@@ -100,12 +92,24 @@ export function computeStats(
     // The newest reading, not the newest bin. A bin reports the worst reading
     // in its span, so at a 24 hour range the last one answers "the worst of
     // the last 24 minutes" when the question asked was "right now".
-    current: latest ?? null,
+    current: currentFrom(latest),
     peak: sorted[sorted.length - 1],
     p90: sorted[rank],
-    notQueryable,
   };
 }
+
+/**
+ * A reading whose lag came back NULL: the object could not be read.
+ *
+ * `Infinity` rather than a flag, so it sorts, ranks and compares against a
+ * threshold as the worst possible lag without any statistic needing to know
+ * about it. It is never formatted; a cell checks for it and names the state.
+ */
+export const UNREADABLE = Infinity;
+
+/** `null` is no reading at all, which is not the same as one that failed. */
+const currentFrom = (latest: number | null | undefined) =>
+  latest === null ? UNREADABLE : (latest ?? null);
 
 const statFor = (stats: ObjectStats, predicate: Predicate) =>
   predicate === "current"
@@ -139,10 +143,7 @@ export function judgeLines(
       key: line.key,
       label: line.label,
       yAccessor: line.yAccessor,
-      // `Infinity` exceeds every threshold and sorts ahead of every measured
-      // lag, which is what an unreadable object deserves. It never reaches the
-      // screen: `FreshnessRow.notQueryable` is what the table renders from.
-      breachValue: stats.notQueryable ? Infinity : statFor(stats, predicate),
+      breachValue: statFor(stats, predicate),
     };
   });
 }
@@ -191,7 +192,6 @@ export function buildFreshnessRows({
         current: null,
         peak: null,
         p90: null,
-        notQueryable: false,
       };
       const object = objectsById.get(line.key);
       const hydration = hydrationByObjectId.get(line.key);
@@ -213,7 +213,6 @@ export function buildFreshnessRows({
         p90: stats.p90,
         breachValue: line.breachValue,
         breaching,
-        notQueryable: stats.notQueryable,
         color: drawn ? colors.get(line.key) : undefined,
       };
     })
