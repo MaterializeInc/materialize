@@ -13,11 +13,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use mz_compute_types::plan::LoweringMetrics;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::raw::{HistogramVec, IntCounterVec};
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{HistogramVec, IntCounterVec};
+
+use crate::plan::LoweringMetrics;
 
 /// Optimizer metrics.
 #[derive(Debug, Clone)]
@@ -39,6 +40,7 @@ pub struct OptimizerMetrics {
 }
 
 impl OptimizerMetrics {
+    /// Registers the optimizer metrics into `registry`.
     pub fn register_into(
         registry: &MetricsRegistry,
         e2e_optimization_time_seconds_log_threshold: Duration,
@@ -85,6 +87,8 @@ impl OptimizerMetrics {
         &self.lowering
     }
 
+    /// Records an end-to-end optimization time for `object_type`, and emits a
+    /// "slow optimization" `warn!` when it exceeds the configured threshold.
     pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
@@ -138,12 +142,14 @@ impl OptimizerMetrics {
         }
     }
 
+    /// Records that outer join lowering took the `case` path.
     pub fn inc_outer_join_lowering(&self, case: &str) {
         self.outer_join_lowering_cases
             .with_label_values(&[case])
             .inc()
     }
 
+    /// Records an application of `transform`, and whether it changed the plan.
     pub fn inc_transform(&self, hit: bool, transform: &str) {
         if hit {
             self.transform_hits.with_label_values(&[transform]).inc();
@@ -151,6 +157,7 @@ impl OptimizerMetrics {
         self.transform_total.with_label_values(&[transform]).inc();
     }
 
+    /// Records a run time of `transform` for the "slow optimization" log line.
     pub fn observe_transform_time(&mut self, transform: &str, duration: Duration) {
         let transform_time_seconds = &mut self.transform_time_seconds;
         if let Some(times) = transform_time_seconds.get_mut(transform) {
