@@ -883,6 +883,14 @@ metrics:
   help: The number of times a metric sink failed to register its collector and scheduled a retry.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_compute_mv_sink_async_longest_step_milliseconds
+  help: Longest single synchronous correction step the async MV sink ran on its Timely worker.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
+- name: mz_compute_mv_sink_async_yields_total
+  help: Yields of the async MV sink to its Timely worker.
+  source: src/compute/src/sink/correction_v2.rs
+  visibility: internal
 - name: mz_compute_mv_sink_write_queue_chain_bytes
   help: Serialized bytes of consolidated chains queued for the MV sink write task.
   source: src/compute/src/sink/correction_v2.rs

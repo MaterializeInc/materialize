@@ -378,6 +378,16 @@ pub const CORRECTION_V2_QUEUE_DEPTH_UNIT_BYTES: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
+/// How much synchronous correction work the async MV sink does before it yields the Timely
+/// worker. Zero never yields between input events.
+pub const MV_SINK_ASYNC_YIELD_INTERVAL: Config<Duration> = Config::new(
+    "compute_mv_sink_async_yield_interval",
+    Duration::ZERO,
+    "Synchronous correction work the async MV sink does before yielding the Timely worker; \
+     zero never yields.",
+    ParameterScope::Replica,
+);
+
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -890,6 +900,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_QUEUE_DEPTH)
         .add(&CORRECTION_V2_QUEUE_GEOMETRIC_DEPTH)
         .add(&CORRECTION_V2_QUEUE_DEPTH_UNIT_BYTES)
+        .add(&MV_SINK_ASYNC_YIELD_INTERVAL)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)

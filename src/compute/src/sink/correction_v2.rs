@@ -1905,6 +1905,12 @@ fn record_read(started: std::time::Instant) {
     POOL_READ_NANOS.fetch_add(nanos, atomic::Ordering::Relaxed);
 }
 
+/// Yields of the async MV sink to its Timely worker, process-wide.
+pub(crate) static ASYNC_SINK_YIELDS: AtomicU64 = AtomicU64::new(0);
+/// The longest single synchronous correction step the async MV sink ran on its Timely worker, in
+/// milliseconds, process-wide.
+pub(crate) static ASYNC_SINK_LONGEST_STEP_MS: AtomicU64 = AtomicU64::new(0);
+
 /// Bytes of owned updates held in correction buffer stages, process-wide.
 static STAGE_BYTES: AtomicU64 = AtomicU64::new(0);
 /// MV sink write commands sent to a write task and not yet received by it, process-wide.
@@ -2027,6 +2033,8 @@ pub fn register_metrics(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_compute_correction_view_copy_bytes_total", help: "Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks."), &VIEW_COPY_BYTES);
         gauge(registry, metric!(name: "mz_compute_correction_pool_reads_total", help: "Reads of MV sink correction chunk bodies out of the buffer pool."), &POOL_READS);
         gauge(registry, metric!(name: "mz_compute_correction_pool_read_nanoseconds_total", help: "Wall-clock nanoseconds spent reading MV sink correction chunk bodies out of the buffer pool, page faults included."), &POOL_READ_NANOS);
+        gauge(registry, metric!(name: "mz_compute_mv_sink_async_yields_total", help: "Yields of the async MV sink to its Timely worker."), &ASYNC_SINK_YIELDS);
+        gauge(registry, metric!(name: "mz_compute_mv_sink_async_longest_step_milliseconds", help: "Longest single synchronous correction step the async MV sink ran on its Timely worker."), &ASYNC_SINK_LONGEST_STEP_MS);
         gauge(registry, metric!(name: "mz_compute_correction_stage_bytes", help: "Bytes of owned updates held in MV sink correction buffer stages."), &STAGE_BYTES);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_commands", help: "MV sink write commands queued for the write task."), &WRITE_QUEUE_COMMANDS);
         gauge(registry, metric!(name: "mz_compute_mv_sink_write_queue_chain_bytes", help: "Serialized bytes of consolidated chains queued for the MV sink write task."), &WRITE_QUEUE_BYTES);
@@ -2844,7 +2852,15 @@ mod tests {
     #[mz_ore::test]
     fn geometric_queue_depth_bands() {
         let depth = QueueDepth::Geometric { unit_bytes: 100 };
-        let expected = [(0, 0), (99, 0), (100, 1), (299, 1), (300, 2), (699, 2), (700, 3)];
+        let expected = [
+            (0, 0),
+            (99, 0),
+            (100, 1),
+            (299, 1),
+            (300, 2),
+            (699, 2),
+            (700, 3),
+        ];
         for (ahead, want) in expected.into_iter().chain([(u64::MAX, 3)]) {
             WRITE_QUEUE_BYTES.store(ahead, atomic::Ordering::Relaxed);
             assert_eq!(depth.depth(), want, "{ahead} bytes ahead");

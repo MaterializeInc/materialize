@@ -119,10 +119,12 @@ use std::cell::RefCell;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
+use mz_compute_types::dyncfgs::{MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_ASYNC_YIELD_INTERVAL};
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -156,6 +158,7 @@ use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::correction_v2;
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 
@@ -863,7 +866,7 @@ mod write {
                     Some(event) = desired_inputs.ok.next() => {
                         match event {
                             Event::Data(_cap, mut data) => {
-                                state.corrections.ok.insert(&mut data);
+                                state.step(|c| c.ok.insert(&mut data));
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -875,7 +878,7 @@ mod write {
                     Some(event) = desired_inputs.err.next() => {
                         match event {
                             Event::Data(_cap, mut data) => {
-                                state.corrections.err.insert(&mut data);
+                                state.step(|c| c.err.insert(&mut data));
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -887,7 +890,7 @@ mod write {
                     Some(event) = persist_inputs.ok.next() => {
                         match event {
                             Event::Data(_cap, mut data) => {
-                                state.corrections.ok.insert_negated(&mut data);
+                                state.step(|c| c.ok.insert_negated(&mut data));
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -899,7 +902,7 @@ mod write {
                     Some(event) = persist_inputs.err.next() => {
                         match event {
                             Event::Data(_cap, mut data) => {
-                                state.corrections.err.insert_negated(&mut data);
+                                state.step(|c| c.err.insert_negated(&mut data));
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -930,6 +933,8 @@ mod write {
                     // All inputs are exhausted, so we can shut down.
                     else => return,
                 };
+
+                state.maybe_yield().await;
 
                 if let Some((index, batch, cap)) = maybe_batch {
                     batches_output.give(&cap, (index, batch));
@@ -974,6 +979,11 @@ mod write {
         /// batches, so the batch-write path never sweeps `consolidate_before(upper)` forward; the
         /// forced consolidation stands in for it and is re-armed as long as this holds.
         read_only: bool,
+        /// Synchronous correction work after which the operator yields its Timely worker, or zero
+        /// to never yield between input events.
+        yield_interval: Duration,
+        /// Synchronous correction work done since the last yield.
+        busy: Duration,
     }
 
     impl State {
@@ -1011,6 +1021,8 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                yield_interval: MV_SINK_ASYNC_YIELD_INTERVAL.get(worker_config),
+                busy: Duration::ZERO,
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1026,6 +1038,33 @@ mod write {
             }
 
             state
+        }
+
+        /// Run one synchronous step of correction work, accounting its duration toward the next
+        /// yield.
+        fn step<R>(
+            &mut self,
+            f: impl FnOnce(&mut OkErr<Correction<Row>, Correction<DataflowErrorSer>>) -> R,
+        ) -> R {
+            let started = Instant::now();
+            let result = f(&mut self.corrections);
+            let elapsed = started.elapsed();
+            self.busy += elapsed;
+            let ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+            correction_v2::ASYNC_SINK_LONGEST_STEP_MS.fetch_max(ms, atomic::Ordering::Relaxed);
+            result
+        }
+
+        /// Yield the Timely worker once the synchronous work since the last yield reaches the
+        /// yield interval, so other operators and the replica's command processing run while
+        /// this sink has work queued.
+        async fn maybe_yield(&mut self) {
+            if self.yield_interval.is_zero() || self.busy < self.yield_interval {
+                return;
+            }
+            self.busy = Duration::ZERO;
+            correction_v2::ASYNC_SINK_YIELDS.fetch_add(1, atomic::Ordering::Relaxed);
+            mz_ore::future::yield_now().await;
         }
 
         fn trace<S: AsRef<str>>(&self, message: S) {
@@ -1158,6 +1197,13 @@ mod write {
 
             let (desc, cap) = self.batch_description.take()?;
 
+            // Consolidating is the expensive half of the read-back. Timing it apart from the
+            // drain, which interleaves with the persist writer's awaits, separates one
+            // synchronous step from the rest.
+            self.step(|c| {
+                c.ok.consolidate_before(&desc.upper);
+                c.err.consolidate_before(&desc.upper);
+            });
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
