@@ -9,7 +9,10 @@
 
 import { useSuspenseQuery } from "@tanstack/react-query";
 
-import { buildQueryKeyPart } from "~/api/buildQueryKeySchema";
+import {
+  buildQueryKeyPart,
+  buildRegionQueryKey,
+} from "~/api/buildQueryKeySchema";
 import { fetchHydrationCounts } from "~/api/materialize/freshness/hydrationCounts";
 
 export interface HydrationCounts {
@@ -18,7 +21,10 @@ export interface HydrationCounts {
 }
 
 export const freshnessQueryKeys = {
-  all: () => ["freshness"] as const,
+  // Region-scoped, because object IDs repeat across regions: `u1` exists in
+  // every one. A bare key would let a region switch serve the previous
+  // region's counts for a cluster whose IDs happen to match.
+  all: () => buildRegionQueryKey("freshness"),
   hydrationCounts: (objectIds: string[]) =>
     [
       ...freshnessQueryKeys.all(),
@@ -35,6 +41,10 @@ export const freshnessQueryKeys = {
  *
  * Its own query rather than a column on the lag history, because that builder
  * is shared with pages that never show hydration.
+ *
+ * The caller passes the objects it means to show, not the ones the lag query
+ * returned. Reading them from that result would make this request wait for it,
+ * since a suspending query stops the component before this line is reached.
  */
 export function useFreshnessHydration(objectIds: string[]) {
   return useSuspenseQuery({

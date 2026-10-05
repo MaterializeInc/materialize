@@ -130,12 +130,9 @@ export function buildLatestLagQuery(objectIds: string[]) {
     .orderBy(["object_id", "occurred_at desc"]);
 }
 
-/**
- * The binned series and the latest readings, in one request.
- *
- * Sent together because they are one question asked at two resolutions, and
- * `executeSqlV2` puts an array of queries in a single round trip.
- */
+/** How often a wallclock lag reading lands, which paces the latest-reading read. */
+export const LATEST_READING_INTERVAL_MS = 60_000;
+
 export async function fetchObjectLagHistory({
   objectIds,
   lookbackMs,
@@ -148,10 +145,26 @@ export async function fetchObjectLagHistory({
   requestOptions?: RequestInit;
 }) {
   return executeSqlV2({
-    queries: [
-      buildObjectLagHistoryQuery({ objectIds, lookbackMs }).compile(),
-      buildLatestLagQuery(objectIds).compile(),
-    ] as const,
+    queries: buildObjectLagHistoryQuery({ objectIds, lookbackMs }).compile(),
+    queryKey,
+    requestOptions,
+    sessionVariables: {
+      transaction_isolation: "serializable",
+    },
+  });
+}
+
+export async function fetchLatestLag({
+  objectIds,
+  queryKey,
+  requestOptions,
+}: {
+  objectIds: string[];
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) {
+  return executeSqlV2({
+    queries: buildLatestLagQuery(objectIds).compile(),
     queryKey,
     requestOptions,
     sessionVariables: {

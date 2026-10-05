@@ -88,7 +88,12 @@ import {
   fetchReplicaUtilizationHistory,
   ReplicaUtilizationHistoryParameters,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
-import { fetchObjectLagHistory } from "~/api/materialize/freshness/lagHistory";
+import {
+  calculateBucketSizeFromLookback,
+  fetchLatestLag,
+  fetchObjectLagHistory,
+  LATEST_READING_INTERVAL_MS,
+} from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
 import { fetchOwners } from "~/api/materialize/owners";
 import { useSubscribe } from "~/api/materialize/useSubscribe";
@@ -185,13 +190,25 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("replicaOfflineEvents", params),
     ] as const,
-  clusterFreshness: (params: { lookbackMs: number; objectIds: string[] }) =>
+  // Sorted so these keys track set membership, not the order the objects
+  // arrived in.
+  clusterFreshnessSeries: (params: {
+    lookbackMs: number;
+    objectIds: string[];
+  }) =>
     [
       ...clusterQueryKeys.all(),
-      // Sorted so the key tracks set membership, not the order the objects
-      // arrived in.
-      buildQueryKeyPart("clusterFreshness", {
+      buildQueryKeyPart("clusterFreshnessSeries", {
         lookbackMs: params.lookbackMs,
+        objectIds: [...params.objectIds].sort().join(","),
+      }),
+    ] as const,
+  // No lookback: the newest reading is the newest reading whatever range is
+  // being graphed, so changing the range must not refetch it.
+  clusterFreshnessLatest: (params: { objectIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("clusterFreshnessLatest", {
         objectIds: [...params.objectIds].sort().join(","),
       }),
     ] as const,
@@ -980,9 +997,10 @@ export interface FreshnessObject {
   objectType: string;
 }
 
-type LagQueryResults = Awaited<ReturnType<typeof fetchObjectLagHistory>>;
-type LagReading = LagQueryResults[0]["rows"][number];
-type LatestReading = LagQueryResults[1]["rows"][number];
+type LagReading = Awaited<
+  ReturnType<typeof fetchObjectLagHistory>
+>["rows"][number];
+type LatestReading = Awaited<ReturnType<typeof fetchLatestLag>>["rows"][number];
 
 export interface LagQueryRows {
   /** One binned point per object per bin, each the worst reading in its span. */
@@ -1102,14 +1120,6 @@ export function buildFreshnessData(
  * type. Resolving those in SQL cost three joins and three full scans per
  * request; here they are a map lookup.
  */
-/**
- * Lag readings for a known set of objects, shaped for the freshness graph.
- *
- * The caller supplies the objects rather than naming a cluster, because the
- * `useAllObjects` subscribe already holds every name, schema, database and
- * type. Resolving those in SQL cost three joins and three full scans per
- * request; here they are a map lookup.
- */
 export function useClusterFreshness({
   lookbackMs,
   objects,
@@ -1119,32 +1129,61 @@ export function useClusterFreshness({
     [objects],
   );
 
-  const query = useSuspenseQuery({
-    queryKey: clusterQueryKeys.clusterFreshness({ lookbackMs, objectIds }),
-    queryFn: async ({ queryKey, signal }): Promise<LagQueryRows> => {
-      if (objectIds.length === 0) return { readings: [], latest: [] };
+  // The binned series and the latest readings go in separate requests because
+  // they go stale at different rates. A bin cannot change faster than its own
+  // width, which at a 24 hour range is 24 minutes, so refetching the series on
+  // the one minute clock would re-read the whole window to change at most one
+  // point.
+  const binSizeMs = calculateBucketSizeFromLookback(lookbackMs);
 
-      const [series, latest] = await fetchObjectLagHistory({
+  const series = useSuspenseQuery({
+    queryKey: clusterQueryKeys.clusterFreshnessSeries({
+      lookbackMs,
+      objectIds,
+    }),
+    queryFn: async ({ queryKey, signal }): Promise<LagReading[]> => {
+      if (objectIds.length === 0) return [];
+
+      const { rows } = await fetchObjectLagHistory({
         objectIds,
         lookbackMs,
         requestOptions: { signal },
         queryKey,
       });
-      return { readings: series.rows, latest: latest.rows };
+      return rows;
     },
-    // A reading lands once a minute, so a refetch inside that window re-asks a
-    // question whose answer cannot have changed, and an interval any longer
-    // than it leaves an open page behind the data it is describing.
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    staleTime: binSizeMs,
+    refetchInterval: binSizeMs,
   });
 
-  // Only `data` is returned. Spreading the query object would make every
+  const latest = useSuspenseQuery({
+    queryKey: clusterQueryKeys.clusterFreshnessLatest({ objectIds }),
+    queryFn: async ({ queryKey, signal }): Promise<LatestReading[]> => {
+      if (objectIds.length === 0) return [];
+
+      const { rows } = await fetchLatestLag({
+        objectIds,
+        requestOptions: { signal },
+        queryKey,
+      });
+      return rows;
+    },
+    // A reading lands once a minute, so anything shorter re-asks a question
+    // whose answer cannot have changed.
+    staleTime: LATEST_READING_INTERVAL_MS,
+    refetchInterval: LATEST_READING_INTERVAL_MS,
+  });
+
+  // Only `data` is returned. Spreading a query object would make every
   // consumer observe all of its state, and suspense already covers loading and
   // errors for these callers.
   const data = useMemo(
-    () => buildFreshnessData(query.data, objects),
-    [query.data, objects],
+    () =>
+      buildFreshnessData(
+        { readings: series.data, latest: latest.data },
+        objects,
+      ),
+    [series.data, latest.data, objects],
   );
 
   return { data };
