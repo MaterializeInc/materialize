@@ -18,9 +18,11 @@ derivative.workspace = true
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
+openssl.workspace = true
 tokio.workspace = true
 tokio-openssl.workspace = true
 tokio-postgres.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
 
 [features]
