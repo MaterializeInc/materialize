@@ -36,8 +36,8 @@ use axum::response::IntoResponse;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
-    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
-    MCP_REQUEST_TIMEOUT,
+    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28,
+    MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
@@ -64,6 +64,29 @@ const JSONRPC_VERSION: &str = "2.0";
 /// MCP protocol version returned in the `initialize` response.
 /// Spec: <https://modelcontextprotocol.io/specification/2025-11-25>
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// The header a client names its protocol revision in.
+const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
+
+/// The protocol revision a request is served on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProtocolVersion {
+    /// `initialize` handshake. Also serves 2025-06-18 and earlier clients.
+    V2025_11_25,
+    /// Per-request `_meta`, no handshake.
+    V2026_07_28,
+}
+
+impl ProtocolVersion {
+    /// Picks the revision from the `MCP-Protocol-Version` header's value, not
+    /// its presence: 2025-06-18 and 2025-11-25 clients send the header too.
+    fn select(header: Option<&HeaderValue>, modern_enabled: bool) -> Self {
+        match header.and_then(|value| value.to_str().ok()) {
+            Some("2026-07-28") if modern_enabled => Self::V2026_07_28,
+            _ => Self::V2025_11_25,
+        }
+    }
+}
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
@@ -459,9 +482,16 @@ pub async fn handle_mcp_agent(
         Ok(request) => request,
         Err(response) => return response,
     };
-    handle_mcp_request(client, request, McpEndpointType::Agent, metrics)
-        .await
-        .into_response()
+    let requested_version = headers.get(MCP_PROTOCOL_VERSION_HEADER).cloned();
+    handle_mcp_request(
+        client,
+        request,
+        requested_version,
+        McpEndpointType::Agent,
+        metrics,
+    )
+    .await
+    .into_response()
 }
 
 /// Developer endpoint: exposes system catalog (mz_*) only.
@@ -479,9 +509,16 @@ pub async fn handle_mcp_developer(
         Ok(request) => request,
         Err(response) => return response,
     };
-    handle_mcp_request(client, request, McpEndpointType::Developer, metrics)
-        .await
-        .into_response()
+    let requested_version = headers.get(MCP_PROTOCOL_VERSION_HEADER).cloned();
+    handle_mcp_request(
+        client,
+        request,
+        requested_version,
+        McpEndpointType::Developer,
+        metrics,
+    )
+    .await
+    .into_response()
 }
 
 /// Parses a request body the way axum's `Json` extractor does, so every
@@ -567,6 +604,7 @@ fn validate_origin(
 async fn handle_mcp_request(
     mut client: AuthedClient,
     request: McpRequest,
+    requested_version: Option<HeaderValue>,
     endpoint_type: McpEndpointType,
     metrics: McpMetrics,
 ) -> impl IntoResponse {
@@ -616,6 +654,10 @@ async fn handle_mcp_request(
     // matches `query_tool_enabled` above.
     let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
+    let protocol = ProtocolVersion::select(
+        requested_version.as_ref(),
+        ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
+    );
     let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
@@ -640,6 +682,7 @@ async fn handle_mcp_request(
         endpoint = %endpoint_type,
         user = %user,
         is_notification = is_notification,
+        ?protocol,
         "MCP request received"
     );
 
@@ -2404,6 +2447,30 @@ mod tests {
                 "expected ToolsList for {body}"
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn test_protocol_version_select() {
+        use ProtocolVersion::*;
+        for (header, enabled, want) in [
+            (None, true, V2025_11_25),
+            (Some("2025-11-25"), true, V2025_11_25),
+            (Some("2025-06-18"), true, V2025_11_25),
+            (Some("2026-07-28"), true, V2026_07_28),
+            (Some("2026-07-28"), false, V2025_11_25),
+            (Some("not-a-version"), true, V2025_11_25),
+            (Some(" 2026-07-28"), true, V2025_11_25),
+            (Some("2026-07-28X"), true, V2025_11_25),
+        ] {
+            let value = header.map(HeaderValue::from_static);
+            assert_eq!(
+                ProtocolVersion::select(value.as_ref(), enabled),
+                want,
+                "for {header:?} with the flag {enabled}"
+            );
+        }
+        let non_ascii = HeaderValue::from_bytes(b"2026-07-28\xff").expect("valid header bytes");
+        assert_eq!(ProtocolVersion::select(Some(&non_ascii), true), V2025_11_25);
     }
 
     fn json_headers() -> HeaderMap {
