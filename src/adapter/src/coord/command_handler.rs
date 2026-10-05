@@ -948,7 +948,6 @@ impl Coordinator {
                     statement_logging_frontend,
                     superuser_attribute,
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
-                    frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
                     group_commit_notifier: self.group_commit_tx.clone(),
                     read_only: self.controller.read_only(),
                 });
@@ -2030,9 +2029,9 @@ impl Coordinator {
             }
         }
 
-        // Cancel deferred writes.
-        if let Some(write_op) = self.deferred_write_ops.remove(&conn_id) {
-            maybe_ctx = Some(write_op.into_ctx());
+        // Cancel plans waiting for session-startup appends.
+        if let Some(plan) = self.deferred_plans.remove(&conn_id) {
+            maybe_ctx = Some(plan.ctx);
         }
 
         // Cancel deferred statements.

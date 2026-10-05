@@ -102,10 +102,7 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::TryDeferred {
-                conn_id,
-                acquired_lock,
-            } => self.try_deferred(conn_id, acquired_lock).await,
+            Message::DeferredPlanReady { conn_id } => self.sequence_deferred_plan(conn_id).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
@@ -1214,7 +1211,7 @@ impl Coordinator {
                 self.metrics
                     .linearize_message_seconds
                     .with_label_values(&[
-                        ready_txn.txn.label(),
+                        "read",
                         if ready_txn.num_requeues == 0 {
                             "true"
                         } else {
@@ -1222,9 +1219,7 @@ impl Coordinator {
                         },
                     ])
                     .observe((now - ready_txn.created).as_secs_f64());
-                if let Some((ctx, result)) = ready_txn.txn.finish() {
-                    ctx.retire(result);
-                }
+                ready_txn.finish();
             }
         }
 

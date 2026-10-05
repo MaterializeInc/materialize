@@ -91,7 +91,6 @@ use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE};
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
@@ -194,7 +193,7 @@ use crate::config::{
     SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
-    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredPlan, GroupCommitPermit,
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
@@ -353,19 +352,9 @@ pub enum Message {
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
-    TryDeferred {
-        /// The connection that created this op.
+    DeferredPlanReady {
+        /// The connection whose session-startup appends completed.
         conn_id: ConnectionId,
-        /// The write lock that notified us our deferred op might be able to run.
-        ///
-        /// Note: While we never want to hold a partial set of locks, it can be important to hold
-        /// onto the _one_ that notified us our op might be ready. If there are multiple operations
-        /// waiting on a single collection, and we don't hold this lock through retyring the op,
-        /// then everything waiting on this collection will get retried causing traffic in the
-        /// Coordinator's message queue.
-        ///
-        /// See [`DeferredOp::can_be_optimistically_retried`] for more detail.
-        acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -548,7 +537,7 @@ impl Message {
             } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::TryDeferred { .. } => "try_deferred",
+            Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
@@ -1476,8 +1465,7 @@ impl From<PendingTxnResponse> for ExecuteResponse {
 #[derive(Debug)]
 /// A pending read transaction waiting to be linearized along with metadata about it's state
 pub struct PendingReadTxn {
-    /// The transaction type
-    txn: PendingRead,
+    txn: PendingTxn,
     /// The timestamp context of the transaction.
     timestamp_context: TimestampContext,
     /// When we created this pending txn, when the transaction ends. Only used for metrics.
@@ -1497,77 +1485,23 @@ impl PendingReadTxn {
     }
 
     pub(crate) fn take_context(self) -> ExecuteContext {
-        self.txn.take_context()
+        self.txn.ctx
     }
-}
 
-#[derive(Debug)]
-/// A pending read transaction waiting to be linearized.
-enum PendingRead {
-    Read {
-        /// The inner transaction.
-        txn: PendingTxn,
-    },
-    ReadThenWrite {
-        /// Context used to send a response back to the client.
-        ctx: ExecuteContext,
-        /// Channel used to alert the transaction that the read has been linearized and send back
-        /// `ctx`.
-        tx: oneshot::Sender<Option<ExecuteContext>>,
-    },
-}
-
-impl PendingRead {
     /// Alert the client that the read has been linearized.
-    ///
-    /// If it is necessary to finalize an execute, return the state necessary to do so
-    /// (execution context and result)
     #[instrument(level = "debug")]
-    pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
-        match self {
-            PendingRead::Read {
-                txn:
-                    PendingTxn {
-                        mut ctx,
-                        response,
-                        action,
-                    },
-                ..
-            } => {
-                let changed = ctx.session_mut().vars_mut().end_transaction(action);
-                // Append any parameters that changed to the response.
-                let response = response.map(|mut r| {
-                    r.extend_params(changed);
-                    ExecuteResponse::from(r)
-                });
-
-                Some((ctx, response))
-            }
-            PendingRead::ReadThenWrite { ctx, tx, .. } => {
-                // Ignore errors if the caller has hung up.
-                let _ = tx.send(Some(ctx));
-                None
-            }
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            PendingRead::Read { .. } => "read",
-            PendingRead::ReadThenWrite { .. } => "read_then_write",
-        }
-    }
-
-    pub(crate) fn take_context(self) -> ExecuteContext {
-        match self {
-            PendingRead::Read { txn, .. } => txn.ctx,
-            PendingRead::ReadThenWrite { ctx, tx, .. } => {
-                // Inform the transaction that we've taken their context.
-                // Ignore errors if the caller has hung up.
-                let _ = tx.send(None);
-                ctx
-            }
-        }
+    pub fn finish(self) {
+        let PendingTxn {
+            mut ctx,
+            response,
+            action,
+        } = self.txn;
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+        ctx.retire(response);
     }
 }
 
@@ -2141,10 +2075,8 @@ pub struct Coordinator {
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
-    /// Locks that grant access to a specific object, populated lazily as objects are written to.
-    write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
-    /// Plans that are currently deferred and waiting on a write lock.
-    deferred_write_ops: BTreeMap<ConnectionId, DeferredOp>,
+    /// Plans waiting for session-startup builtin table appends.
+    deferred_plans: BTreeMap<ConnectionId, DeferredPlan>,
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
@@ -2160,12 +2092,6 @@ pub struct Coordinator {
     /// NOTE: The number of permits is read from `max_concurrent_occ_writes` at
     /// coordinator startup. Runtime changes require an `environmentd` restart.
     occ_write_semaphore: Arc<Semaphore>,
-
-    /// Whether frontend OCC read-then-write is enabled. Read once at startup
-    /// from the `FRONTEND_READ_THEN_WRITE` dyncfg and fixed for the lifetime of
-    /// this process. See the module-level docs on `frontend_read_then_write`
-    /// for why mixed-mode operation is not allowed.
-    frontend_read_then_write_enabled: bool,
 
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
@@ -5375,13 +5301,8 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
-                // Both are read once at startup, see the field docs on
-                // `occ_write_semaphore` and `frontend_read_then_write_enabled`.
                 let max_concurrent_occ_writes =
                     usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
-                let frontend_read_then_write_enabled = {
-                                FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
-                };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
@@ -5411,11 +5332,9 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
-                    write_locks: BTreeMap::new(),
-                    deferred_write_ops: BTreeMap::new(),
+                    deferred_plans: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
-                    frontend_read_then_write_enabled,
                     advance_timelines_interval,
                     secrets_controller,
                     caching_secrets_reader,

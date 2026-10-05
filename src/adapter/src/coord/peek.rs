@@ -21,7 +21,6 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
@@ -1047,10 +1046,6 @@ impl crate::coord::Coordinator {
             self.persist_client.clone(),
             self.statement_logging.create_frontend(build_version),
             Arc::clone(&self.occ_write_semaphore),
-            // Background read-then-write always uses the frontend OCC path.
-            // This field only controls session fallback, so the flag does not
-            // gate background work.
-            FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs()),
             self.group_commit_tx.clone(),
             self.controller.read_only(),
         )

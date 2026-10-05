@@ -111,17 +111,6 @@
 //! answer waits for nothing, while reporting the frontier the subscribe observed
 //! would cost a group commit every time. The design doc's "Linearization" argues
 //! why the lower timestamp is not the weaker guarantee.
-//!
-//! ## Rollout note
-//!
-//! The `FRONTEND_READ_THEN_WRITE` dyncfg is read once at process startup and
-//! fixed for the lifetime of the `environmentd` process. This avoids a
-//! mixed-mode window where both the lock-based coordinator path and this OCC
-//! path are active concurrently. The coordinator path acquires write locks to
-//! prevent concurrent writes between its read and write phases, but this OCC
-//! path does not use write locks, so concurrent operation of both paths could
-//! allow an OCC write to slip between a coordinator-path reader's read and
-//! write.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -629,8 +618,7 @@ fn build_success_response(
 
     // Run the canonical finish to enforce both caps with full precision
     // (including the sorted-view memory overhead) and to register the
-    // row-set-finishing duration histogram, mirroring the legacy
-    // `send_diffs` path.
+    // row-set-finishing duration histogram.
     let finishing = RowSetFinishing {
         order_by: Vec::new(),
         limit: None,
@@ -894,8 +882,7 @@ impl PeekClient {
         //
         // The cost of this ordering is that a permit held by a long-running
         // operation stalls every read-then-write in the process, including ones
-        // on unrelated tables, where the coordinator's write lock would only
-        // stall writes to the target table. We accept that because the
+        // on unrelated tables. We accept that because the
         // statement timeout in
         // `SessionClient::try_frontend_read_then_write_with_cancel` covers the
         // permit wait, so the stall is bounded for everyone but a session that
@@ -2087,10 +2074,8 @@ fn empty_as_of(complete_below: Timestamp) -> Timestamp {
 
 /// Build the response returned when no rows matched the selection.
 ///
-/// Bug-compatible with the coordinator path, which evaluates RETURNING over the
-/// diffs and so reports a plain row count when there are none. Postgres returns
-/// an empty result set for a zero-row `INSERT ... RETURNING` instead, but
-/// changing that is a change to the path that ships today, not to this one.
+/// TODO: Return an empty result set for zero-row `INSERT ... RETURNING`, as
+/// Postgres does, instead of a plain row count.
 fn build_no_rows_response(kind: &MutationKind) -> ExecuteResponse {
     match kind {
         MutationKind::Delete => ExecuteResponse::Deleted(0),

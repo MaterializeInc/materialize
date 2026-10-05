@@ -1100,10 +1100,7 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
 
 #[mz_ore::test]
 fn test_statement_logging_frontend_constant_insert_sets_cluster() {
-    let harness = test_util::TestHarness::default().with_system_parameter_default(
-        "enable_adapter_frontend_occ_read_then_write".to_string(),
-        "true".to_string(),
-    );
+    let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
     client.execute("SET CLUSTER TO quickstart", &[]).unwrap();
@@ -1153,16 +1150,11 @@ ORDER BY mseh.began_at DESC",
     assert_eq!(finished_status, "success");
 }
 
-// Regression test: the frontend OCC read-then-write path must set
-// `execution_timestamp` on the statement's log entry. The coordinator path does
-// this through `set_statement_execution_timestamp` during group commit, so the
-// frontend path has to emit the equivalent signal once its write commits.
+// Regression test: a read-then-write must set `execution_timestamp` on the
+// statement's log entry once its write commits.
 #[mz_ore::test]
-fn test_statement_logging_frontend_read_then_write_sets_execution_timestamp() {
-    let harness = test_util::TestHarness::default().with_system_parameter_default(
-        "enable_adapter_frontend_occ_read_then_write".to_string(),
-        "true".to_string(),
-    );
+fn test_statement_logging_read_then_write_sets_execution_timestamp() {
+    let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
     client.execute("SET CLUSTER TO quickstart", &[]).unwrap();
@@ -1172,7 +1164,6 @@ fn test_statement_logging_frontend_read_then_write_sets_execution_timestamp() {
     client
         .execute("INSERT INTO statement_logging_rtw_t VALUES (1), (2)", &[])
         .unwrap();
-    // DELETE goes through the frontend OCC read-then-write path.
     client
         .execute("DELETE FROM statement_logging_rtw_t WHERE x = 1", &[])
         .unwrap();
@@ -1210,271 +1201,6 @@ ORDER BY mseh.began_at DESC",
     assert!(
         execution_timestamp.is_some(),
         "frontend OCC read-then-write DELETE must set execution_timestamp, got NULL"
-    );
-}
-
-/// One case in the DML statement-logging parity table.
-struct DmlLoggingCase {
-    /// Statements run before the one under test, to set up transaction state.
-    /// These must succeed.
-    before: &'static [&'static str],
-    /// The statement under test. Its log row is found by the redacted form of
-    /// this text, so no two cases may share it.
-    sql: &'static str,
-    /// Statements run after the one under test, to make the session usable
-    /// again. These must succeed.
-    after: &'static [&'static str],
-    /// Whether only the frontend path records an `execution_timestamp` for this
-    /// statement. It holds for every read-then-write that commits: the frontend
-    /// emits the write timestamp when its write lands, while the coordinator
-    /// retires the log entry in `sequence_read_then_write` and only reaches the
-    /// group commit that would set the timestamp afterwards, by which time the
-    /// entry is closed. The difference is pinned per case rather than excluded
-    /// from the comparison, so a change on either path fails this test.
-    frontend_only_execution_timestamp: bool,
-}
-
-/// DML whose statement-logging record must not depend on which path sequenced
-/// it. Failures matter as much as successes: the two paths reject a statement
-/// at different points, so their error exits are where they drift apart.
-const DML_LOGGING_PARITY_CASES: &[DmlLoggingCase] = &[
-    DmlLoggingCase {
-        before: &[],
-        sql: "UPDATE parity_t SET x = x + 1",
-        after: &[],
-        frontend_only_execution_timestamp: true,
-    },
-    DmlLoggingCase {
-        before: &[],
-        sql: "DELETE FROM parity_t WHERE x = 2",
-        after: &[],
-        frontend_only_execution_timestamp: true,
-    },
-    DmlLoggingCase {
-        before: &[],
-        sql: "INSERT INTO parity_t SELECT x + 10 FROM parity_t",
-        after: &[],
-        frontend_only_execution_timestamp: true,
-    },
-    // Reads nothing, so both paths stage the rows and the write timestamp is
-    // chosen when the transaction commits rather than by the statement. Neither
-    // path records an execution timestamp for it.
-    DmlLoggingCase {
-        before: &[],
-        sql: "INSERT INTO parity_t VALUES (100) RETURNING x",
-        after: &[],
-        frontend_only_execution_timestamp: false,
-    },
-    // A RETURNING insert that matches no rows. Both paths report a row count
-    // rather than an empty result set, so this pins the response kind (and with
-    // it `rows_returned` and `result_size`) of the zero-row case.
-    DmlLoggingCase {
-        before: &[],
-        sql: "INSERT INTO parity_t SELECT 101 WHERE false RETURNING x",
-        after: &[],
-        frontend_only_execution_timestamp: false,
-    },
-    // Rejected while describing the portal, before either path begins an
-    // execution, so neither logs one.
-    DmlLoggingCase {
-        before: &[],
-        sql: "UPDATE parity_t SET x = nonexistent_col",
-        after: &[],
-        frontend_only_execution_timestamp: false,
-    },
-    // Bounded staleness forbids writes. Both paths reject the statement after
-    // they have planned it and recorded its cluster, so the error row carries a
-    // cluster on both.
-    DmlLoggingCase {
-        before: &["SET transaction_isolation = 'bounded staleness 5s'"],
-        sql: "DELETE FROM parity_t WHERE x > 1000",
-        after: &["SET transaction_isolation = 'strict serializable'"],
-        frontend_only_execution_timestamp: false,
-    },
-    DmlLoggingCase {
-        before: &["BEGIN"],
-        sql: "DELETE FROM parity_t",
-        after: &["ROLLBACK"],
-        frontend_only_execution_timestamp: false,
-    },
-];
-
-/// The part of a statement's log row that both sequencing paths must agree on.
-#[derive(Debug, PartialEq, Eq)]
-struct DmlLoggingRecord {
-    finished_status: String,
-    error_message: Option<String>,
-    /// Compared as "is it recorded at all", since the byte count itself is not
-    /// a property of the path.
-    result_size_is_null: bool,
-    rows_returned: Option<i64>,
-    execution_strategy: Option<String>,
-    has_cluster: bool,
-    has_execution_timestamp: bool,
-}
-
-/// SQL of the statement whose log row marks the end of the parity run. Once it
-/// is visible, every earlier statement's row is too: the log's end-execution
-/// events are recorded in the order the statements finished, and a flush
-/// appends everything pending at once.
-const DML_LOGGING_PARITY_SENTINEL: &str = "SELECT count(*) FROM parity_t";
-
-/// The form of `sql` that statement logging records, which is what identifies a
-/// statement's rows. DML is stored redacted.
-fn redacted_sql(sql: &str) -> String {
-    mz_sql::parse::parse(sql)
-        .unwrap()
-        .into_element()
-        .ast
-        .to_ast_string_redacted()
-}
-
-/// Reads the log row of the statement whose redacted SQL is `redacted_sql`.
-///
-/// `None` means the execution was not logged at all, which is a comparable
-/// outcome: a statement rejected before execution begins has no row on either
-/// path. Only meaningful once the sentinel row is visible.
-fn read_dml_logging_record(
-    mz_client: &mut postgres::Client,
-    redacted_sql: &str,
-) -> Option<DmlLoggingRecord> {
-    let rows = mz_client
-        .query(
-            "SELECT
-    mseh.finished_status,
-    mseh.error_message,
-    mseh.result_size IS NULL,
-    mseh.rows_returned,
-    mseh.execution_strategy,
-    mseh.cluster_name IS NOT NULL,
-    mseh.execution_timestamp IS NOT NULL
-FROM mz_internal.mz_statement_execution_history AS mseh
-JOIN mz_internal.mz_prepared_statement_history AS mpsh
-    ON mseh.prepared_statement_id = mpsh.id
-JOIN (SELECT DISTINCT sql_hash, redacted_sql FROM mz_internal.mz_sql_text) AS mst
-    ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.redacted_sql = $1 AND mseh.finished_at IS NOT NULL",
-            &[&redacted_sql],
-        )
-        .unwrap();
-
-    assert!(
-        rows.len() <= 1,
-        "expected at most one log row for {redacted_sql}, got {}",
-        rows.len()
-    );
-    rows.first().map(|row| DmlLoggingRecord {
-        finished_status: row.get(0),
-        error_message: row.get(1),
-        result_size_is_null: row.get(2),
-        rows_returned: row.get(3),
-        execution_strategy: row.get(4),
-        has_cluster: row.get(5),
-        has_execution_timestamp: row.get(6),
-    })
-}
-
-/// Runs [`DML_LOGGING_PARITY_CASES`] on a server configured with the given
-/// value of the frontend OCC read-then-write flag, and returns each case's log
-/// row in table order.
-#[allow(clippy::disallowed_methods)]
-fn collect_dml_logging_records(
-    frontend_occ: bool,
-) -> Vec<(&'static str, String, Option<DmlLoggingRecord>)> {
-    let harness = test_util::TestHarness::default().with_system_parameter_default(
-        "enable_adapter_frontend_occ_read_then_write".to_string(),
-        frontend_occ.to_string(),
-    );
-    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
-
-    client.batch_execute("SET CLUSTER TO quickstart").unwrap();
-    client
-        .batch_execute("CREATE TABLE parity_t (x INT)")
-        .unwrap();
-    client
-        .batch_execute("INSERT INTO parity_t VALUES (1), (2)")
-        .unwrap();
-
-    for case in DML_LOGGING_PARITY_CASES {
-        for sql in case.before {
-            client.batch_execute(sql).unwrap();
-        }
-        // Several cases fail on purpose. The log row is what the test reads, so
-        // the client-visible outcome is deliberately ignored here.
-        let _ = client.batch_execute(case.sql);
-        for sql in case.after {
-            client.batch_execute(sql).unwrap();
-        }
-    }
-    client.batch_execute(DML_LOGGING_PARITY_SENTINEL).unwrap();
-
-    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
-    let sentinel = redacted_sql(DML_LOGGING_PARITY_SENTINEL);
-    Retry::default()
-        .max_duration(Duration::from_secs(60))
-        .retry(
-            |_| match read_dml_logging_record(&mut mz_client, &sentinel) {
-                Some(_) => Ok(()),
-                None => Err(()),
-            },
-        )
-        .expect("statement log should flush the sentinel row");
-
-    DML_LOGGING_PARITY_CASES
-        .iter()
-        .map(|case| {
-            let redacted_sql = redacted_sql(case.sql);
-            let record = read_dml_logging_record(&mut mz_client, &redacted_sql);
-            (case.sql, redacted_sql, record)
-        })
-        .collect()
-}
-
-// DELETE/UPDATE/INSERT..SELECT are sequenced either by the coordinator or by
-// the session task, depending on a flag fixed at process startup. What they
-// record in `mz_statement_execution_history` must not depend on that: the log
-// is a user-visible product surface, and a customer querying it cannot tell
-// which path ran.
-#[mz_ore::test]
-fn test_statement_logging_dml_path_parity() {
-    let coordinator = collect_dml_logging_records(false);
-    let frontend = collect_dml_logging_records(true);
-
-    let mut mismatches = Vec::new();
-    for (case, ((sql, redacted, mut coordinator), (_, _, frontend))) in std::iter::zip(
-        DML_LOGGING_PARITY_CASES,
-        std::iter::zip(coordinator, frontend),
-    ) {
-        if case.frontend_only_execution_timestamp {
-            let timestamps = (
-                coordinator
-                    .as_ref()
-                    .map(|record| record.has_execution_timestamp),
-                frontend
-                    .as_ref()
-                    .map(|record| record.has_execution_timestamp),
-            );
-            assert_eq!(
-                timestamps,
-                (Some(false), Some(true)),
-                "{sql} is marked as recording an execution_timestamp on the frontend path only, \
-                 but the paths report {timestamps:?}"
-            );
-            coordinator
-                .as_mut()
-                .expect("checked above")
-                .has_execution_timestamp = true;
-        }
-        if coordinator != frontend {
-            mismatches.push(format!(
-                "{sql} (logged as {redacted}):\n  coordinator: {coordinator:?}\n  frontend:    {frontend:?}"
-            ));
-        }
-    }
-    assert!(
-        mismatches.is_empty(),
-        "statement log rows differ between the coordinator and the frontend OCC path:\n{}",
-        mismatches.join("\n")
     );
 }
 
@@ -1530,10 +1256,6 @@ WHERE mst.sql LIKE $1 AND mseh.finished_at IS NOT NULL",
 fn test_statement_logging_cancel_frontend_read_then_write() {
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
-        .with_system_parameter_default(
-            "enable_adapter_frontend_occ_read_then_write".to_string(),
-            "true".to_string(),
-        )
         .with_system_parameter_default(
             "unsafe_enable_unsafe_functions".to_string(),
             "true".to_string(),
@@ -1599,10 +1321,6 @@ fn test_statement_logging_timeout_frontend_read_then_write() {
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default(
-            "enable_adapter_frontend_occ_read_then_write".to_string(),
-            "true".to_string(),
-        )
-        .with_system_parameter_default(
             "unsafe_enable_unsafe_functions".to_string(),
             "true".to_string(),
         );
@@ -1648,10 +1366,7 @@ fn test_statement_logging_timeout_frontend_read_then_write() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_statement_logging_frontend_read_then_write_transaction_error() {
-    let harness = test_util::TestHarness::default().with_system_parameter_default(
-        "enable_adapter_frontend_occ_read_then_write".to_string(),
-        "true".to_string(),
-    );
+    let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
     client
@@ -1681,10 +1396,7 @@ fn test_statement_logging_frontend_read_then_write_transaction_error() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_statement_logging_frontend_read_then_write_rbac_error() {
-    let harness = test_util::TestHarness::default().with_system_parameter_default(
-        "enable_adapter_frontend_occ_read_then_write".to_string(),
-        "true".to_string(),
-    );
+    let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
     client.batch_execute("CREATE TABLE rbac_t (x INT)").unwrap();
@@ -1726,15 +1438,11 @@ fn test_statement_logging_frontend_read_then_write_rbac_error() {
     );
 }
 
-// A prepared DML statement that no frontend path handles. `EXECUTE` is
-// unrolled in the session task, which takes over the EXECUTE's log entry, and
-// the inner statement then falls back to the coordinator. The coordinator has
-// to receive that entry and finish it, and the two statements have to be
-// counted once each: the EXECUTE by the session task, the inner statement by
-// the coordinator.
+// Unrolling EXECUTE must preserve its log entry and count both EXECUTE and
+// the inner DML statement once each.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_statement_logging_prepared_dml_coordinator_fallback() {
+fn test_statement_logging_prepared_dml() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
 
     client

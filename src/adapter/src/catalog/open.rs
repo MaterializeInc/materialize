@@ -337,9 +337,8 @@ impl Catalog {
         // `SystemConfiguration` values applied via `pre_item_updates` live in
         // the `SystemVars` value map by now. Mirror their effective values into
         // the dyncfg `ConfigSet`, so that startup-only reads observe configured
-        // values rather than compile-time defaults. Those reads are the
-        // `ENABLE_EXPRESSION_CACHE` read just below and
-        // `FRONTEND_READ_THEN_WRITE` in coord bootstrap. `apply_updates` only
+        // values rather than compile-time defaults, as with
+        // `ENABLE_EXPRESSION_CACHE` below. `apply_updates` only
         // syncs the `ConfigSet` when a `SystemConfiguration` update is present,
         // and a deployment configured purely via `system_parameter_default` has
         // none, so sync explicitly here.

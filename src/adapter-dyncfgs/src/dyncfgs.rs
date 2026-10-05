@@ -543,15 +543,6 @@ pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
-    "enable_adapter_frontend_occ_read_then_write",
-    true,
-    "Use frontend sequencing (with optimistic concurrency control) for \
-     DELETE, UPDATE, and INSERT operations. Read at startup, so changing it \
-     takes effect on the next restart.",
-    ParameterScope::Environment,
-);
-
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -610,5 +601,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
-        .add(&FRONTEND_READ_THEN_WRITE)
 }
