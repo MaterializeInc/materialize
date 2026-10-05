@@ -530,7 +530,10 @@ impl ComputeState {
             if !(compute_spill || storage_spill || sink_spill) {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
-                let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
+                let spill_fraction = COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION.get(config);
+                let spill_threads = usize::cast_lossy(
+                    (f64::cast_lossy(self.workers_per_process) * spill_fraction.max(0.0)).ceil(),
+                );
                 let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
 
                 // Budget derivation: fraction of physical RAM, with a 128 MiB
@@ -565,6 +568,7 @@ impl ComputeState {
                         fraction,
                         ram,
                         budget_bytes = total,
+                        spill_fraction,
                         spill_threads,
                         eager_backing,
                         rss_target_bytes = rss_target,
