@@ -174,6 +174,55 @@ The payload has the following structure:
 }
 ```
 
+##### Execution time notice
+
+With the [`emit_execution_time_notice`](/sql/set/#other-configuration-parameters)
+configuration parameter on, a notice with code `MZ012` precedes the
+`CommandComplete` of each successful statement other than `SUBSCRIBE`. A
+`client_min_messages` of `warning` or higher suppresses it. Its `detail` is a
+JSON object:
+
+```
+{
+    "kind": <"first_row"|"empty_result"|"completed"|"staged"|"committed">,
+    "duration_us": <microseconds>,
+    "strategy": <"fast-path"|"persist-fast-path"|"standard"|"constant"|null>
+}
+```
+
+The duration starts when Materialize begins executing the statement, after
+parsing and binding it. Where it ends depends on `kind`:
+
+- `first_row`: a query's first row is ready. Sending the rows to the client is
+  not included.
+- `empty_result`: a query finished without returning rows.
+- `completed`: a statement other than a write completed. For `COMMIT`, this
+  includes the commit and any DDL that the transaction applies at its commit.
+- `staged`: a write was added to a transaction that commits later.
+- `committed`: a write was applied, either when it executed or by the commit of
+  its implicit transaction. For a write with `RETURNING`, the duration is the
+  time to its first row plus the time of that commit.
+
+When an implicit transaction spans several statements, only the statement that
+ends it waits for the commit. That statement's duration includes the commit,
+unless it is a query, whose duration ends at its first row. For a cursor, the
+duration is reported on the `FETCH` that returns the first row.
+
+`strategy` reports how a query was executed: from an index (`fast-path`), by
+reading storage directly (`persist-fast-path`), by a temporary dataflow
+(`standard`), or without a cluster (`constant`, which includes `EXPLAIN`).
+
+New kinds and strategies may be added, so clients should ignore values they do
+not recognize. The notice's message text is meant for people and may change.
+
+Over the PostgreSQL wire protocol, the notice precedes `CommandComplete` or
+`PortalSuspended`, and `COPY ... TO STDOUT` and `COPY ... FROM STDIN` get none.
+A simple query commits its implicit transaction before the last statement's
+`CommandComplete`, as above. The extended protocol commits at `Sync`, after
+`CommandComplete`, so a write that waits for that commit reports `staged`. A
+write that reads a table, such as `UPDATE` or `DELETE`, is applied when it
+executes and reports `committed`.
+
 #### `Error`
 
 Executing a statement resulted in an error.

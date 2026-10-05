@@ -27,8 +27,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
-    verify_datum_desc,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecutionTime,
+    ExecutionTimeKind, PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
@@ -2137,6 +2137,32 @@ where
         Ok(())
     }
 
+    /// Sends the opted-in execution time of a statement that returns no rows.
+    ///
+    /// A write that its implicit transaction still holds is reported as staged: with the
+    /// extended protocol, the commit runs at `Sync`, after the statement's `CommandComplete`.
+    async fn send_completion_time(
+        &mut self,
+        execute_started: Instant,
+        write: bool,
+    ) -> Result<(), io::Error> {
+        let session = self.adapter_client.session();
+        let kind = if write {
+            ExecutionTimeKind::for_write(session.has_staged_writes())
+        } else {
+            ExecutionTimeKind::Completed
+        };
+        let notice = session.execution_time_notice(ExecutionTime {
+            kind,
+            elapsed: execute_started.elapsed(),
+            strategy: None,
+        });
+        if let Some(notice) = notice {
+            self.send(notice.into_response()).await?;
+        }
+        Ok(())
+    }
+
     #[instrument(level = "debug")]
     async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are in an implicit transaction.
@@ -2169,12 +2195,14 @@ where
         execute_started: Instant,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
+        let write = ExecutionTimeKind::is_write(&response, self.adapter_client.session());
 
         macro_rules! command_complete {
             () => {{
                 if let Some(err) = self.commit_before_complete().await? {
                     return self.send_error_and_get_state(err).await;
                 }
+                self.send_completion_time(execute_started, write).await?;
                 self.send(BackendMessage::CommandComplete {
                     tag: tag
                         .take()
@@ -2315,13 +2343,16 @@ where
                     .send_rows(
                         row_desc,
                         portal_name,
-                        InProgressRows::new(RecordFirstRowStream::new(
-                            rx,
-                            execute_started,
-                            &self.adapter_client,
-                            Some(instance_id),
-                            None,
-                        )),
+                        InProgressRows::new(
+                            RecordFirstRowStream::new(
+                                rx,
+                                execute_started,
+                                &self.adapter_client,
+                                Some(instance_id),
+                                None,
+                            )
+                            .without_execution_time(),
+                        ),
                         max_rows,
                         get_response,
                         fetch_portal_name,
@@ -2749,6 +2780,14 @@ where
             }
         }
 
+        let execution_time = rows.remaining.take_execution_time();
+        let returning_write = self
+            .adapter_client
+            .session()
+            .get_portal_unverified(&portal_name)
+            .and_then(|portal| portal.stmt.as_deref())
+            .is_some_and(ExecutionTimeKind::is_returning_write);
+
         let portal = self
             .adapter_client
             .session()
@@ -2808,13 +2847,27 @@ where
         }
 
         // Committing clears the session's portals, so this comes after their last use above.
+        let commit_started = Instant::now();
         let commit_error = match response_message {
             BackendMessage::CommandComplete { .. } => self.commit_before_complete().await?,
             _ => None,
         };
+        let commit = commit_started.elapsed();
         let state = match commit_error {
             Some(err) => self.send_error_and_get_state(err).await?,
             None => {
+                let session = self.adapter_client.session();
+                let notice = execution_time.and_then(|time| {
+                    let time = if returning_write {
+                        time.for_returning_write(session.has_staged_writes(), commit)
+                    } else {
+                        time
+                    };
+                    session.execution_time_notice(time)
+                });
+                if let Some(notice) = notice {
+                    self.send(notice.into_response()).await?;
+                }
                 self.send(response_message).await?;
                 State::Ready
             }

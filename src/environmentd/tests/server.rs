@@ -182,6 +182,7 @@ fn test_http_sql() {
     // mid-statement state.
     // A "fixtimestamp=true" argument can be given to replace timestamps with "<TIMESTAMP>".
     // A "fixid=true" argument can be given to replace IDs with "<ID>".
+    // A "fixtiming=true" argument can be given to replace execution times with "<DURATION>".
     //
     // Datadriven directive for HTTP POST is "http". Input and output are the
     // documented JSON formats.
@@ -194,6 +195,16 @@ fn test_http_sql() {
         ),
         (Regex::new(r#"\b[ust]\d+\b"#).unwrap(), "<ID>"),
         (Regex::new(r#"\\n[ust]\d+\b"#).unwrap(), "\\n<ID>"),
+    ];
+    let fixtiming_replacements = [
+        (
+            Regex::new(r#"execution time: \d+\.\d+ ms"#).unwrap(),
+            "execution time: <DURATION> ms",
+        ),
+        (
+            Regex::new(r#"\\"duration_us\\":\d+"#).unwrap(),
+            "\\\"duration_us\\\":<DURATION>",
+        ),
     ];
 
     datadriven::walk("tests/testdata/http", |f| {
@@ -259,6 +270,17 @@ fn test_http_sql() {
         ));
 
         f.run(|tc| {
+            let mut replacements = Vec::new();
+            if tc.args.contains_key("fixtimestamp") {
+                replacements.extend_from_slice(&fixtimestamp_replacements);
+            }
+            if tc.args.contains_key("fixid") {
+                replacements.extend_from_slice(&fixid_replacements);
+            }
+            if tc.args.contains_key("fixtiming") {
+                replacements.extend_from_slice(&fixtiming_replacements);
+            }
+
             let msg = match tc.directive.as_str() {
                 "ws-text" => Message::Text(tc.input.clone().into()),
                 "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
@@ -269,7 +291,12 @@ fn test_http_sql() {
                         .json(&json)
                         .send()
                         .unwrap();
-                    return format!("{}\n{}\n", res.status(), res.text().unwrap());
+                    let status = res.status();
+                    let mut text = res.text().unwrap();
+                    for (re, replace) in &replacements {
+                        text = re.replace_all(&text, *replace).into_owned();
+                    }
+                    return format!("{}\n{}\n", status, text);
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };
@@ -278,14 +305,6 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-
-            let mut replacements = Vec::new();
-            if tc.args.contains_key("fixtimestamp") {
-                replacements.extend_from_slice(&fixtimestamp_replacements);
-            }
-            if tc.args.contains_key("fixid") {
-                replacements.extend_from_slice(&fixid_replacements);
-            }
 
             ws.send(msg).unwrap();
             let mut responses = String::new();

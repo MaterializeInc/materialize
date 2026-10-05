@@ -145,12 +145,16 @@ Each committed statement returns exactly one of these values; e.g. in the case
 of "complex responses", such as `INSERT INTO...RETURNING`, the presence of a
 `"rows"` object implies `"ok"`.
 
+With the [`emit_execution_time_notice`](/sql/set/#other-configuration-parameters)
+configuration parameter on, the `notices` of each successful statement include
+an [execution time notice](/serve-results/websocket-api/#execution-time-notice).
+
 The `"notices"` array is present in all types of results and contains any
 diagnostic messages that were generated during execution of the query. It has
 the following structure:
 
 ```
-{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>}
+{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>, "code": <SQLSTATE>, "detail": <optional>, "hint": <optional>}
 ```
 
 Note that the returned values include the results of statements which were
