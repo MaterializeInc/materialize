@@ -56,6 +56,11 @@ operator:
     statementLoggingTargetDataRate:
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
+    # -- Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY`
+    # in environmentd. Network policies match on client IP, which self-managed
+    # deployments generally do not preserve (port-forwards and most ingress
+    # setups present a proxy address), so they are disabled by default.
+    enableDatabaseNetworkPolicies: false
     # -- Whether to install the v1 version of the Materialize CRD and the
     # conversion webhook that converts between v1 and v1alpha1. When false,
     # only the v1alpha1 CRD version is installed and no webhook serving
