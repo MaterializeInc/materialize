@@ -384,7 +384,8 @@ pub fn plan_insert_query(
             ..
         } = table_name
         {
-            let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
+            let mut scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
+            gate_zero_arity_table_names(scx, &mut scope);
             let typ = desc.typ().clone();
             (scope, typ)
         } else {
@@ -770,7 +771,8 @@ pub fn plan_mutation_query_inner(
 
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
-    let scope = plan_table_alias(scope, alias.as_ref())?;
+    let mut scope = plan_table_alias(scope, alias.as_ref())?;
+    gate_zero_arity_table_names(qcx.scx, &mut scope);
     let desc = item.relation_desc().expect("table has desc");
     let relation_type = qcx.relation_type(&get);
 
@@ -2416,6 +2418,10 @@ fn plan_select_from_where(
         let mut group_exprs: BTreeMap<HirScalarExpr, ScopeItem> = BTreeMap::new();
         let mut group_hir_exprs = vec![];
         let mut group_scope = Scope::empty();
+        // Zero-arity relations contribute no items that could be carried into
+        // the group scope, so carry over their names explicitly to keep them
+        // visible to name resolution after grouping.
+        group_scope.zero_arity_table_names = from_scope.zero_arity_table_names.clone();
         let mut select_all_mapping = BTreeMap::new();
 
         for group_expr in &s.group_by {
@@ -2898,6 +2904,9 @@ fn plan_scalar_table_funcs(
             scope.items[i].from_single_column_function = num_cols == 1;
             scope.items[i].allow_unqualified_references = false;
         }
+        // SELECT-list table functions are not FROM items, so their names must not
+        // shadow or collide with FROM items.
+        scope.zero_arity_table_names.clear();
         return Ok((expr, scope));
     }
     if table_funcs.keys().any(is_repeat_row) {
@@ -2939,6 +2948,8 @@ fn plan_scalar_table_funcs(
     }
     // Coalesced ordinality column.
     scope.items[i].allow_unqualified_references = false;
+    // See the single-function case above.
+    scope.zero_arity_table_names.clear();
     Ok((expr, scope))
 }
 
@@ -3096,6 +3107,24 @@ fn plan_table_factor(
     qcx: &QueryContext,
     table_factor: &TableFactor<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
+    let (expr, mut scope) = plan_table_factor_inner(qcx, table_factor)?;
+    gate_zero_arity_table_names(qcx.scx, &mut scope);
+    Ok((expr, scope))
+}
+
+/// Forgets the zero-arity relation names recorded in `scope` when
+/// `enable_zero_arity_alias_scoping` is off, which restores the name resolution
+/// that ignores such relations.
+pub(crate) fn gate_zero_arity_table_names(scx: &StatementContext, scope: &mut Scope) {
+    if !scx.catalog.system_vars().enable_zero_arity_alias_scoping() {
+        scope.zero_arity_table_names.clear();
+    }
+}
+
+fn plan_table_factor_inner(
+    qcx: &QueryContext,
+    table_factor: &TableFactor<Aug>,
+) -> Result<(HirRelationExpr, Scope), PlanError> {
     match table_factor {
         TableFactor::Table { name, alias } => {
             let (expr, scope) = qcx.resolve_table_name(name.clone())?;
@@ -3130,6 +3159,7 @@ fn plan_table_factor(
                         break;
                     }
                     scope.items.clear();
+                    scope.zero_arity_table_names.clear();
                 }
             }
             qcx.outer_scopes[0].lateral_barrier = true;
@@ -3540,6 +3570,8 @@ fn plan_table_function_internal(
         scope
             .items
             .push(ScopeItem::from_name(scope_name, "ordinality"));
+        // The relation now has a column, which carries its name.
+        scope.zero_arity_table_names.clear();
     }
 
     Ok((expr, scope))
@@ -3609,6 +3641,20 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
                 .get(i)
                 .map(|a| normalize::column_name(a.clone()))
                 .unwrap_or_else(|| item.column_name.clone());
+        }
+
+        // The alias replaces all table names of the underlying relation,
+        // including the names of relations that expose no columns. If no item
+        // ends up carrying the alias (because the scope has no items, or all
+        // of its items prohibit unqualified references), record the alias
+        // separately so that it stays visible to name resolution.
+        scope.zero_arity_table_names.clear();
+        if scope.items.iter().all(|item| item.table_name.is_none()) {
+            scope.zero_arity_table_names.push(PartialItemName {
+                database: None,
+                schema: None,
+                item: table_name,
+            });
         }
     }
     Ok(scope)
@@ -3774,7 +3820,13 @@ fn expand_select_item<'a>(
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
-            if out.is_empty() {
+            if out.is_empty()
+                && !ecx
+                    .scope
+                    .zero_arity_table_names
+                    .iter()
+                    .any(|n| n.matches(&table_name))
+            {
                 sql_bail!("no table named '{}' in scope", table_name);
             }
             Ok(out)

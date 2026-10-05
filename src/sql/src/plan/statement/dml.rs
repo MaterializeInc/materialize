@@ -1661,7 +1661,8 @@ pub fn plan_subscribe(
                 ResolvedItemName::Item { full_name, .. } => Some(full_name.into()),
                 _ => None,
             };
-            let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
+            let mut scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
+            crate::plan::query::gate_zero_arity_table_names(scx, &mut scope);
             (
                 SubscribeFrom::Id(item.global_id()),
                 desc.into_owned(),

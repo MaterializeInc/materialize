@@ -2030,3 +2030,15 @@ SELECT DISTINCT max(b), generate_series(1, 3) AS g FROM srf_agg ORDER BY g
 30  1
 30  2
 30  3
+
+# A zero-column table function in the SELECT list is not a FROM item, so its name
+# neither collides with nor shadows FROM items.
+statement ok
+SELECT repeat_row_non_negative(2), unnest(ARRAY[1,2]), count(*) FROM generate_series(1,2)
+
+statement ok
+SELECT repeat_row_non_negative(2), unnest(ARRAY[1,2]) FROM repeat_row_non_negative(1)
+
+# Two unaliased zero-column table functions in FROM have the same name.
+statement error table name "repeat_row" specified more than once
+SELECT * FROM generate_series(1,2), repeat_row(1), repeat_row(1)
