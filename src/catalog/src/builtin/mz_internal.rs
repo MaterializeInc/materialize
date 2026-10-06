@@ -3852,9 +3852,14 @@ WITH
     ),
     builtin_windows AS (
         /*
-        A builtin has no `create_sql`: it
-        follows the `metrics_retention` system parameter when flagged as a
-        retained-metrics object, and has the default window otherwise.
+        A builtin has no `create_sql`: it follows the `metrics_retention` system
+        parameter when flagged as a retained-metrics object, and has the default
+        window otherwise. Only a durable override of `metrics_retention` is
+        visible here, one set through `ALTER SYSTEM` or the system parameter
+        sync. A value passed as `--system-parameter-default` never reaches
+        `mz_overridden_system_parameters`, so retained-metrics builtins then
+        report the compiled-in default. No relation exposes effective parameter
+        values yet, see SQL-757.
         */
         SELECT
             's' || (gm.data->'value'->>'catalog_id') AS id,
