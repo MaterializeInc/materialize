@@ -27,8 +27,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
-    verify_datum_desc,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecutionTime,
+    ExecutionTimeKind, PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
@@ -1357,6 +1357,9 @@ where
         }
 
         // Implicit transactions are closed at the end of a Query message.
+        // TODO: commit before the last statement's `CommandComplete`, as PostgreSQL and the
+        // HTTP and WebSocket APIs do, so that a commit failure is the statement's result rather
+        // than an error after its success.
         {
             if self.adapter_client.session().transaction().is_implicit() {
                 self.commit_transaction().await?;
@@ -2098,6 +2101,32 @@ where
         Ok(())
     }
 
+    /// Sends the opted-in execution time of a statement that returns no rows.
+    ///
+    /// A write that its implicit transaction still holds is reported as staged: the commit runs
+    /// after the statement's `CommandComplete`.
+    async fn send_completion_time(
+        &mut self,
+        execute_started: Instant,
+        write: bool,
+    ) -> Result<(), io::Error> {
+        let session = self.adapter_client.session();
+        let kind = if write {
+            ExecutionTimeKind::for_write(session.has_staged_writes())
+        } else {
+            ExecutionTimeKind::Completed
+        };
+        let notice = session.execution_time_notice(ExecutionTime {
+            kind,
+            elapsed: execute_started.elapsed(),
+            strategy: None,
+        });
+        if let Some(notice) = notice {
+            self.send(notice.into_response()).await?;
+        }
+        Ok(())
+    }
+
     #[instrument(level = "debug")]
     async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are in an implicit transaction.
@@ -2128,9 +2157,11 @@ where
         execute_started: Instant,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
+        let write = ExecutionTimeKind::is_write(&response, self.adapter_client.session());
 
         macro_rules! command_complete {
             () => {{
+                self.send_completion_time(execute_started, write).await?;
                 self.send(BackendMessage::CommandComplete {
                     tag: tag
                         .take()
@@ -2271,13 +2302,16 @@ where
                     .send_rows(
                         row_desc,
                         portal_name,
-                        InProgressRows::new(RecordFirstRowStream::new(
-                            rx,
-                            execute_started,
-                            &self.adapter_client,
-                            Some(instance_id),
-                            None,
-                        )),
+                        InProgressRows::new(
+                            RecordFirstRowStream::new(
+                                rx,
+                                execute_started,
+                                &self.adapter_client,
+                                Some(instance_id),
+                                None,
+                            )
+                            .without_execution_time(),
+                        ),
                         max_rows,
                         get_response,
                         fetch_portal_name,
@@ -2705,6 +2739,24 @@ where
             }
         }
 
+        let execution_time_notice = rows.remaining.take_execution_time().and_then(|time| {
+            let session = self.adapter_client.session();
+            // TODO: this classifies by the outer statement, so an `EXECUTE` of a prepared write
+            // with `RETURNING` is timed as a read.
+            let returning_write = session
+                .get_portal_unverified(&portal_name)
+                .and_then(|portal| portal.stmt.as_deref())
+                .is_some_and(is_write_statement);
+            let time = if returning_write {
+                // pgwire commits an implicit transaction after `CommandComplete`, so the
+                // time cannot include it.
+                time.for_returning_write(session.has_staged_writes(), Duration::ZERO)
+            } else {
+                time
+            };
+            session.execution_time_notice(time)
+        });
+
         let portal = self
             .adapter_client
             .session()
@@ -2731,6 +2783,9 @@ where
                 .expect("valid fetch portal")
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
+        if let Some(notice) = execution_time_notice {
+            self.send(notice.into_response()).await?;
+        }
         self.send(response_message).await?;
 
         // Attend to metrics if there are no more rows. Only record once per stream
@@ -3420,6 +3475,13 @@ fn get_authenticator(
 enum ExecuteCount {
     All,
     Count(usize),
+}
+
+fn is_write_statement(stmt: &Statement<Raw>) -> bool {
+    matches!(
+        stmt,
+        Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_)
+    )
 }
 
 // See postgres' backend/tcop/postgres.c IsTransactionExitStmt.

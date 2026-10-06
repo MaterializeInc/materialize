@@ -126,6 +126,7 @@ SESSION_VARIABLES = {
     "server_version_num",
     "sql_safe_updates",
     "real_time_recency",
+    "emit_execution_time_notice",
     "emit_plan_insights_notice",
     "emit_timestamp_notice",
     "emit_trace_id_notice",

@@ -51,8 +51,12 @@ The HTTP API provides two modes with slightly different transactional semantics 
 - **Extended**, which mirrors PostgreSQL's [Extended Query][extended-query] protocol.
     - Supports multiple queries, but only one statement per query string.
     - Supports parameters.
-    - Eagerly commits DDL (e.g. `CREATE TABLE`) in implicit transactions, but
-      not DML (e.g. `INSERT`).
+    - Runs each query in its own implicit transaction unless other transaction
+      control is invoked.
+
+The result of a statement that ends an implicit transaction is returned only
+after the transaction commits. If the commit fails, the commit error is that
+statement's result.
 
 ### OpenAPI spec
 
@@ -140,6 +144,10 @@ Ok | `{"ok": <tag>, "notices": <array of notices>}`
 Each committed statement returns exactly one of these values; e.g. in the case
 of "complex responses", such as `INSERT INTO...RETURNING`, the presence of a
 `"rows"` object implies `"ok"`.
+
+With the [`emit_execution_time_notice`](/sql/set/#other-configuration-parameters)
+configuration parameter on, the `notices` of each successful statement include
+an [execution time notice](/serve-results/websocket-api/#execution-time-notice).
 
 The `"notices"` array is present in all types of results and contains any
 diagnostic messages that were generated during execution of the query. It has
