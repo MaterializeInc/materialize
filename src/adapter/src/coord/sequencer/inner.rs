@@ -2697,8 +2697,7 @@ impl Coordinator {
                     // Test-only synchronization point: parks a blind INSERT once its rows are
                     // packed against the table's current RelationDesc, but before retiring
                     // triggers the implicit commit that stages them for group commit. Lets a
-                    // test land a concurrent ALTER TABLE ... ADD COLUMN in that window. Used by
-                    // test_insert_concurrent_alter_table.
+                    // test land a concurrent ALTER TABLE ... ADD COLUMN in that window.
                     fail::fail_point!("insert_after_pack_before_commit");
 
                     ctx.retire(result);

@@ -1357,6 +1357,9 @@ where
         }
 
         // Implicit transactions are closed at the end of a Query message.
+        // TODO: commit before the last statement's `CommandComplete`, as PostgreSQL and the
+        // HTTP and WebSocket APIs do, so that a commit failure is the statement's result rather
+        // than an error after its success.
         {
             if self.adapter_client.session().transaction().is_implicit() {
                 self.commit_transaction().await?;

@@ -48,8 +48,12 @@ The WebSocket API provides two modes with slightly different transactional seman
 - **Extended**, which mirrors PostgreSQL's [Extended Query][extended-query] protocol.
     - Supports multiple queries, but only one statement per query string.
     - Supports parameters.
-    - Eagerly commits DDL (e.g. `CREATE TABLE`) in implicit transactions, but
-      not DML (e.g. `INSERT`).
+    - Runs each query in its own implicit transaction unless other transaction
+      control is invoked.
+
+The `CommandComplete` of a statement that ends an implicit transaction is sent
+only after the transaction commits. If the commit fails, an `Error` with the
+commit error replaces it, and the request stops.
 
 ## Usage
 

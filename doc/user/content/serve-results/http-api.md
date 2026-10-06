@@ -51,8 +51,12 @@ The HTTP API provides two modes with slightly different transactional semantics 
 - **Extended**, which mirrors PostgreSQL's [Extended Query][extended-query] protocol.
     - Supports multiple queries, but only one statement per query string.
     - Supports parameters.
-    - Eagerly commits DDL (e.g. `CREATE TABLE`) in implicit transactions, but
-      not DML (e.g. `INSERT`).
+    - Runs each query in its own implicit transaction unless other transaction
+      control is invoked.
+
+The result of a statement that ends an implicit transaction is returned only
+after the transaction commits. If the commit fails, the commit error is that
+statement's result.
 
 ### OpenAPI spec
 
