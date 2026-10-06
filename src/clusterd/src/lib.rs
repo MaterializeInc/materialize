@@ -22,6 +22,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
+use mz_compute::sharing::ArrangementSharingRegistry;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -431,6 +432,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
+    let sharing_registries = ArrangementSharingRegistry::per_worker(compute_timely_config.workers);
+
     if args.unified_cluster {
         info!("running with a unified timely cluster");
 
@@ -439,6 +442,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ComputeRuntimeRole::Solo,
             &metrics_registry,
             persist_clients,
+            sharing_registries,
             txns_ctx,
             tracing_handle,
             ComputeInstanceContext {
@@ -525,6 +529,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ComputeRuntimeRole::Solo,
         &metrics_registry,
         persist_clients,
+        sharing_registries,
         txns_ctx,
         tracing_handle,
         ComputeInstanceContext {
