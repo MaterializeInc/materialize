@@ -453,6 +453,43 @@ class TdPhase(Phase):
         c.testdrive(self.td, quiet=True)
 
 
+class SystemParameterPhase(Phase):
+    """Sets a system parameter, or resets it when `value` is `None`.
+
+    A build that does not know the parameter skips it. The benchmark compares
+    two builds, and the older one can predate a parameter the newer one adds.
+    """
+
+    def __init__(self, conn_info: PgConnInfo, name: str, value: str | None):
+        self.conn_info = conn_info
+        self.name = name
+        self.value = value
+
+    def run(
+        self,
+        c: Composition,
+        jobs: queue.Queue,
+        conns: queue.Queue,
+        state: State,
+    ) -> None:
+        if self.value is None:
+            statement = f"ALTER SYSTEM RESET {self.name}"
+        else:
+            statement = f"ALTER SYSTEM SET {self.name} = {self.value}"
+        conn = self.conn_info.connect()
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(statement.encode())
+                except psycopg.errors.UndefinedObject:
+                    print(
+                        f"Skipping '{statement}': the build does not know {self.name}"
+                    )
+        finally:
+            conn.close()
+
+
 class LoadPhase(Phase):
     duration: int
     phase_actions: Sequence[PhaseAction]
