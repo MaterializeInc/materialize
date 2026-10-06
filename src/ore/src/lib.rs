@@ -24,6 +24,7 @@
 
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert-no-tracing")))]
 #[cfg(feature = "assert-no-tracing")]
+pub mod antithesis;
 pub mod assert;
 pub mod bits;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes")))]
