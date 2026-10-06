@@ -1286,7 +1286,10 @@ ORDER BY mseh.began_at DESC",
         .unwrap();
     let invalid = "UPDATE statement_logging_rtw_t SET x = nonexistent_col";
     let err = client.execute(invalid, &[]).unwrap_err();
-    assert_eq!(err.code(), Some(&SqlState::UNDEFINED_COLUMN));
+    assert_eq!(
+        err.as_db_error().unwrap().message(),
+        "column \"nonexistent_col\" does not exist"
+    );
     let sentinel = "SELECT count(*) FROM statement_logging_rtw_t";
     client.batch_execute(sentinel).unwrap();
     let [invalid, sentinel] = [invalid, sentinel].map(|sql| {
