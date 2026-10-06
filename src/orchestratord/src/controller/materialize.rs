@@ -134,6 +134,7 @@ pub struct Config {
     pub default_certificate_specs: DefaultCertificateSpecs,
 
     pub disable_license_key_checks: bool,
+    pub disable_database_network_policies: bool,
 
     pub tracing: TracingCliArgs,
     pub orchestratord_namespace: String,

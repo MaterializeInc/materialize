@@ -5051,6 +5051,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
+    definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"
