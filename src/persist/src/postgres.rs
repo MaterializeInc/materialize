@@ -578,7 +578,20 @@ impl Consensus for PostgresConsensus {
                 // seqno 0 is present) or, if seqno 0 was truncated away, inserts into the gap and
                 // is caught by the `max > 0` check and rolled back. This is correct because an
                 // initialized shard always retains a live row (truncation never removes the head).
-                // Concurrent first-time inits serialize on the seqno-0 PK lock, so exactly one wins.
+                // 2. CaS that initializes the shard, issued with `expected` = None
+                // 
+                // The init path (see the `None` arm) is a single statement that inserts the `-1`
+                // marker and seqno 0, guarded by `NOT EXISTS` over the shard.
+                //
+                // Against a shard this CaS could be appending to, the existence guard is false and
+                // the init affects no rows. Against an empty shard it inserts both rows
+                // atomically, and there is no append to interleave with.
+                //
+                // Concurrent first-time inits block on the uncommitted `-1` marker and the loser
+                // is rejected by the PK, so exactly one wins.
+                //
+                // Truncation does not remove the marker, so a delayed init cannot re-use seqno 0
+                // if a gap is left by truncation.
                 static POSTGRES_CAS_QUERY: &str = "
                 WITH expected_row AS (
                     SELECT sequence_number FROM consensus
