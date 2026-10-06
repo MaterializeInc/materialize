@@ -155,14 +155,13 @@ describe("computeStats", () => {
     );
     // The graph breaks its line at these readings rather than drawing them.
     expect(accessorFor("unreadable")(data[4]!)).toBeNull();
-    // The statistics still see them, as the worst value there is.
     expect(stats.peak).toBe(UNREADABLE);
     expect(stats.current).toBe(UNREADABLE);
   });
 
   it('takes "Now" from the latest reading, not the worst in the last bin', () => {
-    // The reviewer's case: at a wide range the final bin is a maximum over
-    // many minutes, so it reads high for an object that has already recovered.
+    // At a wide range the final bin is a maximum over many minutes, so it
+    // reads high for an object that has already recovered.
     const lastBinMax = Math.max(
       ...(SERIES.spiky as number[]).map((r) => r as number),
     );
@@ -174,8 +173,8 @@ describe("computeStats", () => {
   });
 
   it("lets one unreadable reading in sixty pass p90", () => {
-    // The reviewer's case: unreadable once about twenty hours ago, healthy
-    // since. It has to still breach "at any moment", because that reading was
+    // Unreadable once about twenty hours ago, healthy since. It has to still
+    // breach "at any moment", because that reading was
     // the worst thing in the window. It must not breach "right now", and one
     // bad reading in sixty is not more than 10% of them.
     const series = buildData(

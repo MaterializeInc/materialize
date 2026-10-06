@@ -148,8 +148,8 @@ describe("FreshnessTable", () => {
   });
 
   it("pages rather than mounting a row per object", async () => {
-    // A cluster can carry thousands of objects. Before pagination this mounted
-    // a `tr` for every one of them.
+    // A cluster can carry thousands of objects, and a `tr` each would be
+    // mounted for all of them.
     const many = Array.from({ length: 60 }, (_, i) =>
       buildRow({
         key: `u${i + 10}`,

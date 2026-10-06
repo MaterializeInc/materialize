@@ -72,7 +72,6 @@ describe("ThresholdInput", () => {
     await userEvent.clear(field());
     await userEvent.type(field(), "7");
 
-    // Shown immediately, whatever the debounce is doing.
     expect(field()).toHaveValue(7);
   });
 });

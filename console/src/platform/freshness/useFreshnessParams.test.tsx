@@ -44,8 +44,8 @@ describe("parsePositiveNumber", () => {
 
 describe("parseTimePeriod prototype keys", () => {
   it("rejects inherited keys", () => {
-    // These used to parse to NaN and reach the query as
-    // `INTERVAL 'NaN MILLISECONDS'`.
+    // An inherited key is not a number, and a NaN lookback reaches the query
+    // as `INTERVAL 'NaN MILLISECONDS'`.
     for (const key of PROTOTYPE_KEYS) {
       expect(parseTimePeriod(key)).toBeNull();
     }
@@ -76,8 +76,8 @@ describe("parsePredicate", () => {
   });
 
   it("rejects inherited keys", () => {
-    // `toString` used to pass and then fall through `statFor` to p90, so the
-    // page judged by a statistic the menu was not showing.
+    // An inherited key falls through `statFor` to p90, so the page would
+    // judge by a statistic the menu is not showing.
     for (const key of PROTOTYPE_KEYS) {
       expect(parsePredicate(key)).toBeNull();
     }

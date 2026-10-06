@@ -136,8 +136,6 @@ const FreshnessContent = ({
     hydrationByObjectId,
     typeFilters,
     predicate,
-    // The settled threshold, so a drag does not rebuild a row per object on
-    // every pointer move.
     threshold: thresholdControl.settled,
   });
 
@@ -252,7 +250,6 @@ const FreshnessPage = () => {
   } = useFreshnessParams();
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
-  // Filter out system clusters
   const selectable = clusters
     .filter((c) => !isSystemCluster(c.id))
     .sort((a, b) => a.name.localeCompare(b.name));

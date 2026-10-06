@@ -101,9 +101,9 @@ export function computeStats(
 /**
  * A reading whose lag came back NULL: the object could not be read.
  *
- * `Infinity` rather than a flag, so it sorts, ranks and compares against a
- * threshold as the worst possible lag without any statistic needing to know
- * about it. It is never formatted; a cell checks for it and names the state.
+ * Sorts, ranks and compares against a threshold as the worst possible lag, so
+ * no statistic needs to know about it. Never formatted: a cell checks for it
+ * and names the state.
  */
 export const UNREADABLE = Infinity;
 

@@ -176,8 +176,6 @@ const ClusterFreshnessTable = ({
                       as={Link}
                       to={absoluteFreshnessPath(regionSlug, clusterId)}
                       title={`Freshness details for ${clusterName}`}
-                      // The link text is a bare duration, which does not say
-                      // where the link goes when read on its own.
                       aria-label={`Freshness details for ${clusterName}`}
                     >
                       {tableText}

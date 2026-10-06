@@ -180,11 +180,12 @@ const FreshnessTableInner = ({
   const table = useUniversalTable({
     data: rows,
     columns,
-    // No initial sorting: `buildFreshnessRows` already orders worst first by
-    // `breachValue`, which is whichever statistic the active predicate judges.
-    // Naming a column here would instead fix the order to one statistic, and
-    // would put the rows with nothing to judge at the top, since a descending
-    // sort reverses the nulls-last comparators.
+    // `buildFreshnessRows` orders worst first by `breachValue`, which is
+    // whichever statistic the active predicate judges, so the incoming order
+    // already follows the predicate.
+    //
+    // NOTE: a descending sort reverses the nulls-last comparators, so naming a
+    // column here puts the rows with nothing to judge at the top.
     initialSorting: [],
     pageSize: PAGE_SIZE,
     getRowId: (row) => row.key,

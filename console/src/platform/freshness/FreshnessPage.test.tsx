@@ -31,7 +31,7 @@ const renderWithClusters = async (state: {
 describe("FreshnessPage cluster states", () => {
   it("waits rather than claiming there are no clusters", async () => {
     // An empty list before the subscribe lands is not the same as an empty
-    // environment, and the page used to report both as the latter.
+    // environment.
     await renderWithClusters({ data: [], snapshotComplete: false });
 
     expect(await screen.findByTestId("loading-spinner")).toBeVisible();

@@ -57,9 +57,10 @@ describe("useThresholdControl", () => {
     // `commit` usually reaches this hook through react-router's
     // `setSearchParams`, which is rebuilt whenever any search param changes.
     // Changing another control mid-edit therefore hands the hook a new
-    // function. Depending on it used to rebuild the timer and discard the call
-    // in flight, along with the state reset riding on that call: the controls
-    // then stayed on the edited value and `committed` could never move them.
+    // function. Holding it as a dependency rebuilds the timer and discards the
+    // call in flight, along with the state reset riding on that call, leaving
+    // the controls on the edited value with no way for `committed` to move
+    // them.
     const replacement: (value: number) => void = vi.fn();
     const original: (value: number) => void = vi.fn();
     const { result, rerender } = renderHook(
