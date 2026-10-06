@@ -96,6 +96,7 @@ use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::{Instrument, Span, info, warn};
 
+use crate::ReadHolds;
 use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
@@ -115,7 +116,6 @@ use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::util::viewable_variables;
-use crate::ReadHolds;
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;

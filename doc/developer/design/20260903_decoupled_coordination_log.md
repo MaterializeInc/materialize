@@ -18,13 +18,21 @@ History is consolidated on `decoupled-coordination`,
 with side-branch work accounted for and original trees preserved in local archival
 tags. Verify the combined integration and approved corrections in regular PR CI.
 Preserve designer commits and useful implementation boundaries.
-The replay onto upstream `f5217bd2d7` retains all 136 local commits. Its three
-conflict resolutions combine upstream redacted-log truncation with catalog
-certification and retain the deterministic blob-write-gated cancellation fixture.
+The replay onto upstream `d9a2c5dc40` retains all 138 local commits. Accept
+upstream's unconditional frontend OCC and removal of legacy coordinator write
+locks, while preserving fresh catalog certification, read protection, the
+adapter-owned table writer and the approved Persist-arbitrated OCC correction.
+The moved background PeekClient constructor no longer takes the removed flag.
+The renamed two-instance txn-WAL workflow remains paired with its nightly entry.
+Independent static review found no blocking integration issue. Compilation and
+runtime verification remain CI-owned.
 The imported drop-only prewarming workflow is removed because it asserts legacy
 restarts. Native retirement and SQL DROP membership contracts remain unchanged.
-CI137869 found four explicit-Arc-clone lint errors in the new OCC tests, corrected
-before combined verification. No OCC runtime result is claimed from that build.
+CI137885 at `e8ae0964` passed Cargo tests, both restart shards, catalog read-protection
+restart, Testdrive4, native outage and warm promotion. The approved OCC correction
+has runtime coverage, but both parallel shards and SLT1 still time out. Use their
+post-correction captures to locate remaining waits. The oracle-only rejection is
+removed, so timestamp-conflict replies now describe actual txns conflicts.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
