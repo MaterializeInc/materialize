@@ -1071,7 +1071,16 @@ impl Coordinator {
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
         let stage_start = Instant::now();
-        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
+        let has_builtin_updates = !builtin_table_updates.is_empty();
+        // Even an empty append advances tables past the catalog's oracle write.
+        // Stage it to preserve read freshness, but only wait on the coordinator
+        // when there are actual builtin rows to make visible.
+        let table_updates = self.builtin_table_update().execute(builtin_table_updates);
+        let builtin_update_notify: BuiltinTableAppendNotify = if has_builtin_updates {
+            table_updates
+        } else {
+            Box::pin(futures::future::ready(()))
+        };
         phase_seconds
             .with_label_values(&["stage_builtin"])
             .observe(stage_start.elapsed().as_secs_f64());

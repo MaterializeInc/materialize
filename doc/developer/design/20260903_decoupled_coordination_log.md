@@ -21,12 +21,15 @@ Preserve designer commits and useful implementation boundaries.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
-Prioritize the remaining liveness failures in parallel checks and catalog
-read-protection restart. Successful protection publications can occupy the
-coordinator for tens of seconds. The stale-bound replay correction resamples
-after metadata conflicts, but does not explain that successful-path cost or
-establish the cause of every timeout. Investigate at the publication/transaction
-boundary without weakening protection or extending fixture deadlines.
+Prioritize the remaining liveness failures in parallel checks and the OCC
+zero-row-write fixture. Successful protection publications can occupy the
+coordinator for tens of seconds. Catalog-only updates stage table keepalives
+without awaiting them on the coordinator, preserving table progress. Verify
+this correction and its isolated SQL regression in CI. The stale-bound replay
+correction resamples after metadata conflicts. Neither correction establishes
+the cause of every timeout. Keep protection and fixture deadlines unchanged.
+The restart fixture brackets sink admission before catalog diagnostics to avoid
+consuming its physical-lag window. That adjustment also needs CI verification.
 
 Keep the scheduled-compaction 1/0/1 membership and audit assertions. Its final
 observation uses a fixed sleep and a real-time window. Establish convergence and
