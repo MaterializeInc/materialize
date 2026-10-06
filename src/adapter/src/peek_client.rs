@@ -56,7 +56,7 @@ pub type StorageCollectionsHandle =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Clients needed for peek sequencing in the Adapter Frontend.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PeekClient {
     coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
