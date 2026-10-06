@@ -11,8 +11,8 @@
 
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
-use mz_repr::SqlScalarType;
-use mz_sql::plan::PlanContext;
+use mz_repr::{Datum, Row, SqlScalarType};
+use mz_sql::plan::{Params, Plan, PlanContext};
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -139,11 +139,122 @@ async fn test_parameter_type_inference() {
         for (sql, types) in test_cases {
             let stmt = mz_sql::parse::parse(sql).unwrap().into_element().ast;
             let (stmt, _) = mz_sql::names::resolve(&conn_catalog, stmt).unwrap();
+            let analysis = mz_sql::plan::describe_analyzed(
+                &PlanContext::zero(),
+                &conn_catalog,
+                stmt.clone(),
+                &[],
+            )
+            .unwrap();
             let desc =
                 mz_sql::plan::describe(&PlanContext::zero(), &conn_catalog, stmt, &[]).unwrap();
             assert_eq!(desc.param_types, types);
+            assert_eq!(analysis.desc, desc);
+            assert!(analysis.select.is_some());
         }
         catalog.expire().await;
     })
     .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_analyzed_select_binding() {
+    Catalog::with_debug(|catalog| async move {
+        let conn_catalog = catalog.for_system_session();
+        let pcx = PlanContext::zero();
+        for sql in [
+            "SELECT $1::int4 + x FROM (VALUES (1), (2)) t(x) WHERE x = $2::int4 ORDER BY 1 LIMIT $3 OFFSET $4",
+            "SELECT CASE WHEN $1::int4 = 0 THEN 0 ELSE $2::int4 / $1 END LIMIT $3 OFFSET $4",
+            "SELECT x FROM (VALUES (1), (2)) t(x) WHERE x IN (SELECT $1::int4) AND x > $2::int4 LIMIT $3 OFFSET $4",
+            "SELECT current_timestamp, current_user, $1::int4, $2::int4 LIMIT $3 OFFSET $4",
+            "SELECT $1::int4, $2::int4 LIMIT $3 OFFSET $4 AS OF 0",
+            "SELECT x FROM (VALUES (1), (2)) t(x) WHERE EXISTS (SELECT 1 FROM (VALUES (1), (2)) u(y) WHERE y = x LIMIT $1 OFFSET $2) LIMIT $3 OFFSET $4",
+        ] {
+            let stmt = mz_sql::parse::parse(sql).unwrap().into_element().ast;
+            let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, stmt).unwrap();
+            // Supplied int4 types also exercise casts to the bigint finishing types.
+            let analysis = mz_sql::plan::describe_analyzed(
+                &pcx, &conn_catalog, stmt.clone(), &vec![Some(SqlScalarType::Int32); 4],
+            ).unwrap();
+            let analyzed = analysis.select.as_ref().unwrap();
+            let unbound = format!("{analyzed:?}");
+            for values in [
+                [Some(1), Some(1), Some(2), Some(0)],
+                [Some(2), Some(2), Some(1), Some(1)],
+                [None, Some(2), None, Some(0)],
+                [None, Some(2), None, None],
+                [Some(0), Some(2), Some(0), Some(0)],
+                [Some(1), Some(1), Some(-1), Some(0)],
+                [Some(1), Some(1), Some(1), Some(-1)],
+            ] {
+                let params = Params {
+                    datums: Row::pack(values.map(|v| v.map(Datum::Int32).unwrap_or(Datum::Null))),
+                    execute_types: vec![SqlScalarType::Int32; 4],
+                    expected_types: analysis.desc.param_types.clone(),
+                };
+                let bound = mz_sql::plan::plan_analyzed_select(
+                    &pcx, &conn_catalog, analyzed, &params, &resolved_ids,
+                );
+                let custom = mz_sql::plan::plan(
+                    Some(&pcx), &conn_catalog, stmt.clone(), &params, &resolved_ids,
+                );
+                // A parameter-bound NULL OFFSET currently errors in offset_into_value.
+                assert_eq!(bound.is_ok(), values[2].is_none_or(|v| v >= 0) && values[3].is_some_and(|v| v >= 0), "{sql}: {values:?}: {bound:?} / {custom:?}");
+                match (bound, custom) {
+                    (Ok((bound, binding_ids)), Ok((Plan::Select(custom), sql_impl_ids))) => {
+                        assert!(!bound.source.contains_parameters().unwrap());
+                        assert_eq!(bound.source, custom.source, "{sql}: {values:?}");
+                        assert_eq!(bound.finishing, custom.finishing, "{sql}: {values:?}");
+                        assert_eq!(format!("{:?}", bound.when), format!("{:?}", custom.when));
+                        let mut all_impl_ids = analysis.sql_impl_ids.clone();
+                        all_impl_ids.extend_from(&binding_ids);
+                        assert_eq!(all_impl_ids, sql_impl_ids);
+                    }
+                    (Err(bound), Err(custom)) => {
+                        assert_eq!(bound.to_string(), custom.to_string(), "{sql}: {values:?}");
+                    }
+                    (bound, custom) => panic!("binding diverged for {sql}: {values:?}: {bound:?} / {custom:?}"),
+                }
+                assert_eq!(format!("{analyzed:?}"), unbound, "binding mutated retained analysis");
+            }
+        }
+        for sql in ["SELECT pg_cancel_backend(0)", "SHOW search_path"] {
+            let stmt = mz_sql::parse::parse(sql).unwrap().into_element().ast;
+            let (stmt, _) = mz_sql::names::resolve(&conn_catalog, stmt).unwrap();
+            let analysis = mz_sql::plan::describe_analyzed(&pcx, &conn_catalog, stmt, &[]).unwrap();
+            assert!(analysis.select.is_none(), "unexpected reusable SELECT for {sql}");
+        }
+        catalog.expire().await;
+    }).await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_analyzed_select_inferred_record_comparison() {
+    Catalog::with_debug(|catalog| async move {
+        let conn_catalog = catalog.for_system_session();
+        let pcx = PlanContext::zero();
+        let stmt = mz_sql::parse::parse("SELECT ROW(1, 2) = $1")
+            .unwrap()
+            .into_element()
+            .ast;
+        let (stmt, ids) = mz_sql::names::resolve(&conn_catalog, stmt).unwrap();
+        let analysis =
+            mz_sql::plan::describe_analyzed(&pcx, &conn_catalog, stmt.clone(), &[]).unwrap();
+        let params = Params {
+            datums: Row::pack([Datum::String("(1,2)")]),
+            expected_types: analysis.desc.param_types.clone(),
+            execute_types: analysis.desc.param_types.clone(),
+        };
+        let custom =
+            mz_sql::plan::plan(Some(&pcx), &conn_catalog, stmt, &params, &ids).unwrap_err();
+        assert!(custom.to_string().contains("operator does not exist"));
+        assert!(
+            analysis.select.is_none(),
+            "invalid typed analysis was retained"
+        );
+        catalog.expire().await;
+    })
+    .await;
 }
