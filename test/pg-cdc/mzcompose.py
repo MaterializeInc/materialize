@@ -160,6 +160,49 @@ def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -
         c.run_testdrive_files("override/replication-slots.td")
 
 
+def workflow_slot_creation_timeout(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that replication slot creation times out while an upstream transaction is in
+    progress and succeeds once that transaction ends.
+    """
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(create_postgres(pg_version=pg_version)):
+        c.up("materialized", "postgres")
+
+        pg_conn = psycopg.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+            autocommit=True,
+        )
+        pg_conn.execute("""
+            ALTER USER postgres WITH replication;
+            DROP SCHEMA IF EXISTS public CASCADE;
+            CREATE SCHEMA public;
+            DROP PUBLICATION IF EXISTS mz_source;
+            CREATE PUBLICATION mz_source FOR ALL TABLES;
+            CREATE TABLE t1 (pk INTEGER PRIMARY KEY, f2 TEXT);
+            ALTER TABLE t1 REPLICA IDENTITY FULL;
+            INSERT INTO t1 VALUES (1, 'one');
+            """)
+
+        # Logical slot creation waits for every transaction that holds a transaction ID.
+        pg_conn.autocommit = False
+        pg_conn.execute("INSERT INTO t1 VALUES (2, 'two')")
+
+        c.run_testdrive_files(
+            f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
+            "override/slot-creation-timeout-part-1.td",
+        )
+
+        pg_conn.commit()
+
+        c.run_testdrive_files("--no-reset", "override/slot-creation-timeout-part-2.td")
+
+
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
     pg_version = get_targeted_pg_version(parser)
     for wal_level in ["replica", "minimal"]:
