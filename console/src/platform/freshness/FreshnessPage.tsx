@@ -299,15 +299,14 @@ const FreshnessPage = () => {
         <VStack
           mt="4"
           width="100%"
-          flexWrap="wrap"
           gap="3"
-          alignItems="left"
+          alignItems="flex-start"
           borderWidth="1px"
           borderColor={colors.border.primary}
           borderRadius="lg"
           padding="3"
         >
-          <HStack spacing="2" alignItems="center">
+          <HStack spacing="2" alignItems="center" flexWrap="wrap">
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
               Highlight objects that exceeded
             </Text>
@@ -340,7 +339,7 @@ const FreshnessPage = () => {
               options={TIME_PERIOD_OPTIONS}
             />
           </HStack>
-          <HStack spacing="2" alignItems="center">
+          <HStack spacing="2" alignItems="center" flexWrap="wrap">
             <Box minWidth="52">
               <SearchableSelect<SelectOption, false>
                 ariaLabel="Cluster"
