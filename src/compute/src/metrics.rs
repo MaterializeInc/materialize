@@ -95,6 +95,10 @@ pub struct ComputeMetrics {
 
     // metric sinks
     metric_sink_registration_retries_total: IntCounter,
+
+    // shared arrangements
+    shared_arrangement_hold_gap_ms: raw::UIntGaugeVec,
+    shared_arrangement_held_count: raw::UIntGaugeVec,
 }
 
 /// Applies the per-role const label to `opts`, unless `role` is `Solo`.
@@ -299,6 +303,16 @@ impl ComputeMetrics {
                 name: "mz_compute_metric_sink_registration_retries_total",
                 help: "The number of times a metric sink failed to register its collector and scheduled a retry.",
             ), role)),
+            shared_arrangement_hold_gap_ms: registry.register(with_role(metric!(
+                name: "mz_compute_shared_arrangement_hold_gap_ms",
+                help: "The largest gap, over the shared arrangements this worker publishes, between the compaction frontier it was told to apply and the one it applied.",
+                var_labels: ["worker_id"],
+            ), role)),
+            shared_arrangement_held_count: registry.register(with_role(metric!(
+                name: "mz_compute_shared_arrangement_held_count",
+                help: "How many of the shared arrangements this worker publishes are kept from compacting by the importing runtime or a reader.",
+                var_labels: ["worker_id"],
+            ), role)),
         }
     }
 
@@ -351,6 +365,12 @@ impl ComputeMetrics {
         let shared_row_heap_capacity_bytes = self
             .shared_row_heap_capacity_bytes
             .with_label_values(&[&worker]);
+        let shared_arrangement_hold_gap_ms = self
+            .shared_arrangement_hold_gap_ms
+            .with_label_values(&[&worker]);
+        let shared_arrangement_held_count = self
+            .shared_arrangement_held_count
+            .with_label_values(&[&worker]);
 
         WorkerMetrics {
             worker_label: worker,
@@ -379,6 +399,8 @@ impl ComputeMetrics {
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
+            shared_arrangement_hold_gap_ms,
+            shared_arrangement_held_count,
         }
     }
 }
@@ -459,6 +481,10 @@ pub struct WorkerMetrics {
     pub(crate) replica_expiration_remaining_seconds: raw::Gauge,
     /// Heap capacity of the shared row.
     shared_row_heap_capacity_bytes: UIntGauge,
+    /// The largest compaction gap over the shared arrangements this worker publishes.
+    pub(crate) shared_arrangement_hold_gap_ms: UIntGauge,
+    /// How many of those arrangements are held back at all.
+    pub(crate) shared_arrangement_held_count: UIntGauge,
 }
 
 impl WorkerMetrics {

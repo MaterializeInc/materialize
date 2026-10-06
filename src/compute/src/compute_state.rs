@@ -1090,6 +1090,23 @@ impl<'a> ActiveComputeState<'a> {
                 .replica_expiration_remaining_seconds
                 .set(remaining)
         }
+
+        // A runtime that publishes nothing reports zero, so the other runtime's numbers are not
+        // repeated under a second `role` label: an extra zero leaves a `sum` or a `max` over the
+        // label correct, where a duplicate would not.
+        let (gap, held) = self
+            .compute_state
+            .publisher
+            .as_ref()
+            .map_or((0, 0), ArrangementSharingRegistry::hold_gaps);
+        self.compute_state
+            .metrics
+            .shared_arrangement_hold_gap_ms
+            .set(gap);
+        self.compute_state
+            .metrics
+            .shared_arrangement_held_count
+            .set(u64::cast_from(held));
     }
 
     /// Gives `peek` a turn on the worker if this activation's budget has one left, and queues it
