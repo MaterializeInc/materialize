@@ -2033,11 +2033,6 @@ impl Coordinator {
             }
         }
 
-        // Cancel plans waiting for session-startup appends.
-        if let Some(plan) = self.deferred_plans.remove(&conn_id) {
-            maybe_ctx = Some(plan.ctx);
-        }
-
         // Cancel deferred statements.
         let deferred_ddl_idx = self
             .serialized_ddl

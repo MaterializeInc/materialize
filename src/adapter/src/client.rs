@@ -1763,7 +1763,7 @@ impl SessionClient {
         // paths, and is a no-op for plans that don't depend on builtin tables.
         {
             let session = self.session.as_mut().expect("SessionClient invariant");
-            if let Some((_, wait_future)) =
+            if let Some(wait_future) =
                 crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
             {
                 wait_future.await;

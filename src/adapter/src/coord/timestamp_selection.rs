@@ -10,7 +10,6 @@
 //! Logic for selecting timestamps for various operations on collections.
 
 use std::fmt;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -18,12 +17,10 @@ use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
-use mz_ore::cast::CastLossy;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
-use mz_timestamp_oracle::TimestampOracle;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as _};
 
@@ -647,92 +644,6 @@ pub trait TimestampProvider {
 }
 
 impl Coordinator {
-    /// Returns the timestamp oracle to obtain a linearized read timestamp from,
-    /// if the given isolation level and `when` require one, and `None`
-    /// otherwise.
-    ///
-    /// The caller must perform the `read_ts()` round-trip off the coordinator
-    /// loop, in a spawned task. The oracle backing store can be slow, so doing
-    /// the read inline would wedge every other session until it returns. See
-    /// `explain_timestamp_linearize_timestamp` for a use of this helper.
-    pub(crate) fn linearized_read_ts_oracle(
-        &self,
-        session: &Session,
-        timeline_ctx: &TimelineContext,
-        when: &QueryWhen,
-    ) -> Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>> {
-        let isolation_level = session.vars().transaction_isolation();
-        let timeline = Coordinator::get_timeline(timeline_ctx);
-        let needs_linearized_read_ts = Coordinator::needs_linearized_read_ts(isolation_level, when);
-
-        match timeline {
-            Some(timeline) if needs_linearized_read_ts => {
-                Some(self.get_timestamp_oracle(&timeline))
-            }
-            Some(_) | None => None,
-        }
-    }
-
-    /// Determines the timestamp for a query, acquires read holds that ensure the
-    /// query remains executable at that time, and returns those.
-    /// The caller is responsible for eventually dropping those read holds.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn determine_timestamp(
-        &self,
-        session: &Session,
-        id_bundle: &CollectionIdBundle,
-        when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
-        timeline_context: &TimelineContext,
-        oracle_read_ts: Option<Timestamp>,
-        real_time_recency_ts: Option<mz_repr::Timestamp>,
-    ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
-        let isolation_level = session.vars().transaction_isolation();
-        let (det, read_holds) = self.determine_timestamp_for(
-            session,
-            id_bundle,
-            when,
-            timeline_context,
-            oracle_read_ts,
-            real_time_recency_ts,
-            isolation_level,
-        )?;
-        self.metrics
-            .by_cluster
-            .determine_timestamp(
-                compute_instance,
-                det.respond_immediately(),
-                *isolation_level,
-            )
-            .inc();
-        if !det.respond_immediately()
-            && isolation_level.is_bounded_staleness()
-            && real_time_recency_ts.is_none()
-        {
-            // Note down the difference between BoundedStaleness and Serializable into a metric.
-            if let Some(bs_ts) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
-                    session,
-                    id_bundle,
-                    when,
-                    timeline_context,
-                    oracle_read_ts,
-                    real_time_recency_ts,
-                    &IsolationLevel::Serializable,
-                )?;
-                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
-                    self.metrics
-                        .by_cluster
-                        .timestamp_difference_for_bounded_staleness_ms(compute_instance)
-                        .observe(f64::cast_lossy(u64::from(
-                            serializable.saturating_sub(*bs_ts),
-                        )));
-                }
-            }
-        }
-        Ok((det, read_holds))
-    }
-
     /// The largest timestamp not greater or equal to an element of `upper`.
     ///
     /// If no such timestamp exists, for example because `upper` contains only the

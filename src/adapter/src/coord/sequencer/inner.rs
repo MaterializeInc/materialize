@@ -66,7 +66,6 @@ use mz_sql::plan::{
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -130,7 +129,6 @@ mod create_materialized_view;
 mod create_metric_sink;
 mod create_view;
 mod explain_timestamp;
-mod peek;
 mod secret;
 mod subscribe;
 
@@ -146,30 +144,6 @@ macro_rules! return_if_err {
 }
 
 pub(super) use return_if_err;
-
-fn spawn_linearized_read_ts<S>(
-    oracle: Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
-    name: &'static str,
-    build_stage: impl FnOnce(Option<Timestamp>) -> S + Send + 'static,
-) -> StageResult<Box<S>>
-where
-    S: Send + 'static,
-{
-    match oracle {
-        Some(oracle) => {
-            let span = Span::current();
-            StageResult::Handle(mz_ore::task::spawn(
-                move || name,
-                async move {
-                    let oracle_read_ts = oracle.read_ts().await;
-                    Ok(Box::new(build_stage(Some(oracle_read_ts))))
-                }
-                .instrument(span),
-            ))
-        }
-        None => StageResult::Immediate(Box::new(build_stage(None))),
-    }
-}
 
 /// Rejects connection options whose values cannot work, independent of any
 /// external system.
@@ -2399,26 +2373,6 @@ impl Coordinator {
             StorageError::RtrTimeout(id) => AdapterError::RtrTimeout(rtr_name(&id)),
             StorageError::RtrDropFailure(id) => AdapterError::RtrDropFailure(rtr_name(&id)),
             error => error.into(),
-        }
-    }
-
-    /// Checks to see if the session needs a real time recency timestamp and if so returns
-    /// a future that will return the timestamp.
-    pub(crate) async fn determine_real_time_recent_timestamp_if_needed(
-        &self,
-        session: &Session,
-        source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<Option<RtrTimestampFuture>, AdapterError> {
-        let vars = session.vars();
-
-        if vars.real_time_recency()
-            && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
-            && !session.contains_read_timestamp()
-        {
-            self.determine_real_time_recent_timestamp(source_ids, *vars.real_time_recency_timeout())
-                .await
-        } else {
-            Ok(None)
         }
     }
 
