@@ -1374,6 +1374,14 @@ impl<'a> RunnerInner<'a> {
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
+                    "enable_prepared_query_reuse".to_string(),
+                    "true".to_string(),
+                );
+                params.insert(
+                    "enable_prepared_query_templates".to_string(),
+                    "true".to_string(),
+                );
+                params.insert(
                     "log_filter".to_string(),
                     config.tracing.startup_log_filter.to_string(),
                 );

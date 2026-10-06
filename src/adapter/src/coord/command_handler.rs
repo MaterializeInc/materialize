@@ -1204,12 +1204,13 @@ impl Coordinator {
         // The reference to `portal` can't outlive `session`, which we
         // use to construct the context, so scope the reference to this block where we
         // get everything we need from the portal for later.
-        let (stmt, ctx, params) = {
+        let (stmt, query, ctx, params) = {
             let portal = session
                 .get_portal_unverified(&portal_name)
                 .expect("known to exist");
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
+            let query = portal.query.clone();
             let logging = Arc::clone(&portal.logging);
             let lifecycle_timestamps = portal.lifecycle_timestamps.clone();
 
@@ -1230,7 +1231,7 @@ impl Coordinator {
                 ExecuteContextGuard::new(maybe_uuid, self.internal_cmd_tx.clone())
             };
             let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
-            (stmt, ctx, params)
+            (stmt, query, ctx, params)
         };
 
         let stmt = match stmt {
@@ -1261,13 +1262,14 @@ impl Coordinator {
             _ => {}
         }
 
-        self.handle_execute_inner(stmt, params, ctx).await
+        self.handle_execute_inner(stmt, query, params, ctx).await
     }
 
     #[instrument(name = "coord::handle_execute_inner", fields(stmt = stmt.to_ast_string_redacted()))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Arc<Statement<Raw>>,
+        query: Option<Arc<crate::session::PreparedQuery>>,
         params: Params,
         mut ctx: ExecuteContext,
     ) {
@@ -1556,6 +1558,21 @@ impl Coordinator {
                     ctx,
                     ps: PlanStatement::Statement { stmt, params },
                 });
+                return;
+            }
+        }
+
+        if let Some(query) = query {
+            if self.catalog().system_config().enable_prepared_query_reuse()
+                && query.is_valid(self.catalog(), ctx.session())
+            {
+                match query.bind(self.catalog(), ctx.session(), &params) {
+                    Ok((plan, resolved_ids, sql_impl_ids)) => {
+                        self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
+                            .await;
+                    }
+                    Err(err) => ctx.retire(Err(err)),
+                }
                 return;
             }
         }

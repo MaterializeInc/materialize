@@ -445,6 +445,18 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 }
 
 impl GlobalLirPlan {
+    /// Wraps an instantiated, context-validated prepared fast path.
+    pub(crate) fn from_prepared(
+        plan: crate::coord::peek::FastPathPlan,
+        typ: SqlRelationType,
+    ) -> Self {
+        Self {
+            peek_plan: PeekPlan::FastPath(plan),
+            df_meta: DataflowMetainfo::default(),
+            typ,
+        }
+    }
+
     /// Returns a reference to the peek plan.
     pub fn peek_plan(&self) -> &PeekPlan {
         &self.peek_plan

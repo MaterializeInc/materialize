@@ -671,6 +671,13 @@ impl SessionClient {
         &self,
         sql: &'a str,
     ) -> Result<Result<Vec<StatementParseResult<'a>>, ParserStatementError>, String> {
+        self.session
+            .as_ref()
+            .expect("session invariant violated")
+            .metrics()
+            .sql_compiler
+            .parse
+            .inc();
         match mz_sql::parse::parse_with_limit(sql) {
             Ok(Err(e)) => {
                 self.track_statement_parse_failure(&e);
@@ -756,14 +763,15 @@ impl SessionClient {
             tokio::time::sleep(Duration::from_secs(1)).await;
         };
 
-        let desc = Coordinator::describe(&catalog, self.session(), stmt.clone(), param_types)?;
+        let (desc, query) =
+            Coordinator::describe_prepared(&catalog, self.session(), stmt.clone(), param_types)?;
         let now = self.now();
         let state_revision = StateRevision {
             catalog_revision: catalog.transient_revision(),
             session_state_revision: self.session().state_revision(),
         };
         self.session()
-            .set_prepared_statement(name, stmt, sql, desc, state_revision, now);
+            .set_prepared_statement(name, stmt, sql, desc, query, state_revision, now);
         Ok(())
     }
 
@@ -777,8 +785,12 @@ impl SessionClient {
     ) -> Result<(), AdapterError> {
         let catalog = self.catalog_snapshot("declare").await;
         let param_types = vec![];
-        let desc =
-            Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
+        let (desc, query) = Coordinator::describe_prepared(
+            &catalog,
+            self.session(),
+            Some(stmt.clone()),
+            param_types,
+        )?;
         let params = vec![];
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
@@ -790,6 +802,7 @@ impl SessionClient {
         self.session().set_portal(
             name,
             desc,
+            query,
             Some(stmt),
             logging,
             params,
@@ -1012,7 +1025,8 @@ impl SessionClient {
             .get_prepared_statement_unverified(&execute_plan.name)
             .expect("verified above");
         let inner_stmt = ps.stmt().cloned();
-        let inner_desc = ps.desc().clone();
+        let inner_desc = ps.shared_desc();
+        let query = ps.query();
         let state_revision = ps.state_revision;
         let inner_logging = Arc::clone(ps.logging());
 
@@ -1034,6 +1048,7 @@ impl SessionClient {
             inner_stmt,
             inner_logging,
             inner_desc,
+            query,
             execute_plan.params,
             Vec::new(),
             state_revision,

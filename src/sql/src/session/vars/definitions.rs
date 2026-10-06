@@ -2331,6 +2331,18 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_prepared_query_reuse,
+        desc: "Retain and reuse analyzed prepared SELECT queries.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_prepared_query_templates,
+        desc: "Use generic indexed-query templates for eligible analyzed prepared SELECTs. Disabling retains analysis reuse but forces custom optimization.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
         desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
         default: true,

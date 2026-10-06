@@ -31,6 +31,8 @@ pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
+    pub(crate) sql_compiler: SqlCompilerMetrics,
+    pub(crate) prepared: PreparedMetrics,
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
@@ -80,6 +82,8 @@ pub struct Metrics {
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
+            sql_compiler: SqlCompilerMetrics::register_into(registry),
+            prepared: PreparedMetrics::register_into(registry),
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
@@ -322,6 +326,8 @@ impl Metrics {
 
     pub(crate) fn session_metrics(&self) -> SessionMetrics {
         SessionMetrics {
+            sql_compiler: self.sql_compiler.clone(),
+            prepared: self.prepared.clone(),
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
             query_total: self.query_total.clone(),
@@ -338,6 +344,8 @@ impl Metrics {
 /// Metrics to be accessed from a [`crate::session::Session`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
+    pub(crate) sql_compiler: SqlCompilerMetrics,
+    pub(crate) prepared: PreparedMetrics,
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
@@ -347,6 +355,113 @@ pub struct SessionMetrics {
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
     statement_logging_actual_bytes: IntCounter,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SqlCompilerMetrics {
+    pub(crate) parse: IntCounter,
+    resolve: IntCounter,
+    describe: IntCounter,
+    plan: IntCounter,
+    root_query: IntCounter,
+}
+
+impl SqlCompilerMetrics {
+    fn register_into(registry: &MetricsRegistry) -> Self {
+        let calls: IntCounterVec = registry.register(metric!(
+            name: "mz_sql_compiler_calls_total",
+            help: "Attempted session SQL parsing and compiler entry-point calls, including nested calls and errors. Excludes sessionless catalog bootstrap.",
+            var_labels: ["phase"],
+        ));
+        Self {
+            parse: calls.with_label_values(&["parse"]),
+            resolve: calls.with_label_values(&["resolve"]),
+            describe: calls.with_label_values(&["describe"]),
+            plan: calls.with_label_values(&["plan"]),
+            root_query: calls.with_label_values(&["root_query"]),
+        }
+    }
+
+    pub(crate) fn record(&self, operation: mz_sql::catalog::PlanOperation) {
+        use mz_sql::catalog::PlanOperation;
+        match operation {
+            PlanOperation::Resolve => &self.resolve,
+            PlanOperation::Describe => &self.describe,
+            PlanOperation::Plan => &self.plan,
+            PlanOperation::RootQuery => &self.root_query,
+        }
+        .inc();
+    }
+}
+
+/// Prebound, process-wide counters for prepared-query work, without SQL labels.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedMetrics {
+    pub cache: PreparedCacheMetrics,
+    pub analysis: IntCounter,
+    pub custom_bind: IntCounter,
+    pub template_compile: IntCounter,
+    pub template_hit: IntCounter,
+    pub unsupported_hit: IntCounter,
+    pub generic_execute: IntCounter,
+    pub admission_declined: IntCounter,
+    pub invalid_catalog: IntCounter,
+    pub invalid_settings: IntCounter,
+    pub invalid_roles: IntCounter,
+    pub compile_seconds: Histogram,
+    pub instantiate_seconds: Histogram,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedCacheMetrics {
+    pub estimated_bytes: UIntGauge,
+    pub compiled_entries: UIntGauge,
+    pub evictions: IntCounter,
+    pub orphaned: IntCounter,
+}
+
+impl PreparedMetrics {
+    fn register_into(registry: &MetricsRegistry) -> Self {
+        let events: IntCounterVec = registry.register(metric!(
+            name: "mz_prepared_query_events_total",
+            help: "Prepared-query analysis, binding, template compilation and execution events.",
+            var_labels: ["event"],
+        ));
+        Self {
+            cache: PreparedCacheMetrics {
+                estimated_bytes: registry.register(metric!(
+                    name: "mz_prepared_query_cache_estimated_bytes",
+                    help: "Estimated charged bytes in prepared programs, including evicted programs still in use. Not allocator RSS.",
+                )),
+                compiled_entries: registry.register(metric!(
+                    name: "mz_prepared_query_cache_compiled_entries",
+                    help: "Retained compiled prepared programs, including evicted programs still in use.",
+                )),
+                evictions: events.with_label_values(&["eviction"]),
+                orphaned: events.with_label_values(&["orphaned"]),
+            },
+            analysis: events.with_label_values(&["analysis"]),
+            custom_bind: events.with_label_values(&["custom_bind"]),
+            template_compile: events.with_label_values(&["template_compile"]),
+            template_hit: events.with_label_values(&["template_hit"]),
+            unsupported_hit: events.with_label_values(&["unsupported_hit"]),
+            generic_execute: events.with_label_values(&["generic_execute"]),
+            admission_declined: events.with_label_values(&["admission_declined"]),
+            invalid_catalog: events.with_label_values(&["invalid_catalog"]),
+            invalid_settings: events.with_label_values(&["invalid_settings"]),
+            invalid_roles: events.with_label_values(&["invalid_roles"]),
+            compile_seconds: registry.register(metric!(
+                name: "mz_prepared_query_compile_seconds",
+                help: "Time spent compiling and admitting a prepared indexed-query template.",
+                buckets: histogram_seconds_buckets(0.000_001, 8.0),
+            )),
+            instantiate_seconds: registry.register(metric!(
+                name: "mz_prepared_query_instantiate_seconds",
+                help: "Time spent binding parameters and dynamic values to a prepared indexed-query template.",
+                buckets: histogram_seconds_buckets(0.000_001, 8.0),
+            )),
+        }
+    }
 }
 
 impl SessionMetrics {

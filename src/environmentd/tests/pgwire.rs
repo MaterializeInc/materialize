@@ -18,8 +18,10 @@ use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
+use itertools::Itertools;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
+use mz_ore::cast::CastLossy;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
@@ -31,6 +33,54 @@ use postgres::error::SqlState;
 use postgres::types::Type;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Compare SQL preparation with pgwire Parse directly.
+fn test_sql_prepare_inferred_parameter_error_timing() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    for reuse in [false, true] {
+        system
+            .batch_execute(&format!(
+                "ALTER SYSTEM SET enable_prepared_query_reuse = {reuse}"
+            ))
+            .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for (name, query, error) in [
+            (
+                "param_left",
+                "SELECT $1 = ROW(1, 2)",
+                "operator does not exist: text = record(f1: integer,f2: integer)",
+            ),
+            (
+                "param_right",
+                "SELECT ROW(1, 2) = $1",
+                "operator does not exist: record(f1: integer,f2: integer) = text",
+            ),
+        ] {
+            client
+                .batch_execute(&format!("PREPARE {name} AS {query}"))
+                .unwrap();
+            let stmt = client.prepare(query).unwrap();
+            assert_eq!(stmt.params(), &[Type::TEXT]);
+            for value in ["(1,2)", "(1,2,3)"] {
+                assert_eq!(
+                    client
+                        .simple_query(&format!("EXECUTE {name} ('{value}')"))
+                        .unwrap_db_error()
+                        .message(),
+                    error,
+                    "SQL PREPARE with reuse={reuse}"
+                );
+                assert_eq!(
+                    client.query(&stmt, &[&value]).unwrap_db_error().message(),
+                    error,
+                    "pgwire Parse with reuse={reuse}"
+                );
+            }
+        }
+    }
+}
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
@@ -223,6 +273,286 @@ fn test_bind_params() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Exercise the client's SQL protocol directly.
+fn test_reused_prepared_select_context() {
+    for frontend in [true, false] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default(
+                "enable_frontend_peek_sequencing".into(),
+                frontend.to_string(),
+            )
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_rows (id int, value text)",
+            "INSERT INTO prepared_rows VALUES (1, 'one'), (2, 'two'), (3, 'three')",
+            "CREATE INDEX prepared_rows_id ON prepared_rows (id)",
+        ] {
+            client.batch_execute(sql).unwrap();
+        }
+        let stmt = client
+            .prepare("SELECT id, value || $2 FROM prepared_rows WHERE id = $1 ORDER BY id LIMIT $3")
+            .unwrap();
+        client.query_one(&stmt, &[&1_i32, &"", &1_i64]).unwrap();
+        let optimizer_count = || -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_optimizer_e2e_optimization_time_seconds")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    metric.get_label().iter().any(|label| {
+                        label.name() == "object_type" && label.value().starts_with("peek:")
+                    })
+                })
+                .map(|metric| metric.get_histogram().get_sample_count())
+                .sum()
+        };
+        let prepared_count = |event: &str| -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_prepared_query_events_total")
+                .flat_map(|family| family.get_metric())
+                .filter(|metric| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|label| label.name() == "event" && label.value() == event)
+                })
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum()
+        };
+        let compilation_counts =
+            || ["analysis", "custom_bind", "template_compile"].map(&prepared_count);
+        let sql_compiler_counts = || {
+            ["resolve", "describe", "plan", "root_query", "parse"].map(|phase| -> u64 {
+                server
+                    .metrics_registry()
+                    .gather()
+                    .iter()
+                    .filter(|family| family.name() == "mz_sql_compiler_calls_total")
+                    .flat_map(|family| family.get_metric())
+                    .filter(|metric| {
+                        metric
+                            .get_label()
+                            .iter()
+                            .any(|label| label.name() == "phase" && label.value() == phase)
+                    })
+                    .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                    .sum()
+            })
+        };
+        let before_inferred = sql_compiler_counts();
+        let inferred = client.prepare("SELECT $1::int4").unwrap();
+        let after_inferred = sql_compiler_counts();
+        assert_eq!(after_inferred[1], before_inferred[1] + 1);
+        assert_eq!(after_inferred[3], before_inferred[3] + 2);
+        let typed = client
+            .prepare_typed("SELECT $1::int4", &[postgres::types::Type::INT4])
+            .unwrap();
+        let after_typed = sql_compiler_counts();
+        assert_eq!(after_typed[1], after_inferred[1] + 1);
+        assert_eq!(after_typed[3], after_inferred[3] + 1);
+        drop((inferred, typed));
+        let before = optimizer_count();
+        let before_compilation = compilation_counts();
+        let before_sql_compiler = sql_compiler_counts();
+        assert!(before_sql_compiler.iter().all(|count| *count > 0));
+        let before_hits = prepared_count("template_hit");
+        let before_generic = prepared_count("generic_execute");
+        for (key, value) in [(1_i32, "one"), (3, "three"), (2, "two"), (1, "one")] {
+            let suffix = format!("-{key}");
+            let row = client.query_one(&stmt, &[&key, &suffix, &1_i64]).unwrap();
+            assert_eq!(row.get::<_, i32>(0), key);
+            assert_eq!(row.get::<_, String>(1), format!("{value}{suffix}"));
+        }
+        assert!(
+            client
+                .query(&stmt, &[&None::<i32>, &"", &1_i64])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            client
+                .query(&stmt, &[&1_i32, &"", &0_i64])
+                .unwrap()
+                .is_empty()
+        );
+        let after = optimizer_count();
+        assert_eq!(sql_compiler_counts(), before_sql_compiler);
+        if frontend {
+            assert!(
+                before_compilation[2] > 0,
+                "the template compiler was exercised"
+            );
+            assert_eq!(compilation_counts(), before_compilation);
+            assert_eq!(prepared_count("template_hit"), before_hits + 6);
+            assert_eq!(prepared_count("generic_execute"), before_generic + 6);
+            assert_eq!(
+                after, before,
+                "warm changing-parameter executions must skip the optimizer"
+            );
+        } else {
+            assert!(
+                after >= before + 6,
+                "coordinator custom path must exercise the optimizer metric"
+            );
+        }
+        client
+            .batch_execute("PREPARE prepared_sql AS SELECT value FROM prepared_rows WHERE id = $1")
+            .unwrap();
+        client.query_one("EXECUTE prepared_sql(1)", &[]).unwrap();
+        let before = optimizer_count();
+        let before_compilation = compilation_counts();
+        let before_sql_compiler = sql_compiler_counts();
+        let before_generic = prepared_count("generic_execute");
+        for (key, value) in [(2, "two"), (1, "one"), (3, "three")] {
+            let row = client
+                .query_one(&format!("EXECUTE prepared_sql({key})"), &[])
+                .unwrap();
+            assert_eq!(row.get::<_, String>(0), value);
+        }
+        let after_sql_compiler = sql_compiler_counts();
+        assert_eq!(after_sql_compiler[3], before_sql_compiler[3]);
+        assert!(after_sql_compiler[4] > before_sql_compiler[4]);
+        assert!(
+            after_sql_compiler[..3]
+                .iter()
+                .zip_eq(&before_sql_compiler[..3])
+                .all(|(after, before)| after > before),
+            "SQL EXECUTE compiles its wrapper, but not the prepared SELECT body"
+        );
+        if frontend {
+            assert_eq!(compilation_counts(), before_compilation);
+            assert_eq!(prepared_count("generic_execute"), before_generic + 3);
+            assert_eq!(
+                optimizer_count(),
+                before,
+                "SQL EXECUTE must share the reusable program path"
+            );
+        }
+
+        for (ddl, has_index) in [
+            ("DROP INDEX prepared_rows_id", false),
+            ("CREATE INDEX prepared_rows_id ON prepared_rows (id)", true),
+        ] {
+            client.batch_execute(ddl).unwrap();
+            let before_generic = prepared_count("generic_execute");
+            let row = client.query_one(&stmt, &[&2_i32, &"-new", &1_i64]).unwrap();
+            assert_eq!(row.get::<_, i32>(0), 2);
+            assert_eq!(row.get::<_, String>(1), "two-new");
+            assert_eq!(
+                prepared_count("generic_execute") - before_generic,
+                u64::from(frontend && has_index),
+                "index removal must fall back, and its replacement must be usable"
+            );
+        }
+
+        for sql in [
+            "CREATE SCHEMA first_path",
+            "CREATE SCHEMA second_path",
+            "CREATE VIEW first_path.prepared_view AS SELECT 11 AS value",
+            "CREATE VIEW second_path.prepared_view AS SELECT 22 AS value",
+            "SET search_path = first_path",
+        ] {
+            client.batch_execute(sql).unwrap();
+        }
+        let path_stmt = client.prepare("SELECT value FROM prepared_view").unwrap();
+        assert_eq!(
+            client.query_one(&path_stmt, &[]).unwrap().get::<_, i32>(0),
+            11
+        );
+        client
+            .batch_execute("BEGIN; SET LOCAL search_path = second_path")
+            .unwrap();
+        assert_eq!(
+            client.query_one(&path_stmt, &[]).unwrap().get::<_, i32>(0),
+            22
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+        assert_eq!(
+            client.query_one(&path_stmt, &[]).unwrap().get::<_, i32>(0),
+            11
+        );
+        client
+            .batch_execute("DROP VIEW first_path.prepared_view")
+            .unwrap();
+        client
+            .batch_execute("CREATE VIEW first_path.prepared_view AS SELECT 33 AS value")
+            .unwrap();
+        assert_eq!(
+            client.query_one(&path_stmt, &[]).unwrap().get::<_, i32>(0),
+            33
+        );
+        client
+            .batch_execute("DROP VIEW first_path.prepared_view")
+            .unwrap();
+        client
+            .batch_execute("CREATE VIEW first_path.prepared_view AS SELECT true AS value")
+            .unwrap();
+        let err = client.query_one(&path_stmt, &[]).unwrap_db_error();
+        assert_eq!(err.message(), "cached plan must not change result type");
+
+        let mut system = server.connect_internal(postgres::NoTls).unwrap();
+        system
+            .batch_execute("ALTER SYSTEM SET enable_prepared_query_templates = false")
+            .unwrap();
+        let custom = client
+            .prepare("SELECT value FROM public.prepared_rows WHERE id = $1")
+            .unwrap();
+        client.query_one(&custom, &[&1_i32]).unwrap();
+        let before_custom = sql_compiler_counts();
+        let before_optimizer = optimizer_count();
+        let before_generic = prepared_count("generic_execute");
+        let before_custom_bind = prepared_count("custom_bind");
+        for (key, value) in [(2_i32, "two"), (3, "three")] {
+            assert_eq!(
+                client
+                    .query_one(&custom, &[&key])
+                    .unwrap()
+                    .get::<_, String>(0),
+                value
+            );
+        }
+        assert_eq!(sql_compiler_counts(), before_custom);
+        assert_eq!(prepared_count("generic_execute"), before_generic);
+        assert_eq!(prepared_count("custom_bind"), before_custom_bind + 2);
+        assert!(optimizer_count() >= before_optimizer + 2);
+        system
+            .batch_execute("ALTER SYSTEM SET enable_prepared_query_reuse = false")
+            .unwrap();
+        let uncached = client
+            .prepare("SELECT value FROM public.prepared_rows WHERE id = $1")
+            .unwrap();
+        client.query_one(&uncached, &[&1_i32]).unwrap();
+        let before_uncached = sql_compiler_counts();
+        let before_optimizer = optimizer_count();
+        for (key, value) in [(2_i32, "two"), (3, "three")] {
+            assert_eq!(
+                client
+                    .query_one(&uncached, &[&key])
+                    .unwrap()
+                    .get::<_, String>(0),
+                value
+            );
+        }
+        let after_uncached = sql_compiler_counts();
+        assert_eq!(after_uncached[4], before_uncached[4]);
+        assert!(
+            after_uncached[..4]
+                .iter()
+                .zip_eq(&before_uncached[..4])
+                .all(|(after, before)| after > before),
+            "the disabled control must exercise resolution, description and both planners"
+        );
+        assert!(optimizer_count() >= before_optimizer + 2);
+    }
+}
+
+#[mz_ore::test]
 fn test_partial_read() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -246,6 +576,304 @@ fn test_partial_read() {
         let prepared: &str = rows.get(0).unwrap().get(0);
         assert_eq!(prepared, eagerly);
     }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Exercise the client's SQL protocol directly.
+fn test_prepared_indexed_portal_lifetimes() {
+    use postgres_protocol::IsNull;
+    use postgres_protocol::message::{backend::Message, frontend};
+
+    fn exchange(stream: &mut TcpStream, buf: &mut BytesMut) -> (Vec<i32>, usize) {
+        stream.write_all(buf).unwrap();
+        buf.clear();
+        let mut rows = Vec::new();
+        let mut suspended = 0;
+        for message in read_until_ready(stream) {
+            match message {
+                Message::ErrorResponse(body) => {
+                    let fields: Vec<_> = body
+                        .fields()
+                        .map(|field| Ok(String::from_utf8_lossy(field.value_bytes()).into_owned()))
+                        .collect()
+                        .unwrap();
+                    panic!("unexpected error response: {fields:?}");
+                }
+                Message::DataRow(body) => {
+                    let field = body.ranges().next().unwrap().unwrap().unwrap();
+                    rows.push(
+                        std::str::from_utf8(&body.buffer()[field])
+                            .unwrap()
+                            .parse()
+                            .unwrap(),
+                    );
+                }
+                Message::PortalSuspended => suspended += 1,
+                _ => (),
+            }
+        }
+        (rows, suspended)
+    }
+
+    fn bind(
+        buf: &mut BytesMut,
+        portal: &str,
+        statement: &str,
+        key: i32,
+        addend: i32,
+        binary: bool,
+    ) {
+        frontend::bind(
+            portal,
+            statement,
+            [i16::from(binary)],
+            [key, addend],
+            |value, buf| {
+                if binary {
+                    buf.put_i32(value);
+                } else {
+                    buf.put_slice(value.to_string().as_bytes());
+                }
+                Ok(IsNull::No)
+            },
+            [],
+            buf,
+        )
+        .unwrap_or_else(|_| panic!("failed to encode Bind"));
+    }
+
+    for reuse in [true, false] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE portal_rows (lookup int, value int)",
+            "INSERT INTO portal_rows VALUES (1, 11), (1, 12), (1, 13), (2, 21), (2, 22)",
+            "CREATE INDEX portal_rows_lookup ON portal_rows (lookup)",
+        ] {
+            client.batch_execute(sql).unwrap();
+        }
+        let compiled_entries = || -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_prepared_query_cache_compiled_entries")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| u64::cast_lossy(metric.get_gauge().value()))
+                .sum()
+        };
+        let query = "SELECT value + $2 FROM portal_rows WHERE lookup = $1 ORDER BY value";
+        let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+        let mut buf = BytesMut::new();
+        frontend::startup_message(
+            [
+                ("user", "materialize"),
+                ("database", DEFAULT_DATABASE_NAME),
+                ("options", "--welcome_message=off"),
+            ],
+            &mut buf,
+        )
+        .unwrap();
+        exchange(&mut stream, &mut buf);
+        frontend::query("BEGIN", &mut buf).unwrap();
+        exchange(&mut stream, &mut buf);
+        frontend::parse("q", query, [23, 23], &mut buf).unwrap();
+        bind(&mut buf, "first", "q", 1, 0, true);
+        bind(&mut buf, "second", "q", 2, 100, false);
+        bind(&mut buf, "third", "q", 1, 1000, true);
+        frontend::execute("first", 1, &mut buf).unwrap();
+        frontend::sync(&mut buf);
+        assert_eq!(exchange(&mut stream, &mut buf), (vec![11], 1));
+        assert_eq!(compiled_entries(), u64::from(reuse));
+        frontend::close(b'S', "q", &mut buf).unwrap();
+        frontend::sync(&mut buf);
+        exchange(&mut stream, &mut buf);
+        assert_eq!(
+            compiled_entries(),
+            u64::from(reuse),
+            "bound portals retain their analysis"
+        );
+        frontend::execute("second", 1, &mut buf).unwrap();
+        frontend::sync(&mut buf);
+        assert_eq!(exchange(&mut stream, &mut buf), (vec![121], 1));
+        frontend::query("DEALLOCATE ALL", &mut buf).unwrap();
+        exchange(&mut stream, &mut buf);
+        assert_eq!(compiled_entries(), 0);
+        frontend::execute("third", 1, &mut buf).unwrap();
+        frontend::sync(&mut buf);
+        assert_eq!(exchange(&mut stream, &mut buf), (vec![1011], 1));
+        assert_eq!(
+            compiled_entries(),
+            u64::from(reuse),
+            "an unexecuted portal may recompile after eviction"
+        );
+        for (portal, expected) in [
+            ("first", vec![12, 13]),
+            ("second", vec![122]),
+            ("third", vec![1012, 1013]),
+        ] {
+            frontend::execute(portal, 0, &mut buf).unwrap();
+            frontend::sync(&mut buf);
+            assert_eq!(exchange(&mut stream, &mut buf), (expected, 0));
+        }
+        frontend::query("ROLLBACK", &mut buf).unwrap();
+        exchange(&mut stream, &mut buf);
+        assert_eq!(
+            compiled_entries(),
+            0,
+            "rollback destroys orphaned portal programs"
+        );
+
+        frontend::parse("q", query, [23, 23], &mut buf).unwrap();
+        bind(&mut buf, "", "q", 2, 0, true);
+        frontend::execute("", 0, &mut buf).unwrap();
+        frontend::sync(&mut buf);
+        assert_eq!(exchange(&mut stream, &mut buf), (vec![21, 22], 0));
+        assert_eq!(compiled_entries(), u64::from(reuse));
+        frontend::query("DISCARD ALL", &mut buf).unwrap();
+        exchange(&mut stream, &mut buf);
+        assert_eq!(compiled_entries(), 0);
+        bind(&mut buf, "", "q", 1, 0, true);
+        frontend::sync(&mut buf);
+        stream.write_all(&buf).unwrap();
+        let errors: Vec<_> = read_until_ready(&mut stream)
+            .into_iter()
+            .filter_map(|message| {
+                let Message::ErrorResponse(body) = message else {
+                    return None;
+                };
+                let code = body
+                    .fields()
+                    .find(|field| Ok(field.type_() == b'C'))
+                    .unwrap()
+                    .unwrap();
+                Some(std::str::from_utf8(code.value_bytes()).unwrap().to_owned())
+            })
+            .collect();
+        assert_eq!(errors, [SqlState::INVALID_SQL_STATEMENT_NAME.code()]);
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Exercise the client's SQL protocol directly.
+fn test_prepared_indexed_execution_context() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_rbac_checks".into(), "true".into())
+        .start_blocking();
+    let mut admin = server.connect(postgres::NoTls).unwrap();
+    for sql in [
+        "CREATE ROLE prepared_reader",
+        "CREATE TABLE prepared_context (id int, value int)",
+        "INSERT INTO prepared_context VALUES (1, 11)",
+        "CREATE INDEX prepared_context_id ON prepared_context (id)",
+        "GRANT SELECT ON prepared_context TO prepared_reader",
+    ] {
+        admin.batch_execute(sql).unwrap();
+    }
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    for sql in [
+        "GRANT USAGE ON DATABASE materialize TO prepared_reader",
+        "GRANT USAGE ON SCHEMA public TO prepared_reader",
+    ] {
+        system.batch_execute(sql).unwrap();
+    }
+    let cluster: String = admin.query_one("SHOW cluster", &[]).unwrap().get(0);
+    system
+        .batch_execute(&format!(
+            "GRANT USAGE ON CLUSTER \"{}\" TO prepared_reader",
+            cluster.replace('"', "\"\""),
+        ))
+        .unwrap();
+    let mut reader = server
+        .pg_config()
+        .user("prepared_reader")
+        .connect(postgres::NoTls)
+        .unwrap();
+    let query = "SELECT value, current_user::text, current_timestamp::text, mz_now()::text FROM prepared_context WHERE id = $1";
+    let stmt = reader.prepare(query).unwrap();
+    let event_count = |event: &str| -> u64 {
+        server
+            .metrics_registry()
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "mz_prepared_query_events_total")
+            .flat_map(|family| family.get_metric())
+            .filter(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == "event" && label.value() == event)
+            })
+            .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+            .sum()
+    };
+    let first = reader.query_one(&stmt, &[&1_i32]).unwrap();
+    assert_eq!(first.get::<_, i32>(0), 11);
+    assert_eq!(first.get::<_, String>(1), "prepared_reader");
+    let first_time: u64 = first.get::<_, String>(3).parse().unwrap();
+    let before_compile = event_count("template_compile");
+    let before_generic = event_count("generic_execute");
+    assert!(
+        before_generic > 0,
+        "dynamic expressions must use the template path"
+    );
+    admin
+        .batch_execute("UPDATE prepared_context SET value = 12 WHERE id = 1")
+        .unwrap();
+    let second = reader.query_one(&stmt, &[&1_i32]).unwrap();
+    assert_eq!(second.get::<_, i32>(0), 12);
+    assert!(second.get::<_, String>(3).parse::<u64>().unwrap() > first_time);
+
+    reader.batch_execute("BEGIN").unwrap();
+    let transaction_first = reader.query_one(&stmt, &[&1_i32]).unwrap();
+    admin
+        .batch_execute("UPDATE prepared_context SET value = 13 WHERE id = 1")
+        .unwrap();
+    let transaction_second = reader.query_one(&stmt, &[&1_i32]).unwrap();
+    assert_eq!(transaction_second.get::<_, i32>(0), 12);
+    assert_eq!(
+        transaction_first.get::<_, String>(2),
+        transaction_second.get::<_, String>(2)
+    );
+    assert_eq!(
+        transaction_first.get::<_, String>(3),
+        transaction_second.get::<_, String>(3)
+    );
+    reader.batch_execute("ROLLBACK").unwrap();
+    assert_eq!(
+        reader.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+        13
+    );
+    assert_eq!(event_count("template_compile"), before_compile);
+    assert_eq!(event_count("generic_execute"), before_generic + 4);
+
+    admin
+        .batch_execute("REVOKE SELECT ON prepared_context FROM prepared_reader")
+        .unwrap();
+    let error = reader.query_one(&stmt, &[&1_i32]).unwrap_db_error();
+    assert_eq!(error.code(), &SqlState::INSUFFICIENT_PRIVILEGE);
+    assert_eq!(event_count("generic_execute"), before_generic + 4);
+    admin
+        .batch_execute("GRANT SELECT ON prepared_context TO prepared_reader")
+        .unwrap();
+    assert_eq!(
+        reader.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+        13
+    );
+
+    let admin_stmt = admin.prepare(query).unwrap();
+    assert_eq!(
+        admin
+            .query_one(&admin_stmt, &[&1_i32])
+            .unwrap()
+            .get::<_, String>(1),
+        "materialize"
+    );
 }
 
 #[mz_ore::test]
