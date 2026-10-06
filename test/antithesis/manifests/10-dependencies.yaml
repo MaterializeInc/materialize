@@ -1,0 +1,305 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Dependencies of the system under test. Resource requests are sized for the
+# Antithesis budget: the sum over every pod, including the environmentd and
+# clusterd pods orchestratord creates at runtime, must stay under 1 CPU and
+# 10 GiB.
+
+# Consensus, catalog, and timestamp oracle for every environmentd generation.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: materialize
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: ${POSTGRES_IMAGE}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: materialize_db
+        - name: POSTGRES_USER
+          value: materialize_user
+        - name: POSTGRES_PASSWORD
+          value: materialize_pass
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        args:
+        - postgres
+        - -c
+        - max_connections=500
+        - -c
+        - shared_buffers=64MB
+        - -c
+        - work_mem=4MB
+        - -c
+        - fsync=on
+        resources:
+          requests:
+            cpu: 20m
+            memory: 256Mi
+        readinessProbe:
+          exec:
+            command: [pg_isready, -U, materialize_user, -d, materialize_db]
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: materialize
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+# Persist blob storage.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: materialize
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: ${MINIO_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [minio]
+        args: [server, /data]
+        env:
+        - name: MINIO_ROOT_USER
+          value: minio
+        - name: MINIO_ROOT_PASSWORD
+          value: minio123
+        ports:
+        - containerPort: 9000
+        resources:
+          requests:
+            cpu: 20m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: materialize
+spec:
+  selector:
+    app: minio
+  ports:
+  - port: 9000
+    targetPort: 9000
+---
+# Kafka for upsert and none-envelope sources.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  namespace: materialize
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda
+  template:
+    metadata:
+      labels:
+        app: redpanda
+    spec:
+      containers:
+      - name: redpanda
+        image: ${REDPANDA_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [/usr/bin/rpk]
+        args:
+        - redpanda
+        - start
+        - --overprovisioned
+        - --smp=1
+        - --memory=512M
+        - --reserve-memory=0M
+        - --node-id=0
+        - --check=false
+        - --kafka-addr=0.0.0.0:9092
+        - --advertise-kafka-addr=redpanda.materialize.svc.cluster.local:9092
+        - --schema-registry-addr=0.0.0.0:8081
+        - --set
+        - redpanda.enable_transactions=true
+        - --set
+        - redpanda.enable_idempotence=true
+        - --set
+        - redpanda.auto_create_topics_enabled=false
+        ports:
+        - containerPort: 9092
+        - containerPort: 8081
+        resources:
+          requests:
+            cpu: 20m
+            memory: 640Mi
+        readinessProbe:
+          httpGet:
+            path: /v1/status/ready
+            port: 9644
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/redpanda/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: materialize
+spec:
+  selector:
+    app: redpanda
+  ports:
+  - name: kafka
+    port: 9092
+    targetPort: 9092
+  - name: schema-registry
+    port: 8081
+    targetPort: 8081
+---
+# Upstream for Postgres CDC sources. Separate from the consensus Postgres so
+# upstream faults and consensus faults are independent.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-upstream
+  namespace: materialize
+spec:
+  serviceName: postgres-upstream
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-upstream
+  template:
+    metadata:
+      labels:
+        app: postgres-upstream
+    spec:
+      containers:
+      - name: postgres
+        image: ${POSTGRES_IMAGE}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: upstream
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          value: postgres
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        args:
+        - postgres
+        - -c
+        - wal_level=logical
+        - -c
+        - max_wal_senders=20
+        - -c
+        - max_replication_slots=20
+        - -c
+        - shared_buffers=32MB
+        resources:
+          requests:
+            cpu: 10m
+            memory: 128Mi
+        readinessProbe:
+          exec:
+            command: [pg_isready, -U, postgres, -d, upstream]
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-upstream
+  namespace: materialize
+spec:
+  selector:
+    app: postgres-upstream
+  ports:
+  - port: 5432
+    targetPort: 5432
