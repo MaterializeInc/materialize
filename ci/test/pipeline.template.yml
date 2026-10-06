@@ -619,6 +619,7 @@ steps:
               --no-external-metadata-store,  # faster
               --no-external-blob-store,  # faster
               --default-replication-factor=1, # faster
+              "--system-param=log_filter=info,mz_adapter::frontend_read_then_write=debug",
               "--seed=$BUILDKITE_JOB_ID"
           ]
 

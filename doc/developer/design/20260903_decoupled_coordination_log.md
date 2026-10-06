@@ -21,22 +21,22 @@ Preserve designer commits and useful implementation boundaries.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
-Prioritize the remaining liveness failures in parallel checks and the OCC
-zero-row-write fixture. Successful protection publications can occupy the
-coordinator for tens of seconds. Catalog-only updates stage table keepalives
-without awaiting them on the coordinator, preserving table progress. Verify
-this correction and its isolated SQL regression in CI. The stale-bound replay
-correction resamples after metadata conflicts. Neither correction establishes
-the cause of every timeout. Keep protection and fixture deadlines unchanged.
+Prioritize the remaining read-then-write timeouts in parallel checks. The
+catalog-only completion regression passes: table keepalives remain staged but
+are not awaited on the coordinator. Current failing DML lacks evidence of its
+OCC permit ownership, selected timestamp and subscribe progress. Scoped RTW
+debug events enabled only for parallel CI distinguish those waits. Remove the
+diagnostic once attributed. Neither this correction nor stale-bound resampling
+establishes the cause of every timeout. Keep protection and deadlines unchanged.
 The restart fixture brackets sink admission before catalog diagnostics to avoid
 consuming its physical-lag window. That adjustment also needs CI verification.
 
 Keep the scheduled-compaction 1/0/1 membership and audit assertions. Its final
 observation uses a fixed sleep and a real-time window. Establish convergence and
 the window prerequisite before changing the fixture. The unfinished RBAC-view
-SLT and the intermittent DROP rewrite serialization failure also need diagnosis,
-not golden rewrites. The imported hydration-stability restart workflows require
-their own existing workflow execution, not inference from warm handover.
+SLT needs diagnosis, not golden rewrites. Streaming statements also captures the
+compaction window in the timestamped job log. The imported hydration-stability
+restart and no-dataflow workflows pass in CI137762, alongside warm handover.
 
 Comment-ID collision coverage now uses dynamic setup in the SQL integration
 harness. Preserve actual collisions and exact comment attribution when adjusting

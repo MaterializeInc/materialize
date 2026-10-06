@@ -763,6 +763,9 @@ impl PeekClient {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "debug", skip_all, fields(
+        conn_id = %session.conn_id(), target_id = %plan.id,
+    ))]
     async fn read_then_write(
         &mut self,
         session: &mut Session,
@@ -892,6 +895,10 @@ impl PeekClient {
         // that stalls user DML behind a background sampler. The bound above does
         // not apply to it either: it has no statement timeout, only its own much
         // longer one.
+        tracing::debug!(
+            background = caller.is_background(),
+            "RTW waiting for admission"
+        );
         let permit = if caller.is_background() {
             None
         } else {
@@ -903,6 +910,7 @@ impl PeekClient {
             )
         };
 
+        tracing::debug!("RTW admitted, acquiring read timestamp");
         // Determine timestamp and acquire read holds.
         let oracle_read_ts = self.oracle_read_ts(&timeline).await?;
 
@@ -940,6 +948,7 @@ impl PeekClient {
             .await?;
 
         let as_of = determination.timestamp_context.timestamp_or_default();
+        tracing::debug!(%as_of, ?oracle_read_ts, ?bundle, "RTW timestamp selected");
 
         if catalog.observed_position().is_some()
             && governing_timeline(&timeline) == Some(Timeline::EpochMilliseconds)
@@ -948,9 +957,11 @@ impl PeekClient {
                 .await?;
             let current = self.catalog_snapshot_at(Arc::clone(catalog), as_of).await?;
             if current.planning_position() != catalog.planning_position() {
+                tracing::debug!("RTW catalog changed, replanning");
                 return Ok(None);
             }
         }
+        tracing::debug!("RTW catalog validated");
 
         // Mark the transaction only after catalog validation. A replan must not
         // make an otherwise standalone write look like a subsequent statement.
@@ -1022,6 +1033,7 @@ impl PeekClient {
         // snapshot. A far-future `as_of` parks here until the clock arrives,
         // bounded by `statement_timeout`.
         self.ensure_read_linearized(&timeline, as_of).await?;
+        tracing::debug!(%as_of, "RTW read linearized, creating subscribe");
 
         // The loop takes its write target from this oracle, and reaching one takes
         // `&mut self`, which the loop does not have. `None` for a
@@ -1048,6 +1060,7 @@ impl PeekClient {
             )
             .await?;
 
+        tracing::debug!(?sink_id, "RTW subscribe created");
         let (retry_count, result) = self
             .run_occ_loop(
                 subscribe_handle,
@@ -1067,6 +1080,11 @@ impl PeekClient {
                 &attempt_state,
             )
             .await;
+        tracing::debug!(
+            retry_count,
+            success = result.is_ok(),
+            "RTW OCC loop finished"
+        );
 
         let caller_label = match caller {
             RtwCaller::Session => OCC_CALLER_SESSION,
@@ -1521,6 +1539,10 @@ impl PeekClient {
             let attempt_write = match write_target {
                 Some(target) if state.current_upper.is_some_and(|upper| upper >= target) => true,
                 _ => {
+                    tracing::debug!(
+                        ?write_target, ?min_target, upper = ?state.current_upper,
+                        "RTW waiting for subscribe progress"
+                    );
                     let msg = match subscribe_handle.recv().await {
                         Some(msg) => msg,
                         None => {
@@ -1710,6 +1732,7 @@ impl PeekClient {
             // in profiles. Every attempt clones every row, and we retry up to
             // `max_occ_retries` times.
             attempt_state.mark_write_submitted();
+            tracing::debug!(%target, retry_count, "RTW submitting write");
             let result = match self
                 .call_coordinator(|tx| Command::AttemptWrite {
                     attempt: match write_conn_id.clone() {
