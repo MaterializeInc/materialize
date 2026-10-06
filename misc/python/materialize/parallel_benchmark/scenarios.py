@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import queue
 import time
 from copy import deepcopy
@@ -1885,6 +1886,159 @@ class FreshnessUnderPeekWalks(Scenario):
             ],
             regression_thresholds={
                 "SELECT count(*) FROM fresh_w WHERE k = 0 (reuse connection)": CONTENDED_THRESHOLDS,
+            },
+        )
+
+
+class MaintenanceUnderPeekSaturation(Scenario):
+    """Measures how far a saturating peek load holds back maintenance on the same
+    replica.
+
+    The other isolation scenarios saturate maintenance and measure peeks. This
+    is the converse. Cluster `sat` has one worker per core of the host, rounded
+    down to a size the size map offers, and carries three loads: join peeks
+    at a fixed rate that scales with the workers; two hydration churn loops,
+    so the maintenance workers are busy too; and a small materialized view
+    over a table a writer keeps advancing. With one runtime the workers
+    already fill the cores. A second runtime doubles the worker threads on the
+    same cores, which is the oversubscription a production replica sees under
+    its CPU limit.
+
+    The join peeks run open-loop so that both sides of an A/B serve the same
+    peek load. With one closed loop per worker, the side that served joins
+    faster also issued more of them: at 16 workers the interactive runtime ran
+    70 joins per second against 30, and the extra peeks loaded environmentd,
+    which the INSERT loop shares. The rate is one join per worker per second.
+    The rate has to stay below what the single runtime sustains, or that side
+    builds a queue of joins whose wait dominates its percentiles and loads
+    environmentd again, see `ReadIsolationUnderHydration`. On a 16-CPU CI
+    agent at 16 workers the single runtime kept up with a join p50 of 636 ms,
+    about 10 pooled connections in flight by Little's law, well under the
+    pool's 100. The join's qps is the offered rate on both sides, so compare
+    its p50 and p95.
+
+    The measured query is a strict serializable read of the materialized view
+    from `sat_idle`, a separate one-worker cluster with nothing else to do. It
+    cannot answer until the view's write frontier passes the write, so its
+    latency is the view's maintenance lag on `sat` plus one read on an idle
+    cluster. `sat_idle` has no index on the view, so that read renders a small
+    dataflow over the view's output. Read on `sat` itself it would instead
+    measure the read queueing behind the joins
+    on the runtime that serves peeks, which the join loops' own latency already
+    reports. That latency is reported too, as the serving runtime's throughput.
+
+    The merge base compares one runtime against two while it predates the
+    interactive runtime, so the freshness gate then prices the oversubscription
+    as well as any regression. One CI run measured the view's freshness p50 at
+    194 ms with two runtimes against 356 ms with one, which is inside the gate.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        # `SET cluster` has to run in autocommit, see `FreshnessUnderPeekWalks`,
+        # and `HydrationChurn` turns autocommit on afterwards too. The clusters do
+        # not exist yet when these connections open, which is a notice, not an
+        # error.
+        sat = replace(conn_infos["materialized"], cluster="sat", autocommit=True)
+        idle = replace(conn_infos["materialized"], cluster="sat_idle", autocommit=True)
+        join = "SELECT count(*) FROM sat_big a JOIN sat_big b USING (k)"
+        churn_view_sql = "SELECT a, count(*) AS c FROM sat_churn GROUP BY a"
+        # NOTE: mzcompose replica sizes set no CPU limit, so a replica with
+        # fewer workers than the host has cores gives a second runtime idle
+        # cores of its own instead of oversubscribing the first. The size map
+        # offers powers of two up to 32 workers.
+        workers = min(32, 1 << ((os.cpu_count() or 1).bit_length() - 1))
+        join_rate = 1.0 * workers
+        self.init(
+            [
+                TdPhase(f"""
+                    > DROP TABLE IF EXISTS sat_w CASCADE
+                    > DROP TABLE IF EXISTS sat_big CASCADE
+                    > DROP TABLE IF EXISTS sat_churn CASCADE
+                    > DROP CLUSTER IF EXISTS sat CASCADE
+                    > DROP CLUSTER IF EXISTS sat_idle CASCADE
+
+                    > CREATE CLUSTER sat SIZE 'scale=1,workers={workers}', REPLICATION FACTOR 1
+                    > CREATE CLUSTER sat_idle SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
+
+                    # The written table and the view whose freshness is measured.
+                    > CREATE TABLE sat_w (k int, v int)
+                    > INSERT INTO sat_w SELECT n, n FROM generate_series(1, 1000) AS n
+                    > CREATE MATERIALIZED VIEW sat_mv IN CLUSTER sat AS SELECT count(*) AS c FROM sat_w
+
+                    # The join input.
+                    > CREATE TABLE sat_big (k int, v int)
+                    > INSERT INTO sat_big SELECT n, n * 2 FROM generate_series(1, 200000) AS n
+                    > CREATE INDEX sat_big_k IN CLUSTER sat ON sat_big (k)
+
+                    # The churn input.
+                    > CREATE TABLE sat_churn (a int, b int)
+                    > INSERT INTO sat_churn SELECT n, n % 1000 FROM generate_series(1, 1000000) AS n
+
+                    > SET cluster = sat_idle
+                    > SELECT c FROM sat_mv
+                    1000
+
+                    > SET cluster = sat
+                    > {join}
+                    200000
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Contention: writes the read has to wait for.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO sat_w VALUES (0, 0)",
+                                sat,
+                                strict_serializable=False,
+                            ),
+                            report_regressions=False,
+                        ),
+                        # Measured: a read that waits for the view's write
+                        # frontier to pass the latest write, served off `sat`.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SELECT c FROM sat_mv",
+                                idle,
+                                strict_serializable=True,
+                            ),
+                        ),
+                    ]
+                    + [
+                        # Contention and measured: a fixed rate of join peeks.
+                        OpenLoop(
+                            action=PooledQuery(join),
+                            dist=Periodic(per_second=join_rate),
+                        )
+                    ]
+                    + [
+                        # Contention: continuous hydration on the maintenance
+                        # workers.
+                        ClosedLoop(
+                            action=HydrationChurn(
+                                sat, f"sat_churn_{i}", churn_view_sql
+                            ),
+                            report_regressions=False,
+                        )
+                        for i in range(2)
+                    ],
+                ),
+                TdPhase("""
+                    > DROP TABLE IF EXISTS sat_w CASCADE
+                    > DROP TABLE IF EXISTS sat_big CASCADE
+                    > DROP TABLE IF EXISTS sat_churn CASCADE
+                    > DROP CLUSTER IF EXISTS sat CASCADE
+                    > DROP CLUSTER IF EXISTS sat_idle CASCADE
+                    """),
+            ],
+            conn_pool_size=100,
+            conn_pool_setup=[
+                "SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'",
+                "SET cluster = sat",
+            ],
+            regression_thresholds={
+                "SELECT c FROM sat_mv (reuse connection)": CONTENDED_THRESHOLDS,
+                f"{join} (pooled)": CONTENDED_THRESHOLDS,
             },
         )
 
