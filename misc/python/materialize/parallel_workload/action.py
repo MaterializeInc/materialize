@@ -2991,6 +2991,11 @@ class FlipFlagsAction(Action):
             "'^u1'",
             "'.*'",
         ]
+        self.flags_with_values["persist_part_decode_batch_rows"] = [
+            "0",
+            "7",
+            "16384",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )

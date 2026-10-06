@@ -12,16 +12,20 @@
 use std::io::Write;
 use std::sync::Arc;
 
+use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec64;
 use mz_persist_types::parquet::EncodingConfig;
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+};
 use parquet::basic::Encoding;
 use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 
@@ -31,6 +35,7 @@ use crate::generated::persist::proto_batch_part_inline::FormatMetadata as ProtoF
 use crate::indexed::columnar::arrow::{decode_arrow_batch, encode_arrow_batch};
 use crate::indexed::encoding::{
     BlobTraceBatchPart, BlobTraceUpdates, decode_trace_inline_meta, encode_trace_inline_meta,
+    validate_trace_updates,
 };
 use crate::metrics::{ColumnarMetrics, ParquetColumnMetrics};
 
@@ -97,6 +102,120 @@ pub fn decode_trace_parquet<T: Timestamp + Codec64>(
     };
     ret.validate()?;
     Ok(ret)
+}
+
+/// Incremental decoder over a parquet-encoded [`BlobTraceBatchPart`].
+///
+/// Decodes at most `batch_rows` rows per call to [`Self::next_updates`], so
+/// only the encoded bytes and one decoded batch are resident at a time. Each
+/// batch is validated like [`BlobTraceBatchPart::validate`] validates a whole
+/// part.
+#[derive(Debug)]
+pub struct BlobTraceBatchPartReader<T> {
+    desc: Description<T>,
+    num_rows: usize,
+    /// Drop the `k_s` and `v_s` columns of the deprecated
+    /// `StructuredMigration(1)` format.
+    project_v1: bool,
+    reader: ParquetRecordBatchReader,
+}
+
+impl<T: Timestamp + Codec64> BlobTraceBatchPartReader<T> {
+    /// Opens `buf` for decoding in batches of at most `batch_rows` rows.
+    ///
+    /// Accepts the same formats as [`decode_trace_parquet`]. A `batch_rows`
+    /// of 0 is treated as 1.
+    pub fn new(buf: SegmentedBytes, batch_rows: usize) -> Result<Self, Error> {
+        let metadata = ArrowReaderMetadata::load(&buf, Default::default())?;
+        let inline = metadata
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .and_then(|x| x.iter().find(|x| x.key == INLINE_METADATA_KEY));
+        let (format, inline) = decode_trace_inline_meta(inline.and_then(|x| x.value.as_ref()))?;
+        let project_v1 = match format {
+            ProtoBatchFormat::Unknown => return Err("unknown format".into()),
+            ProtoBatchFormat::ArrowKvtd => {
+                return Err("ArrowKVTD format not supported in parquet".into());
+            }
+            ProtoBatchFormat::ParquetKvtd => false,
+            ProtoBatchFormat::ParquetStructured => match inline.format_metadata {
+                None => return Err("missing field 'format_metadata'".into()),
+                Some(ProtoFormatMetadata::StructuredMigration(v @ 1..=3)) => v == 1,
+                unknown => Err(format!("unkown ProtoFormatMetadata, {unknown:?}"))?,
+            },
+        };
+        let desc = inline.desc.map_or_else(
+            || {
+                Description::new(
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(T::minimum()),
+                )
+            },
+            |x| x.into(),
+        );
+
+        // Checked here as well as per batch, since a part without rows yields
+        // no batches.
+        if PartialOrder::less_equal(desc.upper(), desc.lower()) {
+            return Err(format!("invalid desc: {:?}", desc).into());
+        }
+
+        let builder = ParquetRecordBatchReaderBuilder::new_with_metadata(buf, metadata);
+        let row_groups = builder.metadata().row_groups();
+        if row_groups.len() > 1 {
+            return Err(Error::String("found more than 1 RowGroup".to_string()));
+        }
+        let num_rows = match row_groups.first() {
+            Some(row_group) => usize::try_from(row_group.num_rows())
+                .map_err(|_| Error::String("found negative rows".to_string()))?,
+            None => 0,
+        };
+        let reader = builder.with_batch_size(batch_rows.max(1)).build()?;
+        Ok(BlobTraceBatchPartReader {
+            desc,
+            num_rows,
+            project_v1,
+            reader,
+        })
+    }
+
+    /// The part's inline description.
+    pub fn desc(&self) -> &Description<T> {
+        &self.desc
+    }
+
+    /// The total number of rows in the part, decoded or not.
+    pub fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+
+    /// Decodes the next batch of rows, or returns `None` once all rows have
+    /// been returned.
+    pub fn next_updates(
+        &mut self,
+        metrics: &ColumnarMetrics,
+    ) -> Option<Result<BlobTraceUpdates, Error>> {
+        let batch = match self.reader.next()? {
+            Ok(batch) => batch,
+            Err(e) => return Some(Err(Error::String(e.to_string()))),
+        };
+        Some(self.decode_batch(batch, metrics))
+    }
+
+    fn decode_batch(
+        &self,
+        mut batch: RecordBatch,
+        metrics: &ColumnarMetrics,
+    ) -> Result<BlobTraceUpdates, Error> {
+        if self.project_v1 && batch.num_columns() > 4 {
+            batch = batch.project(&[0, 1, 2, 3])?;
+        }
+        let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
+        validate_trace_updates(&self.desc, &updates)?;
+        Ok(updates)
+    }
 }
 
 /// Encodes [`BlobTraceUpdates`] to Parquet using the [`parquet`] crate.

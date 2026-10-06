@@ -41,7 +41,8 @@ use crate::batch::{
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::fetch::{
-    EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, VALIDATE_PART_BOUNDS_ON_READ,
+    EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, PartSource,
+    VALIDATE_PART_BOUNDS_ON_READ,
 };
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, assert_code_can_read_data};
@@ -658,7 +659,7 @@ where
                             );
                             let mut fetched_part = FetchedPart::new(
                                 Arc::clone(&self.metrics),
-                                encoded_part,
+                                PartSource::Whole(encoded_part),
                                 schema_migration,
                                 FetchBatchFilter::Compaction {
                                     since: desc.since().clone(),
