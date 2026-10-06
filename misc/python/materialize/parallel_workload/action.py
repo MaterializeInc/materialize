@@ -3411,6 +3411,7 @@ class FlipFlagsAction(Action):
             "mysql_replication_heartbeat_interval",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
+            "pg_source_replication_slot_creation_timeout",
             "storage_enforce_external_addresses",
             "storage_upsert_prevent_snapshot_buffering",
             "storage_rocksdb_use_merge_operator",
