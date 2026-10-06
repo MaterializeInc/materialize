@@ -8,29 +8,34 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Weak};
 
 use differential_dataflow::consolidation::consolidate;
+use itertools::Itertools;
 use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
 use mz_compute_client::controller::instance_client::InstanceClient;
 use mz_compute_client::controller::instance_client::{AcquireReadHoldsError, InstanceShutDown};
 use mz_compute_client::protocol::command::PeekTarget;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
+use mz_expr::{RowSetFinishing, RowSetFinishingIncremental};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
-use mz_persist_client::PersistClient;
+use mz_persist_client::{PersistClient, Schemas};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{RelationDesc, Row};
+use mz_repr::{IntoRowIterator, RelationDesc, Row};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
-use mz_storage_types::sources::Timeline;
+use mz_storage_types::sources::{SourceData, Timeline};
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use qcell::QCell;
@@ -42,7 +47,7 @@ use uuid::Uuid;
 use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
-use crate::coord::peek::FastPathPlan;
+use crate::coord::peek::{FastPathPlan, PeekResponseUnary};
 use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
 use crate::metrics::Metrics;
 use crate::session::{LifecycleTimestamps, Session};
@@ -563,7 +568,7 @@ impl PeekClient {
             return Err(err);
         }
 
-        let peek_response_stream = Coordinator::create_peek_response_stream(
+        let peek_response_stream = create_peek_response_stream(
             rows_rx,
             finishing,
             max_result_size,
@@ -1028,4 +1033,222 @@ impl From<AcquireReadHoldsError> for CollectionLookupError {
             AcquireReadHoldsError::InstanceShutDown => Self::InstanceShutDown,
         }
     }
+}
+
+/// Creates an async stream that processes peek responses and yields rows.
+#[mz_ore::instrument(level = "debug")]
+pub(crate) fn create_peek_response_stream(
+    rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
+    finishing: RowSetFinishing,
+    max_result_size: u64,
+    max_returned_query_size: Option<u64>,
+    duration_histogram: prometheus::Histogram,
+    mut persist_client: mz_persist_client::PersistClient,
+    peek_stash_read_batch_size_bytes: usize,
+    peek_stash_read_memory_budget_bytes: usize,
+) -> impl futures::Stream<Item = PeekResponseUnary> {
+    async_stream::stream!({
+        let result = rows_rx.await;
+
+        let rows = match result {
+            Ok(rows) => rows,
+            Err(e) => {
+                yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
+                return;
+            }
+        };
+
+        match rows {
+            PeekResponse::Rows(rows) => {
+                let rows = RowCollection::merge_sorted(&rows, &finishing.order_by);
+                match finishing.finish(
+                    rows,
+                    max_result_size,
+                    max_returned_query_size,
+                    &duration_histogram,
+                ) {
+                    Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
+                    Err(e) => {
+                        yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                            anyhow::Error::msg(e),
+                        ))
+                    }
+                }
+            }
+            PeekResponse::Stashed(response) => {
+                let response = *response;
+
+                let shard_id = response.shard_id;
+
+                let mut batches = Vec::new();
+                for proto_batch in response.batches.into_iter() {
+                    let batch =
+                        persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+
+                    batches.push(batch);
+                }
+                tracing::trace!(?batches, "stashed peek response");
+
+                let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                let read_schemas: Schemas<SourceData, ()> = Schemas {
+                    id: None,
+                    key: Arc::new(response.relation_desc.clone()),
+                    val: Arc::new(UnitSchema),
+                };
+
+                let mut row_cursor = persist_client
+                    .read_batches_consolidated::<_, _, _, i64>(
+                        response.shard_id,
+                        as_of,
+                        read_schemas,
+                        batches,
+                        |_stats| true,
+                        peek_stash_read_memory_budget_bytes,
+                    )
+                    .await
+                    .expect("invalid usage");
+
+                // NOTE: Using the cursor creates Futures that are not Sync,
+                // so we can't drive them on the main Coordinator loop.
+                // Spawning a task has the additional benefit that we get to
+                // delete batches once we're done.
+                //
+                // Batch deletion is best-effort, though, and there are
+                // multiple known ways in which they can leak, among them:
+                //
+                // - ProtoBatch is lost in flight
+                // - ProtoBatch is lost because when combining PeekResponse
+                // from workers a cancellation or error "overrides" other
+                // results, meaning we drop them
+                // - This task here is not run to completion before it can
+                // delete all batches
+                //
+                // This is semi-ok, because persist needs a reaper of leaked
+                // batches already, and so we piggy-back on that, even if it
+                // might not exist as of today.
+                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                mz_ore::task::spawn(|| "read_peek_batches", async move {
+                    // We always send our inline rows first. Ordering
+                    // doesn't matter because we can only be in this case
+                    // when there is no ORDER BY.
+                    //
+                    // We _could_ write these out as a Batch, and include it
+                    // in the batches we read via the Consolidator. If we
+                    // wanted to get a consistent ordering. That's not
+                    // needed for correctness! But might be nice for more
+                    // aesthetic reasons.
+                    for rows in response.inline_rows {
+                        let result = tx.send(rows).await;
+                        if result.is_err() {
+                            tracing::debug!("receiver went away");
+                        }
+                    }
+
+                    let mut current_batch = Vec::new();
+                    let mut current_batch_size: usize = 0;
+
+                    'outer: while let Some(rows) = row_cursor.next().await {
+                        for ((source_data, _val), _ts, diff) in rows {
+                            let row = source_data
+                                .0
+                                .expect("we are not sending errors on this code path");
+
+                            let diff = usize::try_from(diff)
+                                .expect("peek responses cannot have negative diffs");
+
+                            if diff > 0 {
+                                let diff = NonZeroUsize::new(diff).expect("checked to be non-zero");
+                                current_batch_size =
+                                    current_batch_size.saturating_add(row.byte_len());
+                                current_batch.push((row, diff));
+                            }
+
+                            if current_batch_size > peek_stash_read_batch_size_bytes {
+                                // We're re-encoding the rows as a RowCollection
+                                // here, for which we pay in CPU time. We're in a
+                                // slow path already, since we're returning a big
+                                // stashed result so this is worth the convenience
+                                // of that for now.
+                                let result = tx
+                                    .send(RowCollection::new(
+                                        current_batch.drain(..).collect_vec(),
+                                        &[],
+                                    ))
+                                    .await;
+                                if result.is_err() {
+                                    tracing::debug!("receiver went away");
+                                    // Don't return but break so we fall out to the
+                                    // batch delete logic below.
+                                    break 'outer;
+                                }
+
+                                current_batch_size = 0;
+                            }
+                        }
+                    }
+
+                    if current_batch.len() > 0 {
+                        let result = tx.send(RowCollection::new(current_batch, &[])).await;
+                        if result.is_err() {
+                            tracing::debug!("receiver went away");
+                        }
+                    }
+
+                    let batches = row_cursor.into_lease();
+                    tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                    for batch in batches {
+                        batch.delete().await;
+                    }
+                });
+
+                assert!(
+                    finishing.is_streamable(response.relation_desc.arity()),
+                    "can only get stashed responses when the finishing is streamable"
+                );
+
+                tracing::trace!("query result is streamable!");
+
+                assert!(finishing.is_streamable(response.relation_desc.arity()));
+                let mut incremental_finishing = RowSetFinishingIncremental::new(
+                    finishing.offset,
+                    finishing.limit,
+                    finishing.project,
+                    max_returned_query_size,
+                );
+
+                let mut got_zero_rows = true;
+                while let Some(rows) = rx.recv().await {
+                    got_zero_rows = false;
+
+                    let result_rows = incremental_finishing.finish_incremental(
+                        rows,
+                        max_result_size,
+                        &duration_histogram,
+                    );
+
+                    match result_rows {
+                        Ok(result_rows) => yield PeekResponseUnary::Rows(Box::new(result_rows)),
+                        Err(e) => {
+                            yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                                anyhow::Error::msg(e),
+                            ))
+                        }
+                    }
+                }
+
+                // Even when there's zero rows, clients still expect an
+                // empty PeekResponse.
+                if got_zero_rows {
+                    let row_iter = vec![].into_row_iter();
+                    yield PeekResponseUnary::Rows(Box::new(row_iter));
+                }
+            }
+            PeekResponse::Canceled => {
+                yield PeekResponseUnary::Canceled;
+            }
+            PeekResponse::Error(e) => {
+                yield PeekResponseUnary::Error(e.into());
+            }
+        }
+    })
 }
