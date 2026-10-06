@@ -27,7 +27,7 @@ async fn test_comment_id_collision() {
             sql!("CREATE CLUSTER c REPLICAS (), MANAGED = false"),
             sql!("CREATE TABLE t1 (a int)"),
             sql!("CREATE TABLE t2 (a int)"),
-            sql!("CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT * FROM t1"),
+            sql!("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1"),
         ] {
             batch_execute(&client, statement).await.unwrap();
         }
