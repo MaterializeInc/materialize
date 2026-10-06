@@ -44,8 +44,9 @@ are not awaited on the coordinator. CI137946 handoff traces locate dominant wait
 before coordinator receipt: roughly 115s in shard1 and 147s in shard2, while
 thousands of native responses are dispatched. Matching subscribe batches wait
 48s and 82s after reaching the adapter. Catalog/worker waits are much smaller for
-these attempts. Client commands must get a bounded batch each productive service
-round, after the selected messages, without removing maintenance priority.
+these attempts. Client commands get a bounded batch each message-bearing round,
+after the selected messages, without removing maintenance priority. Timer-only
+rounds admit no extra client work that could consume their re-armed delays.
 Verify that admission correction in the existing parallel workflows. Keep the
 temporary handoff events through this comparison, then remove them.
 Long inline catalog/publication work also delays dispatch. Dispatch gaps ending

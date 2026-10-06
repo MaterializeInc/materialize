@@ -4775,8 +4775,8 @@ impl Coordinator {
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
                 select! {
-                    // Maintenance retains priority at each poll. Each productive round also admits
-                    // a bounded client batch below, after its selected messages, so continuous
+                    // Maintenance retains priority at each poll. Each message-bearing round also
+                    // admits a bounded client batch below, after its selected messages, so continuous
                     // internal responses cannot exclude waiting client commands.
                     biased;
 
@@ -4955,14 +4955,17 @@ impl Coordinator {
                     }
                 };
 
-                // Preserve client FIFO and the per-round client limit, including commands already
-                // received by the select. This bounds service in rounds, not time: an individual
-                // handler can still await slow work. The select remains the idle wakeup/shutdown path.
-                while cmd_messages.len() < MESSAGE_BATCH {
-                    let Ok(command) = cmd_rx.try_recv() else {
-                        break;
-                    };
-                    cmd_messages.push(command);
+                // Preserve client FIFO and the batch limit. Maintenance-only rounds re-poll without
+                // client work, which could consume the re-armed timers' delays and exclude message
+                // processing again. Service is bounded in message-bearing rounds, not time: a handler
+                // can still await slow work. The select remains the idle wakeup/shutdown path.
+                if !messages.is_empty() {
+                    while cmd_messages.len() < MESSAGE_BATCH {
+                        let Ok(command) = cmd_rx.try_recv() else {
+                            break;
+                        };
+                        cmd_messages.push(command);
+                    }
                 }
                 messages.extend(
                     cmd_messages
