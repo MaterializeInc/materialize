@@ -110,6 +110,10 @@ contracts at their boundaries and use existing regressions where they suffice.
 Compare disputed behavior against the baseline. Seek independent review when
 warranted. Report failed, pending and unverified results explicitly.
 
+Preserve contracts, not the test inventory. Remove obsolete or vacuous tests
+rather than preserving them with weaker or tautological assertions. Add
+replacement coverage only for a meaningful gap in a current contract.
+
 Keep detailed implementation and validation status in the PR description.
 Maintain the current handoff in place with only live work, unresolved decisions
 and the next useful step. Remove resolved or superseded items rather than append
