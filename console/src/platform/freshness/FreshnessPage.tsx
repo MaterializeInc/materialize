@@ -133,18 +133,6 @@ const FreshnessContent = ({
     objects.map((object) => object.objectId),
   );
 
-  // Picked by hand in the All objects table, on top of whatever breaches.
-  const [selectedKeys, setSelectedKeys] = React.useState<ReadonlySet<string>>(
-    new Set(),
-  );
-  const toggleRow = React.useCallback((key: string) => {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
-  }, []);
-
   const visibleLines = React.useMemo(
     () =>
       lines.filter((line) => {
@@ -176,7 +164,6 @@ const FreshnessContent = ({
         objectsById,
         hydrationByObjectId,
         threshold: thresholdControl.settled,
-        selectedKeys,
       }),
     [
       judged,
@@ -184,7 +171,6 @@ const FreshnessContent = ({
       objectsById,
       hydrationByObjectId,
       thresholdControl.settled,
-      selectedKeys,
     ],
   );
 
@@ -242,7 +228,6 @@ const FreshnessContent = ({
               formatValue={formatDurationForAxis}
               thresholdLabel="Freshness threshold"
               graphLabel="Object freshness over time"
-              selectedKeys={selectedKeys}
             />
           </AccordionPanel>
         </AccordionItem>
@@ -277,11 +262,7 @@ const FreshnessContent = ({
                 No objects with freshness data on this cluster.
               </Box>
             ) : (
-              <FreshnessTable
-                rows={rows}
-                onToggleRow={toggleRow}
-                itemLabel="objects"
-              />
+              <FreshnessTable rows={rows} itemLabel="objects" />
             )}
           </AccordionPanel>
         </AccordionItem>

@@ -162,8 +162,6 @@ const columns = [
 
 export interface FreshnessTableProps {
   rows: FreshnessRow[];
-  /** Clicking a row toggles it onto the graph. Omitted where that is not offered. */
-  onToggleRow?: (key: string) => void;
   /** Names the rows in the pagination footer. */
   itemLabel?: string;
 }
@@ -177,7 +175,6 @@ export interface FreshnessTableProps {
  */
 const FreshnessTableInner = ({
   rows,
-  onToggleRow,
   itemLabel = "objects",
 }: FreshnessTableProps) => {
   const table = useUniversalTable({
@@ -193,17 +190,9 @@ const FreshnessTableInner = ({
     getRowId: (row) => row.key,
   });
 
-  const onRowClick = onToggleRow
-    ? (row: FreshnessRow) => onToggleRow(row.key)
-    : undefined;
-
   return (
     <VStack spacing="4" alignItems="stretch" width="100%">
-      <UniversalTable
-        table={table}
-        variant={onToggleRow ? "linkable" : "standalone"}
-        onRowClick={onRowClick}
-      />
+      <UniversalTable table={table} variant="standalone" />
       {rows.length > PAGE_SIZE && (
         <TablePagination table={table} itemLabel={itemLabel} />
       )}

@@ -115,11 +115,7 @@ const hydrationByObjectId = new Map<string, HydrationCounts>(
   ]),
 );
 
-const rowsFor = (
-  predicate: Predicate,
-  threshold: number,
-  selected: ReadonlySet<string> = new Set(),
-) => {
+const rowsFor = (predicate: Predicate, threshold: number) => {
   const stats = buildStats(lines, data, latestByObjectId);
   const judged = judgeLines(lines, data, predicate, stats);
   return buildFreshnessRows({
@@ -128,7 +124,6 @@ const rowsFor = (
     objectsById,
     hydrationByObjectId,
     threshold,
-    selectedKeys: selected,
   });
 };
 
@@ -276,15 +271,6 @@ describe("buildFreshnessRows", () => {
   it("colors exactly the rows that are drawn", () => {
     const colored = rowsFor("peak", 5_000).filter((r) => r.color !== undefined);
     expect(colored.map((r) => r.key)).toEqual(["unreadable", "spiky"]);
-  });
-
-  it("adds a hand-picked row without removing the breaching ones", () => {
-    // Union, not replacement. A selection that replaced the threshold's set is
-    // what forced modes and an ownership flip in an earlier design.
-    const colored = rowsFor("peak", 5_000, new Set(["steady"]))
-      .filter((r) => r.color !== undefined)
-      .map((r) => r.key);
-    expect(colored.sort()).toEqual(["spiky", "steady", "unreadable"]);
   });
 
   it("never breaches on a line with nothing to judge", () => {

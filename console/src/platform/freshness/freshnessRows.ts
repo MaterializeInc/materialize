@@ -164,10 +164,7 @@ export function buildStats(
 /**
  * Table rows for the objects behind the graph, worst first.
  *
- * `selectedKeys` is a union with the breaching set, never a replacement: a row
- * picked by hand adds a line to the graph without removing the ones the
- * threshold chose. Replacement is what would make the threshold and the
- * selection fight over the same channel.
+ * A row is drawn on the graph when it breaches. Nothing else puts it there.
  */
 export function buildFreshnessRows({
   judged,
@@ -175,14 +172,12 @@ export function buildFreshnessRows({
   objectsById,
   hydrationByObjectId,
   threshold,
-  selectedKeys,
 }: {
   judged: ThresholdLineSeries<DataPoint>[];
   statsByKey: Map<string, ObjectStats>;
   objectsById: Map<string, FreshnessObject>;
   hydrationByObjectId: Map<string, HydrationCounts>;
   threshold: number;
-  selectedKeys: ReadonlySet<string>;
 }): FreshnessRow[] {
   const colors = assignLineColors(judged);
 
@@ -199,7 +194,6 @@ export function buildFreshnessRows({
       // own threshold filter. A row and its line must agree.
       const breaching =
         line.breachValue !== null && line.breachValue >= threshold;
-      const drawn = breaching || selectedKeys.has(line.key);
 
       return {
         key: line.key,
@@ -215,7 +209,7 @@ export function buildFreshnessRows({
         p90: stats.p90,
         breachValue: line.breachValue,
         breaching,
-        color: drawn ? colors.get(line.key) : undefined,
+        color: breaching ? colors.get(line.key) : undefined,
       };
     })
     .sort(

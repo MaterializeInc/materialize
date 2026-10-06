@@ -10,7 +10,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
 import { renderComponent } from "~/test/utils";
@@ -109,16 +109,6 @@ describe("FreshnessTable", () => {
       .slice(1)
       .map((row) => within(row).getAllByRole("cell")[1].textContent);
     expect(names?.[0]).toContain("legacy_sink");
-  });
-
-  it("toggles a row onto the graph when that is offered", async () => {
-    const onToggleRow = vi.fn();
-    await renderComponent(
-      <FreshnessTable rows={rows} onToggleRow={onToggleRow} />,
-    );
-
-    await userEvent.click(await screen.findByText("users_idx"));
-    expect(onToggleRow).toHaveBeenCalledWith("u2");
   });
 
   it("names an unreadable reading rather than printing Infinity", async () => {
