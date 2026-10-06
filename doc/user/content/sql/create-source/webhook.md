@@ -318,6 +318,12 @@ Webhook sources apply the following limits to received requests:
 
 * The maximum size of the request body is **`5MB`**. Requests larger than this
   will fail with `413 Payload Too Large`.
+* The rows decoded from a single request may use at most **`64MB`** of memory,
+  including the headers copied into each row by `INCLUDE HEADERS` or
+  `INCLUDE HEADER`. A request that exceeds this, for example a `JSON` body that
+  expands into a very large number of rows, will fail with
+  `413 Payload Too Large` and none of its rows are appended. Split large
+  batches across multiple requests.
 * The maximum number of concurrent requests across **all** webhook sources
   is **500**. Trying to connect when the server is at capacity will fail with
   `429 Too Many Requests`.

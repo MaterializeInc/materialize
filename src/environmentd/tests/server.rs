@@ -3771,6 +3771,78 @@ fn webhook_max_request_size() {
         .expect("2 KiB body rejected after lowering the limit to 1 KiB");
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn webhook_max_decoded_rows_bytes() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster (SIZE 'scale=1,workers=1');",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster \
+             FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_json",
+        server.http_local_addr(),
+    );
+
+    // Under the 5 MiB body limit, but it decodes to 2.5M rows.
+    let tiny_docs = "{}".repeat(2_500_000);
+    let post = |body: String| {
+        server.runtime().block_on(async {
+            http_client
+                .post(&webhook_url)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await
+                .expect("request failed")
+                .status()
+        })
+    };
+
+    assert_eq!(post(tiny_docs).as_u16(), 413);
+    assert_eq!(post("{}\n{}".to_string()).as_u16(), 200);
+
+    // Lower the limit and confirm enforcement is live: a body that is accepted at the default is
+    // now rejected.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET webhook_max_decoded_rows_bytes = 1024")
+        .unwrap();
+    // The dyncfg propagates asynchronously, so retry briefly until the new limit takes effect.
+    Retry::default()
+        .max_duration(std::time::Duration::from_secs(30))
+        .retry(|_| {
+            if post("{}".repeat(100)).as_u16() == 413 {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .expect("100 rows rejected after lowering the limit to 1 KiB");
+}
+
 /// A `CHECK` expression that allocates a multiple of the request body must be refused rather than
 /// allowed to hold the memory (SQL-431).
 ///

@@ -37,6 +37,8 @@ pub enum AppendWebhookError {
     InvalidUtf8Body { msg: String },
     #[error("the provided request body is not valid JSON: {msg}")]
     InvalidJsonBody { msg: String },
+    #[error("the request body decodes to more than {max_bytes} bytes of rows")]
+    DecodedRowsTooLarge { max_bytes: usize },
     #[error("webhook source '{database}.{schema}.{name}' does not exist")]
     UnknownWebhook {
         database: String,

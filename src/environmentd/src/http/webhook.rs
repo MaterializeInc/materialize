@@ -10,6 +10,7 @@
 //! Helpers for handling events from a Webhook source.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
 use mz_adapter::{AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
@@ -20,6 +21,8 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, Row, RowPacker, SqlScalarType};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
+use serde::de::{self, Deserializer as _, SeqAccess, Visitor};
+use serde_json::value::RawValue;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -27,7 +30,8 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::StatusCode;
 use mz_adapter_types::dyncfgs::{
-    WEBHOOK_MAX_REQUEST_SIZE_BYTES, WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES,
+    WEBHOOK_MAX_DECODED_ROWS_BYTES, WEBHOOK_MAX_REQUEST_SIZE_BYTES,
+    WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES,
 };
 use thiserror::Error;
 
@@ -45,6 +49,7 @@ pub async fn handle_webhook(
 ) -> impl IntoResponse {
     let max_request_size = WEBHOOK_MAX_REQUEST_SIZE_BYTES.get(&dyncfgs);
     let validation_memory_budget = WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES.get(&dyncfgs);
+    let max_decoded_rows_bytes = WEBHOOK_MAX_DECODED_ROWS_BYTES.get(&dyncfgs);
     let body = axum::body::to_bytes(body, max_request_size)
         .await
         .map_err(|err| {
@@ -92,6 +97,7 @@ pub async fn handle_webhook(
                 &body,
                 &headers,
                 validation_memory_budget,
+                max_decoded_rows_bytes,
             )
             .await;
 
@@ -119,6 +125,7 @@ async fn append_webhook(
     body: &Bytes,
     headers: &Arc<BTreeMap<String, String>>,
     validation_memory_budget: usize,
+    max_decoded_rows_bytes: usize,
 ) -> Result<(), AppendWebhookError> {
     // Shenanigans to get the types working for the async retry.
     let (database, schema, name) = (database.to_string(), schema.to_string(), name.to_string());
@@ -182,7 +189,13 @@ async fn append_webhook(
     }
 
     // Pack our body and headers into a Row.
-    let rows = pack_rows(body, &body_format, headers, &header_tys)?;
+    let rows = pack_rows(
+        body,
+        &body_format,
+        headers,
+        &header_tys,
+        max_decoded_rows_bytes,
+    )?;
 
     // Send the row to get appended.
     tx.append(rows).await?;
@@ -192,6 +205,9 @@ async fn append_webhook(
 
 /// Packs the body and headers of a webhook request into as many rows as necessary.
 ///
+/// Fails with [`AppendWebhookError::DecodedRowsTooLarge`] once the in-memory size of the packed
+/// rows exceeds `max_bytes`.
+///
 /// TODO(parkmycar): Should we be consolidating the returned Rows here? Presumably something in
 /// storage would already be doing it, so no need to do it twice?
 fn pack_rows(
@@ -199,67 +215,111 @@ fn pack_rows(
     body_format: &WebhookBodyFormat,
     headers: &BTreeMap<String, String>,
     header_tys: &WebhookHeaders,
+    max_bytes: usize,
 ) -> Result<Vec<(Row, Diff)>, AppendWebhookError> {
-    // This method isn't that "deep" but it reflects the way we intend for the packing process to
-    // work and makes testing easier.
-    let rows = transform_body(body, body_format)?
-        .into_iter()
-        .map(|row| pack_header(row, headers, header_tys).map(|row| (row, Diff::ONE)))
-        .collect::<Result<_, _>>()?;
+    let mut rows = Vec::new();
+    let mut rows_bytes = 0usize;
+    for_each_body_row(body, body_format, |body_row| {
+        let row = pack_header(body_row, headers, header_tys)?;
+        rows_bytes = rows_bytes
+            .saturating_add(row.byte_len())
+            .saturating_add(std::mem::size_of::<Diff>());
+        if rows_bytes > max_bytes {
+            return Err(AppendWebhookError::DecodedRowsTooLarge { max_bytes });
+        }
+        rows.push((row, Diff::ONE));
+        Ok(())
+    })?;
     Ok(rows)
 }
 
-/// Transforms the body of a webhook request into a `Vec<BodyRow>`.
-fn transform_body(
+/// Transforms the body of a webhook request into [`BodyRow`]s, calling `f` on each.
+///
+/// JSON bodies are decoded one document, or one array element, at a time, so an error from `f`
+/// stops decoding before the rest of the body is materialized.
+fn for_each_body_row(
     body: &[u8],
     format: &WebhookBodyFormat,
-) -> Result<Vec<BodyRow>, AppendWebhookError> {
-    let rows = match format {
-        WebhookBodyFormat::Bytes => {
-            vec![Row::pack_slice(&[Datum::Bytes(body)])]
-        }
+    mut f: impl FnMut(BodyRow) -> Result<(), AppendWebhookError>,
+) -> Result<(), AppendWebhookError> {
+    // A `Row` cannot describe its schema without unpacking it. To add some safety we wrap the
+    // produced `Row`s in a newtype to signify they already have the "body" column packed.
+    match format {
+        WebhookBodyFormat::Bytes => f(BodyRow(Row::pack_slice(&[Datum::Bytes(body)]))),
         WebhookBodyFormat::Text => {
             let s = std::str::from_utf8(body)
                 .map_err(|m| AppendWebhookError::InvalidUtf8Body { msg: m.to_string() })?;
-            vec![Row::pack_slice(&[Datum::String(s)])]
+            f(BodyRow(Row::pack_slice(&[Datum::String(s)])))
         }
         WebhookBodyFormat::Json { array } => {
-            let objects = serde_json::Deserializer::from_slice(body)
-                // Automatically expand multiple JSON objects delimited by whitespace, e.g.
-                // newlines, into a single batch.
-                .into_iter::<serde_json::Value>()
+            let mut pack = |raw: &RawValue| {
+                let row = Jsonb::from_slice(raw.get().as_bytes())
+                    .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?
+                    .into_row();
+                f(BodyRow(row))
+            };
+            // Automatically expand multiple JSON documents delimited by whitespace, e.g.
+            // newlines, into a single batch.
+            for raw in serde_json::Deserializer::from_slice(body).into_iter::<&RawValue>() {
+                let raw = raw.map_err(invalid_json_body)?;
                 // Optionally expand a JSON array into separate rows, if requested.
-                .flat_map(|value| match value {
-                    Ok(serde_json::Value::Array(inners)) if *array => {
-                        itertools::Either::Left(inners.into_iter().map(Result::Ok))
-                    }
-                    value => itertools::Either::Right(std::iter::once(value)),
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?;
-
-            // Note: `into_iter()` should be re-using the underlying allocation of the `objects`
-            // vector, and it's more readable to split these into separate iterators.
-            let rows = objects
-                .into_iter()
-                // Map a JSON object into a Row.
-                .map(|o| {
-                    let row = Jsonb::from_serde_json(o)
-                        .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?
-                        .into_row();
-                    Ok::<_, AppendWebhookError>(row)
-                })
-                .collect::<Result<_, _>>()?;
-
-            rows
+                if *array && raw.get().starts_with('[') {
+                    for_each_array_element(raw, &mut pack)?;
+                } else {
+                    pack(raw)?;
+                }
+            }
+            Ok(())
         }
-    };
+    }
+}
 
-    // A `Row` cannot describe its schema without unpacking it. To add some safety we wrap the
-    // returned `Row`s in a newtype to signify they already have the "body" column packed.
-    let body_rows = rows.into_iter().map(BodyRow).collect();
+/// Calls `f` on each element of the JSON array `array` without materializing the array.
+fn for_each_array_element<'de, F>(array: &'de RawValue, f: &mut F) -> Result<(), AppendWebhookError>
+where
+    F: FnMut(&'de RawValue) -> Result<(), AppendWebhookError>,
+{
+    struct Elements<'a, F> {
+        f: &'a mut F,
+        // Serde can only propagate an error from `f` as a stringified JSON error, so it is
+        // stashed here and returned as is.
+        err: &'a mut Option<AppendWebhookError>,
+    }
 
-    Ok(body_rows)
+    impl<'a, 'de, F> Visitor<'de> for Elements<'a, F>
+    where
+        F: FnMut(&'de RawValue) -> Result<(), AppendWebhookError>,
+    {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a JSON array")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+            while let Some(element) = seq.next_element::<&'de RawValue>()? {
+                if let Err(e) = (self.f)(element) {
+                    *self.err = Some(e);
+                    return Err(de::Error::custom("aborted"));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let mut err = None;
+    let result = serde_json::Deserializer::from_str(array.get())
+        .deserialize_seq(Elements { f, err: &mut err });
+    match err {
+        Some(e) => Err(e),
+        None => result.map_err(invalid_json_body),
+    }
+}
+
+fn invalid_json_body(err: serde_json::Error) -> AppendWebhookError {
+    AppendWebhookError::InvalidJsonBody {
+        msg: err.to_string(),
+    }
 }
 
 /// Pack the headers of a request into a [`Row`].
@@ -367,6 +427,8 @@ pub enum WebhookError {
     InternalStorageError(StorageError),
     #[error("request body exceeds the maximum allowed size of {max_bytes} bytes")]
     BodyTooLarge { max_bytes: usize },
+    #[error("request body decodes to more than the maximum allowed {max_bytes} bytes of rows")]
+    DecodedRowsTooLarge { max_bytes: usize },
     #[error("internal failure! {0:?}")]
     Internal(#[from] anyhow::Error),
 }
@@ -384,6 +446,9 @@ impl From<AppendWebhookError> for WebhookError {
                 ty: SqlScalarType::Jsonb,
                 msg,
             },
+            AppendWebhookError::DecodedRowsTooLarge { max_bytes } => {
+                WebhookError::DecodedRowsTooLarge { max_bytes }
+            }
             AppendWebhookError::UnknownWebhook {
                 database,
                 schema,
@@ -422,7 +487,8 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::InvalidHeaders(_) => {
                 (StatusCode::UNAUTHORIZED, e.to_string()).into_response()
             }
-            e @ WebhookError::BodyTooLarge { .. } => {
+            e @ WebhookError::BodyTooLarge { .. }
+            | e @ WebhookError::DecodedRowsTooLarge { .. } => {
                 (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()).into_response()
             }
             e @ WebhookError::Unavailable => {
@@ -447,8 +513,10 @@ mod tests {
     use axum::response::IntoResponse;
     use bytes::Bytes;
     use http::StatusCode;
+    use itertools::Itertools;
     use mz_adapter::AppendWebhookError;
     use mz_ore::assert_none;
+    use mz_repr::adt::jsonb::Jsonb;
     use mz_repr::{GlobalId, Row};
     use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
     use mz_storage_types::controller::StorageError;
@@ -564,6 +632,7 @@ mod tests {
             &WebhookBodyFormat::Json { array: false },
             &BTreeMap::default(),
             &WebhookHeaders::default(),
+            usize::MAX,
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
@@ -574,6 +643,7 @@ mod tests {
             &WebhookBodyFormat::Json { array: true },
             &BTreeMap::default(),
             &WebhookHeaders::default(),
+            usize::MAX,
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
@@ -593,6 +663,7 @@ mod tests {
             &WebhookBodyFormat::Json { array: false },
             &BTreeMap::default(),
             &WebhookHeaders::default(),
+            usize::MAX,
         )
         .unwrap();
         // If we don't expand the body, we should have a single row.
@@ -603,10 +674,85 @@ mod tests {
             &WebhookBodyFormat::Json { array: true },
             &BTreeMap::default(),
             &WebhookHeaders::default(),
+            usize::MAX,
         )
         .unwrap();
         // If we _do_ expand the body, we should have a two rows.
         assert_eq!(rows.len(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_decoded_rows_budget() {
+        // Many tiny documents, both whitespace-delimited and as an expanded array.
+        let n = 10_000;
+        let docs = "{}".repeat(n);
+        let array = format!("[{}]", vec!["{}"; n].join(","));
+        let row_bytes = n * (std::mem::size_of::<Row>() + std::mem::size_of::<mz_repr::Diff>());
+        let headers = BTreeMap::from([("x-padding".to_string(), "a".repeat(1024))]);
+        let with_headers = WebhookHeaders {
+            header_column: Some(WebhookHeaderFilters::default()),
+            mapped_headers: BTreeMap::new(),
+        };
+
+        for (body, array) in [(&docs, false), (&array, true)] {
+            let format = WebhookBodyFormat::Json { array };
+            let rows = pack_rows(
+                body.as_bytes(),
+                &format,
+                &headers,
+                &WebhookHeaders::default(),
+                row_bytes,
+            )
+            .unwrap();
+            assert_eq!(rows.len(), n);
+
+            let err = pack_rows(
+                body.as_bytes(),
+                &format,
+                &headers,
+                &WebhookHeaders::default(),
+                row_bytes - 1,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                AppendWebhookError::DecodedRowsTooLarge { .. }
+            ));
+
+            // Headers are copied into every row, so they count against the budget per row.
+            let err = pack_rows(
+                body.as_bytes(),
+                &format,
+                &headers,
+                &with_headers,
+                row_bytes * 10,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                AppendWebhookError::DecodedRowsTooLarge { .. }
+            ));
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_decoded_rows_too_large_response_status() {
+        let resp = WebhookError::from(AppendWebhookError::DecodedRowsTooLarge { max_bytes: 1 })
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[mz_ore::test]
+    fn test_json_invalid_array_element() {
+        let err = pack_rows(
+            b"[{}, {]",
+            &WebhookBodyFormat::Json { array: true },
+            &BTreeMap::default(),
+            &WebhookHeaders::default(),
+            usize::MAX,
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppendWebhookError::InvalidJsonBody { .. }));
     }
 
     proptest! {
@@ -642,7 +788,7 @@ mod tests {
             };
 
             // Call this method to make sure it doesn't panic.
-            let _ = pack_rows(&body[..], &body_ty, &headers, &header_tys);
+            let _ = pack_rows(&body[..], &body_ty, &headers, &header_tys, usize::MAX);
         }
 
         #[mz_ore::test]
@@ -657,7 +803,7 @@ mod tests {
             let mut header_tys = WebhookHeaders::default();
             header_tys.header_column = include_headers.then(Default::default);
 
-            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys).unwrap();
+            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys, usize::MAX).unwrap();
             check_rows(&rows, 1, header_tys.num_columns() + 1);
         }
 
@@ -673,7 +819,7 @@ mod tests {
             let mut header_tys = WebhookHeaders::default();
             header_tys.header_column = include_headers.then(Default::default);
 
-            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys).unwrap();
+            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys, usize::MAX).unwrap();
             check_rows(&rows, 1, header_tys.num_columns() + 1);
         }
 
@@ -710,7 +856,7 @@ mod tests {
                 mapped_headers,
             };
 
-            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys).unwrap();
+            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys, usize::MAX).unwrap();
             check_rows(&rows, 1, header_tys.num_columns() + 1);
         }
 
@@ -730,14 +876,19 @@ mod tests {
                 &WebhookBodyFormat::Json { array: expand_array },
                 &headers,
                 &header_tys,
+                usize::MAX,
             )
             .unwrap();
 
-            let expected_num_rows = match body {
-                serde_json::Value::Array(inner) if expand_array => inner.len(),
-                _ => 1,
+            let expected = match body {
+                serde_json::Value::Array(inner) if expand_array => inner,
+                body => vec![body],
             };
-            check_rows(&rows, expected_num_rows, header_tys.num_columns() + 1);
+            check_rows(&rows, expected.len(), header_tys.num_columns() + 1);
+            for ((row, _diff), value) in rows.iter().zip_eq(expected) {
+                let expected = Jsonb::from_serde_json(value).unwrap().into_row();
+                assert_eq!(row.unpack_first(), expected.unpack_first());
+            }
         }
     }
 }

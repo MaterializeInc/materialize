@@ -348,6 +348,22 @@ pub const WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Maximum in-memory size of the rows decoded from one webhook request,
+/// including the headers copied into every row. Requests that exceed it are
+/// rejected with HTTP 413 before anything is appended.
+///
+/// `WEBHOOK_MAX_REQUEST_SIZE_BYTES` alone does not bound memory: a JSON body
+/// of many tiny documents decodes into millions of rows, each with a fixed
+/// per-row cost and its own copy of any `INCLUDE HEADERS` columns. The default
+/// leaves room for realistic batches, where JSONB rows are a small multiple of
+/// the body size, while capping the expansion of a maximum-size body.
+pub const WEBHOOK_MAX_DECODED_ROWS_BYTES: Config<usize> = Config::new(
+    "webhook_max_decoded_rows_bytes",
+    64 * 1024 * 1024,
+    "The maximum in-memory size in bytes of the rows decoded from one webhook request.",
+    ParameterScope::Environment,
+);
+
 /// Budget for the backlog a `SUBSCRIBE` (or `COPY (SUBSCRIBE ...) TO STDOUT`)
 /// may accumulate in environmentd while waiting for a slow client to read.
 ///
@@ -566,6 +582,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES)
+        .add(&WEBHOOK_MAX_DECODED_ROWS_BYTES)
         .add(&SUBSCRIBE_MAX_BUFFERED_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
