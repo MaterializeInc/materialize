@@ -8921,7 +8921,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
- "mz-secrets-cli",
+ "mz-secrets",
  "mz-service",
  "mz-storage-client",
  "mz-storage-types",

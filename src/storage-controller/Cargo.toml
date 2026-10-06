@@ -39,7 +39,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-mz-secrets-cli = { path = "../secrets-cli" }
+mz-secrets = { path = "../secrets" }
 
 [features]
 default = []

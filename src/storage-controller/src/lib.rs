@@ -4239,7 +4239,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
+    use mz_secrets::InMemorySecretsController;
     use mz_storage_client::storage_collections::StorageCollectionsImpl;
     use mz_storage_types::connections::{KafkaConnection, Tunnel};
     use mz_storage_types::sinks::{
@@ -4310,17 +4310,7 @@ mod tests {
             PubSubClientConnection::noop()
         }));
         let persist = cache.open(location.clone()).await.unwrap();
-        // No replica connects and the sink has no secrets, so this reader performs no file I/O.
-        let secrets_reader = SecretsReaderCliArgs {
-            secrets_reader: SecretsControllerKind::LocalFile,
-            secrets_reader_local_file_dir: Some("/dev/null".into()),
-            secrets_reader_kubernetes_context: None,
-            secrets_reader_aws_prefix: None,
-            secrets_reader_name_prefix: None,
-        }
-        .load()
-        .await
-        .unwrap();
+        let secrets_reader = Arc::new(InMemorySecretsController::new());
         let context = ConnectionContext::for_tests(secrets_reader);
         let txns_metrics = Arc::new(TxnMetrics::new(&registry));
         let txn = TestTxn(ShardId::new());
