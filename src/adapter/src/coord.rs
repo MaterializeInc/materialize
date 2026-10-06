@@ -186,7 +186,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
-use crate::client::{Client, Handle};
+use crate::client::{Client, Handle, truncate_sql_for_logging};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
     ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
@@ -4957,7 +4957,7 @@ impl LastMessage {
     fn stmt_to_string(&self) -> Cow<'static, str> {
         self.stmt
             .as_ref()
-            .map(|stmt| stmt.to_ast_string_redacted().into())
+            .map(|stmt| truncate_sql_for_logging(stmt.to_ast_string_redacted()).into())
             .unwrap_or(Cow::Borrowed("<none>"))
     }
 }
