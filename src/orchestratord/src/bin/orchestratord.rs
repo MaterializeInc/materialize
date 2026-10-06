@@ -384,6 +384,7 @@ fn parse_data_rate(s: &str) -> anyhow::Result<usize> {
 #[tokio::main]
 async fn main() {
     mz_ore::panic::install_enhanced_handler();
+    mz_ore::antithesis::init();
 
     // Pin the rustls crypto provider to aws-lc-rs. The kube client and the
     // conversion webhook's `RustlsConfig` both build their rustls configs via
