@@ -208,6 +208,14 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false"
         )
 
+    # Frontend subscribes' flag, which current versions no longer have because
+    # the frontend always sequences subscribes. Older binaries still read it,
+    # so pin the value CI has been running them with.
+    if version < MzVersion.parse_mz("v26.46.0-dev"):
+        config["enable_frontend_subscribes"] = (
+            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false"
+        )
+
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
     # from v26.42 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
@@ -382,11 +390,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_password_auth",
             "true",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
-            "enable_frontend_subscribes",
-            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(

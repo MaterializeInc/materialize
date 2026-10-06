@@ -24,6 +24,7 @@ use http::Uri;
 use inner::return_if_err;
 use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
+use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
 use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
@@ -31,6 +32,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, Timestamp};
 use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
@@ -404,8 +406,10 @@ impl Coordinator {
                         "coordinator peek reached despite frontend routing".into(),
                     )));
                 }
-                Plan::Subscribe(plan) => {
-                    self.sequence_subscribe(ctx, plan, target_cluster).await;
+                Plan::Subscribe(_) => {
+                    ctx.retire(Err(AdapterError::Internal(
+                        "coordinator SUBSCRIBE reached despite frontend routing".into(),
+                    )));
                 }
                 Plan::SideEffectingFunc(_) => {
                     ctx.retire(Err(AdapterError::Internal(
@@ -420,7 +424,7 @@ impl Coordinator {
                     self.sequence_copy_from(ctx, plan, target_cluster).await;
                 }
                 Plan::ExplainPlan(plan) => {
-                    self.sequence_explain_plan(ctx, plan, target_cluster).await;
+                    self.sequence_explain_plan(ctx, plan).await;
                 }
                 Plan::ExplainPushdown(plan) => {
                     self.sequence_explain_pushdown(ctx, plan).await;
@@ -1243,6 +1247,58 @@ pub(crate) async fn explain_plan_inner(
             stage,
             plan::ExplaineeStatementKind::Select,
             insights_ctx,
+        )
+        .await?;
+
+    Ok(rows)
+}
+
+/// Renders the rows of an `EXPLAIN ... SUBSCRIBE` from its optimizer trace.
+///
+/// `features` are the optimizer features the `SUBSCRIBE` was optimized with.
+pub(crate) async fn explain_subscribe_inner(
+    session: &Session,
+    catalog: &Catalog,
+    df_meta: DataflowMetainfo,
+    explain_ctx: ExplainPlanContext,
+    sink_id: GlobalId,
+    cluster_id: ComputeInstanceId,
+    features: &OptimizerFeatures,
+) -> Result<Vec<Row>, AdapterError> {
+    let ExplainPlanContext {
+        config,
+        format,
+        stage,
+        desc,
+        optimizer_trace,
+        ..
+    } = explain_ctx;
+
+    let session_catalog = catalog.for_session(session);
+    let expr_humanizer = {
+        let transient_items = btreemap! {
+            sink_id => TransientItem::new(
+                Some(vec![GlobalId::Explain.to_string()]),
+                desc.map(|d| d.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        ExprHumanizerExt::new(transient_items, &session_catalog)
+    };
+
+    let target_cluster = catalog.get_cluster(cluster_id);
+
+    let rows = optimizer_trace
+        .into_rows(
+            format,
+            &config,
+            features,
+            &expr_humanizer,
+            None,
+            Some(target_cluster),
+            df_meta,
+            stage,
+            plan::ExplaineeStatementKind::Subscribe,
+            None,
         )
         .await?;
 

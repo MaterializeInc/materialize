@@ -219,9 +219,6 @@ impl Coordinator {
             Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
-            Message::SubscribeStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
-            }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
             }
