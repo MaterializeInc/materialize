@@ -345,7 +345,7 @@ impl PeekClient {
     }
 
     /// Implement a fast-path peek plan.
-    /// This is similar to `Coordinator::implement_peek_plan`, but only for fast path peeks.
+    /// The slow-path counterpart is `Coordinator::implement_slow_path_peek`.
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
