@@ -554,6 +554,16 @@ struct Spill {
 /// unbounded queue of still-resident chunks.
 pub const SPILL_IN_FLIGHT_MAX: usize = 64;
 
+/// The most extent bytes one spill-thread pass demotes to the file store
+/// before the thread returns to its eviction queue.
+///
+/// Demotions are device writes. On a device slower than the rate at which
+/// evictions fill the compressed tier, an unbounded pass never gets the tier
+/// back to its capacity, the eviction queue stays full, and every eviction
+/// runs inline on the threads that trip the budget. 16 MiB is about 35 ms of
+/// writes at the 475 MB/s an 8 vCPU instance-store NVMe sustained.
+const BACKGROUND_DEMOTION_BYTES: u64 = 16 << 20;
+
 /// How long an idle spill thread parks, and how often a spill thread retries
 /// demotion while the file store's full hint is set.
 const SPILL_PARK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
@@ -1478,6 +1488,7 @@ impl PoolInner {
             let Some(meta) = weak.upgrade() else {
                 continue;
             };
+            let mut inline = false;
             let requeue = {
                 // `try_lock`: a chunk mid-eviction or mid-read holds its
                 // lock for milliseconds; skipping it beats convoying every
@@ -1504,11 +1515,20 @@ impl PoolInner {
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
+                    inline = true;
                     state.residency != Residency::Evicted
                 }
             };
             if requeue {
                 self.queue(band).push_back(weak);
+            }
+            // An inline eviction grows the compressed tier by one extent. A
+            // single pass can evict a whole budget's worth when other threads
+            // keep inserting, so the tier is trimmed between evictions, not
+            // after the pass. Enforcement takes chunk locks itself, so this
+            // runs after the victim's lock is released.
+            if inline {
+                self.enforce_or_defer_compressed_cap();
             }
         }
     }
@@ -2307,7 +2327,8 @@ impl PoolInner {
     /// [`PoolInner::demote`]. A victim whose class the store cannot place
     /// moves to the back of the queue, and a store that can place no class
     /// or has writes disabled ends the pass. An inline file-mode pass with
-    /// spill threads present stops at the [`backstop_threshold`].
+    /// spill threads present stops at the [`backstop_threshold`], and a
+    /// background file-mode pass stops after [`BACKGROUND_DEMOTION_BYTES`].
     fn enforce_compressed_cap(&self, pass: Pass) {
         let cap = self.compressed_cap();
         let over = match (&self.store, pass) {
@@ -2336,7 +2357,11 @@ impl PoolInner {
         // probes the store at most once per class.
         let mut refused_classes = 0u64;
         let mut remaining = self.extent_queue().len();
+        let mut demoted_bytes = 0u64;
         while remaining > 0 && above(self) {
+            if pass == Pass::Background && demoted_bytes >= BACKGROUND_DEMOTION_BYTES {
+                break;
+            }
             remaining -= 1;
             let popped = self.extent_queue().pop_front();
             let Some(entry) = popped else {
@@ -2359,8 +2384,12 @@ impl PoolInner {
                 continue;
             };
             if let ExtentStore::File(store) = &self.store {
+                let alloc_size = u64::cast_from(entry.alloc_size);
                 match self.demote(store, &meta, state, entry, pass) {
-                    Demotion::Committed => demoted = true,
+                    Demotion::Committed => {
+                        demoted = true;
+                        demoted_bytes += alloc_size;
+                    }
                     Demotion::Skipped => {}
                     Demotion::Refused(class) => {
                         refused = true;
