@@ -408,9 +408,13 @@ def run_sqllogictest(
                 c.metadata_store(),
                 rewrite_results=rewrite_results,
             )
-            trace_statements = file == "test/sqllogictest/rbac_views.slt"
+            trace_statements = file in {
+                "test/sqllogictest/rbac_views.slt",
+                "test/sqllogictest/materialized_views.slt",
+            }
             if trace_statements:
-                # Preserve the active statement if the job reaches its deadline.
+                # Preserve active statements and the real-time compaction window
+                # in the timestamped job log, including on job timeout.
                 cmd.insert(1, "--verbose")
             try:
                 c.exec(
