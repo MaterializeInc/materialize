@@ -345,6 +345,13 @@ const FreshnessPage = () => {
             <Box minWidth="52">
               <SearchableSelect<SelectOption, false>
                 ariaLabel="Cluster"
+                // Cluster names run long and are often distinguished only by
+                // their last few characters, so a truncated one is unusable.
+                // `max-content` rather than the base `fit-content`, which
+                // resolves against the select's own container and so cannot
+                // grow past the closed control.
+                containerWidth="max-content"
+                menuWidth="240px"
                 options={options}
                 value={
                   selected ? { id: selected.id, name: selected.name } : null
