@@ -24,7 +24,7 @@
 // some of its methods are called only from tests, so the expectation holds outside tests alone.
 #![cfg_attr(not(test), expect(unused))]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{Thread, ThreadId};
 
@@ -32,9 +32,8 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
-use crate::shared_trace::{Published, adopt_trace};
-#[cfg(test)]
-use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
+use crate::arrangement::manager::TraceBundle;
+use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
@@ -49,6 +48,20 @@ pub struct SharedIndexArrangement {
     pub(crate) oks: Published<RowRowSpine<Timestamp, Diff>>,
     /// The published `errs` arrangement.
     pub(crate) errs: Published<ErrSpine<Timestamp, Diff>>,
+    /// Peer holds the publisher registered for the reading runtime to take over.
+    peer_holds: Mutex<PeerHolds>,
+}
+
+/// Pairs each publication of a slot with the reading runtime's peer of it.
+///
+/// Both runtimes see every `CreateDataflow`, so each publication has exactly one peer, in the same
+/// order on both sides, and whichever side reaches it first leaves something for the other.
+#[derive(Default)]
+struct PeerHolds {
+    /// Holds a publication registered before the reading runtime recorded its peer.
+    reserved: VecDeque<(SharedOksHandle, SharedErrsHandle)>,
+    /// Peers recorded before their publication, which therefore reserves nothing.
+    unpublished_peers: usize,
 }
 
 /// The registry's state: the published slots and the two workers attached to them. One lock covers
@@ -126,6 +139,7 @@ impl ArrangementSharingRegistry {
             as_of: as_of.clone(),
             oks: Published::new(),
             errs: Published::new(),
+            peer_holds: Default::default(),
         });
         inner.map.retain(|_, slot| slot.strong_count() > 0);
         inner.map.insert(id, Arc::downgrade(&slot));
@@ -166,11 +180,47 @@ impl ArrangementSharingRegistry {
         adopt_trace(oks, worker, &slot.oks, move || registry.notify());
         let registry = self.clone();
         adopt_trace(errs, worker, &slot.errs, move || registry.notify());
+        // The reading runtime holds the index from its own copy of this `CreateDataflow`, which it
+        // can reach arbitrarily later. Until then nothing stops this runtime from applying a
+        // compaction past a dataflow that runtime has yet to render: the controller drops its read
+        // hold for a cancelled read before the reader renders it. So the hold starts here, ahead
+        // of any `AllowCompaction` for the index on this runtime's stream, and the peer takes it
+        // over.
+        {
+            let mut holds = slot.peer_holds.lock().expect("peer holds poisoned");
+            if holds.unpublished_peers > 0 {
+                holds.unpublished_peers -= 1;
+            } else {
+                let reserved = (slot.oks.peer_handle(as_of), slot.errs.peer_handle(as_of));
+                holds.reserved.push_back(reserved);
+            }
+        }
         self.notify();
         PublishToken {
             registry: self.clone(),
             slot: Some(slot),
         }
+    }
+
+    /// The bundle through which this runtime holds and reads index `id`, which its peer publishes.
+    ///
+    /// The bundle's logical compaction is this runtime's hold on the publication, from the index's
+    /// `as_of`, so an index's `since` never passes the `as_of` of a dataflow importing it. It holds
+    /// nothing physically, so the publisher keeps merging. Imports from the bundle mint readers that
+    /// do. The slot lives as long as the bundle.
+    pub(crate) fn peer_bundle(&self, id: GlobalId, as_of: &Antichain<Timestamp>) -> TraceBundle {
+        let slot = self.get_or_create(id, as_of);
+        let (oks, errs) = {
+            let mut holds = slot.peer_holds.lock().expect("peer holds poisoned");
+            match holds.reserved.pop_front() {
+                Some(reserved) => reserved,
+                None => {
+                    holds.unpublished_peers += 1;
+                    (slot.oks.peer_handle(as_of), slot.errs.peer_handle(as_of))
+                }
+            }
+        };
+        TraceBundle::shared(oks, errs).with_drop(slot)
     }
 
     /// Mints reader handles for `id`, if published. Test-only.
