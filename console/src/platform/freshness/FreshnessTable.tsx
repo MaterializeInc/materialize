@@ -71,7 +71,7 @@ const StatCell = ({
   return (
     <Text
       color={marked ? colors.accent.red : undefined}
-      fontWeight={marked ? "500" : undefined}
+      textStyle={marked ? "text-ui-med" : undefined}
     >
       {value === null
         ? NO_VALUE

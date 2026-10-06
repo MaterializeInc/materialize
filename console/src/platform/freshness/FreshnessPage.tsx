@@ -161,9 +161,9 @@ const FreshnessContent = ({
   return (
     <VStack alignItems="stretch" width="100%" spacing="4">
       <Text textStyle="text-base">
-        <b>
+        <Text as="span" textStyle="text-ui-med">
           {breaching.length} of {rows.length}
-        </b>{" "}
+        </Text>{" "}
         {rows.length === 1 ? "object" : "objects"} exceeded{" "}
         {formatDurationExact(thresholdControl.settled)} {predicateLabel}
         {window}.
