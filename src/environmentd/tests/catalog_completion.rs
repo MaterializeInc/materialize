@@ -10,6 +10,8 @@
 //! Catalog acknowledgement ordering against the group committer. Keep this as
 //! a single-test integration binary: the failpoint is process-global.
 
+#![recursion_limit = "256"]
+
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
