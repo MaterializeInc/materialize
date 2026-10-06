@@ -840,8 +840,9 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // TODO(peek-seq): wire up cancel_future
-        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
+        let peek_result = self
+            .try_frontend_peek(&portal_name, logging, cancel_future.clone())
+            .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             return Ok(resp);
@@ -1444,10 +1445,11 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
+        connection_closed: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
-            .try_frontend_peek(portal_name, session, logging)
+            .try_frontend_peek(portal_name, session, logging, connection_closed)
             .await
     }
 
