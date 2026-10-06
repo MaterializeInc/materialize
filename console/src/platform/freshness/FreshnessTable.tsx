@@ -24,6 +24,7 @@ import {
 } from "~/platform/maintained-objects/filters";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
+import { kebabToTitleCase } from "~/util";
 import { formatDurationExact } from "~/utils/format";
 
 import { FreshnessRow, UNREADABLE } from "./freshnessRows";
@@ -126,7 +127,9 @@ const columns = [
   }),
   columnHelper.accessor("objectType", {
     header: "Type",
+    // Sorted on the raw value, which orders the same as the formatted one.
     sortingFn: sortingFunctions.nullsLast,
+    cell: (info) => kebabToTitleCase(info.getValue()),
   }),
   columnHelper.accessor("current", {
     header: "Now",
