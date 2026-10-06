@@ -54,16 +54,11 @@ import { MaterializeTheme } from "~/theme";
 import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
 import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
-import {
-  buildFreshnessRows,
-  buildStats,
-  judgeLines,
-  Predicate,
-  PREDICATE_LABELS,
-} from "./freshnessRows";
+import { Predicate, PREDICATE_LABELS } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
 import { useFreshnessHydration } from "./queries";
 import { useFreshnessParams } from "./useFreshnessParams";
+import { useFreshnessRows } from "./useFreshnessRows";
 
 const SectionHeader = ({
   title,
@@ -133,54 +128,19 @@ const FreshnessContent = ({
     objects.map((object) => object.objectId),
   );
 
-  const visibleLines = React.useMemo(
-    () =>
-      lines.filter((line) => {
-        const object = objectsById.get(line.key);
-        return (
-          typeFilters.length === 0 ||
-          (object !== undefined && typeFilters.includes(object.objectType))
-        );
-      }),
-    [lines, objectsById, typeFilters],
-  );
+  const { judged, rows, breaching } = useFreshnessRows({
+    lines,
+    historicalData,
+    latestByObjectId,
+    objectsById,
+    hydrationByObjectId,
+    typeFilters,
+    predicate,
+    // The settled threshold, so a drag does not rebuild a row per object on
+    // every pointer move.
+    threshold: thresholdControl.settled,
+  });
 
-  const statsByKey = React.useMemo(
-    () => buildStats(visibleLines, historicalData, latestByObjectId),
-    [visibleLines, historicalData, latestByObjectId],
-  );
-  const judged = React.useMemo(
-    () => judgeLines(visibleLines, historicalData, predicate, statsByKey),
-    [visibleLines, historicalData, predicate, statsByKey],
-  );
-
-  // Built from the settled threshold so a drag does not re-render a row per
-  // object on every pointer move.
-  const rows = React.useMemo(
-    () =>
-      buildFreshnessRows({
-        judged,
-        statsByKey,
-        objectsById,
-        hydrationByObjectId,
-        threshold: thresholdControl.settled,
-      }),
-    [
-      judged,
-      statsByKey,
-      objectsById,
-      hydrationByObjectId,
-      thresholdControl.settled,
-    ],
-  );
-
-  // Memoized for the same reason as `rows`: a fresh array per render reaches
-  // `FreshnessTable` as a changed prop, so the memo on the table cannot hold
-  // during a drag.
-  const breaching = React.useMemo(
-    () => rows.filter((row) => row.breaching),
-    [rows],
-  );
   const predicateLabel = PREDICATE_LABELS[predicate];
   const window =
     predicate === "current" ? "" : ` in the ${rangeLabel.toLowerCase()}`;
