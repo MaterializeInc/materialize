@@ -1,0 +1,110 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Values for `helm template` of misc/helm-charts/operator. The chart's own
+# defaults target real clusters; these trim it to what fits the Antithesis
+# single-node, single-core budget.
+
+operator:
+  image:
+    repository: ${ORCHESTRATORD_REPOSITORY}
+    tag: ${ORCHESTRATORD_TAG}
+    pullPolicy: IfNotPresent
+  # Two replicas so orchestratord leader election and failover are exercised.
+  replicas: 2
+  podDisruptionBudget:
+    enabled: false
+  args:
+    startupLogFilter: "INFO,mz_orchestratord=DEBUG"
+    enableInternalStatementLogging: false
+    statementLoggingMaxSampleRate: 0
+    installV1CRD: false
+  cloudProvider:
+    type: local
+    region: antithesis
+  clusters:
+    swap_enabled: false
+    # No cpu_limit or memory_limit: either becomes a pod request, and every
+    # replica exists twice during a rollout. Worker counts stay at or below 4
+    # because the whole system shares one simulated core.
+    # Helm merges maps with the chart defaults, so the default sizes are
+    # removed explicitly.
+    sizes:
+      mz_probe: null
+      25cc: null
+      50cc: null
+      100cc: null
+      200cc: null
+      300cc: null
+      400cc: null
+      600cc: null
+      800cc: null
+      1200cc: null
+      1600cc: null
+      3200cc: null
+      6400cc: null
+      antithesis-1:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        credits_per_hour: "0.00"
+      antithesis-2:
+        workers: 2
+        scale: 1
+        cpu_exclusive: false
+        credits_per_hour: "0.00"
+      antithesis-4:
+        workers: 4
+        scale: 1
+        cpu_exclusive: false
+        credits_per_hour: "0.00"
+    defaultSizes:
+      default: antithesis-1
+      system: antithesis-1
+      probe: antithesis-1
+      support: antithesis-1
+      catalogServer: antithesis-1
+      analytics: antithesis-1
+    defaultReplicationFactor:
+      system: 0
+      probe: 0
+      support: 0
+      analytics: 0
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+environmentd:
+  # Overridden per CR by the workload; this is the fallback.
+  defaultResources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+    limits:
+      memory: 3Gi
+
+balancerd:
+  enabled: false
+
+console:
+  enabled: false
+
+observability:
+  enabled: false
+  podMetrics:
+    enabled: false
+
+telemetry:
+  enabled: false
+
+networkPolicies:
+  enabled: false
