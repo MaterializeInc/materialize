@@ -91,6 +91,11 @@ impl Coordinator {
                                 updates: Err("query subscription dataflow was dropped".into()),
                             },
                         };
+                        tracing::debug!(
+                            target: "mz_adapter::frontend_read_then_write",
+                            %id, upper = ?batch.upper,
+                            "native subscribe dispatched by coordinator"
+                        );
                         ControllerResponse::SubscribeResponse(id, batch)
                     }
                     DataflowResponse::CopyTo(id, response) => {

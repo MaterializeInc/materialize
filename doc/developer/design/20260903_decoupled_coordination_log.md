@@ -38,18 +38,18 @@ Older branch-built catalogs are not a compatibility requirement.
 
 Prioritize the remaining read-then-write timeouts in parallel checks. The
 catalog-only completion regression passes: table keepalives remain staged but
-are not awaited on the coordinator. CI137778 traces show advancing subscribe
-progress and repeated global-oracle timestamp rejection while foreground writes
-hold admission permits. Baseline has the same oracle precheck, while native catalog
-publishers add independent allocations. The approved correction makes Persist
-arbitrate certified timestamps, caps proposals by the oracle and returns the actual
-txns upper on conflict. Preserve freshness, future-time checks, catalog completion
-before acknowledgement and refolding at every new target. Verify in existing CI.
-This does not fix lag-induced conflicts. Early traces establish coordinator queue
-pressure and delayed subscribe observation without identifying one wait owner. The frontier
-UPDATE also repeatedly replans before execution. Keep coordinator/DDL stalls
-distinct unless evidence connects them. Remove scoped RTW diagnostics when their
-question is answered. Keep protection and deadlines unchanged.
+are not awaited on the coordinator. CI137885 records seven foreground timestamped
+commits in parallel shard1, but its shard2 contenders still fail on actual txns-upper
+conflicts. The frontier UPDATE gets beyond replanning, then encounters long
+progress waits and write round trips. A later protection handler occupies the
+coordinator for 49.87s, overlapping write attempts. Earliest terminal failures
+are DDL, and the initiating latency owner remains unresolved.
+Temporary events under the existing parallel-only RTW debug filter separate
+subscribe receipt from coordinator dispatch, and write receipt from committer
+entry, catalog-upper advancement and table-worker replies. They log identifiers
+and timestamps, not row contents. Remove these diagnostics when the wait owner is
+established. Preserve freshness, future-time checks, catalog completion before
+acknowledgement, refolding at every new target and existing deadlines.
 The DROP-preparation correction refreshes the owner's committed requirement
 after metadata contention without deriving it from an import's available history.
 The unchanged selected-plan-explain regression passes in CI137817 and CI137825. Its companion
@@ -60,6 +60,10 @@ compaction-command count assertion, without changing runtime measurements.
 
 All five SQL logic test shards pass in CI137778, including scheduled-compaction's
 unchanged 1/0/1 membership and audit assertions. Preserve those assertions.
+CI137885 SLT1 first fails its one-second EXPLAIN FILTER PUSHDOWN on
+`mv_aligned_to_past`, after both `mv12` queries complete. The automatic diagnostic
+rewrite later exhausts the job budget while still making progress. Its final SQL
+is not logged. Do not treat this as proof of a permanent recovery stall.
 Earlier real-time-window observations do not create another investigation campaign.
 The imported hydration-stability restart and no-dataflow workflows pass in
 CI137762, alongside warm handover.

@@ -112,9 +112,14 @@ impl Coordinator {
                         .await?;
                     while let Some(response) = dataflows.recv().await {
                         let response = response?;
-                        if let DataflowResponse::Subscribe(_, SubscribeResponse::Batch(batch)) =
+                        if let DataflowResponse::Subscribe(id, SubscribeResponse::Batch(batch)) =
                             &response
                         {
+                            tracing::debug!(
+                                target: "mz_adapter::frontend_read_then_write",
+                                %id, upper = ?batch.upper,
+                                "native subscribe received before coordinator handoff"
+                            );
                             lower = batch.upper.clone();
                         }
                         if tx.send(Message::QueryDataflowResponse(response)).is_err() {

@@ -200,6 +200,11 @@ impl Coordinator {
         diffs: Vec<(Row, Diff)>,
         result_tx: tokio::sync::oneshot::Sender<WriteResult>,
     ) {
+        tracing::debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            ?attempt, %target_global_id,
+            "write attempt received by coordinator"
+        );
         let result = InternalWriteResponder::new(result_tx);
         match &attempt {
             WriteAttemptKind::Session { conn_id, .. } => {

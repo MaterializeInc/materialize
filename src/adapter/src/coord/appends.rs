@@ -390,6 +390,12 @@ impl GroupCommitter {
             span: _,
         } = request;
 
+        tracing::debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            %target_timestamp,
+            ids = ?appends.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "timestamped write received by committer"
+        );
         // Committing here would apply the target to the oracle below, which is what makes
         // it stick. See `write_ts_upper_bound`.
         let now: Timestamp = (self.timestamp_oracle_now)().into();
@@ -511,9 +517,21 @@ impl GroupCommitter {
         self.metrics
             .group_commit_catalog_upper_seconds
             .observe(catalog_upper_start.elapsed().as_secs_f64());
+        tracing::debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            write_ts = %write_ts.timestamp,
+            elapsed = ?catalog_upper_start.elapsed(),
+            "txns write catalog upper advanced"
+        );
 
         let op_start = Instant::now();
         let op_res = op(write_ts.timestamp, write_ts.advance_to).await;
+        tracing::debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            write_ts = %write_ts.timestamp,
+            elapsed = ?op_start.elapsed(),
+            "txns write worker replied"
+        );
         if let Some(metric) = op_duration_metric {
             metric.observe(op_start.elapsed().as_secs_f64());
         }
