@@ -208,7 +208,7 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW COL
 ----
 Explained Query (fast path):
   Project (#1{name}..=#3{type}, #5{comment})
-    ReadIndex on=mz_internal.mz_show_columns mz_show_columns_ind=[lookup value=("u1")]
+    ReadIndex on=mz_internal.mz_show_columns mz_show_columns_ind=[lookup value=("u17")]
 
 Used Indexes:
   - mz_internal.mz_show_columns_ind (lookup)
@@ -494,7 +494,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0{occurred_at}, #3{error})
-          Filter (#7 <= 100) AND (#7 >= 0) AND (#3{error}) IS NOT NULL
+          Filter (#8 <= 100) AND (#8 >= 0) AND (#3{error}) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0{occurred_at}))
               ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
     Return

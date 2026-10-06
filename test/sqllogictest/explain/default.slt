@@ -141,7 +141,7 @@ SELECT * FROM mz_internal.mz_source_status_history
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #1, #0, #2..=#5
+    Project: #1, #0, #2..=#6
     →Indexed mz_internal.mz_source_status_history (using mz_internal.mz_source_status_history_ind)
 
 Used Indexes:

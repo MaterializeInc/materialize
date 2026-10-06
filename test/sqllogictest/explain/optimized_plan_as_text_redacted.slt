@@ -87,7 +87,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
 ----
 Explained Query (fast path):
-  Project (#1{occurred_at}, #0{source_id}, #2{status}..=#5{replica_id})
+  Project (#1{occurred_at}, #0{source_id}, #2{status}..=#6{deployment_generation})
     ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[*** full scan ***]
 
 Used Indexes:

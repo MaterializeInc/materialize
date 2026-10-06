@@ -28,15 +28,15 @@ reset-server
 
 # --- user_tables branch -------------------------------------------------------
 
-# `t` is the first object created after the reset, so it is u1 and create_sql
-# below can name it.
+# Metric-sink bootstrap reserves user IDs before the first SQL object, so `t`
+# receives u17.
 statement ok
 CREATE TABLE t (a int, b text NOT NULL)
 
 query T
 SELECT id FROM mz_tables WHERE name = 't'
 ----
-u1
+u17
 
 query T
 SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'public' AND database_id IS NOT NULL)

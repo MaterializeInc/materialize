@@ -28,8 +28,8 @@ reset-server
 
 # --- user_views branch --------------------------------------------------------
 
-# `t` is the first object created after the reset, so it is u1 and the
-# definitions below can name it.
+# Bootstrap objects precede `t` in item-ID allocation. The definitions below
+# name the table by its durable ID.
 statement ok
 CREATE TABLE t (a int, b text NOT NULL)
 
@@ -53,20 +53,20 @@ true
 query T multiline
 SELECT definition FROM mz_views WHERE name = 'v'
 ----
-SELECT "a", "b" FROM [u1 AS "materialize"."public"."t"] WHERE "a" > 42;
+SELECT "a", "b" FROM [u17 AS "materialize"."public"."t"] WHERE "a" > 42;
 EOF
 
 query T multiline
 SELECT create_sql FROM mz_views WHERE name = 'v'
 ----
-CREATE VIEW "materialize"."public"."v" AS SELECT "a", "b" FROM [u1 AS "materialize"."public"."t"] WHERE "a" > 42
+CREATE VIEW "materialize"."public"."v" AS SELECT "a", "b" FROM [u17 AS "materialize"."public"."t"] WHERE "a" > 42
 EOF
 
 # Redaction replaces literals but keeps structure and resolves quoting.
 query T multiline
 SELECT redacted_create_sql FROM mz_views WHERE name = 'v'
 ----
-CREATE VIEW materialize.public.v AS SELECT a, b FROM [u1 AS materialize.public.t] WHERE a > '<REDACTED>'
+CREATE VIEW materialize.public.v AS SELECT a, b FROM [u17 AS materialize.public.t] WHERE a > '<REDACTED>'
 EOF
 
 # --- Cross-check against the in-memory catalog --------------------------------
@@ -87,7 +87,7 @@ true
 # This goes out through the planner and back through the durable catalog, so it
 # is an end-to-end check on the rendering rather than a self-comparison.
 statement ok
-CREATE VIEW v_roundtrip AS SELECT "a", "b" FROM [u1 AS "materialize"."public"."t"] WHERE "a" > 42;
+CREATE VIEW v_roundtrip AS SELECT "a", "b" FROM [u17 AS "materialize"."public"."t"] WHERE "a" > 42;
 
 query T
 SELECT (SELECT definition FROM mz_views WHERE name = 'v')
@@ -113,7 +113,7 @@ true  0  true
 query T multiline
 SELECT definition FROM mz_views WHERE name = 'tv'
 ----
-SELECT "a" FROM [u1 AS "materialize"."public"."t"];
+SELECT "a" FROM [u17 AS "materialize"."public"."t"];
 EOF
 
 # Two sessions may each hold a temporary view of the same name: name uniqueness

@@ -1950,15 +1950,15 @@ EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi3;
 statement ok
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi3;
 
-# Attempting to explain MVs which are not readable at the current time can block
+# EXPLAIN reads the protected written plan without waiting for MV readability.
 
-statement error canceling statement due to statement timeout
+statement ok
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv4;
 
-statement error canceling statement due to statement timeout
+statement ok
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv10;
 
-statement error canceling statement due to statement timeout
+statement ok
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv11;
 
 simple conn=mz_system,user=mz_system
