@@ -189,7 +189,9 @@ operator                     total_elapsed
 # Regression test for SQL-756: EXPLAIN ANALYZE CPU counts the time of operators
 # nested in a region once. Hierarchical MIN/MAX renders inside two nested
 # regions, so double counting puts the reported total far above the time the
-# whole dataflow ran, which its root operator measures.
+# whole dataflow ran, which its root operator measures. The check is an upper
+# bound: it catches over-counting of that size, not small errors in either
+# direction.
 > CREATE TABLE cpu_t (k int, g int, v int);
 
 > INSERT INTO cpu_t SELECT x, x % 100, x FROM generate_series(1, 100000) x;

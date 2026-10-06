@@ -656,34 +656,53 @@ query T multiline
 EXPLAIN ANALYZE CPU FOR MATERIALIZED VIEW w AS SQL;
 ----
 WITH
-    summary_cpu AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns,
-            CASE
-                    WHEN count(DISTINCT mse.worker_id) <> 0
-                            THEN
-                                sum(mse.elapsed_ns)
-                                / count(DISTINCT mse.worker_id)
-                        ELSE NULL
-                END
-                AS avg_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
+    ),
+    lir_cpu_per_worker AS
+    (
+        SELECT
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            lir_span_operators AS lso
+                JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            global_id,
+            lir_id,
+            sum(worker_ns) AS total_ns,
+            sum(worker_ns) / count(*) AS avg_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -730,34 +749,53 @@ WITH
                     ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
-    summary_cpu AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns,
-            CASE
-                    WHEN count(DISTINCT mse.worker_id) <> 0
-                            THEN
-                                sum(mse.elapsed_ns)
-                                / count(DISTINCT mse.worker_id)
-                        ELSE NULL
-                END
-                AS avg_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
+    ),
+    lir_cpu_per_worker AS
+    (
+        SELECT
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            lir_span_operators AS lso
+                JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            global_id,
+            lir_id,
+            sum(worker_ns) AS total_ns,
+            sum(worker_ns) / count(*) AS avg_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -823,56 +861,53 @@ WITH
                     ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     ),
-    summary_cpu AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns,
-            CASE
-                    WHEN count(DISTINCT mse.worker_id) <> 0
-                            THEN
-                                sum(mse.elapsed_ns)
-                                / count(DISTINCT mse.worker_id)
-                        ELSE NULL
-                END
-                AS avg_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
-                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
-        WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
     ),
-    per_worker_cpu AS
+    lir_cpu_per_worker AS
     (
         SELECT
-            mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            lir_span_operators AS lso
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            global_id,
+            lir_id,
+            sum(worker_ns) AS total_ns,
+            sum(worker_ns) / count(*) AS avg_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -909,7 +944,7 @@ FROM
         LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
         LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
         LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
-        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN lir_cpu_per_worker AS pwc USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -928,56 +963,53 @@ query T multiline
 EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR MATERIALIZED VIEW w AS SQL;
 ----
 WITH
-    summary_cpu AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns,
-            CASE
-                    WHEN count(DISTINCT mse.worker_id) <> 0
-                            THEN
-                                sum(mse.elapsed_ns)
-                                / count(DISTINCT mse.worker_id)
-                        ELSE NULL
-                END
-                AS avg_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
-                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
-        WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
     ),
-    per_worker_cpu AS
+    lir_cpu_per_worker AS
     (
         SELECT
-            mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            lir_span_operators AS lso
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            global_id,
+            lir_id,
+            sum(worker_ns) AS total_ns,
+            sum(worker_ns) / count(*) AS avg_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     ),
     summary_memory AS
     (
@@ -1056,7 +1088,7 @@ SELECT
 FROM
     mz_introspection.mz_lir_mapping AS mlm
         LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
-        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN lir_cpu_per_worker AS pwc USING(global_id, lir_id)
         LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
         LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
         JOIN
@@ -1115,56 +1147,53 @@ query T multiline
 EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR INDEX v2_idx_x AS SQL;
 ----
 WITH
-    summary_cpu AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns,
-            CASE
-                    WHEN count(DISTINCT mse.worker_id) <> 0
-                            THEN
-                                sum(mse.elapsed_ns)
-                                / count(DISTINCT mse.worker_id)
-                        ELSE NULL
-                END
-                AS avg_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
-                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
-        WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
     ),
-    per_worker_cpu AS
+    lir_cpu_per_worker AS
     (
         SELECT
-            mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            lir_span_operators AS lso
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            global_id,
+            lir_id,
+            sum(worker_ns) AS total_ns,
+            sum(worker_ns) / count(*) AS avg_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     ),
     summary_memory AS
     (
@@ -1243,7 +1272,7 @@ SELECT
 FROM
     mz_introspection.mz_lir_mapping AS mlm
         LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
-        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN lir_cpu_per_worker AS pwc USING(global_id, lir_id)
         LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
         LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
         JOIN
@@ -1330,26 +1359,49 @@ WITH
         FROM per_operator_memory_totals AS pomt
         GROUP BY pomt.global_id
     ),
-    per_operator_cpu_totals AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
+    ),
+    lir_cpu_per_worker AS
+    (
+        SELECT
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            lir_span_operators AS lso
+                JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    per_operator_cpu_totals AS
+    (
+        SELECT global_id, lir_id, sum(worker_ns) AS total_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     ),
     object_cpu_totals AS
     (
@@ -1378,56 +1430,53 @@ query T multiline
 EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW AS SQL;
 ----
 WITH
-    per_operator_cpu_summary AS
+    lir_span_operators AS
     (
         SELECT
             mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
-            sum(mse.elapsed_ns) AS total_ns,
-            CASE
-                    WHEN count(DISTINCT mse.worker_id) <> 0
-                            THEN
-                                sum(mse.elapsed_ns)
-                                / count(DISTINCT mse.worker_id)
-                        ELSE NULL
-                END
-                AS avg_ns
+            valid_id AS id,
+            list_length(mda.address) AS depth
         FROM
             mz_introspection.mz_lir_mapping AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
-                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
-        WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id
+                    mz_introspection.mz_dataflow_operators AS mdo
+                    ON (mdo.id = valid_id)
+                JOIN
+                    mz_introspection.mz_dataflow_addresses AS mda
+                    ON (mda.id = valid_id)
     ),
-    per_operator_cpu_per_worker AS
+    lir_cpu_per_worker AS
     (
         SELECT
-            mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            lso.global_id AS global_id,
+            lso.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            lir_span_operators AS lso
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-                LEFT JOIN
-                    mz_introspection.mz_dataflow_operator_parents AS mdop
-                    ON (mdop.id = valid_id)
+                    ON (mse.id = lso.id)
         WHERE
-            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
-                OR
-            mdop.parent_id >= mlm.operator_id_end
-        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+            ROW(lso.global_id, lso.lir_id, lso.depth)
+            IN (
+            SELECT global_id, lir_id, min(depth)
+            FROM lir_span_operators
+            GROUP BY global_id, lir_id
+            )
+        GROUP BY lso.global_id, lso.lir_id, mse.worker_id
+    ),
+    per_operator_cpu_summary AS
+    (
+        SELECT
+            global_id,
+            lir_id,
+            sum(worker_ns) AS total_ns,
+            sum(worker_ns) / count(*) AS avg_ns
+        FROM lir_cpu_per_worker
+        GROUP BY global_id, lir_id
     ),
     per_operator_cpu_ratios AS
     (
@@ -1442,7 +1491,7 @@ WITH
                 END
                 AS cpu_ratio
         FROM
-            per_operator_cpu_per_worker AS pocpw
+            lir_cpu_per_worker AS pocpw
                 JOIN per_operator_cpu_summary AS pocs USING(global_id, lir_id)
     ),
     object_cpu AS
@@ -1453,7 +1502,7 @@ WITH
             max(pomr.cpu_ratio) AS max_operator_cpu_ratio,
             sum(pocpw.worker_ns) AS worker_ns
         FROM
-            per_operator_cpu_per_worker AS pocpw
+            lir_cpu_per_worker AS pocpw
                 JOIN
                     per_operator_cpu_ratios AS pomr
                     USING(global_id, worker_id, lir_id)

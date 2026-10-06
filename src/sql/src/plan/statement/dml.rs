@@ -887,6 +887,45 @@ pub fn plan_explain_pushdown(
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
+// The `EXPLAIN ANALYZE ... CPU` queries attribute scheduling time to LIR nodes through each
+// node's operator span in `mz_lir_mapping`. A span includes the regions the node renders into,
+// and a region's `elapsed_ns` already contains the time of the operators inside it, so only the
+// span's outermost operators count: its operators at the smallest address depth. Channels have
+// their scope's address and no elapsed time, so the join with `mz_dataflow_operators` keeps them
+// out of the depth comparison. This relies on each span being recorded at a single scope level,
+// see `render_letfree_plan` in mz-compute.
+const LIR_SPAN_OPERATORS_CTE: (&str, &str) = (
+    "lir_span_operators",
+    r#"
+  SELECT mlm.global_id AS global_id,
+         mlm.lir_id AS lir_id,
+         valid_id AS id,
+         list_length(mda.address) AS depth
+    FROM            mz_introspection.mz_lir_mapping mlm
+         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+               JOIN mz_introspection.mz_dataflow_operators mdo
+                 ON (mdo.id = valid_id)
+               JOIN mz_introspection.mz_dataflow_addresses mda
+                 ON (mda.id = valid_id)"#,
+);
+
+/// Per LIR node and worker, the scheduling time of the node's outermost operators. Reads
+/// `LIR_SPAN_OPERATORS_CTE`, which must precede it.
+const LIR_CPU_PER_WORKER_CTE: (&str, &str) = (
+    "lir_cpu_per_worker",
+    r#"
+  SELECT lso.global_id AS global_id,
+         lso.lir_id AS lir_id,
+         mse.worker_id AS worker_id,
+         SUM(mse.elapsed_ns) AS worker_ns
+    FROM            lir_span_operators lso
+               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+                 ON (mse.id = lso.id)
+   WHERE (lso.global_id, lso.lir_id, lso.depth) IN
+         (SELECT global_id, lir_id, MIN(depth) FROM lir_span_operators GROUP BY global_id, lir_id)
+GROUP BY lso.global_id, lso.lir_id, mse.worker_id"#,
+);
+
 pub fn plan_explain_analyze_object(
     scx: &StatementContext,
     statement: ExplainAnalyzeObjectStatement<Aug>,
@@ -930,7 +969,7 @@ pub fn plan_explain_analyze_object(
              AND {predicates}
        ORDER BY lir_id DESC
     */
-    let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
+    let mut ctes = Vec::with_capacity(5); // max 3 per ExplainAnalyzeComputationProperty
     let mut columns = vec!["REPEAT(' ', nesting * 2) || operator AS operator"];
     let mut from = vec!["mz_introspection.mz_lir_mapping mlm"];
     let mut predicates = vec![format!(
@@ -1016,56 +1055,21 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                         }
                     }
                     ExplainAnalyzeComputationProperty::Cpu => {
-                        // An LIR node's operator span includes the regions it renders into, and a
-                        // region's `elapsed_ns` already contains the time of the operators inside it.
-                        // Summing every operator in the span would count that time once per nesting
-                        // level, so only operators whose parent lies outside the span are counted.
-                        // TODO: log each operator's own time (its elapsed time minus its children's)
-                        // in the compute timely logging, whose `handle_schedule` already tracks
-                        // nested schedules. The CTEs could then sum the whole span without the
-                        // parents join, which made `EXPLAIN ANALYZE CLUSTER CPU` 1.5x to 4x slower
-                        // (0.1 s to 0.4 s) in measurements on replicas with 600 to 23,000 operators.
+                        ctes.extend([LIR_SPAN_OPERATORS_CTE, LIR_CPU_PER_WORKER_CTE]);
                         ctes.push((
                             "summary_cpu",
                             r#"
-  SELECT mlm.global_id AS global_id,
-         mlm.lir_id AS lir_id,
-         SUM(mse.elapsed_ns) AS total_ns,
-         CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-    FROM            mz_introspection.mz_lir_mapping mlm
-         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-                 ON (mse.id = valid_id)
-          LEFT JOIN mz_introspection.mz_dataflow_operator_parents mdop
-                 ON (mdop.id = valid_id)
-WHERE mdop.parent_id IS NULL
-   OR mdop.parent_id < mlm.operator_id_start
-   OR mdop.parent_id >= mlm.operator_id_end
-GROUP BY mlm.global_id, mlm.lir_id"#,
+  SELECT global_id,
+         lir_id,
+         SUM(worker_ns) AS total_ns,
+         SUM(worker_ns) / COUNT(*) AS avg_ns
+    FROM lir_cpu_per_worker
+GROUP BY global_id, lir_id"#,
                         ));
                         from.push("LEFT JOIN summary_cpu sc USING (global_id, lir_id)");
 
                         if skew {
-                            // Outermost operators of each span only, see `summary_cpu`.
-                            ctes.push((
-                                "per_worker_cpu",
-                                r#"
-  SELECT mlm.global_id AS global_id,
-         mlm.lir_id AS lir_id,
-         mse.worker_id AS worker_id,
-         SUM(mse.elapsed_ns) AS worker_ns
-    FROM            mz_introspection.mz_lir_mapping mlm
-         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-                 ON (mse.id = valid_id)
-          LEFT JOIN mz_introspection.mz_dataflow_operator_parents mdop
-                 ON (mdop.id = valid_id)
-WHERE mdop.parent_id IS NULL
-   OR mdop.parent_id < mlm.operator_id_start
-   OR mdop.parent_id >= mlm.operator_id_end
-GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
-                            ));
-                            from.push("LEFT JOIN per_worker_cpu pwc USING (global_id, lir_id)");
+                            from.push("LEFT JOIN lir_cpu_per_worker pwc USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
                                 predicates.push(format!(
@@ -1341,6 +1345,7 @@ GROUP BY pomt.global_id
                 }
             }
             ExplainAnalyzeComputationProperty::Cpu => {
+                ctes.extend([LIR_SPAN_OPERATORS_CTE, LIR_CPU_PER_WORKER_CTE]);
                 if skew {
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
@@ -1354,46 +1359,16 @@ GROUP BY pomt.global_id
                         set_worker_id = true; // we'll add ourselves to `order_by` later
                     };
 
-                    // computes the average memory per LIR operator (for per operator ratios)
-                    // Outermost operators of each span only, see `summary_cpu`.
+                    // computes the average CPU per LIR operator (for per operator ratios)
                     ctes.push((
-    "per_operator_cpu_summary",
-    r#"
-SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
-       SUM(mse.elapsed_ns) AS total_ns,
-       CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-FROM       mz_introspection.mz_lir_mapping mlm
-CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-        ON (mse.id = valid_id)
- LEFT JOIN mz_introspection.mz_dataflow_operator_parents mdop
-        ON (mdop.id = valid_id)
-WHERE mdop.parent_id IS NULL
-   OR mdop.parent_id < mlm.operator_id_start
-   OR mdop.parent_id >= mlm.operator_id_end
-GROUP BY mlm.global_id, mlm.lir_id"#,
-));
-
-                    // computes the CPU per worker in a per operator way
-                    // Outermost operators of each span only, see `summary_cpu`.
-                    ctes.push((
-                        "per_operator_cpu_per_worker",
+                        "per_operator_cpu_summary",
                         r#"
-SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
-       mse.worker_id AS worker_id,
-       SUM(mse.elapsed_ns) AS worker_ns
-FROM       mz_introspection.mz_lir_mapping mlm
-CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-        ON (mse.id = valid_id)
- LEFT JOIN mz_introspection.mz_dataflow_operator_parents mdop
-        ON (mdop.id = valid_id)
-WHERE mdop.parent_id IS NULL
-   OR mdop.parent_id < mlm.operator_id_start
-   OR mdop.parent_id >= mlm.operator_id_end
-GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
+SELECT global_id,
+       lir_id,
+       SUM(worker_ns) AS total_ns,
+       SUM(worker_ns) / COUNT(*) AS avg_ns
+FROM lir_cpu_per_worker
+GROUP BY global_id, lir_id"#,
                     ));
 
                     // computes CPU ratios per worker per operator
@@ -1404,7 +1379,7 @@ SELECT pocpw.global_id AS global_id,
        pocpw.lir_id AS lir_id,
        pocpw.worker_id AS worker_id,
        CASE WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0 THEN ROUND(pocpw.worker_ns / pocs.avg_ns, 2) ELSE NULL END AS cpu_ratio
-FROM      per_operator_cpu_per_worker pocpw
+FROM      lir_cpu_per_worker pocpw
      JOIN per_operator_cpu_summary pocs
      USING (global_id, lir_id)
 "#,
@@ -1418,7 +1393,7 @@ SELECT pocpw.global_id AS global_id,
        pocpw.worker_id AS worker_id,
        MAX(pomr.cpu_ratio) AS max_operator_cpu_ratio,
        SUM(pocpw.worker_ns) AS worker_ns
-FROM      per_operator_cpu_per_worker pocpw
+FROM      lir_cpu_per_worker pocpw
      JOIN per_operator_cpu_ratios pomr
      USING (global_id, worker_id, lir_id)
 GROUP BY pocpw.global_id, pocpw.worker_id
@@ -1455,23 +1430,12 @@ GROUP BY oc.global_id"#,));
                     }
                 } else {
                     // no skew, so just compute totals
-                    // Outermost operators of each span only, see `summary_cpu`.
                     ctes.push((
                         "per_operator_cpu_totals",
                         r#"
-    SELECT mlm.global_id AS global_id,
-           mlm.lir_id AS lir_id,
-           SUM(mse.elapsed_ns) AS total_ns
-    FROM        mz_introspection.mz_lir_mapping mlm
-     CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-           JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-             ON (mse.id = valid_id)
-      LEFT JOIN mz_introspection.mz_dataflow_operator_parents mdop
-             ON (mdop.id = valid_id)
-    WHERE mdop.parent_id IS NULL
-       OR mdop.parent_id < mlm.operator_id_start
-       OR mdop.parent_id >= mlm.operator_id_end
-    GROUP BY mlm.global_id, mlm.lir_id"#,
+SELECT global_id, lir_id, SUM(worker_ns) AS total_ns
+FROM lir_cpu_per_worker
+GROUP BY global_id, lir_id"#,
                     ));
 
                     ctes.push((
