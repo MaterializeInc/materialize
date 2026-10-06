@@ -261,6 +261,7 @@ struct StabilityGate {
 impl StabilityGate {
     /// Returns whether `snapshot` shows every cluster ready for promotion.
     async fn ready(&self, snapshot: CaughtUpSnapshot) -> bool {
+        fail::fail_point!("0dt_caught_up_check", |_| false);
         let CaughtUpSnapshot {
             now,
             all_caught_up,
