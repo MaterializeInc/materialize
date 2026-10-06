@@ -16,8 +16,8 @@ The schema is therefore a function of the SQL text, the schemas of the inputs, *
 Any change to nullability or key inference in `mz_transform` changes the schema of existing materialized views on the next upgrade.
 The code already contains several workarounds for this:
 
-* `StorageController::evolve_nullability_for_bootstrap` re-registers each materialized view's shard schema on boot because "across versions of Materialize the nullability of columns can change based on updates to our optimizer".
-* The persist columnar encoder marks every Arrow field nullable for the same reason (`RowColumnarEncoder::finish` in `src/repr/src/row/encode.rs`).
+* On boot, the coordinator calls `StorageController::evolve_nullability_for_bootstrap` to re-register each materialized view's shard schema, because "across versions of Materialize the nullability of columns can change based on updates to our optimizer" (the comment at the call site in `src/adapter/src/coord.rs`).
+* The persist columnar encoder marks every Arrow field nullable for the same reason (`RowColumnarEncoder::finish` in `src/repr/src/row/encode.rs`, which cites [database-issues#2488](https://github.com/MaterializeInc/database-issues/issues/2488)).
 
 The drift leaks into everything that consumes the schema:
 
@@ -92,6 +92,10 @@ A materialized view with column definitions has a *declared schema*.
 Its `RelationDesc` is exactly the declared one: names, scalar types, nullability, and keys come from the column definitions, and nothing inferred by the optimizer is merged in.
 Without column definitions, behavior is unchanged.
 
+Opting in has a cost: a key or non-null fact the optimizer infers today but the user does not declare is gone.
+Dependent queries lose the optimizations it enabled (e.g. `Distinct` or `Reduce` elision), and an upsert sink `KEY (...)` on an undeclared key fails to plan.
+Users who want to keep them have to declare them.
+
 **Arity and names.**
 The number of declared columns must equal the query's arity.
 Columns map by position, and declared names replace the query's names, as the bare-name form does today.
@@ -109,7 +113,7 @@ Every `NOT NULL` column (including `PRIMARY KEY` columns) is added to the existi
 The assertion is required for correctness, not just for error reporting.
 The persist encoder panics on a null in a non-nullable column (`DatumEncoder::push`), so a declared `NOT NULL` must never reach it unchecked.
 Declaring `NOT NULL` is therefore the column-definition spelling of `ASSERT NOT NULL`.
-Using `WITH (ASSERT NOT NULL ...)` together with column definitions is rejected to avoid two ways to say the same thing in one statement.
+Using `WITH (ASSERT NOT NULL ...)` together with a declared schema, written out or inherited by a replacement, is rejected to avoid two ways to say the same thing in one statement.
 
 **Keys.**
 Keys in a `RelationDesc` are consumed by the optimizer of every dependent query (e.g. to elide `Distinct` and `Reduce`).
@@ -118,14 +122,18 @@ We therefore do not trust declared keys blindly.
 At creation, each declared `PRIMARY KEY` or `UNIQUE` key must be a superset of some key the optimizer infers for the (cast) query, otherwise creation fails with an error listing the keys we could prove.
 This mirrors the existing upsert sink `KEY` validation.
 
-The check runs only when the statement is first executed (in the sequencer, next to the replacement schema check), not when `create_sql` is re-planned on boot.
-This is sound: MIR key inference is conservative, so a key it proved once is a property of the query and its inputs' schemas, not of the optimizer version.
+The check runs when the statement is first optimized, for `CREATE` and `EXPLAIN CREATE` alike, but not when `create_sql` is re-planned on boot or by `EXPLAIN REPLAN`.
+This relies on MIR key inference being correct in the version that runs the proof: a key it proved once is a property of the query and its inputs' schemas, not of the optimizer version.
 A later optimizer that fails to re-derive the key does not make the key false.
 The inputs' keys are themselves either declared (and proven), inferred (and sound), or source keys we already trust today.
+The flip side is that a key-inference bug at creation time is frozen into `create_sql`, where today a fixed optimizer would stop inferring the bad key on the next upgrade.
+Re-running the proof on boot as a soft check that only logs is a cheap way to detect that.
 
 A `UNIQUE` constraint on nullable columns without `NULLS NOT DISTINCT` is an error.
-(`plan_create_table` treats it as "not a key" instead, which would make a declared key silently disappear.)
-`PRIMARY KEY` implies `NOT NULL` on its columns.
+This includes column-level `UNIQUE`, which has no `NULLS NOT DISTINCT` spelling and therefore requires `NOT NULL`.
+(`plan_create_table` stops processing constraints at the first such one instead, which drops it and every later key, so a declared key would silently disappear.)
+`PRIMARY KEY` implies `NOT NULL` on its columns, and declaring a primary key column `NULL` is an error.
+`RelationDesc` stores key columns sorted, so the declared column order of a key is not preserved, as for tables.
 
 Note that assignment casts can drop keys from the inferred set when the cast function does not report `preserves_uniqueness`.
 The user then sees the key-proof error and can adjust the query or the declared type.
@@ -140,10 +148,15 @@ The named type becomes a dependency of the materialized view, as with tables.
 With a declared schema, a replacement is validated against the target's declared `RelationDesc` with the same `RelationDesc::diff` check as today.
 The difference is that both sides are now under the user's control, so a mismatch in nullability or keys is something the user wrote, not something the optimizer decided.
 
-A replacement without column definitions for a target *with* a declared schema inherits the target's schema.
-To keep accidental casts out of what is meant to be a drop-in replacement, inheritance requires the query's scalar types to match the target's exactly (no casts).
-Nullability and keys are handled as if declared: `NOT NULL` becomes an assertion and keys must be provable.
-`MaterializedView::apply_replacement` already takes the column list from the replacement's statement, it has to carry the inherited definitions over so the target's `create_sql` remains self-describing.
+A replacement without a column list for a target *with* a declared schema inherits the target's schema.
+Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with assignment casts, `NOT NULL` becomes an assertion, keys must be provable, and the feature flag applies.
+The replacement's `create_sql` then states its schema.
+Re-planning it on boot does not depend on the target, custom types in the definitions are recorded as dependencies, and `MaterializedView::apply_replacement` keeps taking the column list from the replacement's statement.
+
+Requiring the query's types to match the target's exactly, without casts, would keep accidental casts out of a drop-in replacement.
+It needs to know at planning time whether the definitions were inherited, which the stored statement cannot say, and checking exact types when re-planning would make an upgrade that changes a query's inferred type fail on boot.
+
+A replacement with a bare-name list for a target with a declared schema is rejected, because renaming conflicts with inheriting the names.
 
 A replacement *with* column definitions for a target *without* one is allowed if the declared desc equals the target's current desc.
 This is the migration path from an implicit to a declared schema for an existing materialized view.
@@ -156,7 +169,8 @@ This is the migration path from an implicit to a declared schema for an existing
    Update `AstDisplay` and the parser datadriven tests.
 2. **Planner** (`src/sql/src/plan/statement/ddl.rs`).
    `plan_create_table` and `plan_source_export_desc` contain near-identical code turning `ColumnDef`s and `TableConstraint`s into a `SqlRelationType`.
-   Factor that into one helper that also reports which options it accepts, and call it from `plan_create_materialized_view`.
+   Materialized views need different semantics in that code (nullable `UNIQUE` is an error rather than dropped, keys are not gated behind `unsafe_enable_table_keys`, and only `NULL`, `NOT NULL`, `PRIMARY KEY` and `UNIQUE` are accepted), so `plan_create_materialized_view` gets its own helper.
+   Sharing one helper with options is possible, but it would change `CREATE TABLE` behavior (the dropped-keys issue above), which is a separate decision.
    Apply `cast_relation` to the planned query, add `NOT NULL` columns to `non_null_assertions`, and add `declared_desc: Option<RelationDesc>` to `plan::MaterializedView`.
    The type-name references resolve through the normal name resolution, so dependencies on custom types are recorded in `resolved_ids`.
 3. **Optimizer** (`src/adapter/src/optimize/materialized_view.rs`).
@@ -167,13 +181,24 @@ This is the migration path from an implicit to a declared schema for an existing
    Apply the same rule: `desc = declared_desc` if present, otherwise `infer_sql_type_for_catalog` plus assertions.
    This is the single point that makes the schema optimizer-independent on boot.
 5. **Sequencer** (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs`).
-   Add the key proof next to the replacement check, using the keys of the local MIR plan's type.
-   Implement schema inheritance for replacements there, since it needs the target's desc.
+   Run the key proof on the keys of the local MIR plan's type, in the optimize stage so that `EXPLAIN CREATE` rejects what `CREATE` rejects.
+   Reject a replacement without a declared schema for a target with one.
+   Schema inheritance for replacements lives in purification (`src/sql/src/pure.rs`), which can read the target from the catalog and add to the statement's resolved ids.
 6. **Feature flag** `enable_materialized_view_column_definitions`, off in production and on in the test and CI configuration.
-7. **Docs** for `CREATE MATERIALIZED VIEW`, and a note in the dbt adapter that contracts can be expressed directly.
+7. **mz-deploy.** Its typecheck catalog uses the declared desc when present.
+   Unit tests run a materialized view as a temporary view, which cannot declare a schema, so a declared materialized view is lowered to casts to the declared types.
+   Declared `NOT NULL` and keys are not checked in unit tests.
+8. **Docs** for `CREATE MATERIALIZED VIEW`, and a note in the dbt adapter that contracts can be expressed directly.
 
 Nothing changes in the durable catalog format (the schema lives in `create_sql`), persist, or compute.
-`evolve_nullability_for_bootstrap` becomes a no-op for materialized views with declared schemas, because their desc no longer changes between versions.
+`evolve_nullability_for_bootstrap` still runs for materialized views with declared schemas, but has no effect, because their desc no longer changes between versions.
+
+### `EXPLAIN ... WITH (schema)`
+
+To make declared schemas easy to write, `EXPLAIN` gets a `schema` option that prints the schema of a dataflow's exports as column definitions.
+It applies to materialized views and subscribes, in the text format.
+Keys over nullable columns print as `UNIQUE NULLS NOT DISTINCT`, and every key prints as `UNIQUE`, so the output can be pasted into a declaration but does not say which key was declared as `PRIMARY KEY`.
+The option is not behind the feature flag, because it is useful for inspecting inferred schemas too.
 
 ### Feasibility
 
@@ -186,6 +211,7 @@ The main risks are:
 * **Cast semantics surprising users**, e.g. assignment casts to `varchar(n)` or `numeric(p, s)`.
   This is the same behavior as `INSERT`, see open questions.
 * **Key proofs failing for reasonable queries** because MIR key inference is incomplete (e.g. through casts or `UNION ALL` of disjoint inputs).
+  In particular, `Map` carries a key over to a new column only if exactly one of its expressions preserves uniqueness, and `cast_relation` puts all casts into one `Map`, so declaring two columns with widening casts loses every key through them.
   Users can drop the key from the declaration. Runtime enforcement could be added later for those cases.
 
 ### Phase 2: freezing inferred schemas
@@ -199,6 +225,7 @@ Two follow-ups would remove the implicit schema entirely:
   Inferred `NOT NULL` becomes a runtime assertion, which also turns a nullability-inference bug from a persist encoder panic into a query error.
 * **Migrate existing materialized views.**
   Rewrite their `create_sql` with the schema their shard currently has.
+  `evolve_nullability_for_bootstrap` overwrites the shard schema with the newly inferred desc on every boot, so the migration has to read the shard's latest schema before that call, in the same boot.
   Persist stores the complete `RelationDesc`, including nullability and keys, as the shard's schema (`encode_schema` for `SourceData` in `src/storage-types/src/sources.rs`), so the migration can use the last schema the system committed to rather than the new optimizer's inference.
   Materialized views with columns of anonymous record type cannot be migrated and would keep an implicit schema.
 
@@ -257,8 +284,12 @@ A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we rejec
 
 * Assignment casts, or implicit casts only?
   Implicit-only is stricter and avoids silent truncation-style surprises, but forces users to write casts in the query for common cases such as `numeric` scale.
-* Should replacement schema inheritance allow casts after all?
+  The prototype uses assignment casts.
+* Should replacement schema inheritance reject casts?
+  The prototype allows them, see [Replacements](#replacements).
 * Should `NOT NULL` skip the runtime assertion when the optimizer proves non-nullability?
   The assertion is a per-row datum scan in the sink, and skipping it would make performance, though not correctness, depend on the optimizer.
+  The prototype never skips it.
 * Should `mz_materialized_views` expose whether the schema is declared?
+  The prototype does not.
 * Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
