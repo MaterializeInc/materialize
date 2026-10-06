@@ -607,11 +607,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cluster.slt",
         "test/sqllogictest/coercion.slt",
         "test/sqllogictest/collate.slt",
-        # Asserts on exact allocated ids to force a replica/item id collision,
-        # which --auto-index-selects perturbs by consuming item ids for its
-        # wrapper views. The singlereplica_ prefix also pins it to one replica,
-        # since extra replicas shift id allocation and add replica rows.
-        "test/sqllogictest/singlereplica_comment_id_collision.slt",
         "test/sqllogictest/comparison.slt",
         "test/sqllogictest/cte.slt",
         "test/sqllogictest/cte_lowering.slt",
@@ -1121,11 +1116,6 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/peek_result_thinning.slt",
         # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
         "test/sqllogictest/materialized_views.slt",
-        # Asserts on exact allocated ids to force a replica/item id collision,
-        # which --auto-index-selects perturbs by consuming item ids for its
-        # wrapper views. The singlereplica_ prefix also pins it to one replica,
-        # since extra replicas shift id allocation and add replica rows.
-        "test/sqllogictest/singlereplica_comment_id_collision.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
