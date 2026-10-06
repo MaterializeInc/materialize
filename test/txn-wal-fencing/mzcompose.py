@@ -348,6 +348,18 @@ def workflow_read_then_write(c: Composition, parser: WorkflowArgumentParser) -> 
     args = parser.parse_args()
     c.silent = True
 
+    def assert_occ_writes(service: str) -> None:
+        metrics = c.exec(
+            service, "curl", "--silent", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), f"'{service}' sequenced no read-then-write through OCC"
+
     c.down(destroy_volumes=True)
     c.up(c.metadata_store())
 
@@ -382,6 +394,7 @@ def workflow_read_then_write(c: Composition, parser: WorkflowArgumentParser) -> 
         assert (
             increment_counter((c, "mz_first", False)) == Increment.ACKED
         ), "baseline increment on 'mz_first' did not commit"
+        assert_occ_writes("mz_first")
 
         print("--- Driving increments across both instances")
         stop = threading.Event()
@@ -468,6 +481,7 @@ def workflow_read_then_write(c: Composition, parser: WorkflowArgumentParser) -> 
         assert (
             acked <= v <= acked + unknown
         ), f"counter is {v}, expected between {acked} and {acked + unknown}"
+        assert_occ_writes("mz_second")
 
         # Checked last so that a lost update is reported as such rather than as a
         # missing fence.

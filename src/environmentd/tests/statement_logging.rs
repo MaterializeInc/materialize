@@ -1151,6 +1151,7 @@ ORDER BY mseh.began_at DESC",
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_statement_logging_read_then_write_outcomes() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
@@ -1163,14 +1164,43 @@ fn test_statement_logging_read_then_write_outcomes() {
         .execute("INSERT INTO statement_logging_rtw_t VALUES (1), (2)", &[])
         .unwrap();
     let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
-    for (sql, bounded_staleness) in [
-        ("UPDATE statement_logging_rtw_t SET x = x + 1", false),
-        ("DELETE FROM statement_logging_rtw_t WHERE x = 2", false),
+    for (sql, bounded_staleness, has_timestamp, rows_returned) in [
+        (
+            "UPDATE statement_logging_rtw_t SET x = x + 1",
+            false,
+            true,
+            None,
+        ),
+        (
+            "DELETE FROM statement_logging_rtw_t WHERE x = 2",
+            false,
+            true,
+            None,
+        ),
         (
             "INSERT INTO statement_logging_rtw_t SELECT x + 10 FROM statement_logging_rtw_t",
             false,
+            true,
+            None,
         ),
-        ("DELETE FROM statement_logging_rtw_t WHERE x > 1000", true),
+        (
+            "INSERT INTO statement_logging_rtw_t VALUES (100) RETURNING x",
+            false,
+            false,
+            Some(1_i64),
+        ),
+        (
+            "INSERT INTO statement_logging_rtw_t SELECT 101 WHERE false RETURNING x",
+            false,
+            false,
+            None,
+        ),
+        (
+            "DELETE FROM statement_logging_rtw_t WHERE x > 1000",
+            true,
+            false,
+            None,
+        ),
     ] {
         if bounded_staleness {
             client
@@ -1178,10 +1208,10 @@ fn test_statement_logging_read_then_write_outcomes() {
                 .unwrap();
         }
         let expected_error = if bounded_staleness {
-            let err = client.execute(sql, &[]).unwrap_err();
+            let err = client.batch_execute(sql).unwrap_err();
             Some(err.as_db_error().unwrap().message().to_owned())
         } else {
-            client.execute(sql, &[]).unwrap();
+            client.batch_execute(sql).unwrap();
             None
         };
         let redacted_sql = mz_sql::parse::parse(sql)
@@ -1195,7 +1225,8 @@ fn test_statement_logging_read_then_write_outcomes() {
                 let rows = mz_client
                     .query(
                         "SELECT mseh.execution_timestamp, mseh.finished_status,
-                            mseh.cluster_name, mseh.error_message
+                            mseh.cluster_name, mseh.error_message,
+                            mseh.rows_returned, mseh.result_size, mseh.execution_strategy
 FROM mz_internal.mz_statement_execution_history AS mseh
 LEFT JOIN mz_internal.mz_prepared_statement_history AS mpsh
     ON mseh.prepared_statement_id = mpsh.id
@@ -1208,10 +1239,11 @@ ORDER BY mseh.began_at DESC",
                     )
                     .unwrap();
 
-                if let Some(row) = rows.into_iter().next() {
-                    Ok(row)
-                } else {
+                if rows.is_empty() {
                     Err(())
+                } else {
+                    assert_eq!(rows.len(), 1, "duplicate execution log rows for {sql}");
+                    Ok(rows.into_element())
                 }
             })
             .unwrap_or_else(|_| panic!("statement log entry missing for {sql}"));
@@ -1222,7 +1254,7 @@ ORDER BY mseh.began_at DESC",
         let error_message: Option<String> = row.get(3);
         assert_eq!(
             execution_timestamp.is_some(),
-            !bounded_staleness,
+            has_timestamp,
             "unexpected execution timestamp for {sql}"
         );
         assert_eq!(
@@ -1236,7 +1268,63 @@ ORDER BY mseh.began_at DESC",
         );
         assert_eq!(cluster_name.as_deref(), Some("quickstart"), "{sql}");
         assert_eq!(error_message, expected_error, "{sql}");
+        assert_eq!(row.get::<_, Option<i64>>(4), rows_returned, "{sql}");
+        let result_size: Option<i64> = row.get(5);
+        assert_eq!(result_size.is_some(), rows_returned.is_some(), "{sql}");
+        if let Some(result_size) = result_size {
+            assert!(result_size > 0, "{sql}");
+        }
+        assert_eq!(
+            row.get::<_, Option<String>>(6).as_deref(),
+            rows_returned.map(|_| "constant"),
+            "{sql}"
+        );
     }
+
+    client
+        .execute("SET transaction_isolation = 'strict serializable'", &[])
+        .unwrap();
+    let invalid = "UPDATE statement_logging_rtw_t SET x = nonexistent_col";
+    let err = client.execute(invalid, &[]).unwrap_err();
+    assert_eq!(err.code(), Some(&SqlState::UNDEFINED_COLUMN));
+    let sentinel = "SELECT count(*) FROM statement_logging_rtw_t";
+    client.batch_execute(sentinel).unwrap();
+    let [invalid, sentinel] = [invalid, sentinel].map(|sql| {
+        mz_sql::parse::parse(sql)
+            .unwrap()
+            .into_element()
+            .ast
+            .to_ast_string_redacted()
+    });
+
+    // The sentinel's finished row establishes that the log has flushed past
+    // the planning error. A planning error must not create an execution row.
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let rows = mz_client
+                .query(
+                    "SELECT mst.redacted_sql
+FROM mz_internal.mz_statement_execution_history AS mseh
+JOIN mz_internal.mz_prepared_statement_history AS mpsh
+    ON mseh.prepared_statement_id = mpsh.id
+JOIN (SELECT DISTINCT redacted_sql, sql_hash FROM mz_internal.mz_sql_text) AS mst
+    ON mpsh.sql_hash = mst.sql_hash
+WHERE mst.redacted_sql IN ($1, $2) AND mseh.finished_at IS NOT NULL",
+                    &[&invalid, &sentinel],
+                )
+                .unwrap();
+            if !rows.iter().any(|row| row.get::<_, String>(0) == sentinel) {
+                return Err(());
+            }
+            assert_eq!(
+                rows.len(),
+                1,
+                "planning error produced an execution log row"
+            );
+            Ok(())
+        })
+        .expect("sentinel statement log entry should be recorded");
 }
 
 /// Statement-logging outcome of one execution, as recorded once the log
@@ -1245,6 +1333,11 @@ ORDER BY mseh.began_at DESC",
 struct StatementOutcome {
     finished_status: String,
     error_message: Option<String>,
+    cluster_name: Option<String>,
+    has_execution_timestamp: bool,
+    rows_returned: Option<i64>,
+    result_size: Option<i64>,
+    execution_strategy: Option<String>,
 }
 
 /// Reads the outcomes of every finished execution whose logged SQL matches the
@@ -1258,7 +1351,9 @@ fn read_statement_outcomes(
         .retry(|_| {
             let rows = mz_client
                 .query(
-                    "SELECT mseh.finished_status, mseh.error_message
+                    "SELECT mseh.finished_status, mseh.error_message,
+                            mseh.cluster_name, mseh.execution_timestamp IS NOT NULL,
+                            mseh.rows_returned, mseh.result_size, mseh.execution_strategy
 FROM mz_internal.mz_statement_execution_history AS mseh
 JOIN mz_internal.mz_prepared_statement_history AS mpsh
     ON mseh.prepared_statement_id = mpsh.id
@@ -1276,6 +1371,11 @@ WHERE mst.sql LIKE $1 AND mseh.finished_at IS NOT NULL",
                 .map(|row| StatementOutcome {
                     finished_status: row.get(0),
                     error_message: row.get(1),
+                    cluster_name: row.get(2),
+                    has_execution_timestamp: row.get(3),
+                    rows_returned: row.get(4),
+                    result_size: row.get(5),
+                    execution_strategy: row.get(6),
                 })
                 .collect::<Vec<_>>())
         })
@@ -1424,6 +1524,11 @@ fn test_statement_logging_frontend_read_then_write_transaction_error() {
         outcome.error_message.as_deref().unwrap_or_default(),
         "DELETE FROM txn_error_t cannot be run inside a transaction block"
     );
+    assert_none!(outcome.cluster_name);
+    assert!(!outcome.has_execution_timestamp);
+    assert_none!(outcome.rows_returned);
+    assert_none!(outcome.result_size);
+    assert_none!(outcome.execution_strategy);
 }
 
 // An RBAC denial is another exit that happens after the frontend takes the

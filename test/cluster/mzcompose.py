@@ -5022,6 +5022,10 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
         # attempt never starts from a selection an earlier one already emptied.
         c.sql("CREATE TABLE guard (g int)")
 
+        sequenced = occ_writes()[0]
+        c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
+        assert occ_writes()[0] > sequenced, "empty UPDATE did not reach OCC"
+
         # Connections are opened before the failpoint is armed: starting a session
         # appends to `mz_sessions`, which parks like any other write.
         with (
@@ -5203,6 +5207,17 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         write = "INSERT INTO dst SELECT a FROM src"
         rows = rows_surviving(write)
         assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), "persisted-input writes did not reach OCC"
 
         write = "INSERT INTO dst SELECT a FROM sealed"
         rows = rows_surviving(write)
