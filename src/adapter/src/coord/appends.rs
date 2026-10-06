@@ -39,7 +39,6 @@ use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS;
@@ -51,9 +50,7 @@ use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
-use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan};
-use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_storage_client::controller::{TableRegistration, TableWriteHandle};
 use mz_storage_types::controller::StorageError;
@@ -62,29 +59,17 @@ use smallvec::SmallVec;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{Instrument, Span, info, warn};
 
+use crate::AdapterError;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogUpperHandle};
 use crate::coord::timeline::write_ts_upper_bound;
-use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
+use crate::coord::{Coordinator, Message, PendingTxn};
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementLoggingId;
 use crate::util::{CompletedClientTransmitter, ResultExt};
-use crate::{AdapterError, ExecuteContext};
 
 /// Tables that we emit updates for when starting a new session.
 pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
-
-/// A plan awaiting session-startup builtin table appends.
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct DeferredPlan {
-    #[derivative(Debug = "ignore")]
-    pub ctx: ExecuteContext,
-    pub plan: Plan,
-    pub validity: PlanValidity,
-    pub resolved_ids: ResolvedIds,
-    pub sql_impl_resolved_ids: ResolvedIds,
-}
 
 /// Describes what action triggered an update to a builtin table.
 #[derive(Debug)]
@@ -273,7 +258,7 @@ impl GroupCommitRequest {
 
 /// Serializes runtime txns-shard writes off the coordinator loop.
 ///
-/// Dropped group-commit requests retire their clients through [`ExecuteContext`]. Dropped
+/// Dropped group-commit requests retire their clients through [`ExecuteContext`](crate::ExecuteContext). Dropped
 /// registration or forget replies cause their coordinator waiters to halt.
 pub(crate) struct GroupCommitter {
     rx: mpsc::UnboundedReceiver<TableWriteCmd>,
@@ -692,25 +677,6 @@ impl Coordinator {
         self.advance_timelines_interval.reset();
     }
 
-    /// Resumes a plan after its session-startup appends complete.
-    pub(crate) async fn sequence_deferred_plan(&mut self, conn_id: ConnectionId) {
-        let Some(mut deferred) = self.deferred_plans.remove(&conn_id) else {
-            // The plan may have been canceled while waiting.
-            return;
-        };
-        if let Err(e) = deferred.validity.check(self.catalog()) {
-            deferred.ctx.retire(Err(e));
-        } else {
-            self.sequence_plan(
-                deferred.ctx,
-                deferred.plan,
-                deferred.resolved_ids,
-                deferred.sql_impl_resolved_ids,
-            )
-            .await;
-        }
-    }
-
     /// Stages pending writes for the group committer.
     ///
     /// Included writes share one timestamp.
@@ -947,24 +913,6 @@ impl Coordinator {
     pub(crate) fn builtin_table_update<'a>(&'a mut self) -> BuiltinTableAppend<'a> {
         BuiltinTableAppend { coord: self }
     }
-
-    pub(crate) fn defer_plan<F>(&mut self, wait_future: F, plan: DeferredPlan)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let conn_id = plan.ctx.session().conn_id().clone();
-        self.deferred_plans.insert(conn_id.clone(), plan);
-
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let conn_id_ = conn_id.clone();
-        mz_ore::task::spawn(|| format!("defer plan {conn_id_}"), async move {
-            tracing::info!(%conn_id, "deferring plan");
-            wait_future.await;
-
-            // If this send fails then the Coordinator is shutting down.
-            let _ = internal_cmd_tx.send(Message::DeferredPlanReady { conn_id });
-        });
-    }
 }
 
 /// Helper struct to run a builtin table append.
@@ -1183,14 +1131,11 @@ pub struct GroupCommitPermit {
 /// maintain linearizability.
 ///
 /// Warning: this already clears the wait flag (i.e., it calls `clear_builtin_table_updates`).
-///
-/// TODO(peek-seq): After we delete the old peek sequencing, we can remove the first component of
-/// the return tuple.
 pub(crate) fn waiting_on_startup_appends(
     catalog: &Catalog,
     session: &mut Session,
     plan: &Plan,
-) -> Option<(BTreeSet<CatalogItemId>, BoxFuture<'static, ()>)> {
+) -> Option<BoxFuture<'static, ()>> {
     // TODO(parkmycar): We need to check transitive uses here too if we ever move the
     // referenced builtin tables out of mz_internal, or we allow creating views on
     // mz_internal objects.
@@ -1304,13 +1249,7 @@ pub(crate) fn waiting_on_startup_appends(
     // `mz_ore` that allows peeking. If the builtin table writes have already
     // completed then there is no need to defer this plan.
     match session.clear_builtin_table_updates() {
-        Some(wait_future) => {
-            let depends_on = depends_on
-                .into_iter()
-                .map(|gid| catalog.get_entry_by_global_id(&gid).id())
-                .collect();
-            Some((depends_on, wait_future.boxed()))
-        }
+        Some(wait_future) => Some(wait_future.boxed()),
         None => None,
     }
 }
