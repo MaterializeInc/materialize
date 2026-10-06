@@ -662,7 +662,7 @@ impl Coordinator {
                 }
                 continue;
             }
-            let (cluster, required) = match entry.item() {
+            let (cluster, mut required) = match entry.item() {
                 CatalogItem::Index(index) => {
                     let bound = candidate.collection_compaction_bounds().get(&id);
                     if bound.is_none() && self.catalog().try_get_entry_by_global_id(&id).is_some() {
@@ -743,7 +743,7 @@ impl Coordinator {
                     )?,
                     _ => unreachable!("filtered maintained object"),
                 };
-                if let Some(required) = required {
+                if let Some(required_ts) = required {
                     let mut imports = crate::optimize::dataflows::dataflow_import_id_bundle(
                         &replacement.physical_plan,
                         cluster,
@@ -768,14 +768,55 @@ impl Coordinator {
                         .acquire_client_read_protection(
                             client.protection.incarnation(),
                             imports,
-                            |_| Ok(Some(required)),
+                            |_| Ok(Some(required_ts)),
                         )
                         .await?;
-                    if !holds
-                        .least_valid_read()
-                        .as_option()
-                        .is_some_and(|since| *since <= required)
-                    {
+                    let since = holds.least_valid_read();
+                    let mut readable = since.as_option().is_some_and(|since| *since <= required_ts);
+                    if !readable {
+                        // Acquisition can observe compaction after the candidate
+                        // snapshot. Only the owner's committed requirement may
+                        // justify newer history, never the import's readable floor.
+                        self.refresh_catalog(None).await?;
+                        if self.catalog().transient_revision() != planning_revision {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                        required = match entry.item() {
+                            CatalogItem::Index(_) => self
+                                .catalog()
+                                .state()
+                                .collection_compaction_bounds()
+                                .get(&id)
+                                .ok_or_else(|| {
+                                    AdapterError::internal(
+                                        "rewrite index plan",
+                                        format!("index {id} has no admitted compaction bound"),
+                                    )
+                                })?
+                                .as_option()
+                                .copied(),
+                            CatalogItem::MaterializedView(_) => {
+                                self.catalog()
+                                    .state()
+                                    .maintained_read_requirements()
+                                    .get(&id)
+                                    .ok_or_else(|| {
+                                        AdapterError::internal(
+                                            "rewrite materialized view plan",
+                                            format!(
+                                                "materialized view {id} has no read requirement"
+                                            ),
+                                        )
+                                    })?
+                                    .frontier
+                            }
+                            _ => unreachable!("protected rewrite owner"),
+                        };
+                        readable = required.is_none_or(|required| {
+                            since.as_option().is_some_and(|since| *since <= required)
+                        });
+                    }
+                    if !readable {
                         let previous = indexes.len();
                         let target = match entry.item() {
                             CatalogItem::MaterializedView(mv) => mv.target_replica,
@@ -785,7 +826,7 @@ impl Coordinator {
                             self.catalog().state(),
                             cluster,
                             target,
-                            required,
+                            required.expect("an unreadable rewrite has a required frontier"),
                         );
                         indexes.retain(|id| eligible.contains(id));
                         if indexes.len() == previous {
