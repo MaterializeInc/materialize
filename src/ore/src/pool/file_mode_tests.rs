@@ -15,6 +15,7 @@
 
 //! Pool-level tests of file mode: demotion, reads, and drop deferral.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use itertools::Itertools;
@@ -1080,4 +1081,91 @@ fn concurrent_file_mode_churn() {
     assert_drained(&pool);
     assert_eq!(pool.0.extent_arena.slots_in_use(), 0);
     assert_eq!(store.slots_in_use(), 0);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn background_pass_demotes_a_bounded_amount() {
+    let extent = u64::cast_from(stored_class_size(&payload(SMALL, 0), &TEST_CODEC));
+    let chunks = BACKGROUND_DEMOTION_BYTES / extent + 8;
+    let (_dir, pool) = file_pool(1 << 30, 1 << 30);
+    pool.set_rss_target(2 << 30);
+    let handles: Vec<_> = (0..chunks)
+        .map(|seed| {
+            let handle = insert(&pool, &payload(SMALL, seed));
+            pool.evict(&handle);
+            handle
+        })
+        .collect();
+    assert_eq!(
+        pool.stats().extent_file_writes,
+        0,
+        "all extents fit the cap"
+    );
+
+    // A spill thread's pass goes down toward a zero cap, but no further than
+    // the bound per call.
+    pool.0.rss_target_bytes.store(1, Ordering::Relaxed);
+    pool.0.enforce_compressed_cap(Pass::Background);
+    assert_eq!(
+        pool.stats().extent_file_writes,
+        BACKGROUND_DEMOTION_BYTES.div_ceil(extent),
+        "one background pass demotes at most the bound"
+    );
+    pool.0.enforce_compressed_cap(Pass::Background);
+    assert_eq!(
+        pool.stats().extent_file_writes,
+        chunks,
+        "the next pass continues"
+    );
+    for (seed, handle) in (0..chunks).zip_eq(&handles) {
+        assert_eq!(read(handle), payload(SMALL, seed));
+    }
+    drop(handles);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn budget_pass_trims_the_tier_between_evictions() {
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    const CHUNKS: u64 = 32;
+    let handles: Vec<_> = (0..CHUNKS)
+        .map(|seed| insert(&pool, &payload(SMALL, seed)))
+        .collect();
+    let extent = u64::cast_from(stored_class_size(&payload(SMALL, 0), &TEST_CODEC));
+    let cap = extent + extent / 2;
+    pool.fake_spill_threads();
+    // With a zero budget the slot budget, insertion slack, and warm cap are
+    // all zero, so the whole target is tier capacity.
+    pool.set_rss_target(usize::cast_from(cap));
+
+    // Shrinking the budget evicts every chunk inline in one pass. Without
+    // spill hand-off nothing else demotes, so the tier stays within one
+    // extent of the backstop only if the pass trims as it goes.
+    // The hook fires after the evicting pass and before the trim that
+    // follows it, so it observes the tier the pass left behind.
+    let after_pass = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&after_pass);
+    let inner = Arc::clone(&pool.0);
+    ENFORCE_BUDGET_HOOK.with(|cell| {
+        *cell.borrow_mut() = Some(Box::new(move || {
+            observed.set(inner.counters.extent_resident_bytes.load(Ordering::Relaxed));
+        }));
+    });
+    pool.set_budget(0);
+    assert_eq!(pool.0.compressed_cap(), cap);
+    assert!(
+        after_pass.get() <= 2 * cap + extent,
+        "tier {} after the pass exceeds the backstop {} plus one extent {}",
+        after_pass.get(),
+        2 * cap,
+        extent,
+    );
+    assert!(pool.stats().extent_file_writes_inline > 0);
+    for (seed, handle) in (0..CHUNKS).zip_eq(&handles) {
+        assert_eq!(read(handle), payload(SMALL, seed));
+    }
+    drop(handles);
+    assert_drained(&pool);
 }
