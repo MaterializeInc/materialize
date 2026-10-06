@@ -17,11 +17,40 @@ import { HydrationCounts } from "./queries";
 /** Which statistic the threshold judges an object by. */
 export type Predicate = "current" | "peak" | "p90";
 
-export const PREDICATE_LABELS: Record<Predicate, string> = {
-  current: "right now",
-  peak: "at any moment",
-  p90: ">10% of readings (p90)",
+/**
+ * How each predicate is written, in the two places it appears.
+ *
+ * `menu` names the statistic, because that is where a reader chooses between
+ * them. `sentence` has to read as prose in the headline, where a parenthetical
+ * mid-clause does not.
+ */
+export const PREDICATE_LABELS: Record<
+  Predicate,
+  { menu: string; sentence: string }
+> = {
+  current: { menu: "right now", sentence: "right now" },
+  peak: { menu: "at any moment (pMAX)", sentence: "at any moment" },
+  p90: {
+    menu: "more than 10% of readings (p90)",
+    sentence: "for more than 10% of readings",
+  },
 };
+
+/**
+ * The clause both the headline and the empty message end with, so that a
+ * change to the wording lands in one place.
+ *
+ * "Right now" takes no range: it describes this moment whatever is graphed.
+ */
+export function describeThreshold(
+  threshold: string,
+  predicate: Predicate,
+  rangeLabel: string,
+): string {
+  const suffix =
+    predicate === "current" ? "" : ` over the last ${rangeLabel.toLowerCase()}`;
+  return `${threshold} ${PREDICATE_LABELS[predicate].sentence}${suffix}`;
+}
 
 export interface FreshnessRow {
   key: string;

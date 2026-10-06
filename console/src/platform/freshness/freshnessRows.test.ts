@@ -17,6 +17,7 @@ import {
   buildFreshnessRows,
   buildStats,
   computeStats,
+  describeThreshold,
   judgeLines,
   Predicate,
   UNREADABLE,
@@ -289,5 +290,23 @@ describe("buildFreshnessRows", () => {
 
   it("lists every object whatever the threshold", () => {
     expect(rowsFor("peak", 60_000)).toHaveLength(4);
+  });
+});
+
+describe("describeThreshold", () => {
+  // The range labels are bare nouns, so the sentence supplies "over the last"
+  // and reads the way the control above it does.
+  it("reads as prose for each predicate", () => {
+    expect(describeThreshold("2s", "peak", "1 hour")).toBe(
+      "2s at any moment over the last 1 hour",
+    );
+    expect(describeThreshold("1m 30s", "p90", "24 hours")).toBe(
+      "1m 30s for more than 10% of readings over the last 24 hours",
+    );
+  });
+
+  it("leaves the range off 'right now'", () => {
+    // It describes this moment whatever range is graphed.
+    expect(describeThreshold("2s", "current", "24 hours")).toBe("2s right now");
   });
 });

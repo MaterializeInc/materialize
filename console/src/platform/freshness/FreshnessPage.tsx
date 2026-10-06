@@ -54,7 +54,11 @@ import { MaterializeTheme } from "~/theme";
 import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
 import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
-import { Predicate, PREDICATE_LABELS } from "./freshnessRows";
+import {
+  describeThreshold,
+  Predicate,
+  PREDICATE_LABELS,
+} from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
 import { useFreshnessHydration } from "./queries";
 import { parsePredicate, useFreshnessParams } from "./useFreshnessParams";
@@ -139,9 +143,11 @@ const FreshnessContent = ({
     threshold: thresholdControl.settled,
   });
 
-  const predicateLabel = PREDICATE_LABELS[predicate];
-  const window =
-    predicate === "current" ? "" : ` in the ${rangeLabel.toLowerCase()}`;
+  const thresholdClause = describeThreshold(
+    formatDurationExact(thresholdControl.settled),
+    predicate,
+    rangeLabel,
+  );
 
   // Before the headline, the graph and the tables, because each of them would
   // otherwise render its own "0" and the page would read as a passing health
@@ -164,9 +170,7 @@ const FreshnessContent = ({
         <Text as="span" textStyle="text-ui-med">
           {breaching.length} of {rows.length}
         </Text>{" "}
-        {rows.length === 1 ? "object" : "objects"} exceeded{" "}
-        {formatDurationExact(thresholdControl.settled)} {predicateLabel}
-        {window}.
+        {rows.length === 1 ? "object" : "objects"} exceeded {thresholdClause}.
       </Text>
 
       <Accordion allowMultiple defaultIndex={[0, 1]}>
@@ -199,10 +203,7 @@ const FreshnessContent = ({
             {breaching.length === 0 ? (
               <Box padding="4" color={colors.foreground.secondary}>
                 <Text as="span" color={colors.accent.green}>
-                  No objects exceeded{" "}
-                  {formatDurationExact(thresholdControl.settled)}{" "}
-                  {predicateLabel}
-                  {window}.
+                  No objects exceeded {thresholdClause}.
                 </Text>{" "}
                 All {rows.length} objects are within target.
               </Box>
@@ -328,7 +329,7 @@ const FreshnessPage = () => {
             >
               {(Object.keys(PREDICATE_LABELS) as Predicate[]).map((key) => (
                 <option key={key} value={key}>
-                  {PREDICATE_LABELS[key]}
+                  {PREDICATE_LABELS[key].menu}
                 </option>
               ))}
             </Select>
