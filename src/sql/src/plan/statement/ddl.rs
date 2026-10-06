@@ -5379,6 +5379,7 @@ pub fn unplan_create_cluster(
                 enable_case_literal_transform: _,
                 enable_simplify_quantified_comparisons: _,
                 enable_simplify_from_less_existence: _,
+                enable_window_bucketing: _,
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
                 enable_fixed_correlated_cte_lowering: _,

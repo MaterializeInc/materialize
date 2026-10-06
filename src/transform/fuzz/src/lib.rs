@@ -454,6 +454,7 @@ pub fn fuzz_features() -> OptimizerFeatures {
         enable_cast_elimination: true,
         enable_simplify_quantified_comparisons: true,
         enable_simplify_from_less_existence: true,
+        enable_window_bucketing: true,
         enable_coalesce_case_transform: true,
         enable_will_distinct_propagation: true,
         enable_fixed_correlated_cte_lowering: true,

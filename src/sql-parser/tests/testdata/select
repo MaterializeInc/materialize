@@ -1515,28 +1515,28 @@ Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { 
 parse-statement
 SELECT * FROM foo OPTIONS (bar = 7)
 ----
-error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT or WINDOW, found identifier "bar"
 SELECT * FROM foo OPTIONS (bar = 7)
                            ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 7)
 ----
-error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT or WINDOW, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 7)
                                                     ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 'baz')
 ----
-error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT or WINDOW, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 'baz')
                                                     ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar)
 ----
-error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT or WINDOW, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar)
                                                     ^
 
@@ -1942,6 +1942,21 @@ parse-statement roundtrip
 SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, DISTINCT ON INPUT GROUP SIZE = 2)
 ----
 SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, DISTINCT ON INPUT GROUP SIZE = 2)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (WINDOW BUCKET WIDTH = 4096)
+----
+SELECT 1 OPTIONS (WINDOW BUCKET WIDTH = 4096)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (WINDOW BUCKET WIDTH = '14 days')
+----
+SELECT 1 OPTIONS (WINDOW BUCKET WIDTH = '14 days')
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, WINDOW BUCKET WIDTH = 64)
+----
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, WINDOW BUCKET WIDTH = 64)
 
 parse-statement roundtrip
 SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, LIMIT INPUT GROUP SIZE = 3)
