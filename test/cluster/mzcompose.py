@@ -3019,8 +3019,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         assert count == 0, f"unexpected hello count: {count}"
         count = metrics.get_replica_history_command_count("create_instance")
         assert count == 1, f"unexpected create_instance count: {count}"
-        count = metrics.get_replica_history_command_count("allow_compaction")
-        assert count > 0, f"unexpected allow_compaction count: {count}"
+        # History reduction folds compaction into dataflow frontiers, so there
+        # need not be any retained allow_compaction commands.
         count = metrics.get_replica_history_command_count("create_dataflow")
         assert count > 0, f"unexpected create_dataflow count: {count}"
         count = metrics.get_replica_history_command_count("peek")
