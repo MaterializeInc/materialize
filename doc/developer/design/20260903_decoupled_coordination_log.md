@@ -29,15 +29,15 @@ debug events enabled only for parallel CI distinguish those waits. Remove the
 diagnostic once attributed. Neither this correction nor stale-bound resampling
 establishes the cause of every timeout. Keep protection and deadlines unchanged.
 The restart fixture brackets sink admission before catalog diagnostics to avoid
-consuming its physical-lag window. That adjustment also needs CI verification.
+consuming its physical-lag window. The complete workflow passes in CI137762.
 
 Keep the scheduled-compaction 1/0/1 membership and audit assertions. Its final
 observation uses a fixed sleep and a real-time window. Establish convergence and
 the window prerequisite before changing the fixture. Streaming statements
 captures the compaction window in the timestamped job log. RBAC-view SLT
 completes in CI137762, so its temporary streaming diagnostic is removed.
-The imported hydration-stability
-restart and no-dataflow workflows pass in CI137762, alongside warm handover.
+The imported hydration-stability restart and no-dataflow workflows pass in
+CI137762, alongside warm handover.
 
 Comment-ID collision coverage now uses dynamic setup in the SQL integration
 harness. Preserve actual collisions and exact comment attribution when adjusting
@@ -50,10 +50,14 @@ and completed row counts. Use a failing capture before changing retention,
 scheduling or episode grouping. Keep history across deployments. Remove the
 diagnostic once its question is answered.
 
-Continue concrete integration failures, including catalog-cluster hydration
-progress during repeated deployment handover. Keep native ownership enabled,
-read protection, external-sink safeguards and compatible-version fresh-environment
-handover. The outage, targeted DDL and bounded-throughput proofs stay closed.
+Continue concrete integration failures. CI137762 Zippy completes seven promotions
+but readiness grows from 42s to 363s. Final backup/restore exhausts the job budget
+with only the catalog shard unfinished after 353s. Investigate that concrete
+Persist restoration boundary without attributing it to an unfinished promotion.
+Keep the observed retention costs and unproven plateau visible. Preserve native
+ownership, read protection, external-sink safeguards and compatible-version
+handover on fresh environments. The outage, targeted DDL and bounded-throughput
+proofs stay closed.
 Pre-feature environment conversion and independent query-client isolation are
 outside M2. Use CI for CPU/RAM-heavy builds and tests.
 
