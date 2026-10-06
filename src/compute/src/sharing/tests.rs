@@ -205,6 +205,99 @@ fn a_registry_pairs_one_publishing_with_one_reading_thread() {
     assert!(second_reader.is_err(), "a second reading thread attached");
 }
 
+#[mz_ore::test]
+fn reexport_publishes_its_own_point_over_the_same_trace() {
+    let target = GlobalId::User(1);
+    let reexport = GlobalId::User(2);
+    let registry = ArrangementSharingRegistry::new();
+    registry.attach_reader();
+    // A reader bound the re-export's id first on this worker. Publishing backs its point the same
+    // way as a point the publisher creates.
+    let _reader_slot = registry.get_or_create(reexport);
+    // A peer's holds keep both points readable after the publishing worker has torn down.
+    let minimum = Antichain::from_elem(Timestamp::MIN);
+    let target_slot = registry.get_or_create(target);
+    let _holds = [&target_slot, &_reader_slot].map(|slot| {
+        (
+            slot.oks.peer_handle(&minimum),
+            slot.errs.peer_handle(&minimum),
+        )
+    });
+    let registry_in = registry.clone();
+    let (target_token, reexport_token) = timely::execute_directly(move |worker| {
+        let (oks, errs, mut oks_input, mut errs_input, target_token) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_input, oks) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("test oks");
+                let (errs_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs).mz_arrange::<
+                    ColumnationChunker<_>,
+                    ErrBatcher<_, _>,
+                    ErrBuilder<_, _>,
+                    ErrSpine<_, _>,
+                >("test errs");
+                let token = registry_in.publish(
+                    target,
+                    oks.stream.scope().worker(),
+                    &oks.trace,
+                    &errs.trace,
+                );
+                (oks.trace, errs.trace, oks_input, errs_input, token)
+            });
+
+        // The re-export's dataflow must build the same graph on every worker, so publishing the
+        // shared traces under its id builds nothing.
+        let before = worker.peek_identifier();
+        worker.dataflow::<Timestamp, _, _>(|_| {});
+        let empty = worker.peek_identifier() - before;
+        let before = worker.peek_identifier();
+        let reexport_token = worker.dataflow::<Timestamp, _, _>(|scope| {
+            registry_in.publish(reexport, scope.worker(), &oks, &errs)
+        });
+        assert_eq!(worker.peek_identifier() - before, empty);
+
+        for (k, v) in test_rows() {
+            oks_input.update((k, v), Diff::ONE);
+        }
+        oks_input.advance_to(Timestamp::from(1_u64));
+        oks_input.flush();
+        errs_input.advance_to(Timestamp::from(1_u64));
+        errs_input.flush();
+        drop((oks_input, errs_input));
+        while worker.step() {}
+        drop((oks, errs));
+        (target_token, reexport_token)
+    });
+
+    for id in [target, reexport] {
+        let (oks, _) = registry.handles(&id).expect("published");
+        assert_eq!(
+            read_rows(&oks, Timestamp::from(0_u64)),
+            expected_rows(&test_rows())
+        );
+    }
+
+    // The two collections compact independently, so a hold on one point does not reach the other.
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+    let target_hold = registry.get_or_create(target).oks.peer_handle(&at(5));
+    let reexport_hold = registry.get_or_create(reexport).oks.peer_handle(&at(10));
+    drop(_holds);
+    assert_eq!(registry.published_logical_holds(&target), Some(at(5)));
+    assert_eq!(registry.published_logical_holds(&reexport), Some(at(10)));
+    drop((target_hold, reexport_hold));
+
+    // Dropping the index the re-export re-exports leaves the re-export's point readable.
+    drop((target_token, target_slot));
+    assert!(registry.handles(&target).is_none());
+    assert!(registry.handles(&reexport).is_some());
+    drop(reexport_token);
+}
+
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
 /// keeping only entries whose accumulated diff at `at` is nonzero.
 ///

@@ -156,6 +156,11 @@ where
         }
         self
     }
+
+    /// The wrapped trace, which does not report the padding.
+    pub fn unpadded(&self) -> &Tr {
+        &self.trace
+    }
 }
 
 impl<Tr> TraceReader for PaddedTrace<Tr>
@@ -250,6 +255,11 @@ impl TraceBundle {
             errs: errs.into(),
             to_drop: None,
         }
+    }
+
+    /// The traces this runtime maintains, if it maintains them.
+    pub fn local(&self) -> Option<(&RowRowAgent<Timestamp, Diff>, &ErrAgent<Timestamp, Diff>)> {
+        Some((self.oks.unpadded(), self.errs.unpadded()))
     }
 
     /// Adds tokens to be dropped when the trace bundle is dropped.

@@ -814,16 +814,30 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
+                // Borrows the arrangements, so it must precede moving their traces into the
+                // `TraceBundle` below.
+                let publication = compute_state.publisher.as_ref().map(|publisher| {
+                    publisher.publish(idx_id, oks.stream.scope().worker(), &oks.trace, &errs.trace)
+                });
+
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop((needed_tokens, publication)),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                compute_state.traces.set(idx_id, trace);
+                // Only a trace this runtime maintains can be published.
+                let publication = trace.local().and_then(|(oks, errs)| {
+                    let publisher = compute_state.publisher.as_ref()?;
+                    Some(publisher.publish(idx_id, self.scope.worker(), oks, errs))
+                });
+                let to_drop = trace.to_drop().clone();
+                compute_state
+                    .traces
+                    .set(idx_id, trace.with_drop((to_drop, publication)));
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -916,16 +930,30 @@ where
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
+                // Borrows the arrangements, so it must precede moving their traces into the
+                // `TraceBundle` below.
+                let publication = compute_state.publisher.as_ref().map(|publisher| {
+                    publisher.publish(idx_id, oks.stream.scope().worker(), &oks.trace, &errs.trace)
+                });
+
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop((needed_tokens, publication)),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                compute_state.traces.set(idx_id, trace);
+                // Only a trace this runtime maintains can be published.
+                let publication = trace.local().and_then(|(oks, errs)| {
+                    let publisher = compute_state.publisher.as_ref()?;
+                    Some(publisher.publish(idx_id, outer.worker(), oks, errs))
+                });
+                let to_drop = trace.to_drop().clone();
+                compute_state
+                    .traces
+                    .set(idx_id, trace.with_drop((to_drop, publication)));
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
