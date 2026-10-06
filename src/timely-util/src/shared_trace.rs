@@ -87,6 +87,12 @@ struct State<B: BatchReader> {
     upper: Antichain<B::Time>,
     /// The inner trace's logical compaction frontier. Reads at times not beyond it are not accurate.
     logical: Antichain<B::Time>,
+    /// The frontier the writer asked for, before meeting the readers' holds.
+    ///
+    /// Equal to `logical` when nothing holds the trace back. Above it by exactly the amount a
+    /// reader is keeping the writer from compacting, which is the coupling this publication
+    /// introduces and the only place it is observable.
+    writer_logical: Antichain<B::Time>,
     /// The inner trace's physical compaction frontier.
     physical: Antichain<B::Time>,
     /// Readers' logical holds.
@@ -147,6 +153,7 @@ impl<B: BatchReader> Shared<B> {
                 chain: Vec::new(),
                 upper: minimum.clone(),
                 logical: minimum.clone(),
+                writer_logical: minimum.clone(),
                 physical: minimum,
                 remote_logical: MutableAntichain::new(),
                 remote_physical: MutableAntichain::new(),
@@ -169,6 +176,14 @@ impl<B: BatchReader> Shared<B> {
     /// The published logical compaction frontier. Reads at times not beyond it are not accurate.
     pub fn since(&self) -> Antichain<B::Time> {
         self.lock().logical.clone()
+    }
+
+    /// The published `since`, and the logical compaction frontier the writer asked for before the
+    /// readers' holds were met into it, read together. The second is at or beyond the first, and
+    /// equal to it when no reader holds this point.
+    pub fn logical_frontiers(&self) -> (Antichain<B::Time>, Antichain<B::Time>) {
+        let state = self.lock();
+        (state.logical.clone(), state.writer_logical.clone())
     }
 
     /// The published `(since, upper)`, read together.
@@ -345,6 +360,7 @@ impl<Tr: Trace> SharedSpine<Tr> {
             // trace backs hold it lower, and then this point claims the higher frontier, which
             // refuses readers the trace could still serve but never admits one it cannot.
             state.logical = self.local_logical.clone();
+            state.writer_logical = self.local_logical.clone();
             state.physical = self.local_physical.clone();
             // An importer seeded by an earlier writer has acknowledged that writer's frontiers, and
             // this trace's chain regresses below them, which an importer cannot follow: a batch
@@ -514,6 +530,7 @@ impl<Tr: Trace> SharedSpine<Tr> {
             .join(&current_logical);
         for state in guards.iter_mut() {
             state.logical = logical.clone();
+            state.writer_logical = self.local_logical.clone();
         }
         drop(guards);
         drop(attachment);
