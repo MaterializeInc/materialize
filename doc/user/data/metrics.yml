@@ -2725,6 +2725,10 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_shard_metrics_mode_invalid
+  help: count of metrics scrapes that found persist_shard_metrics unrecognized and so exported the default
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
   labels:
