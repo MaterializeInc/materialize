@@ -31,9 +31,7 @@ use crate::compute_state::error_scan::{ErrorScan, ErrorScanStep, ErrsHandle};
 use crate::compute_state::peek_result_iterator::{PeekResultIterator, Step};
 
 /// The scan an index peek builds, over the ok trace of the arrangement that answers it.
-pub(super) type IndexPeekScan = PeekScan<
-    crate::arrangement::manager::PaddedTrace<crate::typedefs::RowRowAgent<Timestamp, Diff>>,
->;
+pub(super) type IndexPeekScan = PeekScan<crate::arrangement::manager::OksTrace>;
 
 /// Rows a scan hands to its driver, in the order the scan produced them.
 ///
