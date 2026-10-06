@@ -374,9 +374,6 @@ pub enum Message {
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
-    CancelPendingPeeks {
-        conn_id: ConnectionId,
-    },
     LinearizeReads,
     StagedBatches {
         conn_id: ConnectionId,
@@ -542,7 +539,6 @@ impl Message {
             Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
-            Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
             Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",

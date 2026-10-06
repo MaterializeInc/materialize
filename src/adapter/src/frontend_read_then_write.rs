@@ -696,8 +696,7 @@ impl Drop for SubscribeHandle {
 impl PeekClient {
     /// Execute a read-then-write operation using frontend sequencing.
     ///
-    /// Called by session code when the frontend_read_then_write dyncfg is
-    /// enabled. The caller owns the end-of-execution logging for
+    /// The caller owns the end-of-execution logging for
     /// `statement_logging_id` and verified and planned the portal against
     /// `catalog`, which stays in force through optimization and write-target
     /// generation capture.
@@ -785,10 +784,8 @@ impl PeekClient {
 
         // A transaction that has taken a timestamped read, was opened READ
         // ONLY, or is committed to some other kind of operation cannot take a
-        // write. Check up front, mirroring `sequence_insert`: the marker op
-        // below rejects only some of those states, and only with its own
-        // errors, so without this check the reported error and SQLSTATE would
-        // depend on which path sequenced the statement.
+        // write. Check up front because the marker op below rejects only
+        // some of those states and reports different errors.
         //
         // Both this and the marker op require an open transaction. The
         // frontends start one before they execute anything, and a `Failed`
@@ -963,9 +960,6 @@ impl PeekClient {
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        // The coordinator sequences this statement's read as a real peek, so the
-        // optimizer's notices and the timestamp notice reach the session there.
-        // Emit both here for the same statement to look the same on either path.
         crate::coord::sequencer::emit_optimizer_notices(
             &**catalog,
             session,
@@ -2052,9 +2046,8 @@ fn process_message(
         PeekResponseUnary::Error(e) => {
             ProcessResult::Error(AdapterError::Unstructured(anyhow::anyhow!(e)))
         }
-        // Match the lock path's classification. `Unstructured` would render
-        // this as an internal error (XX000) for what is an ordinary concurrent
-        // DDL race.
+        // `Unstructured` would misclassify an ordinary concurrent DDL race
+        // as an internal error (XX000).
         PeekResponseUnary::DependencyDropped(dep) => {
             ProcessResult::Error(dep.to_concurrent_dependency_drop())
         }

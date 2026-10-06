@@ -1150,10 +1150,8 @@ ORDER BY mseh.began_at DESC",
     assert_eq!(finished_status, "success");
 }
 
-// Regression test: a read-then-write must set `execution_timestamp` on the
-// statement's log entry once its write commits.
 #[mz_ore::test]
-fn test_statement_logging_read_then_write_sets_execution_timestamp() {
+fn test_statement_logging_read_then_write_outcomes() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
@@ -1164,44 +1162,76 @@ fn test_statement_logging_read_then_write_sets_execution_timestamp() {
     client
         .execute("INSERT INTO statement_logging_rtw_t VALUES (1), (2)", &[])
         .unwrap();
-    client
-        .execute("DELETE FROM statement_logging_rtw_t WHERE x = 1", &[])
-        .unwrap();
-
-    let mut client = server.connect_internal(postgres::NoTls).unwrap();
-    let row = Retry::default()
-        .max_duration(Duration::from_secs(30))
-        .retry(|_| {
-            let rows = client
-                .query(
-                    "SELECT mseh.execution_timestamp, mseh.finished_status
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
+    for (sql, bounded_staleness) in [
+        ("UPDATE statement_logging_rtw_t SET x = x + 1", false),
+        ("DELETE FROM statement_logging_rtw_t WHERE x = 2", false),
+        (
+            "INSERT INTO statement_logging_rtw_t SELECT x + 10 FROM statement_logging_rtw_t",
+            false,
+        ),
+        ("DELETE FROM statement_logging_rtw_t WHERE x > 1000", true),
+    ] {
+        if bounded_staleness {
+            client
+                .execute("SET transaction_isolation = 'bounded staleness 5s'", &[])
+                .unwrap();
+        }
+        let expected_error = if bounded_staleness {
+            let err = client.execute(sql, &[]).unwrap_err();
+            Some(err.as_db_error().unwrap().message().to_owned())
+        } else {
+            client.execute(sql, &[]).unwrap();
+            None
+        };
+        let row = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let rows = mz_client
+                    .query(
+                        "SELECT mseh.execution_timestamp, mseh.finished_status,
+                            mseh.cluster_name, mseh.error_message
 FROM mz_internal.mz_statement_execution_history AS mseh
 LEFT JOIN mz_internal.mz_prepared_statement_history AS mpsh
     ON mseh.prepared_statement_id = mpsh.id
 JOIN (SELECT DISTINCT sql, sql_hash FROM mz_internal.mz_sql_text) AS mst
     ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'DELETE FROM statement_logging_rtw_t%'
+WHERE mst.sql = $1
     AND mseh.finished_at IS NOT NULL
 ORDER BY mseh.began_at DESC",
-                    &[],
-                )
-                .unwrap();
+                        &[&sql],
+                    )
+                    .unwrap();
 
-            if let Some(row) = rows.into_iter().next() {
-                Ok(row)
+                if let Some(row) = rows.into_iter().next() {
+                    Ok(row)
+                } else {
+                    Err(())
+                }
+            })
+            .unwrap_or_else(|_| panic!("statement log entry missing for {sql}"));
+
+        let execution_timestamp: Option<UInt8> = row.get(0);
+        let finished_status: String = row.get(1);
+        let cluster_name: Option<String> = row.get(2);
+        let error_message: Option<String> = row.get(3);
+        assert_eq!(
+            execution_timestamp.is_some(),
+            !bounded_staleness,
+            "unexpected execution timestamp for {sql}"
+        );
+        assert_eq!(
+            finished_status,
+            if bounded_staleness {
+                "error"
             } else {
-                Err(())
-            }
-        })
-        .expect("DELETE statement log entry should be recorded");
-
-    let execution_timestamp: Option<UInt8> = row.get(0);
-    let finished_status: String = row.get(1);
-    assert_eq!(finished_status, "success");
-    assert!(
-        execution_timestamp.is_some(),
-        "frontend OCC read-then-write DELETE must set execution_timestamp, got NULL"
-    );
+                "success"
+            },
+            "unexpected status for {sql}"
+        );
+        assert_eq!(cluster_name.as_deref(), Some("quickstart"), "{sql}");
+        assert_eq!(error_message, expected_error, "{sql}");
+    }
 }
 
 /// Statement-logging outcome of one execution, as recorded once the log

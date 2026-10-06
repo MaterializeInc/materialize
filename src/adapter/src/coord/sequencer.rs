@@ -447,10 +447,7 @@ impl Coordinator {
                     self.sequence_explain_timestamp(ctx, plan, target_cluster)
                         .await;
                 }
-                Plan::Insert(plan) => {
-                    self.sequence_insert(ctx, plan).await;
-                }
-                Plan::ReadThenWrite(_) => {
+                Plan::Insert(_) | Plan::ReadThenWrite(_) => {
                     ctx.retire(Err(AdapterError::Internal(
                         "coordinator read-then-write reached despite frontend routing".into(),
                     )));

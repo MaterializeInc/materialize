@@ -368,8 +368,6 @@ impl GroupCommitter {
     /// * Merging queued commits. There is nothing to merge into: these diffs
     ///   are valid at this one timestamp, so they cannot share a timestamp with
     ///   another write.
-    /// * Write locks. The point of OCC is to detect a conflicting write after
-    ///   the fact, through the timestamp, rather than to exclude it.
     ///
     /// `Break` means the table worker shut down.
     async fn commit_timestamped(&self, request: TimestampedWriteRequest) -> ControlFlow<(), ()> {

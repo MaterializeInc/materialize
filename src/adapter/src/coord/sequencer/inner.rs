@@ -28,7 +28,7 @@ use mz_catalog::memory::objects::{
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, ResultSpec};
+use mz_expr::{MapFilterProject, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
@@ -115,7 +115,6 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -2588,64 +2587,6 @@ impl Coordinator {
             imports,
         )
         .await
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_insert(&self, mut ctx: ExecuteContext, plan: plan::InsertPlan) {
-        if !ctx.session_mut().transaction().allows_writes() {
-            ctx.retire(Err(AdapterError::ReadOnlyTransaction));
-            return;
-        }
-        if ctx
-            .session()
-            .vars()
-            .transaction_isolation()
-            .is_bounded_staleness()
-        {
-            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
-            return;
-        }
-
-        // Ideally, we would like to make the `selection.as_const().is_some()`
-        // check on `plan.values` instead. However, `VALUES (1), (3)` statements
-        // are planned as a Wrap($n, $vals) call, so until we can reduce
-        // HirRelationExpr this will always returns false.
-        let optimized_mir = if let Some(..) = &plan.values.as_const() {
-            // We don't perform any optimizations on an expression that is already
-            // a constant for writes, as we want to maximize bulk-insert throughput.
-            let expr = return_if_err!(
-                plan.values
-                    .clone()
-                    .lower(self.catalog().system_config(), None),
-                ctx
-            );
-            OptimizedMirRelationExpr(expr)
-        } else {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
-
-            // (`optimize::view::Optimizer` has a special case for constant queries.)
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
-
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            return_if_err!(optimizer.optimize(plan.values.clone()), ctx)
-        };
-
-        match optimized_mir.into_inner() {
-            selection if selection.as_const().is_some() && plan.returning.is_empty() => {
-                let catalog = self.owned_catalog();
-                mz_ore::task::spawn(|| "coord::sequence_inner", async move {
-                    let result =
-                        Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
-                    ctx.retire(result);
-                });
-            }
-            _ => {
-                ctx.retire(Err(AdapterError::Internal(
-                    "coordinator read-then-write reached despite frontend routing".into(),
-                )));
-            }
-        }
     }
 
     #[instrument]

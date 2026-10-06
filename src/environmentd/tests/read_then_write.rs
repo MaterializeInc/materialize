@@ -1996,9 +1996,7 @@ fn test_replica_expiration_spares_folded_selections() {
         "the UPDATE changed the table"
     );
 
-    // Ask the process rather than the flag which path those two took: they only
-    // reach the histogram if the frontend sequenced them, and the coordinator's
-    // lock path does not read subscribe frontiers at all.
+    // Both statements must reach the OCC loop, not fold into blind writes.
     let metrics = server.metrics_registry().gather();
     let observations = session_occ_retry_histogram(&metrics).get_sample_count();
     assert!(

@@ -143,9 +143,6 @@ impl Coordinator {
                 self.advance_custom_timelines().boxed_local().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
-            Message::CancelPendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(&conn_id);
-            }
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
