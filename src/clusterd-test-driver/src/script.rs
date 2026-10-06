@@ -194,6 +194,9 @@ pub enum ExplainTarget {
         exports: Vec<ExportSpec>,
         /// The dataflow's `as_of`.
         as_of: u64,
+        /// Bound the dataflow to the single read at its `as_of`. Off by default.
+        #[serde(default)]
+        single_read: bool,
         /// Run the MIR optimizer before lowering. Off by default.
         #[serde(default)]
         optimize: bool,
@@ -524,6 +527,9 @@ pub enum Command {
         exports: Vec<ExportSpec>,
         /// The dataflow's `as_of`.
         as_of: u64,
+        /// Bound the dataflow to the single read at its `as_of`. Off by default.
+        #[serde(default)]
+        single_read: bool,
         /// Run the MIR optimizer before lowering (needed for e.g. joins). Off by
         /// default, so the caller's MIR is lowered faithfully.
         #[serde(default)]
@@ -631,6 +637,7 @@ struct DataflowSpec {
     builds: Vec<BuildSpec>,
     exports: Vec<ExportSpec>,
     as_of: u64,
+    single_read: bool,
     optimize: bool,
 }
 
@@ -801,6 +808,7 @@ impl ScriptState {
         builds: Vec<BuildSpec>,
         exports: Vec<ExportSpec>,
         as_of: u64,
+        single_read: bool,
         optimize: bool,
     ) -> anyhow::Result<(DataflowBuilder, PendingRegistrations)> {
         let mut builder =
@@ -937,6 +945,9 @@ impl ScriptState {
             }
         }
         builder.as_of(Timestamp::from(as_of));
+        if single_read {
+            builder.single_read();
+        }
         Ok((builder, registrations))
     }
 
@@ -1085,6 +1096,7 @@ impl ScriptState {
                 builds,
                 exports,
                 as_of,
+                single_read,
                 optimize,
             } => {
                 // Record the spec under its name so `explain ref=<name>` can render
@@ -1097,12 +1109,20 @@ impl ScriptState {
                             builds: builds.clone(),
                             exports: exports.clone(),
                             as_of,
+                            single_read,
                             optimize,
                         },
                     );
                 }
-                let (builder, registrations) =
-                    self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
+                let (builder, registrations) = self.configure_dataflow(
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    single_read,
+                    optimize,
+                )?;
                 let df = builder.finish()?;
                 self.driver.submit_dataflow(df)?;
                 // Register only after a successful submit, so a rejected dataflow
@@ -1121,15 +1141,16 @@ impl ScriptState {
             Command::Explain { target } => {
                 // Resolve the target to a dataflow body: either given inline, or the
                 // spec a prior `create-dataflow name=<name>` recorded.
-                let (name, imports, builds, exports, as_of, optimize) = match target {
+                let (name, imports, builds, exports, as_of, single_read, optimize) = match target {
                     ExplainTarget::Inline {
                         name,
                         imports,
                         builds,
                         exports,
                         as_of,
+                        single_read,
                         optimize,
-                    } => (name, imports, builds, exports, as_of, optimize),
+                    } => (name, imports, builds, exports, as_of, single_read, optimize),
                     ExplainTarget::Reference { name } => {
                         let spec = self.dataflows.get(&name).ok_or_else(|| {
                             anyhow::anyhow!(
@@ -1143,6 +1164,7 @@ impl ScriptState {
                             spec.builds.clone(),
                             spec.exports.clone(),
                             spec.as_of,
+                            spec.single_read,
                             spec.optimize,
                         )
                     }
@@ -1151,8 +1173,15 @@ impl ScriptState {
                 // LIR plan instead of submitting it. The registrations are discarded:
                 // explain has no side effects, so it neither installs a dataflow nor
                 // records an index / subscribe / materialized-view output.
-                let (builder, _registrations) =
-                    self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
+                let (builder, _registrations) = self.configure_dataflow(
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    single_read,
+                    optimize,
+                )?;
                 // The LIR render separates objects with blank lines; the `----` block
                 // preserves them via the doubled-separator form (see `crate::text`).
                 // Trim the trailing newline so the golden matches like every other
