@@ -635,6 +635,30 @@ steps:
     agents:
       queue: hetzner-x86-64-dedi-16cpu-64gb
 
+  - id: native-hydration-stability-restart
+    topics: [0dt-migration, kafka, kafka-sink, mysql, postgres, sql-server]
+    label: Native hydration stability restart
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+          run: caught-up-stability-survives-restart
+    agents:
+      queue: hetzner-x86-64-dedi-16cpu-64gb
+
+  - id: native-hydration-stability-without-dataflows
+    topics: [0dt-migration, kafka, kafka-sink, mysql, postgres, sql-server]
+    label: Native hydration stability without dataflows
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+          run: caught-up-stability-without-dataflows
+    agents:
+      queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - id: upgrade-smoke-test
     topics: [0dt-migration, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel, upgrade]
     label: "0dt Upgrade Smoke Test"
