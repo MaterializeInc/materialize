@@ -1376,6 +1376,8 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 "enable_expression_cache": "false",
                 "enable_logical_compaction_window": "true",
                 "enable_index_options": "true",
+                # Physical-retention observations require individual shard series.
+                "persist_shard_metrics": "both",
                 # Crash-surviving readers must expire before physical reclamation is observable.
                 "persist_reader_lease_duration": "60s",
                 # Small batches must exercise real blob compaction, not inline writes.
@@ -2749,6 +2751,8 @@ def workflow_catalog_publication_measurement(
                 "max_tables": str(counts[-1]),
                 "max_objects_per_schema": str(counts[-1] + 2),
                 "catalog_read_protection_publish_interval": f"{args.publication_interval_ms}ms",
+                # Measure catalog-shard traffic independently of other shards.
+                "persist_shard_metrics": "both",
                 "persist_inline_writes_single_max_bytes": "0",
                 "persist_compaction_heuristic_min_inputs": "2",
             }

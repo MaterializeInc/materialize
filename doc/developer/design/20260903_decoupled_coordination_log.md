@@ -28,11 +28,13 @@ Independent static review found no blocking integration issue. Compilation and
 runtime verification remain CI-owned.
 The imported drop-only prewarming workflow is removed because it asserts legacy
 restarts. Native retirement and SQL DROP membership contracts remain unchanged.
-CI137885 at `e8ae0964` passed Cargo tests, both restart shards, catalog read-protection
-restart, Testdrive4, native outage and warm promotion. The approved OCC correction
-has runtime coverage, but both parallel shards and SLT1 still time out. Use their
-post-correction captures to locate remaining waits. The oracle-only rejection is
-removed, so timestamp-conflict replies now describe actual txns conflicts.
+CI137934 at `094725b6` passed Cargo, Clippy, all five SLT shards, native outage
+and warm promotion. Both parallel shards still time out. Publication and retention
+fixtures fail because upstream's summary-only test policy omits their required
+per-shard metrics. Both fixtures now explicitly request those series, retaining
+all assertions. Verify that correction and the temporary handoff tracing in CI.
+The oracle-only rejection is removed, so timestamp-conflict replies now describe
+actual txns conflicts. Both focused committer tests passed in CI137885.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
