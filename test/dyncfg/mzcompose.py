@@ -296,43 +296,17 @@ def workflow_default(c: Composition) -> None:
             )
 
             # Create-time resolution: a cluster created while a segment already
-            # matches it folds the overrides into its create transaction, so its
-            # replica's first configuration carries them. This exercises that path,
-            # which the cluster above never reaches.
+            # matches it folds the overrides into its create transaction. So that
+            # this is the only path that can produce the rows asserted for
+            # `dyncfg_scoped_2`, materialized restarts with the sync loop parked at
+            # an hour (its first tick still runs immediately), and testdrive runs
+            # with `no_reset`: `ALTER SYSTEM RESET ALL` would return both scoped
+            # parameters to `--system-parameter-default` values equal to the rule
+            # values, leaving the fold nothing to record.
             #
-            # Two things have to be held still for this to be an assertion about
-            # the create path at all.
-            #
-            # The periodic reconcile runs every 100ms by default here and would
-            # populate the same rows on its own, so the assertion would pass with
-            # the create-time fold deleted -- while a render-frozen parameter would
-            # already have been missed. The interval is a startup argument, so it is
-            # set long and materialized restarted: the loop's first tick fires
-            # immediately, which is what installs the shared frontend the fold needs
-            # and what reconciles the objects that already exist, and the next tick
-            # is an hour away. Every row asserted for `dyncfg_scoped_2` below can
-            # therefore only have come from its own create transaction.
-            #
-            # And testdrive's reset, which is why this block also declares
-            # `no_reset`. `c.testdrive()` runs `ALTER SYSTEM RESET ALL` before each
-            # script otherwise, returning every parameter to its
-            # `--system-parameter-default`. Those defaults come from
-            # `get_default_system_parameters`, which sets both scoped parameters to
-            # the *opposite* of `ENV_WIDE_PARAMS` -- so a reset baseline is exactly
-            # the two rule values, `classify_scoped_value` calls both
-            # `MatchesEnvironment`, and the fold then correctly records nothing at
-            # all. Elsewhere in this file the 100ms loop repairs the reset inside
-            # testdrive's retry window, which is the only reason those
-            # `SHOW max_connections` assertions pass; parked at an hour, nothing
-            # repairs it.
-            #
-            # The two segments are widened with `startsWith` rather than a longer
-            # exact list, which is the case an exact list cannot express: the
-            # clause is authored before `dyncfg_scoped_2` exists and still selects
-            # it. Both must go on matching `dyncfg_scoped` too, asserted below over
-            # both clusters, and the replica half also pins that `r1` of
-            # `dyncfg_scoped` is still decided by the narrower `scoped-r1` rule
-            # ahead of the widened one.
+            # The segments are widened with `startsWith`, which selects
+            # `dyncfg_scoped_2` before it exists. `r1` of `dyncfg_scoped` must stay
+            # decided by the narrower `scoped-r1` rule ahead of the widened one.
             widened = [
                 {
                     "attribute": "cluster_name",
@@ -400,9 +374,9 @@ def workflow_default(c: Composition) -> None:
                 )
 
             # Dropping the segments and rules removes the overrides, returning every
-            # object to the environment-wide value. Back on the short interval and on
-            # the resetting testdrive, since this one is the periodic reconcile's job
-            # -- it repairs the reset as it always did.
+            # object to the environment-wide value. This is the periodic
+            # reconcile's job, so it runs on the short interval and the resetting
+            # testdrive.
             write_config(config_file, system_params_2)
             c.kill("materialized")
             c.up("materialized")
