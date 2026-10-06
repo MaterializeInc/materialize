@@ -5209,9 +5209,8 @@ pub fn plan_create_cluster_inner(
                     "REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL"
                 );
             }
-            // If we have a non-trivial schedule, then let's not have any replicas initially,
-            // to avoid quickly going back and forth if the schedule doesn't want a replica
-            // initially.
+            // Shared scheduled RF is 0. Each deployment's scheduler determines
+            // its running replica set from the refresh window.
             0
         };
         let availability_zones = availability_zones.unwrap_or_default();
@@ -5401,17 +5400,14 @@ pub fn unplan_create_cluster(
             };
             let (introspection_interval, introspection_debugging, arrangement_compression) =
                 unplan_compute_replica_config(compute);
-            // Replication factor cannot be explicitly specified with a refresh schedule, it's
-            // always 1 or less.
+            // Replication factor cannot be explicitly specified with a refresh schedule.
             let replication_factor = match &schedule {
                 ClusterScheduleOptionValue::Manual => Some(replication_factor),
                 ClusterScheduleOptionValue::Refresh { .. } => {
-                    // A cluster with a refresh schedule is turned On/Off by the cluster scheduling
-                    // policy, so its replication factor should always be 0 or 1, and CREATE/ALTER
-                    // reject setting both a non-MANUAL schedule and a higher replication factor. If
-                    // we nevertheless find one (e.g., a cluster left in an invalid state by an
-                    // older version), log loudly rather than crashing the coordinator: the
-                    // replication factor is omitted from the rendered statement regardless.
+                    // DDL records a shared replication factor of 0 for a refresh schedule.
+                    // Accept 1 as well when rendering existing definitions. Log larger values
+                    // rather than crashing the coordinator. The replication factor is omitted
+                    // from the rendered statement regardless.
                     soft_assert_or_log!(
                         replication_factor <= 1,
                         "replication factor, {replication_factor:?}, must be <= 1 with a refresh schedule"
@@ -6770,14 +6766,9 @@ pub fn plan_alter_cluster(
                     {
                         scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
 
-                        // A cluster with a non-MANUAL schedule is automatically turned On/Off by
-                        // the cluster scheduling policy, which means its replication factor is
-                        // always 0 or 1. If the cluster currently has a higher replication factor
-                        // and the user is not lowering it in the same statement (which would be
-                        // rejected just below), then reject the schedule change: otherwise we'd
-                        // leave the cluster in an invalid state with both a non-MANUAL schedule and
-                        // a replication factor > 1 (which would, e.g., make SHOW CREATE CLUSTER
-                        // panic).
+                        // A non-MANUAL schedule runs at most one replica per deployment.
+                        // Require the user to lower a managed cluster's replication factor
+                        // before handing its replica set to the scheduler.
                         if replication_factor.is_none()
                             && cluster.replication_factor().is_some_and(|rf| rf > 1)
                         {
@@ -6898,25 +6889,10 @@ pub fn plan_alter_cluster(
             }
             if let Some(replication_factor) = replication_factor {
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
-            } else if schedule
-                .as_ref()
-                .is_some_and(|s| !matches!(s, ClusterScheduleOptionValue::Manual))
-                && managed != Some(true)
-            {
-                // Setting a non-MANUAL schedule hands the replica set to the
-                // scheduler, so normalize the replication factor to 0 exactly
-                // as CREATE CLUSTER does for a scheduled cluster. Giving
-                // REPLICATION FACTOR together with a non-MANUAL SCHEDULE was
-                // rejected above, so `replication_factor` is `None` here.
-                //
-                // Not when the same statement converts an unmanaged cluster to
-                // managed: that conversion adopts the existing replicas, so the
-                // sequencer requires a replication factor matching their count
-                // and derives it when none is given. Forcing 0 would reject the
-                // conversion whenever a replica exists. The controller
-                // normalizes the adopted factor to 0 on its next tick.
-                options.replication_factor = AlterOptionParameter::Set(0);
             }
+            // The sequencer normalizes scheduled RF to 0 after resolving options
+            // and validating any unmanaged-to-managed replica adoption. Keep an
+            // omitted RF distinct from an explicit one for those checks.
             if let Some(size) = &size {
                 options.size = AlterOptionParameter::Set(size.clone());
             }

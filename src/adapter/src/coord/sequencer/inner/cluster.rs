@@ -227,6 +227,15 @@ impl Coordinator {
                     Reset => *schedule = Default::default(),
                     Unchanged => {}
                 }
+                // DDL owns the shared scheduled RF, including for RESET. The
+                // scheduler owns deployment-local running replicas. Conversion
+                // must first validate adoption against the existing replica
+                // count and normalizes only after those checks succeed.
+                if matches!(config.variant, Managed(_))
+                    && !matches!(schedule, mz_sql::plan::ClusterSchedule::Manual)
+                {
+                    *replication_factor = 0;
+                }
                 match &options.auto_scaling_strategy {
                     Set(new_strategy) => auto_scaling_strategy.clone_from(new_strategy),
                     // The default is autoscaling disabled.
@@ -1604,7 +1613,7 @@ impl Coordinator {
             logging: _,
             arrangement_compression: _,
             optimizer_feature_overrides: _,
-            schedule: _,
+            schedule,
             auto_scaling_strategy: _,
             reconfiguration: _,
             burst: _,
@@ -1707,6 +1716,13 @@ impl Coordinator {
             coord_bail!(
                 "Cannot convert unmanaged cluster to managed, invalid replica names: {formatted}"
             );
+        }
+
+        // Adoption checks use the actual replica count. Once validated, commit
+        // the shared scheduled RF without changing the adopted replicas. Each
+        // deployment's scheduler decides which replicas need to keep running.
+        if !matches!(schedule, mz_sql::plan::ClusterSchedule::Manual) {
+            *new_replication_factor = 0;
         }
 
         let ops = vec![catalog::Op::UpdateClusterConfig {

@@ -1032,9 +1032,9 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
 # ----- ON REFRESH scheduling driven by the controller -----
 #
-# The on-refresh strategy owns a scheduled cluster's replica set. It normalizes
-# the realized replication factor to 0 and brings up a single replica while the
-# cluster is inside a refresh window.
+# DDL sets a scheduled cluster's shared replication factor to 0. The on-refresh
+# strategy owns each deployment's replica set and brings up a single replica
+# while the cluster is inside a refresh window.
 
 # A scheduled cluster with no bound REFRESH MV is outside any refresh window, so it
 # has no replica and its replication factor reads 0. The large HYDRATION TIME
@@ -1049,9 +1049,8 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
 # Bind a REFRESH EVERY materialized view: the cluster is now inside a refresh window
 # (it must rehydrate ahead of each refresh), so the controller brings up exactly one
-# replica at the cluster size. The replication factor still reads 0 (it is the
-# controller's domain for a scheduled cluster), and mz_cluster_replicas is
-# authoritative for what is actually running.
+# replica at the cluster size. The shared replication factor still reads 0,
+# and mz_cluster_replicas shows the active deployment's running replicas.
 > CREATE TABLE sched_t (x int)
 > CREATE MATERIALIZED VIEW cc_sched_mv IN CLUSTER cc_sched WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_t
 
@@ -1117,10 +1116,8 @@ scale=1,workers=2
 
 # Round-tripping a scheduled cluster through unmanaged and back works while its
 # in-window replica is running. The MANAGED = true conversion adopts the
-# existing replica (the replication factor derives from the replica count, it
-# is not normalized to 0 at planning), and the controller then takes ownership
-# again: the factor normalizes to 0 on the next tick and the replica stays for
-# the open window.
+# existing replica, validates against its count, then commits shared RF 0.
+# The controller keeps the replica running for the open window.
 > CREATE CLUSTER cc_sched_convert (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
 > CREATE TABLE sched_convert_t (x int)
 > CREATE MATERIALIZED VIEW cc_sched_convert_mv IN CLUSTER cc_sched_convert WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_convert_t
@@ -1152,8 +1149,21 @@ scale=1,workers=2
 1
 
 # Handing the cluster to the scheduler normalizes the replication factor to 0
-# at planning time, exactly like CREATE CLUSTER with a non-MANUAL schedule.
+# in DDL, exactly like CREATE CLUSTER with a non-MANUAL schedule.
 > ALTER CLUSTER cc_manual SET (SCHEDULE = ON REFRESH)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+0
+
+# Explicit MANAGED = true on an already-managed cluster takes the same path.
+> ALTER CLUSTER cc_manual RESET (SCHEDULE, REPLICATION FACTOR)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+1
+> ALTER CLUSTER cc_manual SET (MANAGED = true, SCHEDULE = ON REFRESH)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+0
+
+# RESET RF respects the effective schedule rather than committing the MANUAL default.
+> ALTER CLUSTER cc_manual RESET (REPLICATION FACTOR)
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
 0
 
@@ -1536,8 +1546,7 @@ ALTER SYSTEM RESET enable_unified_cluster
 # ----- Direct-path invariants on scheduled clusters -----
 
 # Converting a nonempty unmanaged cluster to ON REFRESH adopts its replica
-# rather than failing replication-factor validation, and the controller then
-# normalizes the factor to 0.
+# rather than failing replication-factor validation, then DDL commits RF 0.
 > CREATE CLUSTER cc_conv (REPLICAS (r1 (SIZE 'scale=1,workers=1')))
 > ALTER CLUSTER cc_conv SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_conv'
