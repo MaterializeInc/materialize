@@ -2297,9 +2297,7 @@ impl Coordinator {
         }
     }
 
-    /// Inner method that performs the actual real-time recency timestamp determination.
-    /// This is called by both the old peek sequencing code (via `determine_real_time_recent_timestamp`)
-    /// and the new command handler for `Command::DetermineRealTimeRecentTimestamp`.
+    /// Determines a real-time recency timestamp, for `Command::DetermineRealTimeRecentTimestamp`.
     pub(crate) async fn determine_real_time_recent_timestamp(
         &self,
         source_ids: impl Iterator<Item = GlobalId>,
