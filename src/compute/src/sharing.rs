@@ -181,6 +181,18 @@ impl ArrangementSharingRegistry {
         Some((slot.oks.handle(), slot.errs.handle()))
     }
 
+    /// The accumulated `oks` logical holds registered against `id`, if published.
+    ///
+    /// Test-only. Minting a handle to observe the published frontiers cannot distinguish a live
+    /// reader hold from a frontier that happens to sit there, and that distinction is what says
+    /// whether an import is still protected. Empty when every hold has released.
+    #[cfg(test)]
+    pub(crate) fn published_logical_holds(&self, id: &GlobalId) -> Option<Antichain<Timestamp>> {
+        let inner = self.lock();
+        let slot = Self::slot(&inner, id)?;
+        Some(slot.oks.logical_holds())
+    }
+
     /// Attaches the current thread as the worker that publishes here.
     ///
     /// Worker `i` of each runtime holds registry `i`, and both sides must be a single worker. Two

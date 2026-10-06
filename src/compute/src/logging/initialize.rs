@@ -29,6 +29,7 @@ use timely::container::{ContainerBuilder as _, PushInto};
 use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder, TimelyLogger};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
+use timely::progress::Antichain;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
 
 use crate::arrangement::manager::TraceBundle;
@@ -37,6 +38,7 @@ use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
+use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
@@ -50,6 +52,7 @@ pub fn initialize(
     metrics: LoggingMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
+    publisher: Option<ArrangementSharingRegistry>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -76,6 +79,7 @@ pub fn initialize(
         metrics,
         worker_config,
         workers_per_process,
+        publisher,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -115,6 +119,8 @@ struct LoggingContext<'a> {
     metrics: LoggingMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
+    /// Publishes the logging indexes for the peer runtime, if that runtime reads them.
+    publisher: Option<ArrangementSharingRegistry>,
 }
 
 pub(crate) struct LoggingTraces {
@@ -211,8 +217,20 @@ impl LoggingContext<'_> {
                 let traces = collections
                     .into_iter()
                     .map(|(log, collection)| {
+                        let publication = self.config.index_logs.get(&log).and_then(|&id| {
+                            let publisher = self.publisher.as_ref()?;
+                            // Logging dataflows read from the minimum time.
+                            let as_of = Antichain::from_elem(Timestamp::MIN);
+                            Some(publisher.publish(
+                                id,
+                                &as_of,
+                                scope.worker(),
+                                &collection.trace,
+                                &errs,
+                            ))
+                        });
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
-                            .with_drop(collection.token);
+                            .with_drop((collection.token, publication));
                         (log, bundle)
                     })
                     .collect();
