@@ -244,3 +244,23 @@ t_interval
 t_seconds
 t_unlimited
 tmp
+
+# Subsources and the progress relation inherit the source's RETAIN HISTORY
+
+statement ok
+CREATE SOURCE lg_auction IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (RETAIN HISTORY FOR '6m')
+
+query TT
+SELECT o.name, h.value
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE o.name IN ('lg_auction', 'lg_auction_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+ORDER BY o.name
+----
+accounts  360000
+auctions  360000
+bids  360000
+lg_auction  360000
+lg_auction_progress  360000
+organizations  360000
+users  360000
