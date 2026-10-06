@@ -6214,6 +6214,7 @@ dependencies = [
  "prost",
  "qcell",
  "rand 0.10.3",
+ "regex",
  "semver",
  "serde",
  "serde_json",
