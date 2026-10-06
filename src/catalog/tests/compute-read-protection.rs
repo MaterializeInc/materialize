@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog::builtin::BUILTINS;
+use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::{
     ClusterConfig, ClusterVariant, CollectionCompactionBound, DurableType, SystemObjectDescription,
     SystemObjectMapping, SystemObjectUniqueIdentifier,
@@ -23,7 +24,6 @@ use mz_catalog::durable::{
 use mz_controller_types::ClusterId;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::{PersistClient, ShardId};
-use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItemType;
@@ -994,8 +994,6 @@ async fn client_index_permission_and_retirement() {
 }
 
 fn bounds(snapshot: Snapshot) -> BTreeMap<GlobalId, Option<Timestamp>> {
-    use mz_catalog::durable::objects::serialization::RustType;
-
     snapshot
         .collection_compaction_bounds
         .into_iter()

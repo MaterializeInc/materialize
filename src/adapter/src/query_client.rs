@@ -1254,6 +1254,9 @@ mod tests {
         async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
             unreachable!("storage-only read")
         }
+        async fn flush(&self) -> Result<(), anyhow::Error> {
+            unreachable!("storage-only read")
+        }
         fn watch_services(
             &self,
         ) -> BoxStream<'static, Result<mz_orchestrator::ServiceEvent, anyhow::Error>> {
