@@ -196,6 +196,8 @@ pub fn install_enhanced_handler() {
             "<unknown>".to_string()
         };
 
+        crate::antithesis::panicked(&location, msg);
+
         // We unconditionally collect and display a short backtrace, as there's
         // no practical situation where producing a backtrace in a panic message
         // is undesirable. Panics are always unexpected, and we don't want to

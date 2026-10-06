@@ -19,6 +19,7 @@ anyhow = { workspace = true, optional = true }
 # Exceptions: `either` (zero deps, quasi-stdlib) and `zeroize` (zero runtime
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
+antithesis_sdk = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
@@ -92,6 +93,11 @@ yansi = { workspace = true, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
 
+# The instrumentation shim places its constructor in `.init_array`, which only
+# exists on ELF targets.
+[target.'cfg(target_os = "linux")'.dependencies]
+antithesis-instrumentation = { workspace = true, optional = true }
+
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
@@ -108,6 +114,9 @@ tracing-subscriber.workspace = true
 
 [features]
 default = ["tokio-console"]
+# Links the Antithesis SDK and coverage instrumentation. Only the Antithesis
+# build flavor enables this; see `mz_ore::antithesis`.
+antithesis = ["dep:antithesis-instrumentation", "dep:antithesis_sdk", "antithesis_sdk/full"]
 async = [
     "async-trait",
     "futures",

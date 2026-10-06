@@ -51,7 +51,12 @@ pub const RESTART_IN_PLACE_EXIT_CODE: i32 = 75;
 #[macro_export]
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
-        $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
+        let message = format!($($arg),*);
+        $crate::__private::tracing::warn!("halting process: {}", message);
+        $crate::antithesis_reachable!(
+            ::std::concat!("process halted at ", ::std::file!(), ":", ::std::line!()),
+            &message
+        );
         $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
     }}
 }
