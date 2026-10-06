@@ -1498,8 +1498,8 @@ mod tests {
                 let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
                 let committer = GroupCommitter {
                     rx,
-                    oracle: oracle.clone(),
-                    table_write_handle: handle.clone(),
+                    oracle: Arc::<MemTimestampOracle>::clone(&oracle),
+                    table_write_handle: Arc::<ConflictingTableWriteHandle>::clone(&handle),
                     catalog_upper: catalog.upper_handle(),
                     internal_cmd_tx,
                     now: SYSTEM_TIME.clone(),
@@ -1586,8 +1586,8 @@ mod tests {
             let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
             let committer = GroupCommitter {
                 rx,
-                oracle: oracle.clone(),
-                table_write_handle: handle.clone(),
+                oracle: Arc::<MemTimestampOracle>::clone(&oracle),
+                table_write_handle: Arc::<ConflictingTableWriteHandle>::clone(&handle),
                 catalog_upper: catalog.upper_handle(),
                 internal_cmd_tx,
                 now: SYSTEM_TIME.clone(),
