@@ -14,7 +14,6 @@ anyhow.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
-clap = { workspace = true, features = ["env"] }
 futures.workspace = true
 itertools.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
