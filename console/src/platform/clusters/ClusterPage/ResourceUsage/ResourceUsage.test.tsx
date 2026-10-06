@@ -923,6 +923,61 @@ describe("ResourceUsage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("draws a window of 3h or less from the live subscribe", async () => {
+    window.localStorage.setItem("mz-cluster-graph-time-period", "60");
+    // The lineage key embeds the environment version.
+    await setFakeEnvironment(getStore().set, "aws/us-east-1", NEW_ENVIRONMENT);
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: clusterQueryKeys.deploymentLineage({ clusterIdsKey: "u9" }),
+        results: mapKyselyToTabular({
+          columns: buildColumns([
+            "clusterId",
+            "currentDeploymentClusterId",
+            "clusterName",
+          ]),
+          rows: [],
+        }),
+      }),
+      mockSubscribeSocket((sql) =>
+        sql.includes("utilization_overview_3h")
+          ? {
+              columns: [
+                buildColumn({ name: "replicaId" }),
+                buildColumn({ name: "name" }),
+                buildColumn({ name: "occurredAt" }),
+                buildColumn({
+                  name: "cpuPercent",
+                  type_oid: MzDataType.float8,
+                }),
+                buildColumn({
+                  name: "heapPercent",
+                  type_oid: MzDataType.float8,
+                }),
+              ],
+              rows: [
+                [
+                  "u1",
+                  "r1",
+                  new Date(NOW_MS - 30 * 60_000).toISOString(),
+                  "0.45",
+                  "0.6",
+                ],
+              ],
+            }
+          : undefined,
+      ),
+    );
+    await renderResourceUsage({ withSwap: true });
+
+    expect(
+      await screen.findByRole("img", { name: "CPU usage" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No resource usage in this time period."),
+    ).not.toBeInTheDocument();
+  });
+
   it("says replicas ran unmeasured when the window has no readings", async () => {
     await renderResourceUsage({ withSwap: true, utilizationRowCount: 0 });
 

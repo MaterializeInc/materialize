@@ -27,19 +27,20 @@ const METADATA_COLUMNS = [
 /**
  * Answers each SUBSCRIBE sent over the WebSocket with one snapshot of `upsert`
  * rows and the progress row that completes it, then stays silent.
- * `snapshotFor` picks a query's rows from its SQL and parameters. A query it
- * returns undefined for never completes, like a subscribe still loading.
+ * `snapshotFor` picks a query's rows from its SQL and parameters, or returns a
+ * promise of them to hold the snapshot back. A query it returns undefined for
+ * never completes, like a subscribe still loading.
  */
 export function mockSubscribeSocket(
   snapshotFor: (
     sql: string,
     params: unknown[],
-  ) => SubscribeSnapshot | undefined,
+  ) => SubscribeSnapshot | undefined | Promise<SubscribeSnapshot | undefined>,
 ) {
   return ws.link(/^wss?:\/\//).addEventListener("connection", ({ client }) => {
     let hasOptions = false;
     const send = (message: unknown) => client.send(JSON.stringify(message));
-    client.addEventListener("message", (event) => {
+    client.addEventListener("message", async (event) => {
       // The first message carries the session options.
       if (!hasOptions) {
         hasOptions = true;
@@ -50,7 +51,10 @@ export function mockSubscribeSocket(
         queries: Array<{ query: string; params?: unknown[] }>;
       };
       const [query] = request.queries;
-      const snapshot = snapshotFor(query?.query ?? "", query?.params ?? []);
+      const snapshot = await snapshotFor(
+        query?.query ?? "",
+        query?.params ?? [],
+      );
       if (!snapshot) return;
       const progressRow = (timestamp: string) => [
         timestamp,

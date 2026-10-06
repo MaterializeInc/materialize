@@ -20,11 +20,12 @@ import {
   replicaStatusesUpdatedAt,
   useObjectCreationTimes,
   useObjectHydrationStretches,
+  usePolledReplicaUtilizationHistory,
   useReplicaHeapLimits,
   useReplicaHydrationEpisodes,
   useReplicaStatusHistory,
-  useReplicaUtilizationHistory,
   useUnhydratedObjectCounts,
+  useUtilizationTier,
 } from "~/platform/clusters/queries";
 import { useClusterObjectsLive } from "~/store/allObjectsCollection";
 import { useEnvironmentGate } from "~/store/environments";
@@ -42,6 +43,7 @@ import {
   transformDdlEvents,
   transformReplicaTimeline,
 } from "./resourceUsageModel";
+import { useLiveClusterUtilization } from "./useLiveClusterUtilization";
 
 const DDL_OBJECT_TYPES = ["index", "materialized-view"];
 const EMPTY_SERIES: ReplicaData[] = [];
@@ -92,17 +94,36 @@ export function useResourceUsageData({
   timePeriodMinutes: number;
 }) {
   const { colors } = useTheme<MaterializeTheme>();
-  // The status timeline reads offline stretches from status history.
-  const history = useReplicaUtilizationHistory(
+  const bucketSizeMs = Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS);
+  const tier = useUtilizationTier(timePeriodMinutes);
+  const hasMemoryBreakdown =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
+  const live = useLiveClusterUtilization({
+    clusterId: cluster.id,
+    timePeriodMinutes,
+    bucketSizeMs,
+    tier: tier === "poll" ? undefined : tier,
+    includeMemoryBreakdown: hasMemoryBreakdown,
+  });
+  const polled = usePolledReplicaUtilizationHistory(
     {
-      bucketSizeMs: Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS),
+      bucketSizeMs,
       timePeriodMinutes,
       clusterIds: [cluster.id],
       replicaId: undefined,
       includeMemoryBreakdown: true,
     },
-    { includeOfflineEvents: false },
+    { enabled: tier === "poll" },
   );
+  const history =
+    tier === "poll"
+      ? {
+          data: polled.data,
+          isLoading: polled.isLoading,
+          isError: polled.isError,
+          isRefreshing: false,
+        }
+      : live;
   const graphData = history.data?.graphData;
 
   // Replicas that share a name, such as a scheduled cluster's refreshes, share
@@ -199,10 +220,8 @@ export function useResourceUsageData({
   // A sample without a heap limit has `heap_percent` as a share of the memory
   // allocation instead, and no RAM limit share. Only rows on 26.44 and later
   // carry that share, so older environments keep the heap labels.
-  const rowsCarryHeapLimit =
-    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
   const hasHeapLimit =
-    !rowsCarryHeapLimit ||
+    !hasMemoryBreakdown ||
     chartData.some(({ data }) =>
       data.some((point) => point.ramLimitPercent !== null),
     );

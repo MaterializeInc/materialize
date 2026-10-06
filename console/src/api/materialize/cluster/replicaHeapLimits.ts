@@ -12,9 +12,9 @@ import { QueryKey } from "@tanstack/react-query";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 
 /**
- * Each process's heap limit (RAM plus swap) for the given replicas, from their
- * latest metrics. The literal id list makes this a lookup on
- * `mz_cluster_replica_metrics_ind`.
+ * Each process's heap limit (RAM plus swap) and heap use for the given
+ * replicas, from their latest metrics. The literal id list makes this a lookup
+ * on `mz_cluster_replica_metrics_ind`.
  *
  * NOTE: callers fold the per-process rows, because a GROUP BY here turns the
  * fast-path lookup into a dataflow.
@@ -31,6 +31,7 @@ export function buildReplicaHeapLimitsQuery({
       "process_id as processId",
       "heap_limit as heapLimit",
       "memory_bytes as memoryBytes",
+      "heap_bytes as heapBytes",
     ])
     .where("replica_id", "in", replicaIds);
 }

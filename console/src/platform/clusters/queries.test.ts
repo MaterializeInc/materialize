@@ -44,6 +44,7 @@ import {
   useFreshnessObjects,
   useObjectHydrationStretches,
   useOwners,
+  useReplicaHeapBytes,
   useReplicaHeapLimits,
   useReplicaOfflineEvents,
   useReplicaStatusHistory,
@@ -391,6 +392,95 @@ describe("useReplicaHeapLimits", () => {
     answerHeapLimits({ heapLimit: null, memoryBytes: null });
 
     await pollFiveMinutes();
+
+    expect(requests).toBeGreaterThan(1);
+  });
+});
+
+describe("useReplicaHeapBytes", () => {
+  let requests: number;
+
+  const answerHeapMetrics = (
+    rows: Array<{
+      replicaId: string;
+      processId: string;
+      heapBytes: string | null;
+    }>,
+  ) => {
+    requests = 0;
+    server.use(
+      http.post("*/api/sql", ({ request }) => {
+        const queryKey = JSON.parse(
+          new URL(request.url).searchParams.get("query_key") ?? "[]",
+        );
+        if (queryKey[1]?.scope !== "replicaHeapLimits") return undefined;
+        requests += 1;
+        return HttpResponse.json({
+          results: [
+            mapKyselyToTabular({
+              rows: rows.map((row) => ({
+                ...row,
+                heapLimit: "1073741824",
+                memoryBytes: "1073741824",
+              })),
+              columns: buildColumns([
+                "replicaId",
+                "processId",
+                "heapLimit",
+                "memoryBytes",
+                "heapBytes",
+              ]),
+            }),
+          ],
+        });
+      }),
+    );
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sums each replica's processes, leaving out a replica with a process that reports none", async () => {
+    answerHeapMetrics([
+      { replicaId: "u1", processId: "0", heapBytes: "400" },
+      { replicaId: "u1", processId: "1", heapBytes: null },
+      { replicaId: "u2", processId: "0", heapBytes: "500" },
+      { replicaId: "u2", processId: "1", heapBytes: "600" },
+    ]);
+    const ProviderWrapper = await createProviderWrapper();
+    const { result } = renderHook(() => useReplicaHeapBytes(["u1", "u2"]), {
+      wrapper: ProviderWrapper,
+    });
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual(new Map([["u2", 1100]])),
+    );
+  });
+
+  it("keeps polling once every heap limit is in", async () => {
+    answerHeapMetrics([{ replicaId: "u1", processId: "0", heapBytes: "400" }]);
+    vi.useFakeTimers({
+      toFake: [
+        "Date",
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+      ],
+    });
+    const ProviderWrapper = await createProviderWrapper();
+    renderHook(
+      () => {
+        useReplicaHeapLimits(["u1"]);
+        useReplicaHeapBytes(["u1"]);
+      },
+      { wrapper: ProviderWrapper },
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requests).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(5 * millisecondsInMinute);
 
     expect(requests).toBeGreaterThan(1);
   });
