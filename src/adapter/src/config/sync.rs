@@ -93,11 +93,8 @@ pub async fn system_parameter_sync(
             backend.push(&mut params).await;
         }
 
-        // The environment-wide values this tick read are now in the catalog, so
-        // the same read's rules can be resolved against them. This is what makes
-        // the file a create-time fold evaluates and the baseline it judges that
-        // file against the same file's; see
-        // `SystemParameterFrontend::published_config_file`.
+        // This tick's environment-wide values are now in the catalog, so the
+        // same read's rules can be resolved against them.
         frontend.publish_config_file();
 
         // Reconcile the scoped (per-cluster and per-replica) parameters. We do

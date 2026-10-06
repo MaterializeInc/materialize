@@ -98,31 +98,23 @@ const CLAUSE_OP: &str = "op";
 const CLAUSE_VALUES: &str = "values";
 /// Key of a [`Clause`] inverting it.
 const CLAUSE_NEGATE: &str = "negate";
-/// Key LaunchDarkly's REST API stamps on a clause. Carried by a clause copied
-/// out of the LaunchDarkly API, meaningless in evaluation, so it is accepted and
-/// ignored rather than rejected as an unknown key.
+/// Key LaunchDarkly's REST API stamps on a clause. Accepted and ignored.
 const CLAUSE_ID: &str = "_id";
 
-/// The parsed contents of the config-sync file.
+/// The parsed contents of the config-sync file, a JSON object whose keys are
+/// parameter names except for the reserved [`SEGMENTS_SECTION`] and
+/// [`RULES_SECTION`].
 ///
-/// The file is a JSON object whose keys are parameter names, except for the two
-/// reserved section keys [`SEGMENTS_SECTION`] and [`RULES_SECTION`]. A file
-/// carrying neither reserved key is therefore a flat, wholly environment-wide
-/// parameter map.
-///
-/// No synced system parameter may be named `segments` or `rules`, or the
-/// reserved section would shadow it.
-/// `test_no_synced_parameter_shadows_a_reserved_section` enforces that.
+/// NOTE: A reserved section shadows a synced parameter of the same name.
+/// `test_no_synced_parameter_shadows_a_reserved_section` checks there is none.
 #[derive(Debug, Default, PartialEq)]
 struct ConfigFile {
     /// Environment-wide values, keyed by the parameter's external name.
     environment: BTreeMap<String, JsonValue>,
     /// The predicates rules select objects with, keyed by segment name.
     segments: BTreeMap<String, Segment>,
-    /// The rules, in the document order the file lists them in. The first rule
-    /// whose segment matches an object decides each parameter it supplies, so the
-    /// order is load-bearing and an array is the only shape that carries it: a
-    /// JSON object's key order is lost on parse.
+    /// The rules in file order. The first rule whose segment matches an object
+    /// decides each parameter it supplies.
     rules: Vec<Rule>,
 }
 
@@ -130,15 +122,9 @@ impl ConfigFile {
     /// Parses the config-sync file's contents, or `None` if the document is not a
     /// JSON object.
     ///
-    /// Individual sections are parsed leniently: a section, segment, rule, or
-    /// value of the wrong shape is dropped with a warning rather than failing the
-    /// parse, so one bad entry cannot strand the rest of the file.
-    ///
-    /// A `None` return is "no information about any parameter", which callers must
-    /// keep distinct from a valid but empty document. An empty document is a
-    /// complete desired state of "no scoped overrides", which the reconcile
-    /// applies by durably pruning every override. See
-    /// [`SystemParameterFrontend::has_scoped_desired_state`].
+    /// `None` is "no information about any parameter", which callers must keep
+    /// distinct from a valid but empty document. A section, segment or rule of the
+    /// wrong shape is dropped with a warning and does not fail the parse.
     fn parse(contents: &str) -> Option<Self> {
         let values: BTreeMap<String, JsonValue> = match serde_json::from_str(contents) {
             Ok(values) => values,
@@ -177,15 +163,8 @@ impl ConfigFile {
     }
 }
 
-/// The kind of object a [`Segment`]'s clauses match, spelling the LaunchDarkly
-/// context kind of the same name (see [`cluster_context`] and
-/// [`replica_context`]).
-///
-/// A segment declares one, rather than each clause carrying its own as a
-/// LaunchDarkly clause does. That both spares the repetition and makes the
-/// cluster-coherence rule structural: a cluster-coherent parameter is supplied
-/// only through a `cluster` segment, which cannot name a replica attribute at
-/// all.
+/// The kind of object a [`Segment`]'s clauses match, named after the
+/// LaunchDarkly context kind (see [`cluster_context`] and [`replica_context`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ContextKind {
     Cluster,
@@ -211,12 +190,9 @@ impl ContextKind {
     }
 }
 
-/// An attribute of a cluster or replica that a [`Clause`] matches on.
-///
-/// The vocabulary is closed, and is the same one the LaunchDarkly `cluster` and
-/// `replica` context kinds carry (see [`cluster_context`] and
-/// [`replica_context`]), so that a segment expresses what a LaunchDarkly rule
-/// expresses and the file can stand in for LaunchDarkly.
+/// An attribute of a cluster or replica that a [`Clause`] matches on, the same
+/// set the LaunchDarkly `cluster` and `replica` contexts carry (see
+/// [`cluster_context`] and [`replica_context`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ScopeAttribute {
     ClusterId,
@@ -258,10 +234,6 @@ impl ScopeAttribute {
     }
 
     /// Whether the attribute can distinguish two replicas of one cluster.
-    ///
-    /// Such an attribute is absent from the `cluster` context kind, so a
-    /// [`ParameterScope::Cluster`] parameter cannot be targeted by one. See
-    /// [`SystemParameterFrontend::file_rule_overrides`].
     fn is_replica_attribute(&self) -> bool {
         match self {
             Self::ClusterId | Self::ClusterName | Self::IsBuiltin => false,
@@ -272,9 +244,6 @@ impl ScopeAttribute {
     }
 
     /// Whether an object of `kind` carries this attribute.
-    ///
-    /// A replica carries its owning cluster's attributes too, so every attribute
-    /// is available in the `replica` context.
     fn in_context(&self, kind: ContextKind) -> bool {
         match kind {
             ContextKind::Cluster => !self.is_replica_attribute(),
@@ -284,9 +253,8 @@ impl ScopeAttribute {
 }
 
 /// The attributes a cluster is matched against, mirroring [`cluster_context`].
-///
-/// Deliberately replica-free: a cluster-coherent parameter must resolve
-/// identically across the cluster's replicas.
+/// Replica-free, so a cluster-coherent parameter resolves identically across
+/// the cluster's replicas.
 fn cluster_attributes(cluster: &ClusterScopeContext) -> BTreeMap<ScopeAttribute, String> {
     BTreeMap::from([
         (ScopeAttribute::ClusterId, cluster.id.clone()),
@@ -296,9 +264,6 @@ fn cluster_attributes(cluster: &ClusterScopeContext) -> BTreeMap<ScopeAttribute,
 }
 
 /// The attributes a replica is matched against, mirroring [`replica_context`].
-///
-/// Carries the owning cluster's attributes too, so a replica-local parameter can
-/// be targeted by cluster alone.
 fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute, String> {
     BTreeMap::from([
         (ScopeAttribute::ClusterId, replica.cluster_id.clone()),
@@ -314,32 +279,19 @@ fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute,
     ])
 }
 
-/// A named predicate selecting the clusters or replicas a rule applies to.
-///
-/// Shaped after a LaunchDarkly targeting rule: a context kind and a list of
-/// clauses, ANDed, each ORing its own values. Keeping the clause vocabulary is
-/// what lets the file stand in for LaunchDarkly, since one clause here means what
-/// the same clause means there.
+/// A named predicate selecting the clusters or replicas a rule applies to: a
+/// context kind and LaunchDarkly-shaped clauses, ANDed.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Segment {
     /// The kind of object the clauses match, or `None` when the entry's
-    /// `contextKind` is missing or outside the vocabulary.
-    ///
-    /// `None` makes the segment match nothing in either pass rather than
-    /// defaulting to a kind, since guessing would silently target a set of
-    /// objects the author never named.
+    /// `contextKind` is missing or unknown.
     context_kind: Option<ContextKind>,
     /// The clauses, ANDed. An empty list constrains nothing, so it matches every
     /// object of [`Self::context_kind`].
     clauses: Vec<Clause>,
-    /// The defects that keep this segment from being evaluated, reported by
-    /// [`SystemParameterFrontend::scoped_rule_diagnostics`].
-    ///
-    /// A segment with any defect matches nothing, so the rules naming it never
-    /// apply. Fail-safe on purpose: dropping the offending clause instead would
-    /// leave the surviving ANDed clauses matching a *wider* set of objects than
-    /// the author wrote, and a segment whose every clause was dropped would match
-    /// everything.
+    /// The defects that keep this segment from being evaluated. A segment with
+    /// any defect matches nothing, because dropping only the bad clause would
+    /// widen what the remaining clauses select.
     rejected: Vec<SegmentDefect>,
 }
 
@@ -350,36 +302,22 @@ struct Clause {
     /// The attribute whose value the operator is applied to.
     attribute: ScopeAttribute,
     op: Operator,
-    /// The values the operator is applied against, ORed.
-    ///
-    /// Rendered to strings because that is how scope attributes are spelled, so a
-    /// boolean attribute may be written either as `true` or as `"true"`. An empty
-    /// list satisfies nothing, so the clause holds for no object unless negated.
+    /// The values the operator is applied against, ORed, rendered to strings as
+    /// scope attributes are, so `true` and `"true"` are the same value.
     values: Vec<String>,
     /// The compiled [`Operator::Matches`] patterns, one per entry of
     /// [`Self::values`], and empty for every other operator.
-    ///
-    /// Compiled when the file is parsed rather than per evaluation: evaluation
-    /// runs per object per sync tick and per object creation, while the parse
-    /// cache makes a parse happen once per change to the file.
     patterns: Vec<Regex>,
-    /// Whether to invert the clause.
-    ///
-    /// Applied *after* the OR across [`Self::values`], as it is in LaunchDarkly,
-    /// so a negated `in` means "none of these" rather than "not this one".
+    /// Whether to invert the clause, after the OR across [`Self::values`] as in
+    /// LaunchDarkly.
     negate: bool,
 }
 
-/// A [`Clause`] operator.
+/// A [`Clause`] operator, the string operators of LaunchDarkly's vocabulary.
 ///
-/// Mirrors the operator vocabulary of `launchdarkly-server-sdk-evaluation`, whose
-/// own `Op` enum and `Clause` fields are `pub(crate)` and so can neither be
-/// imported nor constructed here. The two are therefore kept aligned by
-/// `test_operator_vocabulary_matches_launchdarkly` rather than by the compiler:
-/// changing the SDK's vocabulary will not fail this file to compile.
-///
-/// Only the string operators are here. See [`unsupported_operator`] for the ten
-/// LaunchDarkly operators this format recognises and refuses.
+/// NOTE: The SDK's own `Op` is `pub(crate)`, so this mirrors it and
+/// `test_operator_vocabulary_matches_launchdarkly` keeps the two aligned. The
+/// compiler does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operator {
     In,
@@ -400,9 +338,7 @@ impl Operator {
         Self::Matches,
     ];
 
-    /// The operator of this name, or `None` if it is not one of the supported
-    /// ones. Resolved through [`Self::as_str`] so that the name this accepts and
-    /// the name a diagnostic prints cannot drift apart.
+    /// The operator of this name, or `None` if it is not supported.
     fn parse(op: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -422,11 +358,6 @@ impl Operator {
 
 /// Why the LaunchDarkly operator `op` is refused, or `None` if it is not a
 /// LaunchDarkly operator at all.
-///
-/// Every scope attribute is string-valued, so a numeric, date or semantic-version
-/// comparison over one could only ever evaluate false. Recognising these and
-/// saying so is the point: refusing them as if they were typos would send an
-/// author looking for a misspelling that is not there.
 fn unsupported_operator(op: &str) -> Option<&'static str> {
     match op {
         "lessThan" | "lessThanOrEqual" | "greaterThan" | "greaterThanOrEqual" => {
@@ -468,11 +399,9 @@ impl Clause {
     /// Whether the clause holds for an object carrying `attributes`.
     fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
         let Some(value) = attributes.get(&self.attribute) else {
-            // Unreachable: the parse refuses an attribute absent from the
-            // segment's context kind, and both attribute maps are complete for
-            // their kind. `false` regardless of `negate` is what the SDK does
-            // too, a clause stating something about a value and there being no
-            // value.
+            // Unreachable, as the parse refuses an attribute outside the
+            // segment's context kind. `false` regardless of `negate`, as in the
+            // SDK.
             return false;
         };
         self.holds(value) != self.negate
@@ -485,9 +414,7 @@ impl Clause {
             Operator::StartsWith => self.values.iter().any(|prefix| value.starts_with(prefix)),
             Operator::EndsWith => self.values.iter().any(|suffix| value.ends_with(suffix)),
             Operator::Contains => self.values.iter().any(|needle| value.contains(needle)),
-            // Unanchored, which is both the `regex` crate's default and what
-            // LaunchDarkly's `matches` does, it being the same crate. `^` and `$`
-            // are how a whole-value match is asked for.
+            // Unanchored, as LaunchDarkly's `matches`, which uses the same crate.
             Operator::Matches => self.patterns.iter().any(|pattern| pattern.is_match(value)),
         }
     }
@@ -505,8 +432,7 @@ enum SegmentDefect {
     Clauses,
     /// The clause at this 1-based position in `clauses` cannot be evaluated.
     Clause(usize, ClauseDefect),
-    /// The entry carries a key other than `contextKind` and `clauses`, refused for
-    /// the same reason an unknown clause key is.
+    /// The entry carries a key other than `contextKind` and `clauses`.
     UnknownKey(String),
 }
 
@@ -555,9 +481,7 @@ enum ClauseDefect {
     /// `op` names a LaunchDarkly operator this format refuses, with the reason
     /// from [`unsupported_operator`].
     UnsupportedOperator(String, &'static str),
-    /// `op` is not a LaunchDarkly operator. Refused loudly rather than treated as
-    /// an operator that never matches, which is what the SDK does, because an
-    /// author of this file can fix a typo and a warning is how they learn of it.
+    /// `op` is not a LaunchDarkly operator.
     UnknownOperator(String),
     /// `values` is missing, is not an array, or holds something other than a
     /// string, number or boolean.
@@ -566,10 +490,7 @@ enum ClauseDefect {
     InvalidPattern { pattern: String, error: String },
     /// `negate` is present but is not a boolean.
     UnsupportedNegate,
-    /// The clause carries a key this binary does not know. Refused for the same
-    /// reason an unknown attribute is: it states a constraint that cannot be
-    /// honoured. A per-clause `contextKind` lands here, the segment declaring the
-    /// context kind for all of its clauses.
+    /// The clause carries an unknown key, including a per-clause `contextKind`.
     UnknownKey(String),
 }
 
@@ -619,10 +540,7 @@ impl fmt::Display for ClauseDefect {
 
 impl Segment {
     /// Parses one entry of the `segments` section, or `None` if its value is not
-    /// a JSON object.
-    ///
-    /// A defect is kept as a [`SegmentDefect`] rather than dropped, so that the
-    /// segment matches nothing and the diagnostics can name it.
+    /// a JSON object. Defects are recorded in [`Self::rejected`].
     fn parse(position: FilePosition<'_>, value: JsonValue) -> Option<Self> {
         let mut entry = match value {
             JsonValue::Object(entry) => entry,
@@ -646,10 +564,8 @@ impl Segment {
             _ => segment.rejected.push(SegmentDefect::MissingContextKind),
         }
 
-        // Clauses are still parsed when the context kind is unusable, so that
-        // every defect in the segment is reported at once rather than one per
-        // edit of the file. Only the attribute-in-context check needs the kind,
-        // and it is skipped rather than guessed.
+        // Parse the clauses even without a usable context kind, so every defect
+        // is reported at once.
         match entry.remove(SEGMENT_CLAUSES) {
             Some(JsonValue::Array(clauses)) => {
                 for (index, clause) in clauses.into_iter().enumerate() {
@@ -671,12 +587,8 @@ impl Segment {
         Some(segment)
     }
 
-    /// Whether the segment selects an object of `kind` carrying `attributes`.
-    ///
-    /// A segment of any other context kind selects nothing here. That is what
-    /// keeps a cluster-coherent parameter from being targeted by replica
-    /// attributes: only a `cluster` segment is consulted for a cluster, and a
-    /// `cluster` segment cannot name a replica attribute.
+    /// Whether the segment selects an object of `kind` carrying `attributes`. A
+    /// segment of another context kind selects nothing.
     fn matches(&self, kind: ContextKind, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
         self.rejected.is_empty()
             && self.context_kind == Some(kind)
@@ -688,9 +600,8 @@ impl Segment {
 /// segment matches.
 #[derive(Debug, PartialEq)]
 struct Rule {
-    /// The rule's 1-based position in the `rules` array, named in diagnostics.
-    /// Recorded rather than derived from the parsed order so that a malformed
-    /// element, which is dropped, does not renumber the rules after it.
+    /// The rule's 1-based position in the `rules` array, counting dropped
+    /// elements, named in diagnostics.
     ordinal: usize,
     /// The name of the [`Segment`] selecting the objects this rule applies to.
     segment: String,
@@ -757,39 +668,17 @@ impl Rule {
 }
 
 /// The frontend's cached view of the config-sync file.
-///
-/// Caching keeps the file off the coordinator loop: create-time scoped resolution
-/// runs the scoped passes inline on the loop that serializes all DDL and query
-/// sequencing, where a synchronous read has no business.
-///
-/// The read the sync loop is working through and the parse the scoped passes
-/// resolve against are held separately, because a rule is recorded as an override
-/// only where it differs from the environment-wide value, so the two must come
-/// from the same file. [`Self::current`] is this tick's read; [`Self::published`]
-/// is the newest read whose environment-wide section the loop has already pushed.
 #[derive(Debug)]
 struct CachedConfigFile {
     /// The contents the cache was built from, or `None` if that read failed.
-    ///
-    /// Compared against the next read so that re-parsing, and every warning the
-    /// file provokes, happen once per change rather than once per tick.
+    /// The next read is compared against it, so the file is re-parsed, and
+    /// diagnosed, only when it changes.
     contents: Option<String>,
     /// The parse of [`Self::contents`], or `None` if the read failed or the
-    /// document was not a JSON object.
-    ///
-    /// The environment-wide pass of the tick that read it folds this into
-    /// [`SynchronizedParameters`], and whether it is `Some` is the
-    /// current-read-valid bit behind
-    /// [`SystemParameterFrontend::has_scoped_desired_state`]: the reconcile must
-    /// not prune against a file it could not read.
+    /// document was not a JSON object. The environment-wide pass reads this.
     current: Option<Arc<ConfigFile>>,
-    /// The newest parse whose environment-wide section is already committed to
-    /// the catalog. What the scoped passes resolve against; see
-    /// [`SystemParameterFrontend::published_config_file`] for why.
-    ///
-    /// [`SystemParameterFrontend::publish_config_file`] advances this from
-    /// [`Self::current`], and only for a valid parse, so it doubles as the last
-    /// known valid policy across a failed read.
+    /// The newest valid parse whose environment-wide section is committed to
+    /// the catalog. The scoped passes read this. It survives a failed read.
     published: Option<Arc<ConfigFile>>,
 }
 
@@ -854,16 +743,11 @@ fn as_array(position: FilePosition<'_>, value: JsonValue) -> Vec<JsonValue> {
 }
 
 impl Clause {
-    /// Parses one element of a segment's `clauses` array, or why it cannot be
-    /// evaluated.
+    /// Parses one element of a segment's `clauses` array, or its first defect.
     ///
-    /// `context_kind` is the segment's, used to refuse an attribute that objects
-    /// of that kind do not carry. `None` means the segment's own context kind was
-    /// unusable, in which case that check is skipped rather than guessed: the
-    /// segment already matches nothing on the strength of that defect.
-    ///
-    /// A clause with more than one defect is reported for the first one found,
-    /// which is enough to make its segment match nothing.
+    /// `context_kind` is the segment's, used to refuse an attribute objects of
+    /// that kind do not carry. `None`, for an unusable context kind, skips that
+    /// check.
     fn parse(value: JsonValue, context_kind: Option<ContextKind>) -> Result<Self, ClauseDefect> {
         let JsonValue::Object(mut clause) = value else {
             return Err(ClauseDefect::NotAnObject);
@@ -912,16 +796,12 @@ impl Clause {
             Some(_) => return Err(ClauseDefect::UnsupportedNegate),
         };
 
-        // Compiled once, here, rather than per evaluation. Empty for every other
-        // operator, whose values are compared as plain strings.
         let mut patterns = Vec::new();
         if op == Operator::Matches {
             for pattern in &values {
                 let compiled = Regex::new(pattern).map_err(|e| ClauseDefect::InvalidPattern {
                     pattern: pattern.clone(),
-                    // The regex crate renders a parse error as a multi-line block
-                    // that points at the offending character. Collapsed so that
-                    // the warning this ends up in stays one log line.
+                    // Collapse the multi-line error so the warning is one line.
                     error: e
                         .to_string()
                         .split_whitespace()
@@ -992,33 +872,16 @@ enum ScopedValue {
     /// Parses, but matches the environment-wide value, so there is no override
     /// to record.
     MatchesEnvironment,
-    /// Does not parse for the parameter's type, so it is dropped.
+    /// Does not parse for the parameter's type, so it is dropped. Recording it
+    /// would panic the optimizer's `bool` decode for a cluster-coherent override.
     Unparseable,
 }
 
 /// Classifies `value` as the scoped value of `param_name` against the
 /// environment-wide `base`, the var-formatted value held in `params`.
 ///
-/// Recording is keyed on *differing* from the environment-wide value. For
-/// LaunchDarkly the `variation_detail` reason is the wrong signal: it cannot say
-/// which context kind's clause matched (an env-level rule and a cluster-specific
-/// rule both report `RuleMatch`), and `Fallthrough` serves the env-wide value to
-/// every object. Comparing against the env-wide baseline is the only signal that
-/// means "this scope changed the answer", which is what must beat a manual
-/// `FEATURES` pin and what keeps the durable collections sparse. See the scoped
-/// feature flags design, §Resolution.
-///
-/// The comparison runs in the parameter's canonical encoding. `base` is
-/// var-formatted (a `bool` is `"on"`/`"off"`), whereas a raw source value spells
-/// a boolean `"true"`/`"false"`, so a direct string compare would treat every
-/// boolean parameter as differing, even when the source served the env-wide
-/// value. Callers still *store* the raw value, since downstream consumers parse
-/// `"true"`/`"false"`. Only the decision is canonical.
-///
-/// [`ScopedValue::Unparseable`] must never be recorded: a stored unparseable
-/// value would poison resolution. The optimizer's `bool` decode, for one, panics
-/// on every plan for a cluster-coherent override it cannot parse. It means "no
-/// scoped opinion", falling back to the environment-wide value.
+/// The comparison is in the parameter's canonical encoding, since a raw boolean
+/// is `"true"` where `base` is `"on"`. Callers store the raw value.
 fn classify_scoped_value(
     params: &SynchronizedParameters,
     param_name: &str,
@@ -1074,12 +937,10 @@ impl SystemParameterFrontend {
     /// [SystemParameterFrontend] and return `true` iff at least one parameter
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
-        // The file is read exactly once per tick, here, and the scoped passes
-        // resolve against the parse this read is promoted to once its
-        // environment-wide values are pushed. Reading it per parameter would let a
-        // rewrite land mid-loop and be observed as a torn read, and reading it in
-        // the scoped passes would put a synchronous read on the coordinator loop,
-        // which resolves a new object's overrides at create time.
+        // Read the file once per tick rather than once per parameter, so a
+        // rewrite landing mid-loop cannot be observed as a torn read. The scoped
+        // passes read only the cache, as the create path runs them on the
+        // coordinator loop.
         let file = match &self.client {
             SystemParameterFrontendClient::File { path } => {
                 self.refresh_config_file(path, fs::read_to_string(path), params)
@@ -1138,18 +999,11 @@ impl SystemParameterFrontend {
     }
 
     /// Refreshes the cached config-sync file from `read`, the outcome of reading
-    /// it at `path`, and returns the new parse for the environment-wide pass.
+    /// it at `path`, and returns its parse.
     ///
-    /// This does not make the new parse visible to the scoped passes:
-    /// [`Self::publish_config_file`] does, once the caller has pushed this read's
-    /// environment-wide values. Until then the scoped passes keep resolving
-    /// against the previously published parse, whose baseline is the one they
-    /// would be compared to.
-    ///
-    /// Everything the file is diagnosed for, both the shape warnings the parse
-    /// emits and the scoped-section diagnostics, is reported here and only when
-    /// the contents changed. A standing mistake in the file would otherwise be
-    /// logged on every tick, and the sync loop ticks once a second.
+    /// Unchanged contents return the cached parse without re-parsing, so a bad
+    /// file is warned about once per change rather than on every tick. The
+    /// scoped passes see the new parse only after [`Self::publish_config_file`].
     fn refresh_config_file(
         &self,
         path: &Path,
@@ -1190,36 +1044,15 @@ impl SystemParameterFrontend {
         *cache = Some(CachedConfigFile {
             contents,
             current: file.clone(),
-            // Carried over rather than advanced here: this read's rules become
-            // visible to the scoped passes only once `publish_config_file`
-            // reports its baseline committed.
+            // Advanced only by `publish_config_file`.
             published,
         });
 
         file
     }
 
-    /// The newest config-sync file whose environment-wide section is committed to
-    /// the catalog, or `None` if no read of it has ever parsed.
-    ///
-    /// What the scoped passes resolve against, for the two reasons this is split
-    /// from the current read.
-    ///
-    /// A rule is recorded as an override only where it differs from the
-    /// environment-wide value (see [`classify_scoped_value`]), so a file's rules
-    /// have to be judged against that same file's baseline. Were a read published
-    /// before the sync loop pushed its top-level parameters, a create landing in
-    /// that window would pair the new rules with the old baseline and could omit
-    /// an override its first configuration requires. The next reconcile repairs
-    /// the durable row, but for a render-frozen parameter that is already too
-    /// late, which is the whole reason the create-time fold exists.
-    ///
-    /// It also stays put across a failed read or an unparseable document, so an
-    /// object created while the ConfigMap has briefly vanished or is half-written
-    /// still gets the last known valid overrides rather than none, and identical
-    /// replicas do not diverge on when they happened to be created. Pruning is
-    /// held back over that window separately, by
-    /// [`Self::has_scoped_desired_state`], which tracks the current read.
+    /// The newest valid config-sync file whose environment-wide section is
+    /// committed to the catalog, or `None` if no read has parsed yet.
     fn published_config_file(&self) -> Option<Arc<ConfigFile>> {
         self.config_file
             .lock()
@@ -1228,13 +1061,13 @@ impl SystemParameterFrontend {
             .and_then(|cached| cached.published.clone())
     }
 
-    /// Promotes the current read to the published parse, the caller having pushed
-    /// that read's environment-wide values to the catalog.
+    /// Promotes the current read to the published parse. A no-op when the
+    /// current read failed or did not parse.
     ///
-    /// Call this after the push and before the scoped reconcile of the same tick;
-    /// the `published_config_file` accessor describes what that ordering buys. A
-    /// no-op when the current read failed or did not parse, which is what leaves
-    /// the last valid parse available to create-time evaluation.
+    /// Call this after pushing the current read's environment-wide values and
+    /// before the scoped reconcile. A rule is recorded only where it differs from
+    /// the environment-wide value, so it must be resolved against its own file's
+    /// values.
     pub fn publish_config_file(&self) {
         let mut cache = self
             .config_file
@@ -1249,22 +1082,10 @@ impl SystemParameterFrontend {
 
     /// Whether the frontend knows the desired state of the scoped parameters.
     ///
-    /// `false` when the *most recent* read of the config-sync file did not parse,
-    /// which includes a file that is missing (the ConfigMap volume is mounted
-    /// optional, so it can disappear), unreadable, or not a JSON object.
-    ///
-    /// The scoped desired state is complete: the reconcile prunes every override
-    /// absent from it. A caller must therefore skip the reconcile while this is
-    /// `false` rather than treat "no information" as "no overrides", which would
-    /// durably drop every scoped override on a typo and restore it once the file
-    /// is fixed. Always `true` for LaunchDarkly, whose evaluation falls back to
-    /// the environment-wide value when it has nothing to say.
-    ///
-    /// Deliberately the current read rather than the published parse: holding
-    /// back the prune is only about not acting on a desired state we do not have,
-    /// whereas the create path is better served by the last valid one than by
-    /// nothing. The two questions are answered from the two halves of the cache
-    /// for that reason.
+    /// `false` when the most recent read of the config-sync file failed or did
+    /// not parse. The scoped reconcile prunes every override absent from the
+    /// desired state, so callers must skip it while this is `false`. Always
+    /// `true` for LaunchDarkly.
     pub fn has_scoped_desired_state(&self) -> bool {
         match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { .. } => true,
@@ -1277,16 +1098,8 @@ impl SystemParameterFrontend {
         }
     }
 
-    /// The problems with `file`'s segments and rules that an operator can act on:
-    /// a segment or clause that cannot be evaluated, a rule naming a segment that
-    /// does not exist, a parameter that is not scopable at all, a cluster-scoped
-    /// parameter supplied through a `replica` segment, and a value that does not
-    /// parse for its parameter's type. Resolution drops each of these silently,
-    /// and nothing surfaces a parameter's scope from SQL, so without this an
-    /// operator has nothing to debug against.
-    ///
-    /// Returned rather than logged so that [`Self::refresh_config_file`] can log
-    /// them only when the file changes.
+    /// The problems with `file`'s segments and rules that an operator can act on,
+    /// which resolution drops silently.
     fn scoped_rule_diagnostics(
         &self,
         file: &ConfigFile,
@@ -1390,10 +1203,8 @@ impl SystemParameterFrontend {
 
         let client = match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
-            // Resolved from the published parse, so this does no I/O: the create
-            // path calls it on the coordinator loop. An empty result here means
-            // "no overrides", so a caller reconciling the full desired state must
-            // first check `has_scoped_desired_state`.
+            // An empty result means "no overrides", so a caller reconciling the
+            // full desired state must first check `has_scoped_desired_state`.
             SystemParameterFrontendClient::File { .. } => {
                 let Some(file) = self.published_config_file() else {
                     return out;
@@ -1483,9 +1294,6 @@ impl SystemParameterFrontend {
     /// Evaluates each of `param_names` against `ctx`, returning only the values
     /// that differ from the environment-wide value held in `params`. Shared by
     /// the cluster and replica passes, so the returned map is sparse.
-    ///
-    /// See [`classify_scoped_value`] for why recording keys on the
-    /// differs-from-environment test rather than the `variation_detail` reason.
     fn evaluate_scoped_overrides(
         &self,
         client: &ld::Client,
@@ -1507,9 +1315,11 @@ impl SystemParameterFrontend {
                 ld::FlagValue::Json(v) => v.to_string(),
             };
 
-            // An unparseable value is dropped silently: LaunchDarkly targeting
-            // is not authored per environment, so a warning here would repeat
-            // every tick for something the environment's operator cannot fix.
+            // Record on differing from the environment-wide value. The
+            // `variation_detail` reason cannot say which context kind's clause
+            // matched, and `Fallthrough` serves every object the same value. An
+            // unparseable value is dropped silently, as nothing in the
+            // environment can fix it.
             if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Override {
                 overrides.insert(param_name.to_string(), value);
             }
@@ -1519,9 +1329,6 @@ impl SystemParameterFrontend {
 
     /// Resolves the cluster-coherent overrides `file`'s rules declare for each of
     /// `clusters`.
-    ///
-    /// The live clusters drive the resolution, so a segment that matches nothing
-    /// live simply never applies.
     fn file_cluster_overrides(
         &self,
         file: &ConfigFile,
@@ -1548,9 +1355,6 @@ impl SystemParameterFrontend {
 
     /// Resolves the replica-local overrides `file`'s rules declare for each of
     /// `replicas`.
-    ///
-    /// The live replicas drive the resolution, so a segment that matches nothing
-    /// live simply never applies.
     fn file_replica_overrides(
         &self,
         file: &ConfigFile,
@@ -1579,16 +1383,9 @@ impl SystemParameterFrontend {
     /// object's context `kind` and scope `attributes`, and the `scope` that every
     /// parameter in `param_names` declares.
     ///
-    /// The first rule whose segment matches the object and that mentions a
-    /// parameter decides that parameter. A parameter no matching rule mentions
-    /// carries no scoped opinion, so it is absent from the result and resolves to
-    /// the environment-wide value, as does one whose deciding value matches the
-    /// environment-wide value or does not parse. The parseability and
-    /// differs-from-environment rules are the LaunchDarkly path's.
-    ///
-    /// Silent, as this runs on every tick and for every create: the
-    /// operator-facing diagnostics are [`Self::scoped_rule_diagnostics`], reported
-    /// once per change to the file.
+    /// The first matching rule with a non-null value for a parameter decides it.
+    /// A decided value that matches the environment-wide value or does not parse
+    /// yields no override. Silent, see [`Self::scoped_rule_diagnostics`].
     fn file_rule_overrides(
         &self,
         file: &ConfigFile,
@@ -1611,13 +1408,9 @@ impl SystemParameterFrontend {
             if !segment.matches(kind, attributes) {
                 continue;
             }
-            // The coherence guard. A cluster-coherent parameter must resolve
-            // identically across a cluster's replicas, which a `replica` segment
-            // cannot promise, so such a rule supplies no cluster-scoped parameter.
-            // The match above already fails for such a segment when `kind` is
-            // `Cluster`, but the guard is explicit so that the invariant does not
-            // rest on the callers pairing `scope` and `kind` correctly. Its
-            // operator-facing half is the matching diagnostic.
+            // The coherence guard: a cluster-scoped parameter comes only from a
+            // `cluster` segment. The match above already ensures this when `kind`
+            // is `Cluster`, and this keeps it from resting on the callers.
             if scope == ParameterScope::Cluster
                 && segment.context_kind != Some(ContextKind::Cluster)
             {
@@ -1628,14 +1421,13 @@ impl SystemParameterFrontend {
                 let Some(&param_name) = requested.get(name.as_str()) else {
                     continue;
                 };
-                // First match wins, and it wins before the value is judged:
-                // whether an override lands must not depend on a fallthrough that
-                // only a malformed value could trigger.
+                // First match wins before the value is judged, so a malformed
+                // value does not fall through to a later rule.
                 if decided.contains_key(param_name) {
                     continue;
                 }
-                // `null` expresses no opinion rather than a value, exactly as at
-                // the top level, so it leaves the parameter to a later rule.
+                // `null` expresses no opinion, leaving the parameter to a later
+                // rule.
                 let Some(value) = json_param_value(value) else {
                     continue;
                 };
@@ -1910,13 +1702,10 @@ fn ld_ctx(
 ) -> Result<ld::Context, anyhow::Error> {
     // Register multiple contexts for this client.
     //
-    // NOTE: the order these are added in does not affect evaluation. A clause or
-    // target names the context kind it applies to and the SDK resolves that kind
-    // by lookup over the multi-context (`Context::as_kind`), not by an ordered
-    // scan, so these calls can be reordered freely. Precedence within a flag is
-    // individual targets, then rules, then the fallthrough, and within each of
-    // those it is array order with the first match winning. Nothing about which
-    // of two conflicting rules wins is therefore expressible from here.
+    // NOTE: The order these are added in does not affect evaluation, as the SDK
+    // looks each context kind up by name (`Context::as_kind`). Within a flag,
+    // targets, then rules, then the fallthrough apply, each in array order with
+    // the first match winning.
     let mut ctx_builder = ld::MultiContextBuilder::new();
 
     if env_id.cloud_provider() != &CloudProvider::Local {
@@ -2953,16 +2742,8 @@ mod tests {
         );
     }
 
-    /// The operator vocabulary this file mirrors from
-    /// `launchdarkly-server-sdk-evaluation`.
-    ///
-    /// The SDK's own `Op` enum is `pub(crate)`, so nothing here can be checked
-    /// against it by the compiler. This pins our copy instead: all fifteen
-    /// LaunchDarkly operator strings are accounted for, each exactly once, as
-    /// either supported or refused with a reason. An operator added to the SDK
-    /// will not fail this, which is the limit of what is possible; what it does
-    /// catch is our own list drifting, for instance a supported operator quietly
-    /// becoming unrecognised.
+    /// Every LaunchDarkly operator is either supported or refused with a reason.
+    /// An operator added to the SDK does not fail this.
     #[mz_ore::test]
     fn test_operator_vocabulary_matches_launchdarkly() {
         let launchdarkly = [
@@ -3213,22 +2994,8 @@ mod tests {
         );
     }
 
-    /// A whole-document failure, an unreadable file or a document that is not a
-    /// JSON object, must express "no information" rather than "no overrides", and
-    /// the two consumers of that need opposite things from it.
-    ///
-    /// The reconcile prunes against a desired state it takes to be complete, so it
-    /// is skipped while the current read is bad: treating the failure as an empty
-    /// state would durably drop every scoped override and restore it once the file
-    /// is fixed.
-    ///
-    /// Create-time evaluation has no durable state to protect and cannot wait. An
-    /// object created in that window either folds its overrides into its first
-    /// configuration or resolves to the environment-wide value, which for a
-    /// render-frozen parameter no later reconcile can undo. So it keeps resolving
-    /// against the last valid parse, and two identical replicas do not end up
-    /// under different policy for having been created on either side of a
-    /// ConfigMap that briefly vanished.
+    /// An unreadable or unparseable file skips the reconcile, while create-time
+    /// evaluation keeps resolving against the last valid parse.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_read_failure_keeps_scoped_overrides() {
@@ -3277,17 +3044,9 @@ mod tests {
         );
     }
 
-    /// A file's rules become visible to the scoped passes only once that same
-    /// file's environment-wide section is committed, because an override is
-    /// recorded only where a rule differs from the environment-wide value.
-    ///
-    /// Between the read and the push the catalog still holds the old baseline. A
-    /// create landing there must therefore be resolved from the old file, whose
-    /// rules that baseline belongs to, and not from the new one, whose rules
-    /// against the old baseline can silently agree with it and record nothing.
-    /// The reconcile would repair the row on the next tick, but the create-time
-    /// fold exists precisely because that is too late for a render-frozen
-    /// parameter.
+    /// A file's rules reach the scoped passes only once that file's
+    /// environment-wide section is published, so a create between the read and
+    /// the push resolves against the old file and its baseline.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_rules_are_published_with_their_baseline() {
@@ -3331,7 +3090,7 @@ mod tests {
 
         // Still the old file's answer. Resolving the new rules here would compare
         // `false` against the not-yet-pushed `off`, call it "matches the
-        // environment", and record nothing -- after which the push would take
+        // environment", and record nothing. The push would then take
         // `analytics` to `on`, the one value its rule forbids.
         assert_eq!(
             frontend.pull_cluster_overrides(&before, &[CLUSTER_PARAM], &clusters),
