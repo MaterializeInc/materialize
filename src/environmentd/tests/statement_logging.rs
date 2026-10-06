@@ -1184,6 +1184,11 @@ fn test_statement_logging_read_then_write_outcomes() {
             client.execute(sql, &[]).unwrap();
             None
         };
+        let redacted_sql = mz_sql::parse::parse(sql)
+            .unwrap()
+            .into_element()
+            .ast
+            .to_ast_string_redacted();
         let row = Retry::default()
             .max_duration(Duration::from_secs(30))
             .retry(|_| {
@@ -1194,12 +1199,12 @@ fn test_statement_logging_read_then_write_outcomes() {
 FROM mz_internal.mz_statement_execution_history AS mseh
 LEFT JOIN mz_internal.mz_prepared_statement_history AS mpsh
     ON mseh.prepared_statement_id = mpsh.id
-JOIN (SELECT DISTINCT sql, sql_hash FROM mz_internal.mz_sql_text) AS mst
+JOIN (SELECT DISTINCT redacted_sql, sql_hash FROM mz_internal.mz_sql_text) AS mst
     ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql = $1
+WHERE mst.redacted_sql = $1
     AND mseh.finished_at IS NOT NULL
 ORDER BY mseh.began_at DESC",
-                        &[&sql],
+                        &[&redacted_sql],
                     )
                     .unwrap();
 
