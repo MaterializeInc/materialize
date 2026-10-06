@@ -69,6 +69,37 @@ use crate::cast::CastFrom;
 use crate::pool::extent::{ExtentArena, Scratch, SwapExtent};
 use crate::pool::region::{Region, SIZE_CLASSES};
 
+/// Reports a slot or extent allocation of `len` payload bytes at `ptr` to
+/// the allocation tracker, when compiled in.
+#[inline]
+fn track_alloc(ptr: *mut u8, len: usize, extent: bool) {
+    #[cfg(feature = "alloc-track")]
+    {
+        use crate::alloc_track::{Space, on_alloc};
+        on_alloc(
+            ptr,
+            len,
+            if extent {
+                Space::PoolExtent
+            } else {
+                Space::PoolSlot
+            },
+        );
+    }
+    #[cfg(not(feature = "alloc-track"))]
+    let _ = (ptr, len, extent);
+}
+
+/// Reports the end of a slot or extent allocation at `ptr` to the allocation
+/// tracker, when compiled in. Must precede returning the slot to its region.
+#[inline]
+fn track_free(ptr: *mut u8) {
+    #[cfg(feature = "alloc-track")]
+    crate::alloc_track::on_free(ptr, crate::alloc_track::FreeKind::Dealloc);
+    #[cfg(not(feature = "alloc-track"))]
+    let _ = ptr;
+}
+
 /// Virtual reservation per size class. Purely virtual: physical memory
 /// materializes only for slots in use, and slots are scoped to residency,
 /// so this must exceed the largest plausible *resident* set per class, the
@@ -1446,6 +1477,7 @@ impl PoolInner {
     fn release_slot(&self, meta: &ChunkMeta, state: &mut ChunkState) {
         let slot = state.slot.take().expect("slotted chunk");
         let region = self.region_of(meta);
+        track_free(region.slot_ptr(slot));
         let warm = self.try_keep_warm(region.class_size());
         if !warm {
             // SAFETY: no reference into the slot exists (the function-level
@@ -1511,6 +1543,7 @@ impl PoolInner {
     /// trimmed to the payload), or `None` when the class has no free slot.
     fn try_alloc_slot(&self, class: usize, len_bytes: usize) -> Option<u32> {
         let (index, warm) = self.regions[class].alloc()?;
+        track_alloc(self.regions[class].slot_ptr(index), len_bytes, false);
         if warm {
             let class_bytes = u64::cast_from(self.regions[class].class_size());
             self.counters
@@ -1627,6 +1660,11 @@ impl PoolInner {
             // to the admitted payload: the victim's pages past it would
             // stay resident with no ledger bytes to answer for them.
             self.trim_slot_tail(class, slot, meta.len_bytes());
+            // The slot changes owner without passing through the region:
+            // end the victim's allocation and start the admitted chunk's.
+            let ptr = self.regions[class].slot_ptr(slot);
+            track_free(ptr);
+            track_alloc(ptr, meta.len_bytes(), false);
             self.counters
                 .admissions_steal
                 .fetch_add(1, Ordering::Relaxed);

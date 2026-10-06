@@ -75,13 +75,16 @@ function deps() {
 ci_uncollapsed_heading "Linting dependencies -- if the check fails, consult ci/test/lint-deps/README.md"
 
 ################################################
-# Jemalloc lints
+# Allocator lints
 ################################################
 
 # List of crates to include in the dependency lint, including an explanation why they're listed.
 crates=(
-    # Checks that the default allocator is jemalloc on supported platforms, but can
-    # be disabled using --no-default-features or explicitly enabled with --features=jemalloc
+    # Checks that the default allocator is mimalloc on supported platforms, but can
+    # be disabled using --no-default-features.
+    mimalloc
+    libmimalloc_sys
+    # Checks that jemalloc is only linked when explicitly enabled with --features=jemalloc.
     tikv_jemalloc_ctl
     tikv_jemallocator
     tikv_jemalloc_sys
