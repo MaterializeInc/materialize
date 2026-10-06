@@ -13,7 +13,7 @@
 //! [`GroupCommitter`]. FIFO order is required so appends cannot overtake registration or
 //! forgetting.
 //!
-//! For each command, the committer:
+//! For commands without a supplied timestamp, the committer:
 //!
 //! 1. allocates a write timestamp from the shared oracle,
 //! 2. advances the catalog upper to [`WriteTimestamp::advance_to`],
@@ -24,6 +24,12 @@
 //! a post-fence retry: the fresh oracle timestamp's advance frontier is above the stale process's
 //! cached catalog upper, so the advance reaches Persist and observes the fence before another txns
 //! write.
+//!
+//! OCC commands supply a subscribe-certified timestamp and return conflicts to
+//! the caller to refold the payload. The catalog advance still precedes the txns
+//! CAS. A target that could land after a new generation's bootstrap barrier must
+//! exceed that barrier and the stale handle's cached catalog upper, forcing the
+//! advance to observe the fence. Oracle allocation alone is not a conflict.
 //!
 //! On `environmentd` bootstrap in read/write mode, system-table snapshots cannot complete until a
 //! txns-shard write has advanced the table uppers. A stale write either linearizes before this
@@ -292,9 +298,9 @@ pub(crate) struct GroupCommitter {
 enum TxnsWriteAttempt {
     /// The write landed and the oracle has applied its timestamp.
     Applied,
-    /// Another writer holds the upper at or past the attempted timestamp. The
+    /// Another writer moved the upper past the attempted timestamp. The
     /// write did not land.
-    UpperConflict,
+    UpperConflict { next_eligible_timestamp: Timestamp },
     /// The table write worker is gone, so the outcome is unknown.
     WorkerGone,
 }
@@ -358,6 +364,10 @@ impl GroupCommitter {
     /// resolve with a new snapshot. Retrying the same diffs at a fresh
     /// timestamp would apply a mutation to state it was not computed from.
     ///
+    /// Persist arbitrates timestamp availability. An oracle allocation may be
+    /// for an unrelated catalog publication and does not establish a table
+    /// conflict. The caller certifies the payload and its freshness lower bound.
+    ///
     /// What [`Self::commit`] does that this skips, and why that is safe:
     ///
     /// * The wall-clock throttle. `target_timestamp` is the caller's to choose, and a
@@ -379,15 +389,6 @@ impl GroupCommitter {
             result,
             span: _,
         } = request;
-
-        let oracle_write_ts = self.oracle.peek_write_ts().await;
-        if target_timestamp <= oracle_write_ts {
-            result.send(WriteResult::TimestampPassed {
-                target_timestamp,
-                next_eligible_timestamp: oracle_write_ts.step_forward(),
-            });
-            return ControlFlow::Continue(());
-        }
 
         // Committing here would apply the target to the oracle below, which is what makes
         // it stick. See `write_ts_upper_bound`.
@@ -414,10 +415,12 @@ impl GroupCommitter {
             .await
         {
             TxnsWriteAttempt::Applied => {}
-            TxnsWriteAttempt::UpperConflict => {
+            TxnsWriteAttempt::UpperConflict {
+                next_eligible_timestamp,
+            } => {
                 result.send(WriteResult::TimestampPassed {
                     target_timestamp,
-                    next_eligible_timestamp: write_ts.advance_to,
+                    next_eligible_timestamp,
                 });
                 return ControlFlow::Continue(());
             }
@@ -472,7 +475,7 @@ impl GroupCommitter {
                 .await
             {
                 TxnsWriteAttempt::Applied => return Some(write_ts),
-                TxnsWriteAttempt::UpperConflict => {
+                TxnsWriteAttempt::UpperConflict { .. } => {
                     warn!(
                         write_ts = %write_ts.timestamp,
                         attempt,
@@ -517,7 +520,20 @@ impl GroupCommitter {
 
         match op_res {
             Ok(Ok(())) => {}
-            Ok(Err(StorageError::InvalidUppers(_))) => return TxnsWriteAttempt::UpperConflict,
+            Ok(Err(StorageError::InvalidUppers(uppers))) => {
+                // The worker reports the shared txns upper for every registered
+                // table. OCC appends require a registered handle. Other commands
+                // may have none, but a failed CAS still establishes the one-step
+                // lower bound used when there is no reported frontier.
+                let next_eligible_timestamp = uppers
+                    .iter()
+                    .flat_map(|upper| upper.current_upper.elements().iter().copied())
+                    .max()
+                    .unwrap_or(write_ts.advance_to);
+                return TxnsWriteAttempt::UpperConflict {
+                    next_eligible_timestamp,
+                };
+            }
             Ok(Err(other)) => {
                 Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
                 unreachable!("unwrap_or_terminate does not return on Err");
@@ -529,10 +545,11 @@ impl GroupCommitter {
         crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
 
         // The append above is already readable in Persist and has advanced the
-        // table's upper, while no oracle-timestamped read can reach it until
-        // the line below. Anything concluding from a read that follows Persist
-        // rather than the oracle has to cope with this window, so a test can
-        // hold it open here. Every txns-shard write parks here while armed,
+        // table's upper, but its completion has not yet been applied to the
+        // oracle. Concurrent catalog commits may already have advanced the oracle
+        // beyond this timestamp. Reads following Persist can observe the write
+        // before its acknowledgement, so a test can hold that window open here.
+        // Every txns-shard write parks here while armed,
         // including the keepalives that advance table uppers, so arm it with a
         // bounded `sleep` rather than a `pause`. Used by
         // workflow_test_occ_zero_row_write_linearization.
@@ -1343,6 +1360,7 @@ mod tests {
     struct MemTimestampOracle {
         read_write_ts: Mutex<(Timestamp, Timestamp)>,
         apply_writes: AtomicUsize,
+        applied_timestamps: Mutex<Vec<Timestamp>>,
     }
 
     impl MemTimestampOracle {
@@ -1350,6 +1368,7 @@ mod tests {
             Self {
                 read_write_ts: Mutex::new((ts, ts)),
                 apply_writes: AtomicUsize::new(0),
+                applied_timestamps: Mutex::new(Vec::new()),
             }
         }
     }
@@ -1378,6 +1397,10 @@ mod tests {
 
         async fn apply_write(&self, lower_bound: Timestamp) {
             self.apply_writes.fetch_add(1, Ordering::SeqCst);
+            self.applied_timestamps
+                .lock()
+                .expect("lock poisoned")
+                .push(lower_bound);
             let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
             *read_ts = std::cmp::max(*read_ts, lower_bound);
             *write_ts = std::cmp::max(*read_ts, *write_ts);
@@ -1387,6 +1410,7 @@ mod tests {
     #[derive(Debug)]
     struct ConflictingTableWriteHandle {
         conflicts: usize,
+        conflict_upper: Option<Timestamp>,
         calls: AtomicUsize,
         write_timestamps: Mutex<Vec<Timestamp>>,
     }
@@ -1395,6 +1419,7 @@ mod tests {
         fn new(conflicts: usize) -> Self {
             Self {
                 conflicts,
+                conflict_upper: None,
                 calls: AtomicUsize::new(0),
                 write_timestamps: Mutex::new(Vec::new()),
             }
@@ -1411,7 +1436,10 @@ mod tests {
                 Err(StorageError::InvalidUppers(vec![
                     mz_storage_types::controller::InvalidUpper {
                         id: GlobalId::User(1),
-                        current_upper: Antichain::from_elem(write_ts.step_forward()),
+                        current_upper: Antichain::from_elem(
+                            self.conflict_upper
+                                .unwrap_or_else(|| write_ts.step_forward()),
+                        ),
                     },
                 ]))
             } else {
@@ -1447,6 +1475,164 @@ mod tests {
         ) -> oneshot::Receiver<Result<(), StorageError>> {
             self.respond(forget_ts)
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_commit_timestamped_at_or_below_oracle_timestamps() {
+        Catalog::with_debug(|catalog| async move {
+            let initial_upper = catalog.current_upper().await;
+            let target = initial_upper.step_forward();
+            // Oracle progress can come from catalog operations without sealing the txns shard.
+            for (read_ts, write_ts) in [
+                (initial_upper, target),
+                (target, target.step_forward()),
+                (target.step_forward(), target.step_forward()),
+            ] {
+                let oracle = Arc::new(MemTimestampOracle {
+                    read_write_ts: Mutex::new((read_ts, write_ts)),
+                    ..Default::default()
+                });
+                let handle = Arc::new(ConflictingTableWriteHandle::new(0));
+                let (_tx, rx) = mpsc::unbounded_channel();
+                let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
+                let committer = GroupCommitter {
+                    rx,
+                    oracle: oracle.clone(),
+                    table_write_handle: handle.clone(),
+                    catalog_upper: catalog.upper_handle(),
+                    internal_cmd_tx,
+                    now: SYSTEM_TIME.clone(),
+                    timestamp_oracle_now: SYSTEM_TIME.clone(),
+                    metrics: Metrics::register_into(&MetricsRegistry::new()),
+                    max_attempts: ConfigValHandle::disconnected(2),
+                };
+                let (result_tx, mut result_rx) = oneshot::channel();
+                assert_eq!(
+                    committer
+                        .commit_timestamped(TimestampedWriteRequest {
+                            appends: Vec::new(),
+                            target_timestamp: target,
+                            result: InternalWriteResponder::new(result_tx),
+                            span: Span::none(),
+                        })
+                        .await,
+                    ControlFlow::Continue(())
+                );
+
+                assert_eq!(
+                    *handle.write_timestamps.lock().expect("lock poisoned"),
+                    vec![target]
+                );
+                assert_eq!(
+                    *oracle.applied_timestamps.lock().expect("lock poisoned"),
+                    vec![target]
+                );
+                assert_eq!(oracle.read_ts().await, std::cmp::max(read_ts, target));
+                assert_eq!(oracle.peek_write_ts().await, write_ts);
+                assert!(catalog.current_upper().await >= target.step_forward());
+                assert!(matches!(
+                    result_rx.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                let Message::GroupCommitApplied {
+                    responses,
+                    statement_logging_ids,
+                    internal_results,
+                    write_ts,
+                } = internal_cmd_rx
+                    .try_recv()
+                    .expect("successful write applied")
+                else {
+                    panic!("expected GroupCommitApplied");
+                };
+                assert_eq!(write_ts, target);
+                assert!(responses.is_empty());
+                assert!(statement_logging_ids.is_empty());
+                assert_eq!(internal_results.len(), 1);
+                assert!(matches!(
+                    internal_cmd_rx.try_recv(),
+                    Err(mpsc::error::TryRecvError::Empty)
+                ));
+                for result in internal_results {
+                    result.send(WriteResult::Success {
+                        timestamp: write_ts,
+                    });
+                }
+                assert!(matches!(
+                    result_rx.await,
+                    Ok(WriteResult::Success { timestamp }) if timestamp == target
+                ));
+            }
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_commit_timestamped_reports_actual_upper_without_retry() {
+        Catalog::with_debug(|catalog| async move {
+            let initial_upper = catalog.current_upper().await;
+            let target = initial_upper.step_forward();
+            let conflict_upper = target.step_forward().step_forward();
+            let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
+            // A second attempt would succeed, but only the caller may recompute the payload.
+            let handle = Arc::new(ConflictingTableWriteHandle {
+                conflict_upper: Some(conflict_upper),
+                ..ConflictingTableWriteHandle::new(1)
+            });
+            let (_tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
+            let committer = GroupCommitter {
+                rx,
+                oracle: oracle.clone(),
+                table_write_handle: handle.clone(),
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                timestamp_oracle_now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+                max_attempts: ConfigValHandle::disconnected(2),
+            };
+            let (result_tx, mut result_rx) = oneshot::channel();
+            assert_eq!(
+                committer
+                    .commit_timestamped(TimestampedWriteRequest {
+                        appends: Vec::new(),
+                        target_timestamp: target,
+                        result: InternalWriteResponder::new(result_tx),
+                        span: Span::none(),
+                    })
+                    .await,
+                ControlFlow::Continue(())
+            );
+
+            assert!(matches!(
+                result_rx.try_recv(),
+                Ok(WriteResult::TimestampPassed { target_timestamp, next_eligible_timestamp })
+                    if target_timestamp == target && next_eligible_timestamp == conflict_upper
+            ));
+            assert_eq!(
+                *handle.write_timestamps.lock().expect("lock poisoned"),
+                vec![target]
+            );
+            assert!(
+                oracle
+                    .applied_timestamps
+                    .lock()
+                    .expect("lock poisoned")
+                    .is_empty()
+            );
+            assert_eq!(oracle.read_ts().await, initial_upper);
+            assert_eq!(oracle.peek_write_ts().await, initial_upper);
+            assert!(matches!(
+                internal_cmd_rx.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
+            catalog.expire().await;
+        })
+        .await;
     }
 
     #[mz_ore::test(tokio::test)]

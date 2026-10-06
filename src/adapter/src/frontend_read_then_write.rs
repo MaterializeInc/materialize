@@ -84,17 +84,25 @@
 //! durable in the first case and there was never anything to write in the
 //! second, so all they do is make the disagreement loud.
 //!
-//! ## The frontier certifies, the oracle chooses
+//! ## The frontier certifies, the oracle caps, Persist arbitrates
 //!
-//! The target `T` comes from the oracle, and a progress message at `F` only
-//! certifies completeness below `F`, so it gates the write rather than choosing
-//! its timestamp. The design doc's "The OCC loop" says why. Three invariants
-//! hold for every write this path makes:
+//! Choose a target `T` certified by subscribe progress `F`, capped by one above
+//! the oracle's write timestamp so a future refresh frontier cannot advance the
+//! write timeline. A conflict's reported txns upper is a lower bound even while
+//! its writer has not yet completed its oracle update. Persist decides whether
+//! `T` remains available. Three invariants hold for every write this path makes:
 //!
 //! * `F >= T` before it submits, so the payload is a complete view of `T - 1`.
 //! * The payload is every diff below `T`, strictly. A diff at `T` is concurrent
 //!   with the write and waits for a later target.
 //! * `T > as_of`, so the snapshot, which arrives at `as_of`, is in the payload.
+//!
+//! Freshness selection puts `as_of` at or above an oracle read taken after the
+//! statement began. Catalog commits, writes and strict-serializable reads complete
+//! their oracle updates before acknowledgement, so `T` follows operations that
+//! completed before this statement began. Concurrent reads can have timestamps
+//! at or above `T`, but any result depending on this write waits for the txns
+//! upper to pass its timestamp. Oracle allocation alone is not a write conflict.
 //!
 //! NOTE: `F >= T` does not make the two equal, because `F` is a minimum over the
 //! selection's inputs. Where `F` runs above `T`, a selection that reads the
@@ -1035,7 +1043,7 @@ impl PeekClient {
         self.ensure_read_linearized(&timeline, as_of).await?;
         tracing::debug!(%as_of, "RTW read linearized, creating subscribe");
 
-        // The loop takes its write target from this oracle, and reaching one takes
+        // The loop caps its write target with this oracle, and reaching one takes
         // `&mut self`, which the loop does not have. `None` for a
         // timestamp-independent selection, which reads at `Timestamp::maximum()`
         // and so always leaves through the blind path rather than reaching a write.
@@ -1460,10 +1468,11 @@ impl PeekClient {
     /// mutation, and submit the resulting diffs as a write.
     ///
     /// Semantically a SELECT at `target - 1` followed by an INSERT at `target`.
-    /// `write_oracle` chooses `target`, the subscribe's frontier certifies the
-    /// payload is complete below it, and a target the target table has moved
-    /// past comes back as `WriteResult::TimestampPassed`, whose next eligible
-    /// timestamp the loop adopts. At most `max_occ_retries` attempts.
+    /// `write_oracle` caps the target proposal, and the subscribe's frontier
+    /// certifies the payload is complete below it. Persist rejects a target the
+    /// txns shard has moved past with `WriteResult::TimestampPassed`, whose
+    /// next eligible timestamp raises the retry lower bound. At most
+    /// `max_occ_retries` attempts.
     ///
     /// A subscribe that ends on its own has diffs no frontier can change, and
     /// those are returned as [`OccOutcome::Blind`] rather than written.
@@ -1499,9 +1508,8 @@ impl PeekClient {
     ) -> (usize, Result<OccOutcome, AdapterError>) {
         let mut state = OccState::new();
 
-        // The timestamp the next attempt writes at, chosen when we are first
-        // ready to attempt one and replaced only by a conflict. `None` until
-        // then.
+        // A lower bound for the next attempt, raised by the txns upper on
+        // conflict. Each attempt chooses a certified target and refolds its diffs.
         let mut write_target: Option<Timestamp> = None;
 
         // The smallest timestamp an attempt may target. `as_of` itself is out,
@@ -1644,53 +1652,38 @@ impl PeekClient {
                 .current_upper
                 .expect("a write attempt requires an observed frontier");
 
-            let target = match write_target {
-                Some(target) => target,
-                None => {
-                    let Some(oracle) = &write_oracle else {
-                        // Invariant: a statement with no governing timeline
-                        // reads at `as_of == Timestamp::maximum()`, so it
-                        // observes no progress past its `as_of` and leaves
-                        // through the blind arm above rather than reaching a
-                        // write.
-                        soft_panic_or_log!(
-                            "read-then-write reached a write attempt with no governing timeline"
-                        );
-                        break Err(AdapterError::Internal(
-                            "read-then-write has no oracle to take a write timestamp from".into(),
-                        ));
-                    };
-
-                    // One step above the oracle's write timestamp is the smallest
-                    // value `commit_timestamped` accepts.
-                    let peek_write_ts = oracle.peek_write_ts().await;
-                    let Some(chosen) = peek_write_ts.try_step_forward() else {
-                        // A timeline that reached `Timestamp::MAX` is a broken
-                        // environment, not anything this statement did.
-                        soft_panic_or_log!(
-                            "read-then-write cannot target a timestamp above the write \
-                             timeline's timestamp {peek_write_ts}"
-                        );
-                        break Err(AdapterError::Internal(format!(
-                            "write timeline exhausted at timestamp {peek_write_ts}"
-                        )));
-                    };
-
-                    // Unreachable while the oracle's read timestamp is at or
-                    // above `as_of` on entry, and the clamp keeps the payload
-                    // rule rather than only reporting the violation.
-                    if chosen < min_target {
-                        soft_panic_or_log!(
-                            "read-then-write target {chosen} does not clear the as_of {as_of}, \
-                             so the payload would miss the snapshot"
-                        );
-                    }
-                    let chosen = std::cmp::max(chosen, min_target);
-
-                    write_target = Some(chosen);
-                    chosen
-                }
+            let Some(oracle) = &write_oracle else {
+                // Timeless selections close their subscribe and use the blind path.
+                soft_panic_or_log!(
+                    "read-then-write reached a write attempt with no governing timeline"
+                );
+                break Err(AdapterError::Internal(
+                    "read-then-write has no oracle to take a write timestamp from".into(),
+                ));
             };
+            let peek_write_ts = oracle.peek_write_ts().await;
+            let Some(cap) = peek_write_ts.try_step_forward() else {
+                soft_panic_or_log!(
+                    "read-then-write cannot target a timestamp above the write \
+                     timeline's timestamp {peek_write_ts}"
+                );
+                break Err(AdapterError::Internal(format!(
+                    "write timeline exhausted at timestamp {peek_write_ts}"
+                )));
+            };
+            // Linearizing `as_of` before this loop ensures as_of <= R <= W.
+            if cap < min_target {
+                soft_panic_or_log!(
+                    "read-then-write oracle cap {cap} does not clear the as_of {as_of}"
+                );
+            }
+
+            // Progress certifies the payload, not a future jump in the write
+            // timeline. The oracle caps the proposal while Persist arbitrates
+            // availability. A reported txns upper can exceed the cap while its
+            // writer is between its CAS and oracle completion.
+            let target = std::cmp::max(fold_target, std::cmp::min(upper, cap));
+            write_target = Some(target);
 
             // Fold in what the drain picked up, plus anything a target raised
             // by the last conflict now admits.
