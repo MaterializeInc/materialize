@@ -177,7 +177,7 @@ const FreshnessContent = ({
 
       <Accordion allowMultiple defaultIndex={[0, 1]}>
         <AccordionItem>
-          <SectionHeader title="Freshness" count={`(${rows.length})`} />
+          <SectionHeader title="Lag Over Time" count={`(${rows.length})`} />
           <AccordionPanel px="0">
             <ThresholdLineGraph<DataPoint>
               data={historicalData}
@@ -195,7 +195,7 @@ const FreshnessContent = ({
 
         <AccordionItem>
           <SectionHeader
-            title="Exceeding threshold"
+            title="Exceeding Threshold"
             count={`(${breaching.length}/${rows.length})`}
           />
           <AccordionPanel px="0">
@@ -213,7 +213,7 @@ const FreshnessContent = ({
         </AccordionItem>
 
         <AccordionItem>
-          <SectionHeader title="All objects" count={`(${rows.length})`} />
+          <SectionHeader title="All Objects" count={`(${rows.length})`} />
           <AccordionPanel px="0">
             {rows.length === 0 ? (
               <Box padding="4" color={colors.foreground.secondary}>

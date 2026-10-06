@@ -172,7 +172,7 @@ export interface FreshnessTableProps {
 /**
  * Objects and their freshness.
  *
- * Paginated because "All objects" lists every object on the cluster, and a
+ * Paginated because "All Objects" lists every object on the cluster, and a
  * cluster can carry thousands. It opens in the order it is given, which is
  * worst first by whatever the active predicate judges.
  */
