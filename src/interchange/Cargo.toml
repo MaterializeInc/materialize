@@ -42,6 +42,7 @@ uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 prost.workspace = true
 tokio.workspace = true
 

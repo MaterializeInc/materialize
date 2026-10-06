@@ -60,6 +60,7 @@ core_affinity.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true

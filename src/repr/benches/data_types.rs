@@ -9,6 +9,7 @@
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use dec::Context;
+use mz_alloc_default as _;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_repr::adt::numeric::{Numeric, PackedNumeric};
 

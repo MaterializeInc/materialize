@@ -31,6 +31,7 @@
 //!   conservative — actual heap footprints (Row overhead, container
 //!   metadata, output buffers) land roughly 3× higher.
 
+use mz_alloc_default as _;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};

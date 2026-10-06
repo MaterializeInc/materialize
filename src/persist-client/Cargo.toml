@@ -69,6 +69,7 @@ uuid = { workspace = true, features = ["v4"] }
 criterion.workspace = true
 datadriven = { workspace = true, features = ["async"] }
 futures-task.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 mz-persist-proc = { path = "../persist-proc" }
 num_cpus.workspace = true
 rand.workspace = true

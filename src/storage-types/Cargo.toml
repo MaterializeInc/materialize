@@ -85,6 +85,7 @@ iceberg-storage-opendal.workspace = true
 chrono.workspace = true
 criterion.workspace = true
 insta.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 mz-persist = { path = "../persist" }
 mz-storage-types = { path = ".", features = ["proptest"] }
 proptest.workspace = true
