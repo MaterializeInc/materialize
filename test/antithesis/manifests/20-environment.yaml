@@ -1,0 +1,59 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Inputs for the Materialize environment. The Materialize CR itself is not in
+# the manifests: orchestratord registers the CRD at startup, so the workload's
+# setup step creates the CR from the template in `materialize-cr` once the CRD
+# is established.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+  persist_backend_url: "s3://minio:minio123@persist/antithesis?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+  license_key: "${LICENSE_KEY}"
+---
+# Synced into environmentd every second via `--config-sync-file-path`. The
+# workload rewrites it to roll per-timeline system parameters.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: system-params
+  namespace: materialize-environment
+data:
+  system-params.json: |
+    ${SYSTEM_PARAMS_JSON}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: materialize-cr
+  namespace: materialize-environment
+data:
+  materialize.yaml: |
+    apiVersion: materialize.cloud/v1alpha1
+    kind: Materialize
+    metadata:
+      name: ${ENVIRONMENT_NAME}
+      namespace: materialize-environment
+    spec:
+      environmentdImageRef: ${INITIAL_ENVIRONMENTD_IMAGE}
+      backendSecretName: materialize-backend
+      authenticatorKind: None
+      systemParameterConfigmapName: system-params
+      rolloutStrategy: WaitUntilReady
+      environmentdResourceRequirements:
+        requests:
+          cpu: 50m
+          memory: 512Mi
+        limits:
+          memory: 3Gi
