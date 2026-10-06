@@ -29,5 +29,8 @@
       }
     ],
     "types": ["vite/client", "vitest/globals"]
-  }
+  },
+  // Build output, not source. tsc has no `include`, so without this it parses
+  // Storybook's minified bundles and overflows its stack.
+  "exclude": ["storybook-static"]
 }
