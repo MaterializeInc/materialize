@@ -64,6 +64,8 @@ SECRETS_DIR = env("SECRETS_DIR", "/tmp/clusterd-test-driver-secrets")
 # resolved against the repo root. Defaults to the `index` scenario script.
 SCRIPT = env("SCRIPT", "test/clusterd-test-driver/scripts/index.spec")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
+# Start a second, interactive compute runtime, as `Clusterd(interactive_compute=True)` does.
+INTERACTIVE_COMPUTE = env("INTERACTIVE_COMPUTE", "0") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
 WRAPPER = env("WRAPPER", "")
 # Cargo profile; `optimized` is release-like with debug symbols.
@@ -170,6 +172,12 @@ def clusterd_command() -> list[str]:
     storage_tc = timely_config(
         ["127.0.0.1"], 2103, 1, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
     )
+    interactive_args = []
+    if INTERACTIVE_COMPUTE:
+        interactive_tc = timely_config(
+            ["127.0.0.1"], 2104, 1, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
+        )
+        interactive_args = ["--interactive-compute-timely-config", interactive_tc]
     return [
         *shlex.split(WRAPPER),
         str(ROOT / "target" / PROFILE_DIR / "clusterd"),
@@ -181,6 +189,7 @@ def clusterd_command() -> list[str]:
         compute_tc,
         "--storage-timely-config",
         storage_tc,
+        *interactive_args,
         "--process",
         "0",
         "--environment-id",
