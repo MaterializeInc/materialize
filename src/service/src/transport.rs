@@ -246,28 +246,29 @@ where
 /// This type encapsulates the core connection logic. It is used by both the client and the server
 /// implementation, with swapped `Out`/`In` types.
 ///
-/// Each connection spawns two tasks:
+/// Each connection spawns three tasks:
 ///
 ///  * The send task is responsible for encoding and sending enqueued messages.
 ///  * The recv task is responsible for receiving and decoding messages from the peer.
+///  * The heartbeat task periodically enqueues keepalive frames.
 ///
 /// The separation into tasks provides some performance isolation between the sending and the
 /// receiving half of the connection.
 #[derive(Debug)]
 struct Connection<Out, In> {
     /// Message sender connected to the send task.
-    msg_tx: mpsc::UnboundedSender<Out>,
+    msg_tx: mpsc::UnboundedSender<Option<Out>>,
     /// Message receiver connected to the receive task.
     msg_rx: mpsc::UnboundedReceiver<In>,
     /// Receiver for errors encountered by connection tasks.
     error_rx: ErrorRx,
 
     /// Handles to connection tasks.
-    _tasks: [AbortOnDropHandle<()>; 2],
+    _tasks: [AbortOnDropHandle<()>; 3],
 }
 
 impl<Out: Message, In: Message> Connection<Out, In> {
-    /// The interval with which keepalives are emitted on idle connections.
+    /// The interval with which keepalive frames are enqueued.
     const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
     /// The minimum acceptable idle timeout.
     ///
@@ -307,6 +308,11 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         let (error_tx, error_rx) = error_channel();
 
         let span = tracing::Span::current();
+        let heartbeat_tx = out_tx.clone();
+        let heartbeat_task = mz_ore::task::spawn(
+            || "ctp::heartbeat",
+            Self::run_heartbeat_task(heartbeat_tx).instrument(span.clone()),
+        );
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
             Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone())
@@ -321,13 +327,17 @@ impl<Out: Message, In: Message> Connection<Out, In> {
             msg_tx: out_tx,
             msg_rx: in_rx,
             error_rx,
-            _tasks: [send_task.abort_on_drop(), recv_task.abort_on_drop()],
+            _tasks: [
+                send_task.abort_on_drop(),
+                recv_task.abort_on_drop(),
+                heartbeat_task.abort_on_drop(),
+            ],
         })
     }
 
     /// Enqueue a message for sending.
     async fn send(&mut self, msg: Out) -> anyhow::Result<()> {
-        match self.msg_tx.send(msg) {
+        match self.msg_tx.send(Some(msg)) {
             Ok(()) => Ok(()),
             Err(_) => bail!(self.error_rx.collect().await),
         }
@@ -346,30 +356,29 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         }
     }
 
+    /// Enqueue heartbeat frames without polling or rebuilding a timer for each message.
+    async fn run_heartbeat_task(msg_tx: mpsc::UnboundedSender<Option<Out>>) {
+        let start = tokio::time::Instant::now() + Self::KEEPALIVE_INTERVAL;
+        let mut interval = tokio::time::interval_at(start, Self::KEEPALIVE_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if msg_tx.send(None).is_err() {
+                break;
+            }
+        }
+    }
+
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
         mut writer: W,
-        mut msg_rx: mpsc::UnboundedReceiver<Out>,
+        mut msg_rx: mpsc::UnboundedReceiver<Option<Out>>,
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
-        loop {
-            let msg = tokio::select! {
-                // `mpsc::UnboundedReceiver::recv` is cancel safe.
-                msg = msg_rx.recv() => match msg {
-                    Some(msg) => {
-                        trace!(?msg, "ctp: sending message");
-                        Some(msg)
-                    }
-                    None => break,
-                },
-                // `tokio::time::sleep` is cancel safe.
-                _ = tokio::time::sleep(Self::KEEPALIVE_INTERVAL) => {
-                    trace!("ctp: sending keepalive");
-                    None
-                },
-            };
-
+        // Heartbeats share the writer's queue, so they cannot interleave bytes with a message.
+        while let Some(msg) = msg_rx.recv().await {
+            trace!(?msg, "ctp: sending message or keepalive");
             if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
                 warn!("ctp: send error: {error}");
                 error_tx.report(format!("send error: {error}"));
