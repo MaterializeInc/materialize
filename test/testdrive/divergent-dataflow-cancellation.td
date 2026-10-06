@@ -18,6 +18,13 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
 
+# The INSERT case's read renders on the interactive runtime, which installs no logging, so the
+# checks below could not see it. The flag is read when a replica is provisioned, so this must
+# precede `CREATE CLUSTER test`.
+# TODO(CPU-222): drop once interactive work appears in introspection.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_compute_interactive_runtime = false
+
 # Curated metric sinks install one dataflow per definition on every replica. CI
 # runs with the feature on, so the assertions at the end filter them out instead
 # of disabling it and leaving the shipping path untested. The default cluster's
