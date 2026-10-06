@@ -27,6 +27,7 @@
 # replica per cycle. Shorten its cadence so episodes land within this test's
 # retry budget.
 $ postgres-execute connection=mz_system
+ALTER SYSTEM SET log_filter = 'info,mz_adapter::coord::hydration_history=debug';
 ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
@@ -575,7 +576,6 @@ true
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '0s';
-ALTER SYSTEM SET log_filter = 'info,mz_adapter::coord::hydration_history=debug';
 
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
 0
