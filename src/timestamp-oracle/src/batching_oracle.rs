@@ -417,6 +417,63 @@ mod tests {
         .expect("limit changes made progress");
     }
 
+    #[mz_ore::test(tokio::test)]
+    async fn larger_read_concurrency_limits_bound_inflight_work_and_survive_cancellation() {
+        for limit in [4, 8] {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let (calls_tx, mut calls_rx) = tokio::sync::mpsc::unbounded_channel();
+                let oracle = BatchingTimestampOracle::new_with_read_concurrency(
+                    Arc::new(Metrics::new(&MetricsRegistry::new())),
+                    Arc::new(ControlledOracle { calls: calls_tx }),
+                    fixed_read_concurrency(limit),
+                );
+                let mut readers = Vec::new();
+                let mut backing = Vec::new();
+                for _ in 0..limit {
+                    let mut reader = Box::pin(oracle.read_ts());
+                    assert!(futures::poll!(&mut reader).is_pending());
+                    backing.push(calls_rx.recv().await.expect("fresh batch starts"));
+                    readers.push(reader);
+                }
+                let mut queued = Box::pin(oracle.read_ts());
+                assert!(futures::poll!(&mut queued).is_pending());
+                tokio::task::yield_now().await;
+                assert!(futures::poll!(std::pin::pin!(calls_rx.recv())).is_pending());
+                drop(readers.remove(0));
+                let cancelled = backing.remove(0);
+                tokio::task::yield_now().await;
+                assert!(
+                    futures::poll!(std::pin::pin!(calls_rx.recv())).is_pending(),
+                    "caller cancellation must not free a backing slot"
+                );
+                backing
+                    .pop()
+                    .expect("last batch")
+                    .send(100)
+                    .expect("worker waiting");
+                assert_eq!(readers.pop().expect("last reader").await, 100);
+                calls_rx
+                    .recv()
+                    .await
+                    .expect("queued batch gets released slot")
+                    .send(200)
+                    .expect("worker waiting");
+                assert_eq!(queued.await, 200);
+                cancelled
+                    .send(10)
+                    .expect("cancelled caller's backing read continues");
+                assert_eq!(readers.len(), backing.len());
+                for reader in readers.into_iter().rev() {
+                    let response = backing.pop().expect("one backing read per reader");
+                    response.send(20).expect("worker waiting");
+                    assert_eq!(reader.await, 20);
+                }
+            })
+            .await
+            .expect("bounded pipeline made progress");
+        }
+    }
+
     #[mz_ore::test]
     fn shutdown_drops_two_in_flight_batches_without_inventing_timestamps() {
         let worker_runtime = tokio::runtime::Runtime::new().expect("worker runtime");
@@ -475,7 +532,7 @@ mod tests {
     async fn qps_diagnostics_preserve_batch_boundaries_and_cancellation() {
         use mz_ore::metrics::phase::Mode;
         for mode in [Mode::Off, Mode::Wall, Mode::Poll] {
-            for limit in [1, 2] {
+            for limit in [1, 2, 4, 8] {
                 tokio::time::timeout(std::time::Duration::from_secs(10), async {
                     let (calls_tx, mut calls_rx) = tokio::sync::mpsc::unbounded_channel();
                     let mut metrics = Metrics::new(&MetricsRegistry::new());
@@ -612,7 +669,7 @@ mod tests {
         };
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
-        for limit in [1, 2] {
+        for limit in [1, 2, 4, 8] {
             crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
                 // We use the postgres oracle as the backing oracle.
                 let pg_oracle = PostgresTimestampOracle::open(
