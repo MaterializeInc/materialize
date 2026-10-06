@@ -408,8 +408,17 @@ def run_sqllogictest(
                 c.metadata_store(),
                 rewrite_results=rewrite_results,
             )
+            trace_statements = file == "test/sqllogictest/rbac_views.slt"
+            if trace_statements:
+                # Preserve the active statement if the job reaches its deadline.
+                cmd.insert(1, "--verbose")
             try:
-                c.exec(container_name, *cmd, capture=True, capture_stderr=True)
+                c.exec(
+                    container_name,
+                    *cmd,
+                    capture=not trace_statements,
+                    capture_stderr=not trace_statements,
+                )
                 # Uploading successful junit files wastes time and contains no useful information
                 if junit_report_path:
                     os.remove(junit_report_path)
