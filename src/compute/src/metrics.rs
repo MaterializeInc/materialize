@@ -60,6 +60,8 @@ pub struct ComputeMetrics {
     // yielding, but it should hopefully alert us when there is something to
     // look at.
     timely_step_duration_seconds: HistogramVec,
+    worker_loop_iteration_seconds: HistogramVec,
+    worker_loop_phase_seconds_total: raw::CounterVec,
     logging_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
@@ -201,6 +203,17 @@ impl ComputeMetrics {
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            ), role)),
+            worker_loop_iteration_seconds: registry.register(with_role(metric!(
+                name: "mz_compute_worker_loop_iteration_seconds",
+                help: "The time each iteration of the compute worker loop took, from one command and peek sweep to the next.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 64.0),
+            ), role)),
+            worker_loop_phase_seconds_total: registry.register(with_role(metric!(
+                name: "mz_compute_worker_loop_phase_seconds_total",
+                help: "The time the compute worker loop spent in each phase of its iterations.",
+                var_labels: ["worker_id", "phase"],
             ), role)),
             logging_step_duration_seconds: registry.register(with_role(metric!(
                 name: "mz_compute_logging_step_duration_seconds",
@@ -348,6 +361,20 @@ impl ComputeMetrics {
             .timely_step_duration_seconds
             .with_label_values(&[&worker]);
         let persist_peek_seconds = self.persist_peek_seconds.with_label_values(&[&worker]);
+        let worker_loop_iteration_seconds = self
+            .worker_loop_iteration_seconds
+            .with_label_values(&[&worker]);
+        let phase = |phase: &str| {
+            self.worker_loop_phase_seconds_total
+                .with_label_values(&[worker.as_ref(), phase])
+        };
+        let worker_loop_phase_seconds = LoopPhaseMetrics {
+            maintenance: phase("maintenance"),
+            step: phase("step"),
+            commands: phase("commands"),
+            storage_guest: phase("storage_guest"),
+            peeks: phase("peeks"),
+        };
         let handle_command_duration_seconds = CommandMetrics::build(|typ| {
             self.handle_command_duration_seconds
                 .with_label_values(&[worker.as_ref(), typ])
@@ -386,6 +413,8 @@ impl ComputeMetrics {
             arrangement_maintenance_seconds_total,
             arrangement_maintenance_active_info,
             timely_step_duration_seconds,
+            worker_loop_iteration_seconds,
+            worker_loop_phase_seconds,
             persist_peek_seconds,
             handle_command_duration_seconds,
             index_peek_total_seconds,
@@ -409,6 +438,21 @@ impl ComputeMetrics {
             shared_row_heap_capacity_bytes,
         }
     }
+}
+
+/// Per-worker time spent in each phase of the compute worker loop.
+#[derive(Clone, Debug)]
+pub(crate) struct LoopPhaseMetrics {
+    /// Arrangement maintenance and frontier and metric reporting.
+    pub(crate) maintenance: GenericCounter<AtomicF64>,
+    /// The Timely step, including any time parked.
+    pub(crate) step: GenericCounter<AtomicF64>,
+    /// Draining and applying pending commands.
+    pub(crate) commands: GenericCounter<AtomicF64>,
+    /// Driving the storage guest.
+    pub(crate) storage_guest: GenericCounter<AtomicF64>,
+    /// Sweeping peeks, subscribes, and copy-tos.
+    pub(crate) peeks: GenericCounter<AtomicF64>,
 }
 
 /// Per-worker metrics of the logging dataflow.
@@ -438,6 +482,10 @@ pub struct WorkerMetrics {
     pub(crate) arrangement_maintenance_active_info: UIntGauge,
     /// Histogram of Timely step timings.
     pub(crate) timely_step_duration_seconds: Histogram,
+    /// Histogram of worker loop iteration timings.
+    pub(crate) worker_loop_iteration_seconds: Histogram,
+    /// Time spent in each phase of the worker loop.
+    pub(crate) worker_loop_phase_seconds: LoopPhaseMetrics,
     /// Histogram of persist peek durations.
     pub(crate) persist_peek_seconds: Histogram,
     /// Histogram of command handling durations.

@@ -684,6 +684,7 @@ impl<'w> Worker<'w> {
                 .map_or(Duration::ZERO, |state| state.server_maintenance_interval);
 
             let now = Instant::now();
+            let iteration_start = now;
             // Determine if we need to perform maintenance, which is true if `maintenance_interval`
             // time has passed since the last maintenance.
             let sleep_duration;
@@ -721,6 +722,8 @@ impl<'w> Worker<'w> {
             };
 
             // Step the timely worker, recording the time taken.
+            let step_start = Instant::now();
+            let maintenance = step_start - iteration_start;
             let timer = self.metrics.timely_step_duration_seconds.start_timer();
             if self.storage_guest_busy() {
                 self.timely_worker.step();
@@ -729,15 +732,63 @@ impl<'w> Worker<'w> {
             }
             timer.observe_duration();
 
+            let commands_start = Instant::now();
+            let step = commands_start - step_start;
             self.handle_pending_commands()?;
 
+            let storage_guest_start = Instant::now();
+            let commands = storage_guest_start - commands_start;
             self.process_storage_guest();
 
+            let peeks_start = Instant::now();
+            let storage_guest = peeks_start - storage_guest_start;
             if let Some(mut compute_state) = self.activate_compute() {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
             }
+            let end = Instant::now();
+            let peeks = end - peeks_start;
+            self.record_loop_iteration(LoopPhases {
+                maintenance,
+                step,
+                commands,
+                storage_guest,
+                peeks,
+            });
+        }
+    }
+
+    /// Records one iteration of the worker loop, and logs iterations long enough to delay command
+    /// and peek handling noticeably.
+    fn record_loop_iteration(&self, phases: LoopPhases) {
+        let metrics = &self.metrics.worker_loop_phase_seconds;
+        metrics.maintenance.inc_by(phases.maintenance.as_secs_f64());
+        metrics.step.inc_by(phases.step.as_secs_f64());
+        metrics.commands.inc_by(phases.commands.as_secs_f64());
+        metrics
+            .storage_guest
+            .inc_by(phases.storage_guest.as_secs_f64());
+        metrics.peeks.inc_by(phases.peeks.as_secs_f64());
+        let total = phases.maintenance
+            + phases.step
+            + phases.commands
+            + phases.storage_guest
+            + phases.peeks;
+        self.metrics
+            .worker_loop_iteration_seconds
+            .observe(total.as_secs_f64());
+        if total >= Duration::from_secs(2) {
+            warn!(
+                worker = self.timely_worker.index(),
+                total_ms = total.as_millis(),
+                maintenance_ms = phases.maintenance.as_millis(),
+                step_ms = phases.step.as_millis(),
+                commands_ms = phases.commands.as_millis(),
+                storage_guest_ms = phases.storage_guest.as_millis(),
+                peeks_ms = phases.peeks.as_millis(),
+                "slow compute worker loop iteration",
+            );
         }
     }
 
@@ -1347,4 +1398,18 @@ fn spawn_channel_adapter(
             }
         },
     );
+}
+
+/// The time one iteration of the compute worker loop spent in each of its phases.
+struct LoopPhases {
+    /// Arrangement maintenance and frontier and metric reporting.
+    maintenance: Duration,
+    /// The Timely step, including any time parked.
+    step: Duration,
+    /// Draining and applying pending commands.
+    commands: Duration,
+    /// Driving the storage guest.
+    storage_guest: Duration,
+    /// Sweeping peeks, subscribes, and copy-tos.
+    peeks: Duration,
 }
