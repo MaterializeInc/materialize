@@ -4197,17 +4197,6 @@ async fn test_github_25388() {
         .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
 
-    // TODO(peek-seq) The second part of this test no longer works with the new peek sequencing,
-    // because we no longer check the catalog after optimization whether the original dependencies
-    // still exist. This might be fine, because nothing bad happens: timestamp determination already
-    // puts a a read hold on the index, so the index doesn't actually gets dropped in the
-    // Controller, and therefore the peek actually succeeds. In other words, the old peek
-    // sequencing's dependency check was overly cautious. I'm planning to revisit this later, and
-    // probably delete the second part of the test.
-    server
-        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
-        .await;
-
     let client1 = server.connect().await.unwrap();
 
     client1
@@ -4235,35 +4224,6 @@ async fn test_github_25388() {
 
             match client1
                 .query("SUBSCRIBE (SELECT *, mz_unsafe.mz_sleep(2) FROM t)", &[])
-                .await
-            {
-                Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
-                Err(err) => Err(err.to_string_with_causes()),
-            }
-        })
-        .await
-        .unwrap();
-
-    Retry::default()
-        .retry_async(|_| async {
-            client1
-                .batch_execute("DROP INDEX IF EXISTS idx")
-                .await
-                .unwrap();
-            client1
-                .batch_execute("CREATE INDEX idx ON t(a)")
-                .await
-                .unwrap();
-
-            let client2 = server.connect().await.unwrap();
-            mz_ore::task::spawn(|| "test", async move {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                client2.batch_execute("DROP INDEX idx").await.unwrap();
-            });
-
-            match client1
-                .query("SELECT *, mz_unsafe.mz_sleep(2) FROM t", &[])
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),

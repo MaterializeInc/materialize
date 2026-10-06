@@ -36,7 +36,7 @@ use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan, SideEffectingFunc,
+    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -88,10 +88,9 @@ use crate::util::ClientTransmitter;
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
-// `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
-// - The frontend peek sequencing temporarily reaches into this module for things that are needed
-//   by both the old and new peek sequencing. TODO(peek-seq): We plan to eliminate this with a
-//   big refactoring after the old peek sequencing is removed.
+// `sequence_staged` and `sequence_create_connection_stage_finish`.
+// - The frontend peek sequencing reaches into this module for some shared helpers.
+//   TODO(peek-seq): Move these out of the coordinator.
 
 mod inner;
 
@@ -182,24 +181,11 @@ impl Coordinator {
                 }
             }
 
-            // Look up the authenticated role of the connection targeted by
-            // pg_cancel_backend, which check_plan needs for its RBAC check.
-            // Linear search through active connections is fine because this
-            // happens at most once per statement.
-            let target_conn_role = match &plan {
-                Plan::SideEffectingFunc(SideEffectingFunc::PgCancelBackend {
-                    connection_id: Some(connection_id),
-                }) => self
-                    .active_conns()
-                    .into_iter()
-                    .find(|(conn_id, _)| conn_id.unhandled() == *connection_id)
-                    .map(|(_, conn_meta)| *conn_meta.authenticated_role_id()),
-                _ => None,
-            };
-
+            // `None` is the role of a `pg_cancel_backend` target connection,
+            // and side-effecting functions are sequenced by the frontend.
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                target_conn_role,
+                None,
                 ctx.session(),
                 &plan,
                 target_cluster_id,
@@ -307,8 +293,10 @@ impl Coordinator {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
-                Plan::CopyTo(plan) => {
-                    self.sequence_copy_to(ctx, plan, target_cluster).await;
+                Plan::CopyTo(_) => {
+                    ctx.retire(Err(AdapterError::Internal(
+                        "coordinator COPY TO reached despite frontend routing".into(),
+                    )));
                 }
                 Plan::DropObjects(plan) => {
                     let result = self.sequence_drop_objects(&mut ctx, plan).await;
@@ -411,23 +399,22 @@ impl Coordinator {
                     }
                     self.sequence_end_transaction(ctx, action).await;
                 }
-                Plan::Select(plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, plan, target_cluster, max).await;
+                Plan::Select(_) | Plan::ShowColumns(_) => {
+                    ctx.retire(Err(AdapterError::Internal(
+                        "coordinator peek reached despite frontend routing".into(),
+                    )));
                 }
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
                 }
-                Plan::SideEffectingFunc(plan) => {
-                    self.sequence_side_effecting_func(ctx, plan).await;
+                Plan::SideEffectingFunc(_) => {
+                    ctx.retire(Err(AdapterError::Internal(
+                        "coordinator side-effecting function reached despite frontend routing"
+                            .into(),
+                    )));
                 }
                 Plan::ShowCreate(plan) => {
                     ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
-                }
-                Plan::ShowColumns(show_columns_plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
-                        .await;
                 }
                 Plan::CopyFrom(plan) => {
                     self.sequence_copy_from(ctx, plan, target_cluster).await;
@@ -436,8 +423,7 @@ impl Coordinator {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }
                 Plan::ExplainPushdown(plan) => {
-                    self.sequence_explain_pushdown(ctx, plan, target_cluster)
-                        .await;
+                    self.sequence_explain_pushdown(ctx, plan).await;
                 }
                 Plan::ExplainSinkSchema(plan) => {
                     let result = self.sequence_explain_schema(plan);
@@ -1069,9 +1055,6 @@ pub(crate) fn emit_optimizer_notices(
 }
 
 /// Evaluates a COPY TO target URI expression and validates it.
-///
-/// This function is shared between the old peek sequencing (sequence_copy_to)
-/// and the new frontend peek sequencing to avoid code duplication.
 pub fn eval_copy_to_uri(
     to: HirScalarExpr,
     session: &Session,

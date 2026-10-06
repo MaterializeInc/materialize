@@ -13,7 +13,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
@@ -83,14 +82,10 @@ impl Optimizer {
             duration: Default::default(),
         }
     }
-
-    pub fn cluster_id(&self) -> ComputeInstanceId {
-        self.compute_instance.instance_id()
-    }
 }
 
-// A bogey `Debug` implementation that hides fields. This is needed to make the
-// `event!` call in `sequence_peek_stage` not emit a lot of data.
+// A bogey `Debug` implementation that hides fields, so that debug-formatting an
+// optimizer (e.g. in a tracing event) does not emit a lot of data.
 //
 // For now, we skip almost all fields, but we might revisit that bit if it turns
 // out that we really need those for debugging purposes.
@@ -140,15 +135,6 @@ pub struct GlobalLirPlan {
 impl GlobalLirPlan {
     pub fn df_desc(&self) -> &LirDataflowDescription {
         &self.df_desc
-    }
-
-    /// Returns the id of the dataflow's sink export.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the dataflow has no sink exports or has more than one.
-    pub fn sink_id(&self) -> GlobalId {
-        self.df_desc.sink_id()
     }
 }
 
