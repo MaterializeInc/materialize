@@ -571,15 +571,6 @@ impl Consensus for PostgresConsensus {
                 //
                 // 2. CaS that initializes the shard, issued with `expected` = None
                 //
-                // The init path (see the `None` arm) inserts a `-1` sentinel and the first row at
-                // seqno 0, then commits only if `max(sequence_number)` is 0. It commits (head
-                // becomes 0) exactly when the shard was empty: a shard that still holds seqno 0
-                // fails the insert's PK, and a shard with a head above 0 either fails the PK (if
-                // seqno 0 is present) or, if seqno 0 was truncated away, inserts into the gap and
-                // is caught by the `max > 0` check and rolled back. This is correct because an
-                // initialized shard always retains a live row (truncation never removes the head).
-                // 2. CaS that initializes the shard, issued with `expected` = None
-                // 
                 // The init path (see the `None` arm) is a single statement that inserts the `-1`
                 // marker and seqno 0, guarded by `NOT EXISTS` over the shard.
                 //
