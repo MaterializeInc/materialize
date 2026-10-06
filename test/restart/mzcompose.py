@@ -2307,11 +2307,14 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                   (TOPIC 'protected-no-snapshot-{attempt}-${{testdrive.seed}}')
                   FORMAT JSON ENVELOPE DEBEZIUM WITH (SNAPSHOT = false);
             """)
+            # Bracket admission before catalog diagnostics add query latency.
+            # Physical since is monotone, so this observation covers CREATE even
+            # if it advances while we subsequently inspect the committed records.
+            since_after = inspect(no_snapshot_input)["since"][0]
             fresh_sink = gid("protected_no_snapshot")
             fresh_requirement = storage_requirement(
                 fresh_sink, [fresh_sink, no_snapshot_input]
             )
-            since_after = inspect(no_snapshot_input)["since"][0]
             permission_after = record(bound_kind, no_snapshot_input)["frontier"]
             assert permission <= fresh_requirement["frontier"] <= permission_after, (
                 fresh_requirement,
