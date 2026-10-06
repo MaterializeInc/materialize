@@ -3097,6 +3097,7 @@ fn test_emit_tracing_notice() {
         .with_system_parameter_default("opentelemetry_filter".to_string(), "info".to_string())
         .with_system_parameter_default("log_filter".to_string(), "info".to_string())
         .start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -3414,6 +3415,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -3509,6 +3511,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -3586,6 +3589,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server

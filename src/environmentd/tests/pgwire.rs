@@ -802,6 +802,7 @@ fn pg_test_inner(path: &Path, mz_flags: bool) {
 fn pg_test_harness(path: &Path, mz_flags: bool, harness: fn() -> test_util::TestHarness) {
     datadriven::walk(path.to_str().unwrap(), |tf| {
         let server = harness().unsafe_mode().start_blocking();
+        server.wait_for_replica_statuses().unwrap();
         if mz_flags {
             server.enable_feature_flags(&[
                 "enable_create_table_from_source",

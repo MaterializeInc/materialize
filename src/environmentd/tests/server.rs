@@ -1268,6 +1268,7 @@ fn test_mz_system_user_admin() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_passes_options() {
     let server = test_util::TestHarness::default().start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     // Create our WebSocket.
     let ws_url = server.ws_addr();
@@ -1347,6 +1348,7 @@ fn test_ws_notifies_for_bad_options() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_select_row_message_shape() {
     let server = test_util::TestHarness::default().start_blocking();
+    server.wait_for_replica_statuses().unwrap();
     let ws_url = server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
@@ -1665,6 +1667,7 @@ struct Notice {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_options_param() {
     let server = test_util::TestHarness::default().start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     #[derive(Debug, Serialize)]
     struct Params {
@@ -2544,6 +2547,7 @@ fn test_internal_http_auth() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_ws_auth() {
     let server = test_util::TestHarness::default().start_blocking();
+    server.wait_for_replica_statuses().unwrap();
 
     // Create our WebSocket.
     let ws_url = server.internal_ws_addr();
@@ -3921,6 +3925,7 @@ fn webhook_validation_memory_budget() {
 #[allow(clippy::disallowed_methods)]
 fn test_webhook_url_notice() {
     let server = test_util::TestHarness::default().start_blocking();
+    server.wait_for_replica_statuses().unwrap();
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server
