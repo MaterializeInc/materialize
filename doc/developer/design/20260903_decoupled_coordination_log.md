@@ -33,9 +33,10 @@ consuming its physical-lag window. That adjustment also needs CI verification.
 
 Keep the scheduled-compaction 1/0/1 membership and audit assertions. Its final
 observation uses a fixed sleep and a real-time window. Establish convergence and
-the window prerequisite before changing the fixture. The unfinished RBAC-view
-SLT needs diagnosis, not golden rewrites. Streaming statements also captures the
-compaction window in the timestamped job log. The imported hydration-stability
+the window prerequisite before changing the fixture. Streaming statements
+captures the compaction window in the timestamped job log. RBAC-view SLT
+completes in CI137762, so its temporary streaming diagnostic is removed.
+The imported hydration-stability
 restart and no-dataflow workflows pass in CI137762, alongside warm handover.
 
 Comment-ID collision coverage now uses dynamic setup in the SQL integration

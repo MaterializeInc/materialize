@@ -408,10 +408,7 @@ def run_sqllogictest(
                 c.metadata_store(),
                 rewrite_results=rewrite_results,
             )
-            trace_statements = file in {
-                "test/sqllogictest/rbac_views.slt",
-                "test/sqllogictest/materialized_views.slt",
-            }
+            trace_statements = file == "test/sqllogictest/materialized_views.slt"
             if trace_statements:
                 # Preserve active statements and the real-time compaction window
                 # in the timestamped job log, including on job timeout.
