@@ -51,6 +51,7 @@ import {
 import { useAllClusters } from "~/store/allClusters";
 import { useAllObjects } from "~/store/allObjects";
 import { MaterializeTheme } from "~/theme";
+import { pluralize } from "~/util";
 import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
 import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
@@ -170,15 +171,13 @@ const FreshnessContent = ({
         <Text as="span" textStyle="text-ui-med">
           {breaching.length} of {rows.length}
         </Text>{" "}
-        {rows.length === 1 ? "object" : "objects"} exceeded {thresholdClause}.
+        {pluralize(rows.length, "object", "objects")} exceeded {thresholdClause}
+        .
       </Text>
 
       <Accordion allowMultiple defaultIndex={[0, 1]}>
         <AccordionItem>
-          <SectionHeader
-            title="Freshness"
-            count={`${rows.length} ${rows.length === 1 ? "object" : "objects"}`}
-          />
+          <SectionHeader title="Freshness" count={`(${rows.length})`} />
           <AccordionPanel px="0">
             <ThresholdLineGraph<DataPoint>
               data={historicalData}
