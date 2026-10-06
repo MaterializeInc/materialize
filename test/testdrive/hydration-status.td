@@ -575,6 +575,7 @@ true
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '0s';
+ALTER SYSTEM SET log_filter = 'info,mz_adapter::coord::hydration_history=debug';
 
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
 0
@@ -801,6 +802,9 @@ ALTER SYSTEM SET replica_hydration_history_retention_period = '120d';
 
 > DROP CLUSTER episodes CASCADE
 > SET cluster = test
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET log_filter;
 
 # Test that incorrectly configured sinks do _not_ show as hydrated.
 
