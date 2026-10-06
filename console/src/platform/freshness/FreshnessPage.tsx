@@ -315,7 +315,14 @@ const FreshnessPage = () => {
   const selectable = clusters
     .filter((c) => !isSystemCluster(c.id))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const selected = selectable.find((c) => c.id === clusterId) ?? selectable[0];
+  // An absent param falls back to the first cluster. A param naming a cluster
+  // that is not there does not: an old link, or one to a dropped or system
+  // cluster, would otherwise show a different cluster under the name the URL
+  // still carries, and sharing that link would show a third thing again.
+  const selected = clusterId
+    ? selectable.find((c) => c.id === clusterId)
+    : selectable[0];
+  const notFound = Boolean(clusterId) && selected === undefined;
   const options: SelectOption[] = selectable.map((c) => ({
     id: c.id,
     name: c.name,
@@ -434,7 +441,12 @@ const FreshnessPage = () => {
         </VStack>
       </PageHeader>
       <VStack alignItems="stretch" width="100%" spacing="4">
-        {selected ? (
+        {notFound ? (
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            That cluster was not found. Select another cluster using the menu
+            above.
+          </Text>
+        ) : selected ? (
           // The key is on the boundary, not on the content: once a boundary
           // has caught an error it renders its fallback instead of its
           // children, so re-keying a child it is no longer rendering does

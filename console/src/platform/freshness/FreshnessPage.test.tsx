@@ -61,3 +61,41 @@ describe("FreshnessPage cluster states", () => {
     ).toBeVisible();
   });
 });
+
+const CLUSTER: Cluster = {
+  id: "u1",
+  name: "quickstart",
+  managed: true,
+  replicas: [],
+  size: "25cc",
+  replicationFactor: 1,
+} as unknown as Cluster;
+
+describe("FreshnessPage cluster selection", () => {
+  const renderAt = async (search: string) =>
+    renderComponent(<FreshnessPage />, {
+      initializeState: (store) =>
+        store.set(allClusters, {
+          data: [CLUSTER],
+          error: undefined,
+          snapshotComplete: true,
+        }),
+      initialRouterEntries: [search],
+    });
+
+  it("says so rather than showing a different cluster", async () => {
+    // An old link, or one to a dropped or system cluster. Falling back would
+    // show one cluster under a URL naming another.
+    await renderAt("/?cluster=u999");
+
+    expect(await screen.findByText(/was not found/)).toBeVisible();
+    expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
+  });
+
+  it("still falls back when no cluster is named", async () => {
+    await renderAt("/");
+
+    expect(await screen.findByText("quickstart")).toBeVisible();
+    expect(screen.queryByText(/was not found/)).not.toBeInTheDocument();
+  });
+});
