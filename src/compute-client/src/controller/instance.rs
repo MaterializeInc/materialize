@@ -25,7 +25,8 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS, ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
@@ -1468,6 +1469,11 @@ impl Instance {
             dataflow.until.elements(),
         );
         if !dataflow.class_fits_shape() {
+            dataflow.class = DataflowClass::Maintained;
+        }
+        if dataflow.class == DataflowClass::OneShotRead
+            && !ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS.get(&self.dyncfg)
+        {
             dataflow.class = DataflowClass::Maintained;
         }
 

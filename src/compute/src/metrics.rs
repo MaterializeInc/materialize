@@ -17,7 +17,6 @@ use mz_ore::metrics::{
 };
 use mz_repr::{GlobalId, SharedRow};
 use prometheus::core::{AtomicF64, GenericCounter};
-use prometheus::proto::LabelPair;
 use prometheus::{Histogram, HistogramVec, IntCounter};
 
 /// Metrics exposed by compute replicas.
@@ -129,35 +128,8 @@ impl ComputeMetrics {
             prometheus::exponential_buckets(1.0, 2.0, 25).expect("valid parameters");
         index_peek_row_buckets.insert(0, 0.0);
 
-        // Apply a `workload_class` label to all metrics in the registry when we
-        // have a known workload class.
-        //
-        // The postprocessor rewrites every metric in the whole registry, so only the maintenance
-        // runtime registers it. A second registration from the interactive runtime would push the
-        // label twice onto each metric and produce a duplicate-label scrape error.
-        if role.owns_process_globals() {
-            registry.register_postprocessor({
-                let workload_class = Arc::clone(&workload_class);
-                move |metrics| {
-                    let workload_class: Option<String> =
-                        workload_class.lock().expect("lock poisoned").clone();
-                    let Some(workload_class) = workload_class else {
-                        return;
-                    };
-                    for metric in metrics {
-                        for metric in metric.mut_metric() {
-                            let mut label = LabelPair::default();
-                            label.set_name("workload_class".into());
-                            label.set_value(workload_class.clone());
-
-                            let mut labels = metric.take_label();
-                            labels.push(label);
-                            metric.set_label(labels);
-                        }
-                    }
-                }
-            });
-        }
+        role.process_globals()
+            .register_workload_class_label(registry, &workload_class);
 
         Self {
             workload_class,
