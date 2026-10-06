@@ -453,6 +453,8 @@ export function useLargestClusterReplica(params: LargestClusterReplicaParams) {
 
 const STRIP_DATAFLOW_PREFIX = /^Dataflow: /;
 
+export const UNIFIED_OBJECT_SIZES_MIN_VERSION = "26.35.0-dev";
+
 export type UseLargestMaintainedQueriesParams = {
   clusterId: string;
   clusterName: string;
@@ -465,7 +467,8 @@ export function useLargestMaintainedQueries(
 ) {
   // mz_object_arrangement_sizes reports sizes reliably from v26.35, where
   // they no longer go stale across replica restarts.
-  const unifiedSizes = useEnvironmentGate("26.35.0-dev") ?? false;
+  const unifiedSizes =
+    useEnvironmentGate(UNIFIED_OBJECT_SIZES_MIN_VERSION) ?? false;
   const queryClient = useQueryClient();
   // queryClient is a stable singleton, not query input.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -794,8 +797,29 @@ export function useReplicaOfflineEvents(
 }
 
 // TODO: remove these gates once all environments are past them.
+const UTILIZATION_INDEXED_VIEWS_MIN_VERSION = "26.32.0";
 export const REPLICA_MEMORY_BREAKDOWN_MIN_VERSION = "26.44.0";
 const REPLICA_HYDRATION_HISTORY_MIN_VERSION = "26.43.0";
+
+/**
+ * Which source serves a utilization window: a live SUBSCRIBE to the un-binned
+ * 3h view, a live SUBSCRIBE to the binned 24h view, or a poll.
+ */
+export function useUtilizationTier(timePeriodMinutes: number) {
+  // The un-binned 3h and 24h indexed views (and their SUBSCRIBEs) only exist on
+  // mz >= 26.32. On older environments (e.g. mid-rollout) these paths are gated
+  // off and everything falls back to the poll. The 14d `overview` view predates
+  // this, so its poll path is not gated.
+  // TODO: remove the gate once all environments are >= 26.32.
+  const hasIndexedViews =
+    useEnvironmentGate(UTILIZATION_INDEXED_VIEWS_MIN_VERSION) === true;
+  if (!hasIndexedViews || timePeriodMinutes > SUBSCRIBE_BINNED_MAX_MINUTES) {
+    return "poll" as const;
+  }
+  return timePeriodMinutes <= SUBSCRIBE_UNBINNED_MAX_MINUTES
+    ? ("unbinned3h" as const)
+    : ("binned24h" as const);
+}
 
 /**
  * SUBSCRIBE variant for the live (≤3h) window: streams the un-binned 3h base
@@ -949,13 +973,7 @@ export function useReplicaUtilizationHistory(
   },
 ) {
   const enabled = queryOptions?.enabled ?? true;
-  const minutes = params.timePeriodMinutes;
-  // The un-binned 3h and 24h indexed views (and their SUBSCRIBEs) only exist on
-  // mz >= 26.32. On older environments (e.g. mid-rollout) these paths are gated
-  // off and everything falls back to the poll. The 14d `overview` view predates
-  // this, so its poll path is not gated.
-  // TODO: remove the gate once all environments are >= 26.32.
-  const hasIndexedViews = useEnvironmentGate("26.32.0") === true;
+  const tier = useUtilizationTier(params.timePeriodMinutes);
   const hasMemoryBreakdown =
     useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
   const filters = {
@@ -965,12 +983,8 @@ export function useReplicaUtilizationHistory(
       (params.includeMemoryBreakdown && hasMemoryBreakdown) || undefined,
   };
 
-  const useUnbinnedSubscribe =
-    hasIndexedViews && minutes <= SUBSCRIBE_UNBINNED_MAX_MINUTES;
-  const useBinnedSubscribe =
-    hasIndexedViews &&
-    minutes > SUBSCRIBE_UNBINNED_MAX_MINUTES &&
-    minutes <= SUBSCRIBE_BINNED_MAX_MINUTES;
+  const useUnbinnedSubscribe = tier === "unbinned3h";
+  const useBinnedSubscribe = tier === "binned24h";
 
   const unbinnedResult = useReplicaUtilizationHistorySubscribe(
     filters,

@@ -20,22 +20,29 @@ import {
 import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
+import Alert from "~/components/Alert";
 import { TooltipColorSwatch } from "~/components/graphComponents";
+import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import { generateRainbowPalette } from "~/components/ThresholdLineGraph/thresholdLineGraphHelpers";
 import { useFlags } from "~/hooks/useFlags";
 import { LargestReplicaBoundary } from "~/platform/clusters/LargestMaintainedQueries";
-import { useLargestMaintainedQueries } from "~/platform/clusters/queries";
+import {
+  UNIFIED_OBJECT_SIZES_MIN_VERSION,
+  useLargestMaintainedQueries,
+} from "~/platform/clusters/queries";
 import {
   maintainedObjectPath,
   useBuildWorkflowGraphPath,
 } from "~/platform/routeHelpers";
-import { useRegionSlug } from "~/store/environments";
+import { useAllClusters } from "~/store/allClusters";
+import { useEnvironmentGate, useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { formatMemoryUsage } from "~/utils/format";
 
 import { segmentWidths, TOP_OBJECT_COUNT } from "./memoryByObjectModel";
 import { PERCENT_TICKS } from "./ResourceUsage/resourceUsageStyles";
+import { useLiveLargestObjects } from "./useLiveLargestObjects";
 
 export interface MemoryByObjectProps {
   clusterId: string;
@@ -46,32 +53,45 @@ export interface MemoryByObjectProps {
 export const MemoryByObject = ({
   clusterId,
   clusterName,
-}: MemoryByObjectProps) => (
-  <LargestReplicaBoundary clusterId={clusterId}>
-    {(replica) => (
-      <MemoryByObjectCard
-        clusterId={clusterId}
-        clusterName={clusterName}
-        replicaName={replica.name}
-        replicaHeapLimit={replica.heapLimit}
-      />
-    )}
-  </LargestReplicaBoundary>
-);
+}: MemoryByObjectProps) => {
+  const hasLiveSizes =
+    useEnvironmentGate(UNIFIED_OBJECT_SIZES_MIN_VERSION) === true;
+  const { getClusterById } = useAllClusters();
+  const replicas = getClusterById(clusterId)?.replicas;
+  return (
+    <LargestReplicaBoundary clusterId={clusterId}>
+      {(replica) =>
+        hasLiveSizes ? (
+          <LiveMemoryByObject
+            replicaId={replicas?.find(({ name }) => name === replica.name)?.id}
+            replicaName={replica.name}
+            replicaHeapLimit={replica.heapLimit}
+          />
+        ) : (
+          <PolledMemoryByObject
+            clusterId={clusterId}
+            clusterName={clusterName}
+            replicaName={replica.name}
+            replicaHeapLimit={replica.heapLimit}
+          />
+        )
+      }
+    </LargestReplicaBoundary>
+  );
+};
 
-const MemoryByObjectCard = ({
+// The polled rows type `size` as a bigint, the live ones as a number.
+type LargestObject = Omit<
+  NonNullable<ReturnType<typeof useLargestMaintainedQueries>["data"]>[number],
+  "size"
+> & { size: bigint | number | null };
+
+const PolledMemoryByObject = ({
   clusterId,
   clusterName,
   replicaName,
   replicaHeapLimit,
 }: MemoryByObjectProps & { replicaName: string; replicaHeapLimit: number }) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  // The maintained objects page only has routes while its flag is on.
-  const hasMaintainedObjectsPage = Boolean(
-    useFlags()["maintained-objects-ui-50"],
-  );
-  const regionSlug = useRegionSlug();
-  const workflowGraphPath = useBuildWorkflowGraphPath();
   const { data: objects } = useLargestMaintainedQueries({
     clusterId,
     clusterName,
@@ -79,8 +99,47 @@ const MemoryByObjectCard = ({
     replicaName,
     replicaHeapLimit,
   });
+  return (
+    <MemoryByObjectCard objects={objects ?? []} replicaName={replicaName} />
+  );
+};
 
-  if (!objects || objects.length === 0) return null;
+const LiveMemoryByObject = ({
+  replicaId,
+  replicaName,
+  replicaHeapLimit,
+}: {
+  replicaId: string | undefined;
+  replicaName: string;
+  replicaHeapLimit: number;
+}) => {
+  const { objects, snapshotComplete, isError } = useLiveLargestObjects({
+    replicaId,
+    heapLimit: replicaHeapLimit,
+  });
+  if (isError) {
+    return <Alert variant="error" message="Object memory is unavailable." />;
+  }
+  if (!snapshotComplete && objects.length === 0) return <LoadingContainer />;
+  return <MemoryByObjectCard objects={objects} replicaName={replicaName} />;
+};
+
+const MemoryByObjectCard = ({
+  objects,
+  replicaName,
+}: {
+  objects: LargestObject[];
+  replicaName: string;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  // The maintained objects page only has routes while its flag is on.
+  const hasMaintainedObjectsPage = Boolean(
+    useFlags()["maintained-objects-ui-50"],
+  );
+  const regionSlug = useRegionSlug();
+  const workflowGraphPath = useBuildWorkflowGraphPath();
+
+  if (objects.length === 0) return null;
 
   // Colored by rank like the Freshness page's lines, so the largest objects
   // are furthest apart in hue.
