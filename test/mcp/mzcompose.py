@@ -992,11 +992,10 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
     empty `resolved_ids`, silently skipping the system-catalog guard. Same
     bug class as the SHOW fix in #36543.
 
-    `EXPLAIN TIMESTAMP` is the reliable vector — it reaches `sequence_plan`
-    and its raw plan depends on `mz_sessions`. The deferral fires only on the
-    *first* `mz_sessions` reference in a session, so the same statement is
-    correctly blocked once the wait future is cleared; we use that for a
-    differential check.
+    `EXPLAIN TIMESTAMP` over `mz_sessions` is the vector. Only the *first*
+    `mz_sessions` reference in a session waits for the startup append, so
+    comparing the first and the second reference checks that the wait does
+    not bypass the guard.
     """
     c.up("materialized")
 
@@ -1035,27 +1034,28 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
 
     with c.test_case("explain_timestamp_first_statement_blocked"):
         cur = fresh_cursor()
-        # First reference: deferred for the startup append, then resumed.
+        # First reference: waits for the startup append.
         first = run(cur, BYPASS)
-        # Second reference: wait future already cleared, no deferral.
+        # Second reference: the append has completed, nothing waits.
         second = run(cur, BYPASS)
 
         # Control: holds on both builds; proves the restriction works and that
         # the statement's resolved_ids carry mz_sessions.
         assert RESTRICTED in second, (
-            "non-deferred EXPLAIN TIMESTAMP over mz_sessions should be blocked, "
+            "EXPLAIN TIMESTAMP over mz_sessions after the startup append should be "
+            "blocked, "
             f"got: {second!r}"
         )
 
-        # Regression: fails on the buggy build, passes once `DeferredPlan`
-        # carries `resolved_ids` into the resumed `check_plan`.
+        # Regression: the guard must also hold for the statement that waits.
         assert RESTRICTED in first, (
-            f"deferred EXPLAIN TIMESTAMP bypassed restrict_to_user_objects, "
+            f"EXPLAIN TIMESTAMP waiting for the startup append bypassed "
+            f"restrict_to_user_objects, "
             f"got: {first!r}"
         )
 
     with c.test_case("non_required_builtin_blocked_as_first_statement"):
-        # mz_roles is not a REQUIRED_BUILTIN_TABLE, so no deferral fires —
+        # mz_roles is not a REQUIRED_BUILTIN_TABLE, so nothing waits. It is
         # blocked even as the first statement.
         outcome = run(
             fresh_cursor(),
@@ -1086,12 +1086,8 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
         assert rows[0][0] == "restricted_agent", rows
 
     with c.test_case("unrestricted_role_first_statement_succeeds"):
-        # Positive control on the resume path: an unrestricted role running
-        # the same deferred statement as its first statement must succeed,
-        # not error. If `DeferredPlan` now carries `resolved_ids` correctly
-        # the resumed `rbac::check_plan` returns Ok (no `restrict_to_user_objects`
-        # to enforce), and the EXPLAIN TIMESTAMP plan flows through. A
-        # regression here would mean we broke the non-restricted deferral path.
+        # Positive control: an unrestricted role running the same statement as
+        # its first statement, which waits for the startup append, must succeed.
         cur = c.sql_cursor(user="materialize", port=6875, reuse_connection=False)
         outcome = run(cur, BYPASS)
         assert outcome.startswith("ok:"), (
