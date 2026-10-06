@@ -104,63 +104,36 @@ export interface FreshnessParams {
 export function useFreshnessParams(): FreshnessParams {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const clear = React.useCallback(
-    (key: string) => {
-      setSearchParams(
-        (prev) => {
-          prev.delete(key);
-          return prev;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
+  const clear = (key: string) =>
+    setSearchParams(
+      (prev) => {
+        prev.delete(key);
+        return prev;
+      },
+      { replace: true },
+    );
 
-  const set = React.useCallback(
-    (key: string, value: string) => {
-      setSearchParams(
-        (prev) => {
-          prev.set(key, value);
-          return prev;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
+  const set = (key: string, value: string) =>
+    setSearchParams(
+      (prev) => {
+        prev.set(key, value);
+        return prev;
+      },
+      { replace: true },
+    );
 
-  // NOTE: these are not stable across a param change. They reach
-  // `setSearchParams`, which react-router rebuilds whenever `searchParams`
-  // changes, so changing any one param gives every setter a new identity. A
-  // caller holding a timer must keep the setter in a ref rather than in a
-  // dependency array, or an unrelated param moving will cancel its pending
-  // call. See `useSettledThreshold`.
-  const setClusterId = React.useCallback(
-    (id: string) => set(CLUSTER_SEARCH_PARAM, id),
-    [set],
-  );
-  const setThreshold = React.useCallback(
-    (ms: number) => set(THRESHOLD_SEARCH_PARAM, String(ms)),
-    [set],
-  );
-  const setTimePeriodMinutes = React.useCallback(
-    (minutes: number) => set(TIME_PERIOD_SEARCH_PARAM_KEY, String(minutes)),
-    [set],
-  );
-  const setPredicate = React.useCallback(
-    (predicate: Predicate) => set(PREDICATE_SEARCH_PARAM, predicate),
-    [set],
-  );
+  const setClusterId = (id: string) => set(CLUSTER_SEARCH_PARAM, id);
+  const setThreshold = (ms: number) => set(THRESHOLD_SEARCH_PARAM, String(ms));
+  const setTimePeriodMinutes = (minutes: number) =>
+    set(TIME_PERIOD_SEARCH_PARAM_KEY, String(minutes));
+  const setPredicate = (predicate: Predicate) =>
+    set(PREDICATE_SEARCH_PARAM, predicate);
   // An empty selection is the absence of a filter, so it clears the param
   // rather than writing a sentinel nobody else would recognise.
-  const setObjectTypes = React.useCallback(
-    (types: string[]) =>
-      types.length === 0
-        ? clear(OBJECT_TYPE_SEARCH_PARAM)
-        : set(OBJECT_TYPE_SEARCH_PARAM, types.join(",")),
-    [set, clear],
-  );
+  const setObjectTypes = (types: string[]) =>
+    types.length === 0
+      ? clear(OBJECT_TYPE_SEARCH_PARAM)
+      : set(OBJECT_TYPE_SEARCH_PARAM, types.join(","));
 
   // Memoized on the raw param, which is a string and so compares by value.
   // Rebuilding it per render would hand every consuming `useMemo` a new array
