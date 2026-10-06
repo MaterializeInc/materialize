@@ -2910,6 +2910,9 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
+        self.flags_with_values["enable_timestamp_oracle_pipelined_reads"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_blob_target_size"] = (
             # 1 MiB, 16 MiB, 128 MiB
             ["1048576", "16777216", "134217728"]

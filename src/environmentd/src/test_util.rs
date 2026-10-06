@@ -235,6 +235,10 @@ impl Default for TestHarness {
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([
                 (
+                    "enable_timestamp_oracle_pipelined_reads".to_string(),
+                    "true".to_string(),
+                ),
+                (
                     "enable_prepared_query_reuse".to_string(),
                     "true".to_string(),
                 ),

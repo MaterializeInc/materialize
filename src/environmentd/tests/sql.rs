@@ -1987,6 +1987,94 @@ async fn test_linearizability() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
+async fn test_timestamp_oracle_pipelining_reads_follow_acknowledged_writes() {
+    for pipelined in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default(
+                "enable_timestamp_oracle_pipelined_reads".into(),
+                pipelined.to_string(),
+            )
+            .with_system_parameter_default("enable_frontend_peek_sequencing".into(), "true".into())
+            .start()
+            .await;
+        let writer = server.connect().await.unwrap();
+        for statement in [
+            "CREATE TABLE oracle_pipeline (id INT, value BIGINT)",
+            "CREATE DEFAULT INDEX ON oracle_pipeline",
+            "INSERT INTO oracle_pipeline VALUES (1, 0)",
+        ] {
+            writer.batch_execute(statement).await.unwrap();
+        }
+        let left = server.connect().await.unwrap();
+        let right = server.connect().await.unwrap();
+        for client in [&left, &right] {
+            client
+                .batch_execute("SET transaction_isolation = 'strict serializable'")
+                .await
+                .unwrap();
+        }
+        let left_select = left
+            .prepare("SELECT value FROM oracle_pipeline WHERE id = 1")
+            .await
+            .unwrap();
+        let right_select = right
+            .prepare("SELECT value FROM oracle_pipeline WHERE id = 1")
+            .await
+            .unwrap();
+
+        for value in [1i64, 3, 5] {
+            writer
+                .execute(
+                    "UPDATE oracle_pipeline SET value = $1 WHERE id = 1",
+                    &[&value],
+                )
+                .await
+                .unwrap();
+            let (left_row, right_row) = tokio::join!(
+                left.query_one(&left_select, &[]),
+                right.query_one(&right_select, &[]),
+            );
+            assert_eq!(left_row.unwrap().get::<_, i64>(0), value);
+            assert_eq!(right_row.unwrap().get::<_, i64>(0), value);
+
+            left.batch_execute("BEGIN").await.unwrap();
+            assert_eq!(
+                left.query_one(&left_select, &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                value
+            );
+            let next = value + 1;
+            writer
+                .execute(
+                    "UPDATE oracle_pipeline SET value = $1 WHERE id = 1",
+                    &[&next],
+                )
+                .await
+                .unwrap();
+            // The explicit transaction retains its snapshot/read holds while
+            // another session observes a subsequently acknowledged write.
+            let (held_row, fresh_row) = tokio::join!(
+                left.query_one(&left_select, &[]),
+                right.query_one(&right_select, &[]),
+            );
+            assert_eq!(held_row.unwrap().get::<_, i64>(0), value);
+            assert_eq!(fresh_row.unwrap().get::<_, i64>(0), next);
+            left.batch_execute("COMMIT").await.unwrap();
+            assert_eq!(
+                left.query_one(&left_select, &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                next
+            );
+        }
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn test_strong_session_serializability() {
     test_session_linearizability("strong session serializable").await;
 }

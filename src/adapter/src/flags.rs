@@ -9,7 +9,9 @@
 
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS, PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT,
+};
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
@@ -168,6 +170,7 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
 
 pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
     TimestampOracleParameters {
+        pipelined_reads: Some(ENABLE_TIMESTAMP_ORACLE_PIPELINED_READS.get(config.dyncfgs())),
         pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
         pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),
         pg_connection_pool_ttl: Some(config.pg_timestamp_oracle_connection_pool_ttl()),

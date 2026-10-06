@@ -229,7 +229,12 @@ impl Coordinator {
                 .open(timeline.to_string(), initially, now_fn, read_only)
                 .await;
 
-            let batching_oracle = BatchingTimestampOracle::new(oracle_config.metrics(), oracle);
+            let TimestampOracleConfig::Postgres(pg_config) = &oracle_config;
+            let batching_oracle = BatchingTimestampOracle::new_with_read_concurrency(
+                oracle_config.metrics(),
+                oracle,
+                pg_config.dynamic.subscribe_read_concurrency(),
+            );
 
             let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
                 Arc::new(batching_oracle);

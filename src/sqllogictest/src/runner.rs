@@ -1374,6 +1374,10 @@ impl<'a> RunnerInner<'a> {
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
+                    "enable_timestamp_oracle_pipelined_reads".to_string(),
+                    "true".to_string(),
+                );
+                params.insert(
                     "enable_prepared_query_reuse".to_string(),
                     "true".to_string(),
                 );
