@@ -202,6 +202,7 @@ impl Context {
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
             time_dependence: desc.time_dependence,
+            class: desc.class,
         };
 
         // Refining: identify the common parts in the MFPs pushed onto a
