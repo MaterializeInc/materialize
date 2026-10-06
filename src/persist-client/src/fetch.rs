@@ -293,7 +293,9 @@ where
     /// Diagnoses a missing-blob fetch failure for a part leased by the given
     /// reader. See the free function `missing_blob_diagnostics`.
     pub async fn missing_blob_diagnostics(&self, reader_id: &LeasedReaderId) -> String {
-        missing_blob_diagnostics(self.schema_cache.applier(), reader_id).await
+        missing_blob_diagnostics(self.schema_cache.applier(), reader_id)
+            .await
+            .message
     }
 }
 
@@ -310,13 +312,24 @@ where
 pub(crate) async fn missing_blob_diagnostics<K, V, T, D>(
     applier: &Applier<K, V, T, D>,
     reader_id: &LeasedReaderId,
-) -> String
+) -> MissingBlobDiagnosis
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64,
 {
+    #[derive(Serialize)]
+    struct Details<'a> {
+        shard_id: String,
+        reader_id: &'a str,
+    }
+    let reader = reader_id.to_string();
+    let details = Details {
+        shard_id: applier.shard_id.to_string(),
+        reader_id: &reader,
+    };
+
     // Refreshing state talks to consensus; this runs on an already-fatal path
     // and a partition from consensus may be the very reason the lease was
     // lost, so don't let the diagnosis block the restart indefinitely.
@@ -325,22 +338,57 @@ where
         .await
         .is_err()
     {
-        return format!(
-            "reader {reader_id}: could not refresh state within 30s to diagnose the lease; \
-             partitioned from consensus?"
+        mz_ore::antithesis_reachable!(
+            "persist: blob missing and the leasing reader's state could not be refreshed",
+            &details
         );
+        // Inconclusive: the lease may still be held, so this is not
+        // explained by lease loss.
+        return MissingBlobDiagnosis {
+            lease_lost: false,
+            message: format!(
+                "reader {reader_id}: could not refresh state within 30s to diagnose the lease; \
+                 partitioned from consensus?"
+            ),
+        };
     }
     match applier.reader_lease(reader_id.clone()) {
-        Some(lease_state) => format!(
-            "reader {reader_id} is still present in state ({lease_state:?}); \
-             a missing blob despite a live lease indicates a GC bug"
-        ),
-        None => format!(
-            "reader {reader_id} has been expired out of state; \
-             the process likely failed to heartbeat it within the lease duration \
-             (machine sleep, CPU/memory starvation, or a partition from consensus?)"
-        ),
+        Some(lease_state) => {
+            mz_ore::antithesis_unreachable!(
+                "persist: blob missing although the leasing reader is still in state",
+                &details
+            );
+            MissingBlobDiagnosis {
+                lease_lost: false,
+                message: format!(
+                    "reader {reader_id} is still present in state ({lease_state:?}); \
+                     a missing blob despite a live lease indicates a GC bug"
+                ),
+            }
+        }
+        None => {
+            mz_ore::antithesis_reachable!(
+                "persist: blob missing after the leasing reader expired",
+                &details
+            );
+            MissingBlobDiagnosis {
+                lease_lost: true,
+                message: format!(
+                    "reader {reader_id} has been expired out of state; \
+                     the process likely failed to heartbeat it within the lease duration \
+                     (machine sleep, CPU/memory starvation, or a partition from consensus?)"
+                ),
+            }
+        }
     }
+}
+
+/// The outcome of [`missing_blob_diagnostics`].
+pub(crate) struct MissingBlobDiagnosis {
+    /// Whether refreshed state shows the reader lost its lease, which
+    /// explains the failure without a bug in the seqno hold.
+    pub lease_lost: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -438,8 +486,14 @@ where
             // If we do have a bug and a reader does encounter a missing blob, the state
             // cannot be recovered, and our best option is to panic and retry the whole
             // process.
-            let diagnostics = missing_blob_diagnostics(schema_cache.applier(), reader_id).await;
-            panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
+            let diagnosis = missing_blob_diagnostics(schema_cache.applier(), reader_id).await;
+            if diagnosis.lease_lost {
+                mz_ore::antithesis::expect_panic();
+            }
+            panic!(
+                "could not fetch batch part {}: {}",
+                blob_key, diagnosis.message
+            )
         }
     };
     let part_cfg = BatchFetcherConfig::new(cfg);
