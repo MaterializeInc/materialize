@@ -1672,9 +1672,11 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                     advance()
                 # Persist schedules merges in response to writes. Keep producing real
                 # batches while waiting, including after a requirement has completed.
+                # Blind writes keep this compaction pump independent of input reads
+                # and their protection. The eliminated relation cancels from the MV.
                 for _ in range(8):
-                    query("UPDATE protected_eliminated SET a = a + 1")
-                    query("UPDATE protected_control SET a = a + 1")
+                    query("INSERT INTO protected_eliminated VALUES (1)")
+                    query("INSERT INTO protected_control VALUES (1)")
                 print(f"Waiting for {description}")
                 try:
                     td(
