@@ -1732,7 +1732,7 @@ impl PeekClient {
             // in profiles. Every attempt clones every row, and we retry up to
             // `max_occ_retries` times.
             attempt_state.mark_write_submitted();
-            tracing::debug!(%target, retry_count, "RTW submitting write");
+            tracing::debug!(%target, retry_count = state.retry_count, "RTW submitting write");
             let result = match self
                 .call_coordinator(|tx| Command::AttemptWrite {
                     attempt: match write_conn_id.clone() {
