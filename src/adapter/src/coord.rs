@@ -4775,10 +4775,9 @@ impl Coordinator {
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
                 select! {
-                    // We prioritize internal commands over other commands. However, we work through
-                    // batches of commands in some branches of this select, which means that even if
-                    // a command generates internal commands, we will work through the current batch
-                    // before receiving a new batch of commands.
+                    // Maintenance retains priority at each poll. Each productive round also admits
+                    // a bounded client batch below, after its selected messages, so continuous
+                    // internal responses cannot exclude waiting client commands.
                     biased;
 
                     // Polling the pinned timer is cancel-safe. Renewal and requirement
@@ -4893,10 +4892,6 @@ impl Coordinator {
                     count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
                         if count == 0 {
                             break;
-                        } else {
-                            messages.extend(cmd_messages.drain(..).map(
-                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
-                            ));
                         }
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
@@ -4959,6 +4954,21 @@ impl Coordinator {
                         continue;
                     }
                 };
+
+                // Preserve client FIFO and the per-round client limit, including commands already
+                // received by the select. This bounds service in rounds, not time: an individual
+                // handler can still await slow work. The select remains the idle wakeup/shutdown path.
+                while cmd_messages.len() < MESSAGE_BATCH {
+                    let Ok(command) = cmd_rx.try_recv() else {
+                        break;
+                    };
+                    cmd_messages.push(command);
+                }
+                messages.extend(
+                    cmd_messages
+                        .drain(..)
+                        .map(|(otel_ctx, cmd)| Message::Command(otel_ctx, cmd)),
+                );
 
                 // Observe the number of messages we're processing at once.
                 message_batch.observe(f64::cast_lossy(messages.len()));

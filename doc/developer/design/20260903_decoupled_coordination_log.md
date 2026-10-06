@@ -40,18 +40,20 @@ Older branch-built catalogs are not a compatibility requirement.
 
 Prioritize the remaining read-then-write timeouts in parallel checks. The
 catalog-only completion regression passes: table keepalives remain staged but
-are not awaited on the coordinator. CI137885 records seven foreground timestamped
-commits in parallel shard1, but its shard2 contenders still fail on actual txns-upper
-conflicts. The frontier UPDATE gets beyond replanning, then encounters long
-progress waits and write round trips. A later protection handler occupies the
-coordinator for 49.87s, overlapping write attempts. Earliest terminal failures
-are DDL, and the initiating latency owner remains unresolved.
-Temporary events under the existing parallel-only RTW debug filter separate
-subscribe receipt from coordinator dispatch, and write receipt from committer
-entry, catalog-upper advancement and table-worker replies. They log identifiers
-and timestamps, not row contents. Remove these diagnostics when the wait owner is
-established. Preserve freshness, future-time checks, catalog completion before
-acknowledgement, refolding at every new target and existing deadlines.
+are not awaited on the coordinator. CI137946 handoff traces locate dominant waits
+before coordinator receipt: roughly 115s in shard1 and 147s in shard2, while
+thousands of native responses are dispatched. Matching subscribe batches wait
+48s and 82s after reaching the adapter. Catalog/worker waits are much smaller for
+these attempts. Client commands must get a bounded batch each productive service
+round, after the selected messages, without removing maintenance priority.
+Verify that admission correction in the existing parallel workflows. Keep the
+temporary handoff events through this comparison, then remove them.
+Long inline catalog/publication work also delays dispatch. Dispatch gaps ending
+with publication-race warnings implicate maintenance, but do not isolate every
+await inside those gaps. Fair admission does not eliminate slow branch bodies.
+Preserve freshness, future-time checks, catalog completion before acknowledgement,
+refolding at every new target and existing deadlines. Lower-priority read/timeline
+branches retain their ordering. No broader scheduler redesign is included.
 The DROP-preparation correction refreshes the owner's committed requirement
 after metadata contention without deriving it from an import's available history.
 The unchanged selected-plan-explain regression passes in CI137817 and CI137825. Its companion
