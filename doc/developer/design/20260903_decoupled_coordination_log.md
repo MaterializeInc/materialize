@@ -21,21 +21,24 @@ Preserve designer commits and useful implementation boundaries.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
-Verify the retained contracts in the existing workflows:
+Prioritize the remaining liveness failures in parallel checks and catalog
+read-protection restart. Successful protection publications can occupy the
+coordinator for tens of seconds. The stale-bound replay correction resamples
+after metadata conflicts, but does not explain that successful-path cost or
+establish the cause of every timeout. Investigate at the publication/transaction
+boundary without weakening protection or extending fixture deadlines.
 
-- The two retention fixtures share their scoped heartbeat/grace settings from
-  startup and wait for their specific retired incarnations before measuring
-  advancement. Production timing and the advancement checks stay unchanged.
-- Managed adoption validates the current replicas before DDL records scheduled
-  RF0. Equivalent ALTER/RESET paths agree. The scheduler owns deployment-local
-  running replicas, not shared intent.
-- Promotion includes adapter startup through SQL readiness, within a bounded,
-  reported interval. The first query retains its three-second limit without a
-  warm-up query or production readiness change.
+Keep the scheduled-compaction 1/0/1 membership and audit assertions. Its final
+observation uses a fixed sleep and a real-time window. Establish convergence and
+the window prerequisite before changing the fixture. The unfinished RBAC-view
+SLT and the intermittent DROP rewrite serialization failure also need diagnosis,
+not golden rewrites. The imported hydration-stability restart workflows require
+their own existing workflow execution, not inference from warm handover.
 
-The obsolete native peek-history test is retired. Preserve meaningful query
-cleanup coverage, adding coverage only for a demonstrated gap. Do not preserve
-obsolete tests with weaker or tautological assertions.
+Comment-ID collision coverage now uses dynamic setup in the SQL integration
+harness. Preserve actual collisions and exact comment attribution when adjusting
+its setup or cost. EXPLAIN reports selected recovery plans, not necessarily the
+running dataflow after imported-index removal.
 
 The missing hydration-history episode remains an intermittent, unattributed
 failure. Existing scoped collector logging identifies visits, captured cutoffs
