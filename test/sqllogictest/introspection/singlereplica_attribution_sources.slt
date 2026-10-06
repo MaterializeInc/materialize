@@ -676,6 +676,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
@@ -743,6 +750,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
@@ -829,6 +843,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
@@ -844,6 +865,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     )
 SELECT
@@ -920,6 +948,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
@@ -935,6 +970,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
@@ -1093,6 +1135,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
@@ -1108,6 +1157,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
@@ -1286,6 +1342,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     object_cpu_totals AS
@@ -1335,6 +1398,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_operator_cpu_per_worker AS
@@ -1350,6 +1420,13 @@ WITH
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
                     ON (mse.id = valid_id)
+                LEFT JOIN
+                    mz_introspection.mz_dataflow_operator_parents AS mdop
+                    ON (mdop.id = valid_id)
+        WHERE
+            mdop.parent_id IS NULL OR mdop.parent_id < mlm.operator_id_start
+                OR
+            mdop.parent_id >= mlm.operator_id_end
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     per_operator_cpu_ratios AS
