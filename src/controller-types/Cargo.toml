@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 mz-cluster-client = { path = "../cluster-client" }
+mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", default-features = false }

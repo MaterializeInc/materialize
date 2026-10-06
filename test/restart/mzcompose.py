@@ -3743,7 +3743,7 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
         ):
             c.up("materialized")
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, timeout=120)
-            c.promote_mz()
+            c.promote_mz(retire_mz_service=None)
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, timeout=120)
         forget_cached_conns()
         wait_for(temp_item_counts, [(0, 0)], "SQL invisibility after promotion")

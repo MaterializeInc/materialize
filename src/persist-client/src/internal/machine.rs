@@ -2661,7 +2661,8 @@ pub mod tests {
         old_client.cfg.build_version = older.clone();
         old_client
             .cfg
-            .require_state_version_target(Some(older.clone()));
+            .set_state_version_target(older.clone())
+            .expect("older client authorized target");
         old_client.shared_states = Arc::new(StateCache::new_no_metrics());
         let (mut old_write, mut old_read) =
             old_client.expect_open::<String, (), u64, i64>(shard).await;

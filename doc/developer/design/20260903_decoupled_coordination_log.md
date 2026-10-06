@@ -12,9 +12,10 @@ Implementer session: `2026-09-14-13-05-31-256`.
 
 The linear replay onto upstream `49b61f3904` is complete. Reconciliation restores
 native ownership on the shared compute/storage runtime and keeps connection state
-at the storage boundary. Finish the no-loss history consolidation and verify the
-combined integration and approved corrections in regular PR CI. Preserve designer
-commits and useful implementation boundaries. Do not publish merge commits.
+at the storage boundary. History is consolidated on `decoupled-coordination`,
+with side-branch work accounted for and original trees preserved in local archival
+tags. Verify the combined integration and approved corrections in regular PR CI.
+Preserve designer commits and useful implementation boundaries.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
