@@ -184,6 +184,13 @@ def get_minimal_system_parameters(
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 
+    # Keep older baselines and mixed-version runs on the same read-then-write
+    # path as current binaries, where frontend OCC is unconditional.
+    if version < MzVersion.parse_mz("v26.46.0-dev"):
+        config["enable_adapter_frontend_occ_read_then_write"] = (
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false"
+        )
+
     # The cluster controller's break-glass gate. Removed in v26.38, where the
     # controller runs unconditionally. Older binaries still read it, and
     # defaulted it off before v26.29, so pin it on for them to keep mixed-version
@@ -347,11 +354,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_coalesce_case_transform",
             "true",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
-            "enable_adapter_frontend_occ_read_then_write",
-            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(

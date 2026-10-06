@@ -11,12 +11,7 @@
 //! `INSERT ... SELECT`, plus the constant `INSERT` that shares their planning
 //! path.
 //!
-//! Most tests here enable `enable_adapter_frontend_occ_read_then_write` and so
-//! cover the frontend OCC path. `test_counts_query_total` and
-//! `test_constant_insert_reading_catalog_in_transaction` run with the flag both
-//! off and on, because what they check is how the two paths compare.
-//! `test_cancel_read_then_write` covers the coordinator path only, and is the
-//! other half of the cancellation behavior its OCC counterpart pins.
+//! These tests cover the frontend OCC path.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
@@ -29,17 +24,6 @@ use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use prometheus::proto::{Histogram, MetricFamily};
 use tokio_postgres::error::SqlState;
-
-/// A harness with frontend OCC read-then-write enabled and nothing else.
-///
-/// Callers add what they need on top, notably `unsafe_mode` for the tests that
-/// hold a statement open with `mz_unsafe` functions.
-fn frontend_occ_harness() -> test_util::TestHarness {
-    test_util::TestHarness::default().with_system_parameter_default(
-        "enable_adapter_frontend_occ_read_then_write".to_string(),
-        "true".to_string(),
-    )
-}
 
 /// The server's message for a client error, or the client-side rendering when
 /// the error never reached the server. `postgres::Error::to_string` is only "db
@@ -74,36 +58,29 @@ fn session_occ_retry_histogram(metrics: &[MetricFamily]) -> &Histogram {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_counts_query_total() {
-    for frontend_occ in [false, true] {
-        let server = test_util::TestHarness::default()
-            .with_system_parameter_default(
-                "enable_adapter_frontend_occ_read_then_write".to_string(),
-                frontend_occ.to_string(),
-            )
-            .start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client
-            .batch_execute("CREATE TABLE query_total_t (x INT)")
-            .unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE query_total_t (x INT)")
+        .unwrap();
 
-        for (statement_type, sql) in [
-            ("insert", "INSERT INTO query_total_t SELECT 1"),
-            ("update", "UPDATE query_total_t SET x = 2"),
-            ("delete", "DELETE FROM query_total_t"),
-        ] {
-            let labels = [("session_type", "user"), ("statement_type", statement_type)];
-            let before =
-                test_util::get_counter_value(server.metrics_registry(), "mz_query_total", &labels);
-            client.batch_execute(sql).unwrap();
-            let after =
-                test_util::get_counter_value(server.metrics_registry(), "mz_query_total", &labels);
-            assert_eq!(
-                after,
-                before + 1,
-                "mz_query_total{{statement_type={statement_type}}} moved from {before} to {after} \
-                 across `{sql}`, with frontend OCC read-then-write {frontend_occ}"
-            );
-        }
+    for (statement_type, sql) in [
+        ("insert", "INSERT INTO query_total_t SELECT 1"),
+        ("update", "UPDATE query_total_t SET x = 2"),
+        ("delete", "DELETE FROM query_total_t"),
+    ] {
+        let labels = [("session_type", "user"), ("statement_type", statement_type)];
+        let before =
+            test_util::get_counter_value(server.metrics_registry(), "mz_query_total", &labels);
+        client.batch_execute(sql).unwrap();
+        let after =
+            test_util::get_counter_value(server.metrics_registry(), "mz_query_total", &labels);
+        assert_eq!(
+            after,
+            before + 1,
+            "mz_query_total{{statement_type={statement_type}}} moved from {before} to {after} \
+             across `{sql}`"
+        );
     }
 }
 
@@ -112,7 +89,9 @@ fn test_counts_query_total() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_cancel_long_running_write() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -212,7 +191,9 @@ fn test_cancel_long_running_write() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_constant_insert_prepares_unmaterializable_functions() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -233,7 +214,9 @@ fn test_constant_insert_prepares_unmaterializable_functions() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_rejected_in_multi_statement_batch() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -276,7 +259,7 @@ fn test_rejected_in_multi_statement_batch() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_constant_insert_respects_max_result_size() {
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default("max_result_size".to_string(), "1MB".to_string())
         .start_blocking();
@@ -305,7 +288,9 @@ fn test_constant_insert_respects_max_result_size() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_constant_insert_rejects_mz_now() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -328,7 +313,9 @@ fn test_constant_insert_rejects_mz_now() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_returning_error_does_not_commit_write() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -365,7 +352,7 @@ fn test_returning_error_does_not_commit_write() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_empty_snapshot_returns_zero() {
-    let server = frontend_occ_harness().start_blocking();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -417,7 +404,7 @@ fn test_concurrent_updates_retry() {
     const NUM_WORKERS: usize = 4;
     const UPDATES_PER_WORKER: usize = 25;
 
-    let server = frontend_occ_harness().start_blocking();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut setup = server.connect(postgres::NoTls).unwrap();
     setup
@@ -485,7 +472,9 @@ fn test_concurrent_updates_retry() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_statement_timeout_does_not_commit_write() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -530,7 +519,9 @@ fn test_concurrent_delete_does_not_over_delete() {
     const NUM_WORKERS: usize = 6;
     const ROUNDS: usize = 10;
 
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut setup = server.connect(postgres::NoTls).unwrap();
     setup.batch_execute("CREATE TABLE t (id INT)").unwrap();
 
@@ -606,7 +597,9 @@ fn test_concurrent_delete_does_not_over_delete() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_duplicate_row_multiplicity_counts() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute("CREATE TABLE t (a INT, b INT)")
@@ -652,7 +645,9 @@ fn test_duplicate_row_multiplicity_counts() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_not_null_constraint_enforced() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute("CREATE TABLE t (a INT NOT NULL, b INT)")
@@ -705,7 +700,9 @@ fn test_not_null_constraint_enforced() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_insert_returning_values() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute("CREATE TABLE t (id INT, v INT)")
@@ -768,7 +765,9 @@ fn test_insert_returning_values() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_update_moves_overlapping_rows() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (id INT)").unwrap();
     client
@@ -808,7 +807,9 @@ fn test_update_moves_overlapping_rows() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_insert_select_from_materialized_view() {
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE src (a INT)").unwrap();
     client
@@ -858,7 +859,9 @@ fn test_concurrent_mixed_dml_conserves_writes() {
     const ALLOWED_ERRORS: &[&str] =
         &["read-then-write exceeded maximum retry attempts under contention"];
 
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut setup = server.connect(postgres::NoTls).unwrap();
     setup
         .batch_execute("CREATE TABLE t (id INT, v INT)")
@@ -941,15 +944,10 @@ fn test_concurrent_mixed_dml_conserves_writes() {
 /// park, which it does because
 /// `SessionClient::try_frontend_read_then_write_with_cancel` bounds the
 /// *entire* operation, not just the OCC loop.
-///
-/// NOTE: This holds for the OCC path only. The coordinator path also bounds the
-/// scenario, but through the `statement_timeout` it arms around the row stream
-/// it reads the selection from, and it blocks while holding the target table's
-/// write lock rather than an OCC permit.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_far_future_refresh_mv_respects_statement_timeout() {
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
         .start_blocking();
@@ -1047,7 +1045,7 @@ fn test_far_future_refresh_mv_respects_statement_timeout() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_far_future_read_then_write_starves_permit_pool() {
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
         // One permit: a single hung op exhausts the pool.
@@ -1198,7 +1196,7 @@ fn test_cancel_and_timeout_release_permit() {
     // rather than as a hang.
     const FOLLOW_UP_TIMEOUT: &str = "30s";
 
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
         // One permit: a single leak starves every read-then-write.
@@ -1396,7 +1394,7 @@ fn test_write_racing_alter_table_add_column() {
     const SLEEP_SECS: i32 = 3;
     const ROUNDS: usize = 3;
 
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default(
             "unsafe_enable_unsafe_functions".to_string(),
@@ -1524,7 +1522,7 @@ fn test_write_racing_alter_table_add_column() {
 fn test_frontend_occ_write_visible_to_linearizable_read() {
     const ITERATIONS: i32 = 50;
 
-    let server = frontend_occ_harness().start_blocking();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut writer = server.connect(postgres::NoTls).unwrap();
     writer
@@ -1554,74 +1552,6 @@ fn test_frontend_occ_write_visible_to_linearizable_read() {
     }
 }
 
-// Test that the server properly handles cancellation requests of read-then-write queries.
-// See database-issues#6134.
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-#[allow(clippy::disallowed_methods)]
-fn test_cancel_read_then_write() {
-    let server = test_util::TestHarness::default()
-        .with_system_parameter_default(
-            "enable_adapter_frontend_occ_read_then_write".to_string(),
-            "false".to_string(),
-        )
-        .unsafe_mode()
-        .start_blocking();
-    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client
-        .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
-        .unwrap();
-
-    // Lots of races here, so try this whole thing in a loop.
-    Retry::default()
-        .clamp_backoff(Duration::ZERO)
-        .retry(|_state| {
-            let mut client1 = server.connect(postgres::NoTls).unwrap();
-            let mut client2 = server.connect(postgres::NoTls).unwrap();
-            let cancel_token = client2.cancel_token();
-
-            client1.batch_execute("DELETE FROM foo").unwrap();
-            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
-            client1
-                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
-                .unwrap();
-
-            let handle1 = thread::spawn(move || {
-                let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
-                    .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "statement timeout"
-                );
-                client1
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            let handle2 = thread::spawn(move || {
-                let err = client2
-                .batch_execute("insert into foo values ('blah', 1);")
-                .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "canceling statement"
-                );
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            cancel_token.cancel_query(postgres::NoTls)?;
-            let mut client1 = handle1.join().unwrap();
-            handle2.join().unwrap();
-            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
-            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
-            if rows !=1 {
-                anyhow::bail!("unexpected row count: {rows}");
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-        .unwrap();
-}
-
 /// A read dependency dropped underneath a running mutation must surface as a
 /// concurrent dependency drop, SQLSTATE 42704, the same as the coordinator
 /// path reports. Reporting it as an internal error would page us for an
@@ -1634,7 +1564,7 @@ fn test_cancel_read_then_write() {
 fn test_dependency_dropped_under_running_mutation() {
     const SLEEP_SECS: i32 = 5;
 
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default(
             "unsafe_enable_unsafe_functions".to_string(),
@@ -1704,7 +1634,7 @@ fn test_dependency_dropped_under_running_mutation() {
 fn test_zero_row_write_does_not_wait_for_keepalive() {
     const STATEMENTS: usize = 10;
 
-    let server = frontend_occ_harness().start_blocking();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client.batch_execute("CREATE TABLE t (a INT)").unwrap();
@@ -1735,9 +1665,7 @@ fn test_zero_row_write_does_not_wait_for_keepalive() {
 /// decision falls to the planned selection.
 ///
 /// Such a statement is invalid whatever the transaction state, since a
-/// read-then-write may not read a system table. What this pins is that both
-/// paths say so, rather than reporting the transaction state, which would
-/// suggest the statement works outside a transaction when it never does.
+/// read-then-write may not read a system table.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_constant_insert_reading_catalog_in_transaction() {
@@ -1757,46 +1685,38 @@ fn test_constant_insert_reading_catalog_in_transaction() {
             .clone()
     };
 
-    for frontend in [false, true] {
-        let server = test_util::TestHarness::default()
-            .with_system_parameter_default(
-                "enable_adapter_frontend_occ_read_then_write".to_string(),
-                frontend.to_string(),
-            )
-            .start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.batch_execute("CREATE TABLE t (a text)").unwrap();
-        client.batch_execute("CREATE VIEW v AS SELECT 1").unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a text)").unwrap();
+    client.batch_execute("CREATE VIEW v AS SELECT 1").unwrap();
 
-        // Reading a system table is what makes these invalid, and both paths
-        // agree on that when no transaction is in the way.
-        assert_eq!(
-            error_code(&mut client, READS_CATALOG),
-            SqlState::INVALID_TRANSACTION_STATE,
-            "frontend={frontend}: a read-then-write may not read a system table"
-        );
+    // Reading a system table is what makes these invalid.
+    assert_eq!(
+        error_code(&mut client, READS_CATALOG),
+        SqlState::INVALID_TRANSACTION_STATE,
+        "a read-then-write may not read a system table"
+    );
 
-        // `mz_now` outranks the transaction state on both paths. Answering the
-        // transaction question first would report 25001 and hide the reason the
-        // statement can never work.
-        client.batch_execute("BEGIN").unwrap();
-        assert_eq!(
-            error_code(&mut client, READS_CATALOG_AND_MZ_NOW),
-            SqlState::FEATURE_NOT_SUPPORTED,
-            "frontend={frontend}: mz_now must outrank the transaction refusal"
-        );
-        client.batch_execute("ROLLBACK").unwrap();
+    // `mz_now` outranks the transaction state. Answering the transaction
+    // question first would report 25001 and hide the reason the statement can
+    // never work.
+    client.batch_execute("BEGIN").unwrap();
+    assert_eq!(
+        error_code(&mut client, READS_CATALOG_AND_MZ_NOW),
+        SqlState::FEATURE_NOT_SUPPORTED,
+        "mz_now must outrank the transaction refusal"
+    );
+    client.batch_execute("ROLLBACK").unwrap();
 
-        // A transaction does not change the answer. Both paths still report the
-        // selection, which is the reason that holds either way.
-        client.batch_execute("BEGIN").unwrap();
-        assert_eq!(
-            error_code(&mut client, READS_CATALOG),
-            SqlState::INVALID_TRANSACTION_STATE,
-            "frontend={frontend}: the invalid selection must outrank the transaction"
-        );
-        client.batch_execute("ROLLBACK").unwrap();
-    }
+    // A transaction does not change the answer. The invalid selection remains
+    // the reason the statement is rejected.
+    client.batch_execute("BEGIN").unwrap();
+    assert_eq!(
+        error_code(&mut client, READS_CATALOG),
+        SqlState::INVALID_TRANSACTION_STATE,
+        "the invalid selection must outrank the transaction"
+    );
+    client.batch_execute("ROLLBACK").unwrap();
 }
 
 /// An INSERT whose values read no persisted state may run in a transaction,
@@ -1810,7 +1730,9 @@ fn test_nonconstant_insert_in_transaction() {
     // instead of folding into a constant.
     const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
 
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
@@ -1918,7 +1840,9 @@ fn test_nonconstant_insert_in_transaction() {
 fn test_rejected_in_non_writable_transaction() {
     const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
 
-    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
@@ -1985,7 +1909,7 @@ fn test_replica_expiration_spares_folded_selections() {
     const FOLDED: &str = "WITH x AS (SELECT c0 FROM a WHERE TRUE = c0) \
                           ((SELECT true AS c0 FROM x) EXCEPT ALL (SELECT c0 FROM x))";
 
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         // Sampled once per replica, when it is created, which for the default
         // cluster is during bootstrap. So this has to be a default rather than an
         // `ALTER SYSTEM SET`.
@@ -2072,9 +1996,7 @@ fn test_replica_expiration_spares_folded_selections() {
         "the UPDATE changed the table"
     );
 
-    // Ask the process rather than the flag which path those two took: they only
-    // reach the histogram if the frontend sequenced them, and the coordinator's
-    // lock path does not read subscribe frontiers at all.
+    // Both statements must reach the OCC loop, not fold into blind writes.
     let metrics = server.metrics_registry().gather();
     let observations = session_occ_retry_histogram(&metrics).get_sample_count();
     assert!(
@@ -2134,7 +2056,7 @@ fn test_replica_expiration_spares_folded_selections() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_refresh_mv_write_commits_near_wall_clock() {
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
         .start_blocking();
@@ -2204,7 +2126,7 @@ fn test_refresh_mv_write_commits_near_wall_clock() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_serializable_read_sees_own_refresh_mv_write() {
-    let server = frontend_occ_harness()
+    let server = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
         .start_blocking();

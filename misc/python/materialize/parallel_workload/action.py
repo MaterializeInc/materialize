@@ -3257,10 +3257,6 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
-            # Read once at environmentd startup, so an ALTER SYSTEM SET only
-            # takes effect after a restart. Flipping it here would be a no-op
-            # for the running process.
-            "enable_adapter_frontend_occ_read_then_write",
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",

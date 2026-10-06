@@ -83,8 +83,6 @@ pub struct PeekClient {
     pub statement_logging_frontend: StatementLoggingFrontend,
     /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
     pub occ_write_semaphore: Arc<Semaphore>,
-    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
-    pub frontend_read_then_write_enabled: bool,
     /// Requests a group commit. Used to advance the write timeline when we
     /// need the oracle to move but have nothing to write ourselves.
     pub(crate) group_commit_notifier: GroupCommitNotifier,
@@ -158,7 +156,6 @@ impl PeekClient {
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
         occ_write_semaphore: Arc<Semaphore>,
-        frontend_read_then_write_enabled: bool,
         group_commit_notifier: GroupCommitNotifier,
         read_only: bool,
     ) -> Self {
@@ -173,7 +170,6 @@ impl PeekClient {
             oracles: Default::default(), // lazily populated
             persist_client,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         }
