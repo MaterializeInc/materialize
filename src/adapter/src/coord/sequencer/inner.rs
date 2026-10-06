@@ -27,7 +27,8 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource,
+    Type,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -4991,19 +4992,22 @@ impl Coordinator {
             "preparing materialized view replacement application",
         );
 
-        let Some(replacement_upper_ts) = replacement_upper.into_option() else {
-            // A replacement's write frontier can only become empty if the target's write frontier
-            // has advanced to the empty frontier. In this case the MV is sealed for all times and
-            // applying the replacement wouldn't have any effect. We use this opportunity to alert
-            // the user by returning an error, rather than applying the useless replacement.
-            //
-            // Note that we can't assert on `target_upper` being empty here, because the reporting
-            // of the target's frontier might be delayed. We'd have to fetch the current frontier
-            // from persist, which we cannot do without incurring I/O.
-            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
-                name: target.name().item.clone(),
-            }));
-            return;
+        // Once the target's write frontier is empty, its contents are final for all times and the
+        // replacement could never write to it. The replacement's write frontier then becomes
+        // empty too, but the frontiers are reported independently, so either one can be observed
+        // first.
+        //
+        // NOTE: `_finish` checks the target again, but checking it here is needed too. If only
+        // compute has seen the seal so far, the watch set below never resolves: installing it
+        // reads the storage frontier, and compute doesn't report the target's frontier again.
+        let replacement_upper_ts = match replacement_upper.into_option() {
+            Some(ts) if !self.materialized_view_sealed(target) => ts,
+            _ => {
+                ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
+                    name: target.name().item.clone(),
+                }));
+                return;
+            }
         };
 
         // A watch set resolves when the watched objects' frontier becomes _greater_ than the
@@ -5047,6 +5051,18 @@ impl Coordinator {
             return;
         }
 
+        // The target can also seal while we wait, which resolves the watch set as well. The
+        // compute controller records a frontier before reporting it, so this check sees that seal.
+        //
+        // NOTE: The target can still seal after this check, until its old dataflow is dropped.
+        // The replacement then never writes.
+        let target = self.catalog().get_entry(&id);
+        if self.materialized_view_sealed(target) {
+            let name = target.name().item.clone();
+            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed { name }));
+            return;
+        }
+
         info!(
             %id, %replacement_id,
             "finishing materialized view replacement application",
@@ -5072,6 +5088,27 @@ impl Coordinator {
             ))),
             Err(err) => ctx.retire(Err(err)),
         }
+    }
+
+    /// Reports whether the write frontier of the materialized view `entry` is known to be empty.
+    ///
+    /// The compute controller and storage collections learn about the frontier independently,
+    /// so either one can see it first.
+    fn materialized_view_sealed(&self, entry: &CatalogEntry) -> bool {
+        let gid = entry.latest_global_id();
+        let compute_upper = self
+            .controller
+            .compute
+            .collection_frontiers(gid, entry.cluster_id())
+            .expect("materialized view exists")
+            .write_frontier;
+        let storage_upper = self
+            .controller
+            .storage_collections
+            .collection_frontiers(gid)
+            .expect("materialized view exists")
+            .write_frontier;
+        compute_upper.is_empty() || storage_upper.is_empty()
     }
 
     pub(super) async fn statistics_oracle(
