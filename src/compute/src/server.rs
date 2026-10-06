@@ -35,7 +35,9 @@ use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_service::client::{Partitionable, PartitionedState};
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::metrics::StorageMetrics;
-use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as StorageWorker};
+use mz_storage::storage_state::{
+    GuestWorker, StorageInstanceContext, StorageState, Worker as StorageWorker,
+};
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
@@ -258,6 +260,7 @@ type StorageClientRx = mpsc::UnboundedReceiver<(
 
 /// Configuration for hosting storage objects on the compute cluster.
 pub struct StorageGuestConfig {
+    replica_ready: Mutex<Option<oneshot::Sender<mz_storage::server::ReplicaStorageBuilder>>>,
     /// Per-worker channels delivering storage client connections, indexed by local worker index.
     client_rxs: Mutex<Vec<Option<StorageClientRx>>>,
     /// Metrics for storage objects.
@@ -286,15 +289,9 @@ pub async fn serve(
     context: ComputeInstanceContext,
 ) -> Result<ComputeServer, Error> {
     let workers_per_process = timely_config.workers;
-    let (ready_tx, ready_rx) = if replica_owned && timely_config.process == 0 {
-        let (tx, rx) = oneshot::channel();
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
     let config = Config {
         replica_owned,
-        replica_ready: Arc::new(Mutex::new(ready_tx)),
+        replica_ready: Arc::new(Mutex::new(None)),
         persist_clients,
         txns_ctx,
         tracing_handle,
@@ -306,17 +303,19 @@ pub async fn serve(
         storage_guest: None,
     };
 
-    let (_worker_threads, server) = serve_inner(config, timely_config, ready_rx).await?;
+    let (_worker_threads, server) = serve_inner(config, timely_config).await?;
     Ok(server)
 }
 
 /// Initiates a timely dataflow computation that processes compute commands and additionally hosts
 /// storage objects, processing storage commands received over a separate client connection.
 ///
-/// Returns client builders for both the compute and the storage side.
+/// Returns the compute server, the native storage endpoint on process zero when
+/// replica-owned, and the storage connection factory. Both endpoints retain the host runtime.
 pub async fn serve_unified(
     timely_config: TimelyConfig,
     role: ComputeRuntimeRole,
+    replica_owned: bool,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -327,7 +326,8 @@ pub async fn serve_unified(
     storage_instance_context: StorageInstanceContext,
 ) -> Result<
     (
-        impl Fn() -> Box<dyn ComputeClient> + use<>,
+        ComputeServer,
+        Option<mz_storage::server::ReplicaStorage>,
         impl Fn() -> Box<dyn StorageClient> + use<>,
     ),
     Error,
@@ -343,7 +343,14 @@ pub async fn serve_unified(
         storage_client_rxs.push(Some(rx));
     }
 
+    let (storage_ready_tx, storage_ready_rx) = if replica_owned && timely_config.process == 0 {
+        let (tx, rx) = oneshot::channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let storage_guest = StorageGuestConfig {
+        replica_ready: Mutex::new(storage_ready_tx),
         client_rxs: Mutex::new(storage_client_rxs),
         metrics: StorageMetrics::register_with(metrics_registry),
         now,
@@ -353,7 +360,7 @@ pub async fn serve_unified(
     };
 
     let config = Config {
-        replica_owned: false,
+        replica_owned,
         replica_ready: Arc::new(Mutex::new(None)),
         persist_clients,
         txns_ctx,
@@ -366,26 +373,38 @@ pub async fn serve_unified(
         storage_guest: Some(Arc::new(storage_guest)),
     };
 
-    let (worker_threads, compute_server) = serve_inner(config, timely_config, None).await?;
-    let compute_client_builder = compute_server.client_builder();
+    let (worker_threads, compute_server) = serve_inner(config, timely_config).await?;
+    let replica_storage = match storage_ready_rx {
+        Some(rx) => Some(rx.await?.build(Arc::clone(&compute_server.runtime))),
+        None => None,
+    };
+    let runtime = Arc::clone(&compute_server.runtime);
 
     let storage_client_txs = Arc::new(storage_client_txs);
     let storage_client_builder = move || {
+        // Storage connections retain the host runtime just like compute connections.
         let client =
             GuestClusterClient::new(Arc::clone(&storage_client_txs), worker_threads.clone());
-        let client: Box<dyn StorageClient> = Box::new(client);
-        client
+        mz_storage::server::guest_client(client, replica_owned, Arc::clone(&runtime))
     };
 
-    Ok((compute_client_builder, storage_client_builder))
+    Ok((compute_server, replica_storage, storage_client_builder))
 }
 
-/// Builds the Timely cluster for the given config and returns its worker threads and compute server.
+/// Builds the Timely cluster for the given config and returns its worker threads along with a
+/// server retaining runtime ownership.
 async fn serve_inner(
     config: Config,
     timely_config: TimelyConfig,
-    ready_rx: Option<oneshot::Receiver<ReplicaChannels>>,
 ) -> Result<(Vec<Thread>, ComputeServer), Error> {
+    let replica_owned = config.replica_owned;
+    let ready_rx = if replica_owned && timely_config.process == 0 {
+        let (tx, rx) = oneshot::channel();
+        *config.replica_ready.lock().expect("poisoned") = Some(tx);
+        Some(rx)
+    } else {
+        None
+    };
     mz_timely_util::column_pager::metrics::register(
         &config.metrics_registry,
         mz_timely_util::column_pager::tiered_policy(),
@@ -395,7 +414,6 @@ async fn serve_inner(
 
     let tokio_executor = tokio::runtime::Handle::current();
 
-    let replica_owned = config.replica_owned;
     let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
     let worker_threads = timely_container.worker_threads();
     let timely_container = Arc::new(Mutex::new(timely_container));
@@ -634,65 +652,20 @@ struct Worker<'w> {
     storage: Option<StorageGuest>,
 }
 
-/// Per-worker state for hosting storage objects on the compute cluster.
+/// Storage retains its client and execution state between turns on the host worker.
 struct StorageGuest {
-    /// Channel delivering new storage client connections.
-    client_rx: StorageClientRx,
-    /// The current storage client connection, if any.
-    conn: Option<StorageConn>,
-    /// The hosted storage worker state.
-    storage_state: StorageState,
-    /// The last time storage maintenance ran.
-    last_maintenance: Instant,
-    /// The last time storage statistics were reported.
-    last_stats_time: Instant,
+    worker: GuestWorker,
+    last_maintenance: tokio::time::Instant,
+    last_stats_time: tokio::time::Instant,
 }
 
 impl StorageGuest {
-    /// The longest the worker may park before the guest's next periodic duty (frontier reporting
-    /// or statistics collection) comes due, or `None` when no duty is pending.
-    ///
-    /// Mirrors the parking of storage's own server loop: the maintenance and statistics intervals
-    /// bound the park. A maintenance deadline in the past does not bound it, because maintenance
-    /// runs on the next wakeup anyway. The initial zero maintenance interval would otherwise turn
-    /// every park into a spin.
     fn park_cap(&self) -> Option<Duration> {
-        // Periodic duties run only on a reconciled connection. Without one there is no deadline
-        // to meet, and connection and command arrivals unpark the worker.
-        let conn_serving = self
-            .conn
-            .as_ref()
-            .is_some_and(|conn| conn.reconcile_buf.is_none());
-        if !conn_serving {
-            return None;
-        }
-
-        let maintenance_interval = self.storage_state.server_maintenance_interval;
-        let stats_interval = self
-            .storage_state
-            .storage_configuration
-            .parameters
-            .statistics_collection_interval;
-
-        let next_maintenance =
-            (self.last_maintenance + maintenance_interval).checked_duration_since(Instant::now());
-        let next_stats = stats_interval.saturating_sub(self.last_stats_time.elapsed());
-        match next_maintenance {
-            Some(maintenance) => Some(maintenance.min(next_stats)),
-            None => Some(next_stats),
-        }
+        Some(
+            self.worker
+                .park_duration(self.last_maintenance, self.last_stats_time),
+        )
     }
-}
-
-/// A storage client connection.
-struct StorageConn {
-    /// The channel over which storage commands are received.
-    command_rx: mpsc::UnboundedReceiver<StorageCommand>,
-    /// The channel over which storage responses are sent.
-    response_tx: mpsc::UnboundedSender<StorageResponse>,
-    /// Commands buffered for reconciliation, until `InitializationComplete` is received.
-    /// `None` once the connection is reconciled and serving.
-    reconcile_buf: Option<Vec<StorageCommand>>,
 }
 
 impl ClusterSpec for Config {
@@ -781,12 +754,23 @@ impl ClusterSpec for Config {
                 cfg.shared_rocksdb_write_buffer_manager.clone(),
             );
 
+            let mut worker =
+                StorageWorker::from_state(timely_worker, storage_client_rx, storage_state);
+            if self.replica_owned {
+                if let Some(builder) = worker.enable_replica_guest() {
+                    cfg.replica_ready
+                        .lock()
+                        .expect("poisoned")
+                        .take()
+                        .expect("replica owner registered")
+                        .send(builder)
+                        .unwrap_or_else(|_| panic!("replica owner lost during startup"));
+                }
+            }
             StorageGuest {
-                client_rx: storage_client_rx,
-                conn: None,
-                storage_state,
-                last_maintenance: Instant::now(),
-                last_stats_time: Instant::now(),
+                worker: worker.into_guest(),
+                last_maintenance: tokio::time::Instant::now(),
+                last_stats_time: tokio::time::Instant::now(),
             }
         });
 
@@ -983,155 +967,32 @@ impl<'w> Worker<'w> {
         Ok(())
     }
 
-    /// Whether the storage guest has pending work that forbids parking.
-    ///
-    /// It is critical that we allow Timely to park iff there are no pending commands or async
-    /// worker responses, since those are delivered by other threads that only unpark us once, at
-    /// send time.
+    /// Pending arrivals must be drained before parking, since they unpark only once.
     fn storage_guest_busy(&self) -> bool {
-        self.storage.as_ref().is_some_and(|guest| {
-            !guest.client_rx.is_empty()
-                || guest
-                    .conn
-                    .as_ref()
-                    .is_some_and(|conn| !conn.command_rx.is_empty())
-                || !guest.storage_state.async_worker.is_empty()
-        })
+        self.storage
+            .as_ref()
+            .is_some_and(|guest| guest.worker.busy())
     }
 
-    /// Dispatch a storage-internal command from the command channel to
-    /// the storage guest. This is where all storage dataflow rendering happens.
+    /// All storage rendering is dispatched at its position in the common lane.
     fn handle_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
         let mut guest = self
             .storage
             .take()
-            .expect("the command channel carries storage commands only when a guest is hosted");
-
-        let mut worker = StorageWorker {
-            timely_worker: &mut *self.timely_worker,
-            client_rx: guest.client_rx,
-            storage_state: guest.storage_state,
-        };
+            .expect("storage command requires a guest");
+        let mut worker = guest.worker.attach(self.timely_worker);
         worker.handle_internal_storage_command(cmd);
-
-        let StorageWorker {
-            timely_worker: _,
-            client_rx,
-            storage_state,
-        } = worker;
-        guest.client_rx = client_rx;
-        guest.storage_state = storage_state;
+        guest.worker = worker.into_guest();
         self.storage = Some(guest);
     }
 
-    /// Process the storage guest's per-iteration duties: accept client
-    /// connections, handle external storage commands (buffering for reconciliation until
-    /// `InitializationComplete`), forward async worker responses, and report frontiers, dropped
-    /// collections, status updates, and statistics.
     fn process_storage_guest(&mut self) {
         let Some(mut guest) = self.storage.take() else {
             return;
         };
-
-        // Accept new client connections, replacing any current one. Every new connection starts
-        // with a reconciliation.
-        loop {
-            use tokio::sync::mpsc::error::TryRecvError;
-            match guest.client_rx.try_recv() {
-                Ok((_nonce, command_rx, response_tx)) => {
-                    guest.conn = Some(StorageConn {
-                        command_rx,
-                        response_tx,
-                        reconcile_buf: Some(Vec::new()),
-                    });
-                }
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-            }
-        }
-
-        let mut worker = StorageWorker {
-            timely_worker: &mut *self.timely_worker,
-            client_rx: guest.client_rx,
-            storage_state: guest.storage_state,
-        };
-
-        // Handle responses from the async worker. Only worker 0 does async processing, so only
-        // worker 0 ever receives any. This must run with or without a client connection:
-        // storage-internal commands keep flowing through the command channel while the
-        // controller is away and can issue async work, and an undrained response queue keeps
-        // `storage_guest_busy` true, turning every park into a spin.
-        while let Ok(response) = worker.storage_state.async_worker.try_recv() {
-            worker.handle_async_worker_response(response);
-        }
-
-        let Some(mut conn) = guest.conn.take() else {
-            let StorageWorker {
-                timely_worker: _,
-                client_rx,
-                storage_state,
-            } = worker;
-            guest.client_rx = client_rx;
-            guest.storage_state = storage_state;
-            self.storage = Some(guest);
-            return;
-        };
-
-        // Drain external storage commands.
-        let mut disconnected = false;
-        loop {
-            use tokio::sync::mpsc::error::TryRecvError;
-            match conn.command_rx.try_recv() {
-                Ok(StorageCommand::InitializationComplete) if conn.reconcile_buf.is_some() => {
-                    let commands = conn.reconcile_buf.take().expect("checked above");
-                    worker.reconcile_commands(commands);
-                }
-                Ok(cmd) => match &mut conn.reconcile_buf {
-                    Some(buf) => buf.push(cmd),
-                    None => worker.storage_state.handle_storage_command(cmd),
-                },
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
-                    break;
-                }
-            }
-        }
-
-        // Response-producing duties run only on a reconciled connection.
-        if conn.reconcile_buf.is_none() {
-            let maintenance_interval = worker.storage_state.server_maintenance_interval;
-            let now = Instant::now();
-            if now >= guest.last_maintenance + maintenance_interval {
-                guest.last_maintenance = now;
-                worker.report_frontier_progress(&conn.response_tx);
-            }
-
-            for id in std::mem::take(&mut worker.storage_state.dropped_ids) {
-                worker.send_storage_response(&conn.response_tx, StorageResponse::DroppedId(id));
-            }
-
-            worker.process_oneshot_ingestions(&conn.response_tx);
-            worker.report_status_updates(&conn.response_tx);
-
-            let stats_interval = worker
-                .storage_state
-                .storage_configuration
-                .parameters
-                .statistics_collection_interval;
-            if guest.last_stats_time.elapsed() >= stats_interval {
-                worker.report_storage_statistics(&conn.response_tx);
-                guest.last_stats_time = Instant::now();
-            }
-        }
-
-        let StorageWorker {
-            timely_worker: _,
-            client_rx,
-            storage_state,
-        } = worker;
-        guest.client_rx = client_rx;
-        guest.storage_state = storage_state;
-        guest.conn = (!disconnected).then_some(conn);
+        let mut worker = guest.worker.attach(self.timely_worker);
+        worker.process_guest(&mut guest.last_maintenance, &mut guest.last_stats_time);
+        guest.worker = worker.into_guest();
         self.storage = Some(guest);
     }
 

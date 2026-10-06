@@ -13,12 +13,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog_protos::objects as proto;
 use mz_controller_types::ClusterId;
-use mz_proto::ProtoType;
 use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{RawClusterName, Statement};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use super::objects::serialization::ProtoType;
 use super::objects::state_update::StateUpdateKindJson;
 use super::{CatalogError, DurableCatalogError};
 

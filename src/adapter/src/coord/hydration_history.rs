@@ -722,7 +722,8 @@ impl Sweep {
         sql: &str,
     ) -> Option<usize> {
         tracing::debug!(
-            %step, %cluster_id, %replica_id, cutoff = %self.cutoff,
+            %step, %cluster_id, %replica_id,
+            object_cutoff = %self.object_cutoff, replica_cutoff = %self.replica_cutoff,
             "hydration history step starting"
         );
         let mutation = async {
@@ -762,7 +763,8 @@ impl Sweep {
                 let outcome = if rows == 0 { "noop" } else { "success" };
                 self.observe_mutation(step, outcome);
                 tracing::debug!(
-                    %step, %cluster_id, %replica_id, rows, cutoff = %self.cutoff,
+                    %step, %cluster_id, %replica_id, rows,
+                    object_cutoff = %self.object_cutoff, replica_cutoff = %self.replica_cutoff,
                     "hydration history step completed"
                 );
                 Some(rows)

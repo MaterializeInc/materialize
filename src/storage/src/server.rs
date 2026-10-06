@@ -73,7 +73,7 @@ impl StorageServer {
 /// Continuously drain responses, which aggregate all global workers. Channel loss
 /// is fatal. This endpoint has no reconnect or reconciliation handshake.
 pub struct ReplicaStorage {
-    _runtime: Arc<Mutex<TimelyContainer<Config>>>,
+    _runtime: Arc<dyn Send + Sync>,
     commands: mpsc::UnboundedSender<ReplicaCommand>,
     worker: std::thread::Thread,
     responses: mpsc::UnboundedReceiver<(usize, WorkerResponse)>,
@@ -261,6 +261,71 @@ type ReplicaChannels = (
     usize,
 );
 
+/// Native storage channels awaiting their host's runtime owner.
+/// The host retains execution independently of listener and connection lifetimes.
+pub struct ReplicaStorageBuilder(pub(crate) ReplicaChannels);
+
+impl ReplicaStorageBuilder {
+    /// Attaches the process-lifetime runtime owner to the native endpoint.
+    pub fn build(self, runtime: Arc<impl Send + Sync + 'static>) -> ReplicaStorage {
+        let (commands, worker, responses, peers) = self.0;
+        ReplicaStorage {
+            _runtime: runtime,
+            commands,
+            worker,
+            responses,
+            next_sequence: 1,
+            peers,
+            inputs: BTreeMap::new(),
+            current: BTreeMap::new(),
+            restarts: BTreeSet::new(),
+            starts: BTreeMap::new(),
+            output_generations: OutputGenerations::default(),
+            outputs: BTreeMap::new(),
+        }
+    }
+}
+
+/// Applies storage role validation and retains the Timely host for a guest connection.
+pub fn guest_client<C: StorageClient + 'static>(
+    client: C,
+    replica_owned: bool,
+    runtime: Arc<impl Send + Sync + 'static>,
+) -> Box<dyn StorageClient> {
+    let client = mz_storage_client::client::RoleClient::new(client);
+    let inner: Box<dyn StorageClient> = if replica_owned {
+        Box::new(QueryOnly(client))
+    } else {
+        Box::new(client)
+    };
+    Box::new(GuestClient {
+        inner,
+        _runtime: runtime,
+    })
+}
+
+struct GuestClient {
+    inner: Box<dyn StorageClient>,
+    _runtime: Arc<dyn Send + Sync>,
+}
+
+impl std::fmt::Debug for GuestClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuestClient").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl GenericClient<StorageCommand, StorageResponse> for GuestClient {
+    async fn send(&mut self, command: StorageCommand) -> anyhow::Result<()> {
+        self.inner.send(command).await
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse>> {
+        self.inner.recv().await
+    }
+}
+
 // RoleClient owns handshake validation. This runtime boundary additionally
 // excludes lifecycle connections without changing the shared storage protocol.
 #[derive(Debug)]
@@ -380,20 +445,10 @@ pub async fn serve_with_replica(
     let replica = match ready_rx {
         Some(rx) => {
             let (commands, worker, responses, peers) = rx.await?;
-            Some(ReplicaStorage {
-                _runtime: Arc::clone(&timely_container),
-                commands,
-                worker,
-                responses,
-                next_sequence: 1,
-                peers,
-                inputs: BTreeMap::new(),
-                current: BTreeMap::new(),
-                restarts: BTreeSet::new(),
-                starts: BTreeMap::new(),
-                output_generations: OutputGenerations::default(),
-                outputs: BTreeMap::new(),
-            })
+            Some(
+                ReplicaStorageBuilder((commands, worker, responses, peers))
+                    .build(Arc::clone(&timely_container)),
+            )
         }
         None => None,
     };

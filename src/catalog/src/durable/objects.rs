@@ -37,7 +37,7 @@ use mz_audit_log::VersionedEvent;
 use mz_controller_types::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
@@ -54,7 +54,7 @@ use uuid::Uuid;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::Epoch;
-use crate::durable::objects::serialization::proto;
+use crate::durable::objects::serialization::{RustType, proto};
 
 /// A proptest strategy for [`Uuid`]s, which don't implement `Arbitrary`.
 #[cfg(test)]

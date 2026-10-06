@@ -94,18 +94,15 @@ async fn colliding_export_instances_retract_only_their_own_logging_rows() {
                 compute_state: &mut h.state,
                 response_tx: &mut h.sender,
             }
-            .initialize_logging(
-                LoggingConfig {
-                    interval: Duration::from_millis(1),
-                    enable_logging: true,
-                    log_logging: false,
-                    index_logs: BTreeMap::from([
-                        (ComputeLog::DataflowCurrent.into(), CURRENT),
-                        (ComputeLog::HydrationTime.into(), HYDRATION),
-                    ]),
-                },
-                None,
-            );
+            .initialize_logging(LoggingConfig {
+                interval: Duration::from_millis(1),
+                enable_logging: true,
+                log_logging: false,
+                index_logs: BTreeMap::from([
+                    (ComputeLog::DataflowCurrent.into(), CURRENT),
+                    (ComputeLog::HydrationTime.into(), HYDRATION),
+                ]),
+            });
             h.state
                 .traces
                 .set(CATALOG, trace_bundle(&wide_ok_rows(1), vec![]));

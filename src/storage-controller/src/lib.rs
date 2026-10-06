@@ -4239,7 +4239,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
+    use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
     use mz_storage_client::storage_collections::StorageCollectionsImpl;
     use mz_storage_types::connections::{KafkaConnection, Tunnel};
     use mz_storage_types::sinks::{

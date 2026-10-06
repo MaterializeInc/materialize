@@ -643,8 +643,8 @@ impl Coordinator {
     /// the lag gate against `reference` when `allowed_lag` is `Some`.
     ///
     /// Returns checks for online, storage-hydrated replicas. Native compute uses
-    /// connection-scoped hydration observations. Legacy compute completes its
-    /// check off the coordinator loop.
+    /// connection-scoped hydration and output observations. Legacy compute
+    /// completes its check off the coordinator loop.
     ///
     /// The storage-side check is hydration only. Storage hydration has its own
     /// definition (see `StorageController::collections_hydrated_on_replicas`),

@@ -531,20 +531,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    // We assume each storage worker has a corresponding compute worker that can process its logs.
-    assert_eq!(
-        storage_timely_config.workers, compute_timely_config.workers,
-        "storage and compute must have equal workers-per-process",
-    );
-
-    if args.unified_cluster {
+    let replica_owned =
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
+    let (mut compute_server, storage_endpoint, storage_client_builder): (
+        _,
+        _,
+        Box<dyn Fn() -> Box<dyn mz_storage_client::client::StorageClient> + Send + Sync>,
+    ) = if args.unified_cluster {
         info!("running with a unified timely cluster");
-
-        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+        let (server, endpoint, builder) = mz_compute::server::serve_unified(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
+            replica_owned,
             &metrics_registry,
-            persist_clients,
+            Arc::clone(&persist_clients),
             txns_ctx,
             tracing_handle,
             ComputeInstanceContext {
@@ -557,61 +557,43 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
         )
         .await?;
+        (server, endpoint, Box::new(builder))
+    } else {
+        let mut storage_server = mz_storage::server::serve_with_replica(
+            storage_timely_config,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            SYSTEM_TIME.clone(),
+            connection_context.clone(),
+            StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        )
+        .await?;
+        let compute_server = mz_compute::server::serve(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory,
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context,
+            },
+        )
+        .await?;
+        let endpoint = storage_server.take_replica();
+        (
+            compute_server,
+            endpoint,
+            Box::new(storage_server.client_builder()),
+        )
+    };
 
-        info!(
-            "listening for storage controller connections on {}",
-            args.storage_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "storage_server",
-            transport::serve(
-                args.storage_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host.clone(),
-                Duration::MAX,
-                storage_client_builder,
-                cluster_server_metrics.for_server("storage"),
-            )
-            .instrument(info_span!("ctp", name = "storage")),
-        );
-
-        info!(
-            "listening for compute controller connections on {}",
-            args.compute_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "compute_server",
-            transport::serve(
-                args.compute_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host,
-                Duration::MAX,
-                compute_client_builder,
-                cluster_server_metrics.for_server("compute"),
-            )
-            .instrument(info_span!("ctp", name = "compute")),
-        );
-
-        // Block forever.
-        return future::pending().await;
-    }
-
-    // Start storage server.
-    let replica_owned =
-        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
-    let mut storage_server = mz_storage::server::serve_with_replica(
-        storage_timely_config,
-        replica_owned,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
-        SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
-    )
-    .await?;
-    let storage_client_builder = storage_server.client_builder();
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -629,25 +611,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "storage")),
     );
 
-    // Start compute server.
-    let mut compute_server = mz_compute::server::serve(
-        compute_timely_config,
-        ComputeRuntimeRole::Solo,
-        replica_owned,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
-            connection_context,
-        },
-    )
-    .await?;
     if let Some(config) = follower_config {
         let endpoint = compute_server.take_replica();
-        let storage_endpoint = storage_server.take_replica();
         let replica_owned = endpoint.is_some();
         let registry = metrics_registry.clone();
         mz_ore::task::spawn(|| "catalog_follower", async move {

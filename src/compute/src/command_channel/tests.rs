@@ -57,6 +57,7 @@ fn sequencer_all_workers_observe_one_order() {
         for i in 0..STORAGE_COMMANDS {
             storage_tx
                 .send(InternalStorageCommand::SuspendAndRestart {
+                    execution: None,
                     id: GlobalId::User(u64::cast_from(worker_id)),
                     reason: format!("worker{worker_id}-{i}"),
                 })

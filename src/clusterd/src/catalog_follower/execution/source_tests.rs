@@ -287,7 +287,6 @@ async fn start_runtime(
             worker_core_affinity: false,
             connection_context: config.connection_context.clone(),
         },
-        Vec::new(),
     )
     .await
     .unwrap();
@@ -301,7 +300,6 @@ async fn start_runtime(
         SYSTEM_TIME.clone(),
         config.connection_context.clone(),
         StorageInstanceContext::new(None, None),
-        Vec::new(),
     )
     .await
     .unwrap();

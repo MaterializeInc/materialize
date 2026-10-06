@@ -172,6 +172,62 @@ async fn curated_written_admission_and_bootstrap_flag_semantics() {
     );
     assert_eq!(catalog.state().written_plans(), &selected);
 
+    // Denylist edits and resets select their changes in the config transaction,
+    // without rebuilding unaffected immutable plans.
+    for config_op in [
+        Op::UpdateSystemConfiguration {
+            name: DISABLED_METRIC_SINKS.name().into(),
+            value: OwnedVarInput::Flat(CURATED[0].name.into()),
+        },
+        Op::ResetSystemConfiguration {
+            name: DISABLED_METRIC_SINKS.name().into(),
+        },
+    ] {
+        let mut ops = vec![config_op];
+        let (candidate, _) = catalog
+            .transact_incremental_dry_run(
+                catalog.state(),
+                ops.clone(),
+                None,
+                None,
+                catalog.current_upper().await,
+            )
+            .await
+            .expect("validate denylist candidate");
+        let denied = metric_sink_denied(candidate.system_config(), CURATED[0].name);
+        let selections = prepare(&catalog, candidate, Some(&BTreeSet::new())).await;
+        assert!(!selections.is_empty());
+        assert!(selections.iter().all(|op| matches!(op,
+            Op::SetWrittenPlan { revision, replica_owner: Some(owner), .. }
+                if owner.name == CURATED[0].name && revision.is_none() == denied
+        )));
+        ops.extend(selections);
+        commit(&mut catalog, ops).await;
+        for (key, selection) in &selected {
+            if selection
+                .replica_owner
+                .as_ref()
+                .expect("curated selection has a replica owner")
+                .name
+                != CURATED[0].name
+            {
+                assert_eq!(catalog.state().written_plans().get(key), Some(selection));
+            }
+        }
+        assert_eq!(
+            catalog.state().written_plans().values().any(|selection| {
+                selection
+                    .replica_owner
+                    .as_ref()
+                    .expect("curated selection has a replica owner")
+                    .name
+                    == CURATED[0].name
+            }),
+            !denied
+        );
+    }
+    let selected = catalog.state().written_plans().clone();
+
     commit(
         &mut catalog,
         vec![Op::UpdateSystemConfiguration {

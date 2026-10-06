@@ -161,8 +161,8 @@ pub fn spawn_catchup(
                 }
             }
 
-            // Check for DDL changes one last time before announcing as ready to
-            // promote.
+            // Native replicas continuously reconcile committed definitions.
+            // New committed object IDs must not discard their warmed execution.
             if !native_prewarming && !should_skip_catchup {
                 check_ddl_changes(
                     boot_ts,
@@ -210,7 +210,7 @@ pub fn spawn_catchup(
             Some(timestamp_oracle),
         )
         .await
-        .expect("incompatible catalog/persist version");
+        .unwrap_or_terminate("unexpected error while fencing out old deployment");
 
         let _catalog = openable_adapter_storage
             .open_for_promotion(boot_ts, &bootstrap_args)

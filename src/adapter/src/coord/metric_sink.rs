@@ -27,9 +27,9 @@
 //! `drop_metric_sinks` drops them before a replica is dropped. This mirrors
 //! [`crate::coord::introspection`], which installs introspection subscribes on the same triggers.
 //!
-//! The `disabled_metric_sinks` system var denies definitions by name, and
-//! `reconcile_metric_sinks` converges the installed set on it, tearing a denied sink down rather
-//! than only gating future installs.
+//! The `disabled_metric_sinks` system var denies definitions by name, tearing a denied sink down
+//! rather than only gating future installs. Writer admission reconciles native selections in the
+//! config transaction. `reconcile_metric_sinks` converges the controller-owned installed set.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -243,7 +243,7 @@ impl Coordinator {
         }
     }
 
-    /// Converges the installed curated sinks on `disabled_metric_sinks`.
+    /// Warns about unknown denied names and converges controller-owned curated sinks.
     ///
     /// Reconciles the whole set rather than the delta.
     pub(super) async fn reconcile_metric_sinks(&mut self) {
@@ -254,6 +254,12 @@ impl Coordinator {
                     "disabled_metric_sinks entry matches no curated definition"
                 );
             }
+        }
+
+        // Native selections are reconciled atomically with the config change
+        // by writer admission, not installed through the compute controller.
+        if self.replica_owned_metric_sinks() {
+            return;
         }
 
         let denied: Vec<_> = self

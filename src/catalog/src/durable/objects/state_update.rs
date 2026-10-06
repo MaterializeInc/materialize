@@ -1054,8 +1054,7 @@ mod tests {
 
     #[mz_ore::test]
     fn written_plan_serialization() {
-        use mz_proto::RustType;
-
+        use crate::durable::objects::serialization::RustType;
         use crate::durable::objects::{DurableType, WrittenPlan};
 
         let plan = WrittenPlan {

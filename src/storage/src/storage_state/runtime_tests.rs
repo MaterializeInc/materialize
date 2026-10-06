@@ -208,7 +208,13 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
 /// Drive the existing worker's native ingress, sequencer, async startup, and
 /// global response gather. Never manufacture input frontier responses.
 fn step(worker: &mut Worker<'_>, startup: bool) {
-    while let Ok(command) = worker.replica_commands.as_mut().unwrap().try_recv() {
+    while let Ok(command) = worker
+        .storage_state
+        .replica_commands
+        .as_mut()
+        .unwrap()
+        .try_recv()
+    {
         worker
             .storage_state
             .internal_cmd_tx
@@ -220,7 +226,13 @@ fn step(worker: &mut Worker<'_>, startup: bool) {
             worker.handle_async_worker_response(response);
         }
     }
-    while let Some(command) = worker.storage_state.internal_cmd_rx.try_recv() {
+    while let Some(command) = worker
+        .storage_state
+        .internal_cmd_rx
+        .as_ref()
+        .expect("storage server always wires a receiver")
+        .try_recv()
+    {
         worker.handle_internal_storage_command(command);
     }
     let (discard, _) = mpsc::unbounded_channel();
@@ -228,6 +240,7 @@ fn step(worker: &mut Worker<'_>, startup: bool) {
     worker.report_frontier_progress(&discard);
     for response in worker.storage_state.executions.as_mut().unwrap().report() {
         worker
+            .storage_state
             .replica_progress
             .as_ref()
             .unwrap()
