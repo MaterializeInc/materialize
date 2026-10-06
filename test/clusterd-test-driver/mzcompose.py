@@ -94,6 +94,16 @@ SCRIPTS = [
     "create_time_config.spec",
 ]
 
+# Scenarios run against a clusterd with the interactive compute runtime enabled
+# (see `workflow_two_runtime_compute`). Kept separate from `SCRIPTS` so the
+# single-runtime scenarios above stay byte-for-byte unchanged.
+TWO_RUNTIME_SCRIPTS = [
+    "two_runtime_index.spec",
+    "two_runtime_query_dataflow.spec",
+    "two_runtime_reexport.spec",
+    "two_runtime_reexport_interactive.spec",
+]
+
 
 def workflow_default(c: Composition) -> None:
     c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
@@ -113,3 +123,45 @@ def workflow_default(c: Composition) -> None:
             env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
             use_aliases=True,
         )
+    # Also exercise every other workflow (the two-runtime compute path) so the
+    # CI job, which runs this composition's default workflow, covers them too.
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_two_runtime_compute(c: Composition) -> None:
+    """Run the two-runtime scenarios against a clusterd started with a second,
+    interactive compute runtime configured. `Clusterd(interactive_compute=True)`
+    sets `CLUSTERD_INTERACTIVE_COMPUTE_TIMELY_CONFIG`, which turns on the
+    multiplexer that fronts both runtimes on the same `:2101` endpoint this
+    driver already connects to, so no driver changes are needed to reach the
+    interactive runtime.
+    """
+    c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
+    # Once per worker count: the registry pairs worker `i` of one runtime with
+    # worker `i` of the other, so a single worker never exercises the pairing.
+    first = True
+    for workers in (1, 2):
+        with c.override(
+            Clusterd(
+                mz_service="headless-driver",
+                interactive_compute=True,
+                workers=workers,
+            )
+        ):
+            for script in TWO_RUNTIME_SCRIPTS:
+                ui.section(
+                    f"Running two-runtime scenario {script} with {workers} worker(s)"
+                )
+                if not first:
+                    c.kill("clusterd")
+                first = False
+                c.up("clusterd")
+                c.run(
+                    "headless-driver",
+                    env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
+                    use_aliases=True,
+                )
