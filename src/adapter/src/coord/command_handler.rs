@@ -2081,13 +2081,10 @@ impl Coordinator {
     /// may be sent for it.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        // If the session doesn't exist in `active_conns`, then this method will panic later on.
-        // Instead we explicitly panic here while dumping the entire Coord to the logs to help
-        // debug. This panic is very infrequent so we want as much information as possible.
-        // See https://github.com/MaterializeInc/database-issues/issues/5627.
+        // Checked up front so that an unknown connection panics before the cleanup below runs.
         assert!(
             self.active_conns.contains_key(&conn_id),
-            "unknown connection: {conn_id:?}\n\n{self:?}"
+            "unknown connection: {conn_id:?}"
         );
 
         // We do not need to call clear_transaction here because there are no side effects to run
