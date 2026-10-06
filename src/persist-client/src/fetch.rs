@@ -134,16 +134,16 @@ impl FetchConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
+    pub(crate) validate_bounds_on_read: ConfigValHandle<bool>,
     pub(crate) part_decode_batch_rows: ConfigValHandle<usize>,
-    pub(crate) fetch_config: FetchConfig,
 }
 
 impl BatchFetcherConfig {
     pub fn new(value: &PersistConfig) -> Self {
         Self {
             part_decode_format: PART_DECODE_FORMAT.handle(value),
+            validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.handle(value),
             part_decode_batch_rows: PART_DECODE_BATCH_ROWS.handle(value),
-            fetch_config: FetchConfig::from_persist_config(value),
         }
     }
 
@@ -151,11 +151,11 @@ impl BatchFetcherConfig {
         PartDecodeFormat::from_str(self.part_decode_format.get().as_str())
     }
 
-    /// The [`FetchConfig`] with dynamic values read at call time.
+    /// The [`FetchConfig`] with values read at call time.
     pub fn fetch_config(&self) -> FetchConfig {
         FetchConfig {
+            validate_bounds_on_read: self.validate_bounds_on_read.get(),
             part_decode_batch_rows: self.part_decode_batch_rows.get(),
-            ..self.fetch_config.clone()
         }
     }
 }
@@ -441,7 +441,7 @@ where
 {
     let fetch_config = FetchConfig::from_persist_config(cfg);
     let fetched = match &part.part {
-        BatchPart::Hollow(x) if fetch_config.part_decode_batch_rows > 0 => fetch_batch_part_blob(
+        BatchPart::Hollow(x) => fetch_batch_part_blob(
             &part.shard_id,
             blob,
             &metrics,
@@ -451,27 +451,27 @@ where
         )
         .await
         .map(|buf| {
-            PartSource::Batched(EncodedPartBatches::new(
+            PartSource::from_hollow_blob(
                 &fetch_config,
                 &metrics,
-                read_metrics.clone(),
+                read_metrics,
                 part.desc.clone(),
                 x,
-                buf,
-            ))
+                &buf,
+            )
         }),
-        _ => EncodedPart::fetch(
+        BatchPart::Inline {
+            updates,
+            ts_rewrite,
+            ..
+        } => Ok(PartSource::Whole(EncodedPart::from_inline(
             &fetch_config,
-            &part.shard_id,
-            blob,
             &metrics,
-            shard_metrics,
-            read_metrics,
-            &part.desc,
-            &part.part,
-        )
-        .await
-        .map(PartSource::Whole),
+            read_metrics.clone(),
+            part.desc.clone(),
+            updates,
+            ts_rewrite.as_ref(),
+        ))),
     };
     let source = match fetched {
         Ok(x) => x,
@@ -897,19 +897,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     /// Partially decodes this blob into a [FetchedPart].
     pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
-            FetchedBlobBuf::Hollow { buf, part } if cfg.part_decode_batch_rows > 0 => {
-                let batches = EncodedPartBatches::new(
-                    cfg,
-                    &self.metrics,
-                    self.read_metrics.clone(),
-                    self.registered_desc.clone(),
-                    part,
-                    buf.clone(),
-                );
-                (PartSource::Batched(batches), part.stats.as_ref())
-            }
             FetchedBlobBuf::Hollow { buf, part } => {
-                let parsed = decode_batch_part_blob(
+                let source = PartSource::from_hollow_blob(
                     cfg,
                     &self.metrics,
                     &self.read_metrics,
@@ -917,7 +906,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     part,
                     buf,
                 );
-                (PartSource::Whole(parsed), part.stats.as_ref())
+                (source, part.stats.as_ref())
             }
             FetchedBlobBuf::Inline {
                 desc,
@@ -972,24 +961,10 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
 pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
-    // The decoded rows `timestamps`, `diffs`, and `part` index into: the whole
-    // part, or the current batch of `batches`. `None` before the first batch
-    // and after the last.
-    //
-    // If migration is Either, then the columnar one will have already been
-    // applied here on the structured data only.
-    part: Option<
-        EitherOrBoth<
-            ColumnarRecords,
-            (
-                <K::Schema as Schema<K>>::Decoder,
-                <V::Schema as Schema<V>>::Decoder,
-            ),
-        >,
-    >,
-    timestamps: Int64Array,
-    diffs: Int64Array,
-    // Batches not yet decoded into `part`, if the part is decoded in batches.
+    // The decoded rows of the whole part, or of the current batch of
+    // `batches`. `None` before the first batch and after the last.
+    rows: Option<DecodedRows<K, V>>,
+    // Batches not yet decoded into `rows`, if the part is decoded in batches.
     batches: Option<EncodedPartBatches<T>>,
     part_decode_format: PartDecodeFormat,
     // Row count of the whole part before normalization.
@@ -997,11 +972,27 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     migration: PartMigration<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
     peek_stash: Option<((K, V), T, D)>,
-    part_cursor: usize,
     key_storage: Option<K::Storage>,
     val_storage: Option<V::Storage>,
 
     _phantom: PhantomData<fn() -> D>,
+}
+
+/// Decoded rows of a [`FetchedPart`] and the cursor into them.
+#[derive(Debug)]
+struct DecodedRows<K: Codec, V: Codec> {
+    // If migration is Either, then the columnar one will have already been
+    // applied here on the structured data only.
+    part: EitherOrBoth<
+        ColumnarRecords,
+        (
+            <K::Schema as Schema<K>>::Decoder,
+            <V::Schema as Schema<V>>::Decoder,
+        ),
+    >,
+    timestamps: Int64Array,
+    diffs: Int64Array,
+    cursor: usize,
 }
 
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
@@ -1059,23 +1050,18 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         let mut ret = FetchedPart {
             metrics,
             ts_filter,
-            part: None,
+            rows: None,
             peek_stash: None,
-            timestamps: Int64Array::from(Vec::<i64>::new()),
-            diffs: Int64Array::from(Vec::<i64>::new()),
             batches,
             part_decode_format,
             part_rows,
             migration,
             filter_pushdown_audit,
-            part_cursor: 0,
             key_storage: None,
             val_storage: None,
             _phantom: PhantomData,
         };
-        if let Some(updates) = updates {
-            ret.set_updates(updates);
-        }
+        ret.rows = updates.map(|updates| ret.decode_rows(updates));
         ret
     }
 
@@ -1089,13 +1075,10 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         };
         // Release the current batch before decoding the next, so at most one
         // decoded batch is alive.
-        self.part = None;
-        self.timestamps = Int64Array::from(Vec::<i64>::new());
-        self.diffs = Int64Array::from(Vec::<i64>::new());
-        self.part_cursor = 0;
+        self.rows = None;
         match batches.next_updates(&self.metrics) {
             Some(updates) => {
-                self.set_updates(updates);
+                self.rows = Some(self.decode_rows(updates));
                 true
             }
             None => {
@@ -1105,9 +1088,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         }
     }
 
-    /// Builds decoders over normalized `updates` and makes them the current
-    /// decoded rows.
-    fn set_updates(&mut self, updates: BlobTraceUpdates) {
+    /// Builds decoders over normalized `updates`.
+    fn decode_rows(&self, updates: BlobTraceUpdates) -> DecodedRows<K, V> {
         let metrics = &*self.metrics;
         let migration = &self.migration;
         let downcast_structured = |structured: ColumnarRecordsStructuredExt,
@@ -1198,10 +1180,12 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             },
         };
 
-        self.part = Some(part);
-        self.timestamps = timestamps;
-        self.diffs = diffs;
-        self.part_cursor = 0;
+        DecodedRows {
+            part,
+            timestamps,
+            diffs,
+            cursor: 0,
+        }
     }
 
     /// Returns Some if this part was only fetched as part of a filter pushdown
@@ -1233,6 +1217,38 @@ pub(crate) struct EncodedPart<T> {
 pub(crate) enum PartSource<T> {
     Whole(EncodedPart<T>),
     Batched(EncodedPartBatches<T>),
+}
+
+impl<T: Timestamp + Lattice + Codec64> PartSource<T> {
+    /// Decodes the fetched blob `buf` of the hollow `part`, in batches if
+    /// [`FetchConfig::part_decode_batch_rows`] is non-zero.
+    pub(crate) fn from_hollow_blob(
+        cfg: &FetchConfig,
+        metrics: &Metrics,
+        read_metrics: &ReadMetrics,
+        registered_desc: Description<T>,
+        part: &HollowBatchPart<T>,
+        buf: &SegmentedBytes,
+    ) -> Self {
+        match cfg.part_decode_batch_rows {
+            0 => PartSource::Whole(decode_batch_part_blob(
+                cfg,
+                metrics,
+                read_metrics,
+                registered_desc,
+                part,
+                buf,
+            )),
+            _ => PartSource::Batched(EncodedPartBatches::new(
+                cfg,
+                metrics,
+                read_metrics.clone(),
+                registered_desc,
+                part,
+                buf.clone(),
+            )),
+        }
+    }
 }
 
 /// The normalization of a fetched part's updates to its registered
@@ -1328,16 +1344,22 @@ where
         let mut consolidated = self.peek_stash.take();
         loop {
             // Fetch and decode the next tuple in the sequence. (Or break if there is none.)
-            let next = if self.part_cursor < self.timestamps.len() {
-                let next_idx = self.part_cursor;
-                self.part_cursor += 1;
+            let row = match &mut self.rows {
+                Some(rows) if rows.cursor < rows.timestamps.len() => {
+                    let idx = rows.cursor;
+                    rows.cursor += 1;
+                    Some((idx, rows.timestamps.values()[idx], rows.diffs.values()[idx]))
+                }
+                _ => None,
+            };
+            let next = if let Some((next_idx, t, d)) = row {
                 // These `to_le_bytes` calls were previously encapsulated by `ColumnarRecords`.
                 // TODO(structured): re-encapsulate these once we've finished the structured migration.
-                let mut t = T::decode(self.timestamps.values()[next_idx].to_le_bytes());
+                let mut t = T::decode(t.to_le_bytes());
                 if !self.ts_filter.filter_ts(&mut t) {
                     continue;
                 }
-                let d = D::decode(self.diffs.values()[next_idx].to_le_bytes());
+                let d = D::decode(d.to_le_bytes());
                 if d.is_zero() {
                     continue;
                 }
@@ -1375,9 +1397,10 @@ where
 
     fn decode_kv(&mut self, index: usize, key: &mut Option<K>, val: &mut Option<V>) -> (K, V) {
         let decoded = self
-            .part
+            .rows
             .as_ref()
             .expect("decoded rows present while the cursor is in bounds")
+            .part
             .as_ref()
             .map_left(|codec| {
                 let ((ck, cv), _, _) = codec.get(index).expect("valid index");
