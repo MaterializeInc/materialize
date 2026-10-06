@@ -632,6 +632,68 @@ mod prepared_tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn prepared_analysis_retains_sql_function_dependencies() {
+        Catalog::with_debug(|mut catalog| async move {
+            catalog
+                .system_config_mut()
+                .set("enable_prepared_query_reuse", VarInput::Flat("true"))
+                .expect("test fixture must be valid");
+            let mut session = Session::dummy();
+            session.start_transaction_single_stmt(chrono::Utc::now());
+            prepare(
+                &catalog,
+                &mut session,
+                "q",
+                "SELECT pg_catalog.format_type($1::oid, -1)",
+            );
+            let query = session
+                .get_prepared_statement_unverified("q")
+                .expect("test fixture must be valid")
+                .query()
+                .expect("test fixture must be valid");
+            let types = catalog.resolve_builtin_table(&mz_catalog::builtin::MZ_TYPES);
+            assert!(!query.resolved_ids.contains_item(&types));
+            assert!(query.sql_impl_ids.contains_item(&types));
+            for oid in [23, 25] {
+                bind(
+                    &mut session,
+                    "q",
+                    "",
+                    vec![(Datum::UInt32(oid), SqlScalarType::Oid)],
+                );
+                Coordinator::verify_portal(&catalog, &mut session, "")
+                    .expect("test fixture must be valid");
+                let portal = session
+                    .get_portal_unverified("")
+                    .expect("test fixture must be valid");
+                assert!(Arc::ptr_eq(
+                    &query,
+                    portal.query.as_ref().expect("test fixture must be valid")
+                ));
+                let (_, resolved, implicit) = query
+                    .bind(&catalog, &session, &portal.parameters)
+                    .expect("test fixture must be valid");
+                assert!(!resolved.contains_item(&types));
+                assert!(implicit.contains_item(&types));
+                let _ = session.clear_transaction();
+                session.start_transaction_single_stmt(chrono::Utc::now());
+                Coordinator::verify_prepared_statement(&catalog, &mut session, "q")
+                    .expect("test fixture must be valid");
+                assert!(Arc::ptr_eq(
+                    &query,
+                    &session
+                        .get_prepared_statement_unverified("q")
+                        .expect("test fixture must be valid")
+                        .query()
+                        .expect("test fixture must be valid")
+                ));
+            }
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn prepared_fetch_still_depends_on_portal_description() {
         Catalog::with_debug(|mut catalog| async move {
             catalog
