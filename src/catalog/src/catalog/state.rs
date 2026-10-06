@@ -3362,7 +3362,7 @@ fn serialize_replica_declarations<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     use crate::durable::objects::DurableType;
-    use mz_proto::RustType;
+    use crate::durable::objects::serialization::RustType;
     serializer.collect_seq(declarations.values().map(|record| {
         let (key, value) = record.clone().into_key_value();
         mz_catalog_protos::objects::ClusterReplicaDeclaration {
@@ -3384,7 +3384,7 @@ fn serialize_cluster_runtimes<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     use crate::durable::objects::DurableType;
-    use mz_proto::RustType;
+    use crate::durable::objects::serialization::RustType;
     serializer.collect_seq(runtimes.values().map(|record| {
         let (key, value) = record.clone().into_key_value();
         mz_catalog_protos::objects::ClusterRuntime {

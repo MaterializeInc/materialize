@@ -846,8 +846,8 @@ impl Catalog {
     pub async fn committed_replica_memberships(
         &self,
     ) -> Result<Vec<crate::durable::ClusterReplica>, CatalogError> {
+        use crate::durable::objects::serialization::RustType;
         use crate::durable::objects::{ClusterReplica, DurableType};
-        use mz_proto::RustType;
         let snapshot = self.storage().await.snapshot().await?;
         snapshot
             .cluster_replicas

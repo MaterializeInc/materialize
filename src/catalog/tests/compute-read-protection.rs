@@ -994,6 +994,8 @@ async fn client_index_permission_and_retirement() {
 }
 
 fn bounds(snapshot: Snapshot) -> BTreeMap<GlobalId, Option<Timestamp>> {
+    use mz_catalog::durable::objects::serialization::RustType;
+
     snapshot
         .collection_compaction_bounds
         .into_iter()
