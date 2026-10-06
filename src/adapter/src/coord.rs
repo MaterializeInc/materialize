@@ -153,7 +153,7 @@ use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, Params, QueryWhen,
+    NetworkPolicyRule, Params,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
@@ -193,8 +193,7 @@ use crate::config::{
     SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
-    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredPlan, GroupCommitPermit,
-    PendingWriteTxn,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, GroupCommitPermit, PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -202,7 +201,7 @@ use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
-use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::coord::timeline::TimelineState;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
@@ -351,10 +350,6 @@ pub enum Message {
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
-    DeferredPlanReady {
-        /// The connection whose session-startup appends completed.
-        conn_id: ConnectionId,
-    },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     /// Finalizes an applied group commit.
@@ -444,11 +439,6 @@ pub enum Message {
         span: Span,
         stage: ClusterStage,
     },
-    ExplainTimestampStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: ExplainTimestampStage,
-    },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
 
@@ -526,7 +516,6 @@ impl Message {
             } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
@@ -548,7 +537,6 @@ impl Message {
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
-            Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
@@ -733,58 +721,6 @@ pub struct CreateViewExplain {
     id: GlobalId,
     plan: plan::CreateViewPlan,
     explain_ctx: ExplainPlanContext,
-}
-
-#[derive(Debug)]
-pub enum ExplainTimestampStage {
-    Optimize(ExplainTimestampOptimize),
-    RealTimeRecency(ExplainTimestampRealTimeRecency),
-    LinearizeTimestamp(ExplainTimestampLinearizeTimestamp),
-    Finish(ExplainTimestampFinish),
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampOptimize {
-    validity: PlanValidity,
-    plan: plan::ExplainTimestampPlan,
-    cluster_id: ClusterId,
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampRealTimeRecency {
-    validity: PlanValidity,
-    format: ExplainFormat,
-    optimized_plan: OptimizedMirRelationExpr,
-    cluster_id: ClusterId,
-    when: QueryWhen,
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampLinearizeTimestamp {
-    validity: PlanValidity,
-    format: ExplainFormat,
-    optimized_plan: OptimizedMirRelationExpr,
-    cluster_id: ClusterId,
-    source_ids: BTreeSet<GlobalId>,
-    when: QueryWhen,
-    real_time_recency_ts: Option<Timestamp>,
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampFinish {
-    validity: PlanValidity,
-    format: ExplainFormat,
-    cluster_id: ClusterId,
-    source_ids: BTreeSet<GlobalId>,
-    when: QueryWhen,
-    real_time_recency_ts: Option<Timestamp>,
-    /// The timeline context derived in the preceding `LinearizeTimestamp`
-    /// stage, carried forward so it stays consistent with `oracle_read_ts`.
-    timeline_context: TimelineContext,
-    /// The linearized read timestamp, read off the coordinator loop in the
-    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
-    /// needed.
-    oracle_read_ts: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -1864,9 +1800,6 @@ pub struct Coordinator {
     /// Curated metric-sink plans, cached per definition so each is planned once rather than once
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
-
-    /// Plans waiting for session-startup builtin table appends.
-    deferred_plans: BTreeMap<ConnectionId, DeferredPlan>,
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
@@ -5125,7 +5058,6 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
-                    deferred_plans: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
                     advance_timelines_interval,
