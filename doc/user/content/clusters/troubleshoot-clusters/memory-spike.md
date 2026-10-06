@@ -10,11 +10,11 @@ menu:
 ---
 
 A memory spike is a sudden increase in a cluster replica's memory usage. A
-spike that outgrows the replica's [heap
-limit](/observability/replica-resource-usage/) makes Materialize spill to
-disk, which slows the cluster down, or triggers an out-of-memory (OOM) kill and
-replica restart. This guide helps you find what caused a spike and how to
-prevent it recurring.
+spike that outgrows the replica's RAM spills into swap, which slows the cluster
+down, and one that outgrows its [heap
+limit](/observability/replica-resource-usage/) (RAM plus swap) triggers an
+out-of-memory (OOM) kill and replica restart. This guide helps you find what
+caused a spike and how to prevent it recurring.
 
 For sustained CPU/memory pressure and OOM crash loops on an undersized
 cluster, see [Check cluster
@@ -163,10 +163,10 @@ WHERE c.name = '<cluster_name>';
 
 ### The working set outgrew memory
 
-If a cluster's data no longer fits in memory, Materialize spills arrangements
-to its scratch disk, which shows up as elevated `disk_bytes` on
-`mz_cluster_replica_metrics` alongside memory near the limit, rather than an
-outright OOM. Two common contributors:
+If a cluster's data no longer fits in RAM, the replica's memory spills into
+swap, which shows up as elevated `swap_bytes` on `mz_cluster_replica_metrics`
+alongside memory near the RAM limit, rather than an outright OOM. Two common
+contributors:
 
 - **Compaction state.** The same source data can require more memory to
   rehydrate on one replica than another if their upstream collections are

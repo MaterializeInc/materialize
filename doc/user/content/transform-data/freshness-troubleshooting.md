@@ -221,7 +221,7 @@ ORDER BY u.cpu_percent DESC;
   allocation and further growth spills into swap, which can slow down
   processing.
   `heap_percent` (RAM plus swap) shows how close the replica is to being
-  OOM-killed.
+  OOM-killed, and `swap_percent` how much of that is already in swap.
 
 Note that `cpu_percent` averages over the replica's workers, so a cluster whose
 work is concentrated on one worker can degrade while reporting unremarkable CPU.
