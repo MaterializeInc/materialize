@@ -1411,6 +1411,228 @@ fn test_prepared_indexed_isolation_and_writes() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Drive scoped reconciliation between executions of one statement.
+fn test_prepared_indexed_scoped_optimizer_changes() {
+    use mz_adapter::config::{ScopedParameters, ScopedParametersScope};
+    use mz_controller_types::ClusterId;
+
+    for reuse in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .with_system_parameter_default("enable_eager_delta_joins".into(), "false".into())
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "CREATE TABLE prepared_scoped (id int, value int)",
+            "INSERT INTO prepared_scoped VALUES (1, 11), (2, 22)",
+            "CREATE INDEX prepared_scoped_id ON prepared_scoped (id)",
+        ] {
+            client.batch_execute(sql).unwrap();
+        }
+        let cluster: String = client.query_one("SHOW cluster", &[]).unwrap().get(0);
+        let cluster_id: ClusterId = client
+            .query_one("SELECT id FROM mz_clusters WHERE name = $1", &[&cluster])
+            .unwrap()
+            .get::<_, String>(0)
+            .parse()
+            .unwrap();
+        let stmt = client
+            .prepare("SELECT value FROM prepared_scoped WHERE id = $1")
+            .unwrap();
+        let event_count = |event| {
+            test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_prepared_query_events_total",
+                &[("event", event)],
+            )
+        };
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        let adapter = server.inner().adapter_client();
+        for value in [Some("true"), Some("false"), None] {
+            let scoped = ScopedParameters {
+                cluster: value
+                    .map(|value| {
+                        (
+                            cluster_id,
+                            [("enable_eager_delta_joins".into(), value.into())].into(),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            };
+            server
+                .runtime()
+                .block_on(adapter.update_scoped_system_parameters(
+                    scoped.clone(),
+                    ScopedParametersScope {
+                        clusters: [cluster_id].into(),
+                        ..Default::default()
+                    },
+                ));
+            let catalog = server
+                .runtime()
+                .block_on(adapter.catalog_snapshot_expensive());
+            assert_eq!(catalog.state().scoped_system_parameters(), &scoped);
+            assert_eq!(
+                catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster_id)
+                    .enable_eager_delta_joins,
+                value.map(|value| value == "true")
+            );
+            let compiles = event_count("template_compile");
+            let hits = event_count("template_hit");
+            assert_eq!(
+                client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+                22
+            );
+            assert_eq!(event_count("template_compile") - compiles, u64::from(reuse));
+            assert_eq!(event_count("template_hit"), hits);
+            for (key, expected) in [(1_i32, 11_i32), (2, 22)] {
+                assert_eq!(
+                    client.query_one(&stmt, &[&key]).unwrap().get::<_, i32>(0),
+                    expected
+                );
+            }
+            assert_eq!(event_count("template_compile") - compiles, u64::from(reuse));
+            assert_eq!(event_count("template_hit") - hits, 2 * u64::from(reuse));
+        }
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Advance the test oracle while a prepared query's input is stopped.
+fn test_prepared_indexed_bounded_staleness() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use mz_ore::now::{NowFn, SYSTEM_TIME};
+
+    for reuse in [false, true] {
+        let now = Arc::new(AtomicU64::new(0));
+        let now_fn = {
+            let now = Arc::clone(&now);
+            NowFn::from(move || SYSTEM_TIME() + now.load(Ordering::SeqCst))
+        };
+        let server = test_util::TestHarness::default()
+            .with_now(now_fn)
+            .with_system_parameter_default("enable_prepared_query_reuse".into(), reuse.to_string())
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        for sql in [
+            "SET statement_timeout = '30s'",
+            "CREATE TABLE prepared_freshness_input (id int, value int)",
+            "INSERT INTO prepared_freshness_input VALUES (1, 11), (2, 22)",
+            "CREATE CLUSTER prepared_producer SIZE 'scale=1,workers=1'",
+            "CREATE MATERIALIZED VIEW prepared_freshness IN CLUSTER prepared_producer AS
+             SELECT id, value FROM prepared_freshness_input",
+            "CREATE INDEX prepared_freshness_id ON prepared_freshness (id)",
+        ] {
+            admin.batch_execute(sql).unwrap();
+        }
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("SET statement_timeout = '30s'")
+            .unwrap();
+        let stmt = client
+            .prepare("SELECT value, mz_now()::text FROM prepared_freshness WHERE id = $1")
+            .unwrap();
+        assert_eq!(
+            client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+            11
+        );
+        client
+            .batch_execute("SET transaction_isolation = 'bounded staleness 1h'")
+            .unwrap();
+        admin
+            .batch_execute("ALTER CLUSTER prepared_producer SET (REPLICATION FACTOR 0)")
+            .unwrap();
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let replicas: i64 = admin
+                    .query_one(
+                        "SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+                         WHERE c.name = 'prepared_producer'",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                if replicas == 0 { Ok(()) } else { Err(replicas) }
+            })
+            .expect("producer replicas have been removed");
+        // Warm after the DDL so the later error exercises a valid cached template.
+        let before = client.query_one(&stmt, &[&1_i32]).unwrap();
+        assert_eq!(before.get::<_, i32>(0), 11);
+        let old_timestamp: u64 = before.get::<_, String>(1).parse().unwrap();
+        let hits = || {
+            test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_prepared_query_events_total",
+                &[("event", "template_hit")],
+            )
+        };
+        let before_hits = hits();
+        assert_eq!(
+            client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+            22
+        );
+        assert_eq!(hits() - before_hits, u64::from(reuse));
+
+        now.store(86_400_000, Ordering::SeqCst);
+        // A blind INSERT chooses a fresh oracle timestamp using the advanced clock.
+        // An UPDATE can commit at its OCC subscribe frontier without advancing to now.
+        admin
+            .batch_execute("INSERT INTO prepared_freshness_input VALUES (3, 33)")
+            .unwrap();
+        let oracle_timestamp: u64 = admin
+            .query_one(
+                "SELECT mz_now()::text FROM prepared_freshness_input LIMIT 1",
+                &[],
+            )
+            .unwrap()
+            .get::<_, String>(0)
+            .parse()
+            .unwrap();
+        assert!(
+            oracle_timestamp >= old_timestamp + 86_400_000,
+            "oracle timestamp {oracle_timestamp} did not advance a day beyond {old_timestamp}"
+        );
+        let before_hits = hits();
+        for key in [1_i32, 2] {
+            let error = client.query_one(&stmt, &[&key]).unwrap_db_error();
+            assert_eq!(
+                error.code(),
+                &SqlState::T_R_SERIALIZATION_FAILURE,
+                "{error}"
+            );
+            assert!(
+                error
+                    .message()
+                    .contains("cannot serve query under bounded staleness"),
+                "{error}"
+            );
+        }
+        assert_eq!(hits() - before_hits, 2 * u64::from(reuse));
+
+        client
+            .batch_execute("SET transaction_isolation = 'bounded staleness 48h'")
+            .unwrap();
+        for (key, value) in [(1_i32, 11_i32), (2, 22)] {
+            let row = client.query_one(&stmt, &[&key]).unwrap();
+            assert_eq!(row.get::<_, i32>(0), value);
+            let timestamp: u64 = row.get::<_, String>(1).parse().unwrap();
+            assert!(oracle_timestamp.saturating_sub(timestamp) <= 172_800_000);
+            assert!(timestamp < oracle_timestamp);
+        }
+    }
+}
+
+#[mz_ore::test]
 fn test_read_many_rows() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
