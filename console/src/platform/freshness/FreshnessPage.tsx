@@ -57,7 +57,7 @@ import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
 import { Predicate, PREDICATE_LABELS } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
 import { useFreshnessHydration } from "./queries";
-import { useFreshnessParams } from "./useFreshnessParams";
+import { parsePredicate, useFreshnessParams } from "./useFreshnessParams";
 import { useFreshnessRows } from "./useFreshnessRows";
 
 const SectionHeader = ({
@@ -322,7 +322,9 @@ const FreshnessPage = () => {
               width="auto"
               aria-label="When the threshold must be exceeded"
               value={predicate}
-              onChange={(e) => setPredicate(e.target.value as Predicate)}
+              onChange={(e) =>
+                setPredicate(parsePredicate(e.target.value) ?? predicate)
+              }
             >
               {(Object.keys(PREDICATE_LABELS) as Predicate[]).map((key) => (
                 <option key={key} value={key}>
