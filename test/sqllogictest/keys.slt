@@ -68,8 +68,10 @@ FROM mz_columns c JOIN mz_tables t ON c.id = t.id
 WHERE t.name = 'unique_then_pk'
 ORDER BY c.position
 ----
-a  true
-b  false
+a
+true
+b
+false
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM unique_then_pk
