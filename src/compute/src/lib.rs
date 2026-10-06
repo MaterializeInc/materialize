@@ -20,7 +20,11 @@ mod compute_state;
 mod extensions;
 mod logging;
 mod metrics;
+mod placement;
+mod process_globals;
 mod render;
+pub(crate) mod shared_trace;
+pub mod sharing;
 /// MV sink machinery, exposed for benchmarks.
 #[cfg(feature = "bench")]
 pub mod sink;

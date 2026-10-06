@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_compute_types::dataflows::{
-    BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
+    BuildDesc, DataflowClass, DataflowDescription, IndexDesc, IndexImport, SourceImport,
 };
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -428,6 +428,21 @@ impl DataflowBuilder {
         self
     }
 
+    /// Bound the dataflow to the single read at its `as_of`, as the adapter bounds a peek: `until`
+    /// one past the `as_of`, and the class [`DataflowClass::OneShotRead`]. Call after
+    /// [`Self::as_of`].
+    pub fn single_read(&mut self) -> &mut Self {
+        let as_of = self
+            .mir
+            .as_of
+            .as_ref()
+            .and_then(|as_of| as_of.as_option())
+            .expect("a single read needs a single-time `as_of`");
+        self.mir.until = Antichain::from_elem(as_of.step_forward());
+        self.mir.class = DataflowClass::OneShotRead;
+        self
+    }
+
     /// Run the MIR dataflow optimizer in [`Self::finish`] before lowering.
     ///
     /// Off by default: the builder otherwise lowers the caller's MIR faithfully (the
@@ -715,6 +730,7 @@ fn augment(
         refresh_schedule: lowered.refresh_schedule,
         debug_name: lowered.debug_name,
         time_dependence: lowered.time_dependence,
+        class: lowered.class,
     })
 }
 

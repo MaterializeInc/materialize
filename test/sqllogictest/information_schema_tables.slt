@@ -598,7 +598,7 @@ VIEW
 materialize
 mz_internal
 mz_replacements
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_replica_hydration_history

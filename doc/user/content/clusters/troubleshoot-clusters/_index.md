@@ -15,3 +15,4 @@ the cause:
 
 - [Memory spikes](/clusters/troubleshoot-clusters/memory-spike/)
 - [CPU spikes](/clusters/troubleshoot-clusters/cpu-troubleshooting/)
+- [Hydration failures](/clusters/troubleshoot-clusters/hydration-failures/)

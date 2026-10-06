@@ -42,7 +42,7 @@ use crate::render::RenderTimestamp;
 use crate::render::columnar::{ColCollection, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::typedefs::{ImportedRowRowEnter, RowRowAgent};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
@@ -382,7 +382,7 @@ where
         }
         Some(ArrangementFlavor::Trace(_, oks, _errs)) => {
             let (oks, errs2) = if source_precedes_lookup {
-                build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
+                build_halfjoin_trace::<_, ImportedRowRowEnter<_>, _>(
                     updates,
                     oks,
                     prev_key,
@@ -392,7 +392,7 @@ where
                     config_set,
                 )
             } else {
-                build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
+                build_halfjoin_trace::<_, ImportedRowRowEnter<_>, _>(
                     updates,
                     oks,
                     prev_key,
@@ -740,7 +740,7 @@ where
             )
         }
         Some(ArrangementFlavor::Trace(_, oks, _errs)) => {
-            build_update_stream_trace::<_, RowRowEnter<_, _, _>>(
+            build_update_stream_trace::<_, ImportedRowRowEnter<_>>(
                 oks,
                 as_of,
                 source_relation,

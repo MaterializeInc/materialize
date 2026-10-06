@@ -21,10 +21,10 @@
 //! rewrites (`StringWrapper` unwrap and the `ResetAllV1` null case). See the
 //! individual table docstrings for their shapes. The reciprocal is
 //! `EventDetails::as_json` combined with the proto `RustType` conversion in
-//! `src/catalog-protos/src/audit_log.rs`. The round-trip property test at
-//! `src/catalog/tests/audit_log_details.rs` samples every `Arbitrary`
-//! variant and catches drift when either side gains a new variant, field,
-//! or serde attribute.
+//! `src/catalog/src/durable/objects/serialization/audit_log.rs`. The
+//! round-trip property test at `src/catalog/tests/audit_log_details.rs`
+//! samples every `Arbitrary` variant and catches drift when either side gains
+//! a new variant, field, or serde attribute.
 
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::{Datum, Row, RowPacker};

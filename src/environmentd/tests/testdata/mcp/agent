@@ -50,6 +50,13 @@ mcp-agent
 200 OK
 {"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}
 
+# arguments is optional in the MCP spec, so omitting it works the same.
+mcp-agent
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"get_data_products"}}
+----
+200 OK
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}
+
 # =============================================================================
 # get_data_product_details - nonexistent product
 # =============================================================================

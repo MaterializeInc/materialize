@@ -50,6 +50,9 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::placement::Placement;
+use crate::process_globals::ProcessGlobals;
+use crate::sharing::ArrangementSharingRegistry;
 
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
@@ -84,16 +87,6 @@ pub enum ComputeRuntimeRole {
     Maintenance,
     /// The interactive runtime of a two-runtime process. Shares the process globals owned by
     /// maintenance and serves reads.
-    ///
-    /// Test-only until the interactive runtime exists to construct it. It is present because the
-    /// `role` label's entire purpose is that two named roles register into one process registry
-    /// without colliding, and nothing else can express that: `Solo` registers the same metric names
-    /// with no `role` label, so prometheus rejects it alongside a named role for differing label
-    /// dimensions rather than treating it as a second series. Verifying non-collision therefore
-    /// needs a second *named* role.
-    ///
-    /// TODO: drop the `cfg` when the interactive runtime lands and constructs this.
-    #[cfg(test)]
     Interactive,
 }
 
@@ -106,32 +99,69 @@ impl ComputeRuntimeRole {
         match self {
             ComputeRuntimeRole::Solo => None,
             ComputeRuntimeRole::Maintenance => Some("maintenance"),
-            #[cfg(test)]
             ComputeRuntimeRole::Interactive => Some("interactive"),
         }
     }
 
-    /// Whether this role runs the non-idempotent, process-global initializers.
+    /// The name of this runtime's tracing span.
     ///
-    /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
-    /// inherits the globals maintenance installs, so re-running them would either double-apply a
-    /// non-idempotent effect or race maintenance.
+    /// `Solo` and `Maintenance` keep compute's bare name so single-runtime logs are unchanged.
+    fn span_name(self) -> &'static str {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => Config::NAME,
+            ComputeRuntimeRole::Interactive => "compute-interactive",
+        }
+    }
+
+    /// The name prefix of this runtime's worker threads.
+    fn thread_name_prefix(self) -> &'static str {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => Config::NAME,
+            ComputeRuntimeRole::Interactive => "interactive",
+        }
+    }
+
+    /// Whether this role applies the process-global settings or inherits them.
     ///
-    /// NOTE: every role a release build can construct owns the globals, so this is constantly true
-    /// outside tests. The distinction becomes load-bearing when the interactive runtime lands.
-    pub fn owns_process_globals(self) -> bool {
-        matches!(
-            self,
-            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
-        )
+    /// An interactive runtime shares the process with maintenance and inherits the globals
+    /// maintenance applies.
+    pub(crate) fn process_globals(self) -> ProcessGlobals {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => ProcessGlobals::Apply,
+            ComputeRuntimeRole::Interactive => ProcessGlobals::Inherit,
+        }
+    }
+
+    /// The dataflow classes this role renders.
+    pub(crate) fn placement(self) -> Placement {
+        match self {
+            ComputeRuntimeRole::Solo => Placement::All,
+            ComputeRuntimeRole::Maintenance => Placement::Maintained,
+            ComputeRuntimeRole::Interactive => Placement::OneShotRead,
+        }
+    }
+
+    /// Whether this role publishes its indexes for the process's other runtime to read.
+    pub(crate) fn publishes_indexes(self) -> bool {
+        matches!(self, ComputeRuntimeRole::Maintenance)
+    }
+
+    /// Whether this role reads the indexes the process's other runtime publishes.
+    pub(crate) fn reads_peer_indexes(self) -> bool {
+        matches!(self, ComputeRuntimeRole::Interactive)
     }
 }
 
 /// Configures the server with compute-specific metrics.
 #[derive(Clone)]
 struct Config {
+    /// Which of the process's compute runtimes this is.
+    pub role: ComputeRuntimeRole,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// One registry of published index arrangements per local worker ordinal, shared with the
+    /// worker of the same ordinal on the process's other compute runtime.
+    pub sharing_registries: Vec<ArrangementSharingRegistry>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -176,19 +206,35 @@ pub struct StorageGuestConfig {
     shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
+/// Checks that `registries` holds one registry per local worker.
+fn sharing_registries_config(
+    registries: Vec<ArrangementSharingRegistry>,
+    workers_per_process: usize,
+) -> Vec<ArrangementSharingRegistry> {
+    assert_eq!(
+        registries.len(),
+        workers_per_process,
+        "one sharing registry per local worker"
+    );
+    registries
+}
+
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
     timely_config: TimelyConfig,
     role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
+    sharing_registries: Vec<ArrangementSharingRegistry>,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let workers_per_process = timely_config.workers;
     let config = Config {
+        role,
         persist_clients,
+        sharing_registries: sharing_registries_config(sharing_registries, workers_per_process),
         txns_ctx,
         tracing_handle,
         metrics: ComputeMetrics::register_with(metrics_registry, role),
@@ -212,6 +258,7 @@ pub async fn serve_unified(
     role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
+    sharing_registries: Vec<ArrangementSharingRegistry>,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
@@ -246,7 +293,9 @@ pub async fn serve_unified(
     };
 
     let config = Config {
+        role,
         persist_clients,
+        sharing_registries: sharing_registries_config(sharing_registries, workers_per_process),
         txns_ctx,
         tracing_handle,
         metrics: ComputeMetrics::register_with(metrics_registry, role),
@@ -404,6 +453,17 @@ impl ResponseSender {
         self.nonce = Some(nonce);
     }
 
+    /// Builds a `ResponseSender` with the nonce pre-initialized, for tests that drive an
+    /// `ActiveComputeState` outside the full `serve` protocol.
+    #[cfg(test)]
+    pub(crate) fn for_test(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>) -> Self {
+        Self {
+            inner,
+            worker_id: 0,
+            nonce: Some(Uuid::nil()),
+        }
+    }
+
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let nonce = self.nonce.expect("nonce must be initialized");
@@ -420,6 +480,8 @@ impl ResponseSender {
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
 struct Worker<'w> {
+    /// Which of the process's compute runtimes this worker belongs to.
+    role: ComputeRuntimeRole,
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
@@ -432,6 +494,8 @@ struct Worker<'w> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// The registry this worker shares with its peer on the process's other compute runtime.
+    sharing_registry: ArrangementSharingRegistry,
     /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -515,6 +579,14 @@ impl ClusterSpec for Config {
 
     const NAME: &str = "compute";
 
+    fn cluster_name(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(self.role.span_name())
+    }
+
+    fn thread_name_prefix(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(self.role.thread_name_prefix())
+    }
+
     fn run_worker(
         &self,
         timely_worker: &mut TimelyWorker,
@@ -532,6 +604,8 @@ impl ClusterSpec for Config {
         let metrics = self.metrics.for_worker(worker_id);
 
         let local_index = worker_id % self.workers_per_process;
+
+        let sharing_registry = self.sharing_registries[local_index].clone();
 
         // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.
@@ -588,12 +662,14 @@ impl ClusterSpec for Config {
         });
 
         Worker {
+            role: self.role,
             timely_worker,
             command_rx: CommandReceiver::new(cmd_rx, worker_id),
             response_tx: ResponseSender::new(resp_tx, worker_id),
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
+            sharing_registry,
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
@@ -957,7 +1033,9 @@ impl<'w> Worker<'w> {
     fn handle_command(&mut self, cmd: ComputeCommand) {
         if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
             self.compute_state = Some(ComputeState::new(
+                self.role,
                 Arc::clone(&self.persist_clients),
+                self.sharing_registry.clone(),
                 self.txns_ctx.clone(),
                 self.metrics.clone(),
                 Arc::clone(&self.tracing_handle),

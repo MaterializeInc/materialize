@@ -10,7 +10,7 @@ menu:
 ---
 
 A cluster's [size](/sql/create-cluster/#available-sizes) defines the CPU,
-memory, and scratch disk available to every replica. On Materialize Cloud, this
+memory, and disk available to every replica. On Materialize Cloud, this
 determines the [cost](/materialize-cloud/billing/#compute) of the cluster.
 Clusters should be provisioned for peak resource usage, to ensure that they can
 handle the load placed on them. For most clusters, peak resource usage happens
@@ -34,8 +34,8 @@ This guide assumes you are running Materialize v26.42 or later. v26.42 added
 improvements to allow you to track peak resource usage during hydration.
 
 {{< note >}}
-**Multi-process replicas.** `peak_memory_bytes` is a single process's
-high-water mark, not the replica's. On a multi-process size it does not capture
+**Multi-process replicas.** The recorded peaks are a single process's
+high-water marks, not the replica's. On a multi-process size they do not capture
 the replica's true peak, and no way to combine the per-process marks into one is
 established. This guide assumes a single-process size.
 {{< /note >}}
@@ -82,29 +82,31 @@ SELECT
     h.started_at,
     h.finished_at - h.started_at AS hydration_time,
     h.object_count,
-    pg_size_pretty(h.peak_memory_bytes) AS peak_memory,
-    pg_size_pretty(h.peak_disk_bytes) AS peak_disk
+    pg_size_pretty(h.peak_memory_bytes + coalesce(h.peak_disk_bytes, 0)) AS peak_heap,
+    pg_size_pretty(s.memory_bytes + coalesce(s.disk_bytes, 0)) AS heap_limit
 FROM mz_internal.mz_replica_hydration_history AS h
 JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
-WHERE rh.cluster_name = 'analytics'
+JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id
+JOIN mz_catalog.mz_cluster_replica_sizes AS s ON s.size = rh.size
+WHERE c.name = 'analytics'
 ORDER BY h.started_at DESC;
 ```
 
 ```none
- replica | size  |          started_at           | hydration_time | object_count | peak_memory | peak_disk
----------+-------+-------------------------------+----------------+--------------+-------------+-----------
- r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
+ replica | size  |          started_at           | hydration_time | object_count | peak_heap | heap_limit
+---------+-------+-------------------------------+----------------+--------------+-----------+------------
+ r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 13 GB     | 152 GB
 (1 row)
 ```
 
-`peak_memory` is the highest memory any process on the replica reached, from
-process start through the moment the episode was recorded. For sizing that is
-the useful direction: it bounds the hydration peak rather than under-reporting
-it.
-
-Compare `peak_memory` against the replica sizes in
-[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes), and use this to
-determine the ideal cluster size. Both figures are per process.
+`peak_heap` adds a process's memory and disk high-water marks
+(`peak_memory_bytes` and `peak_disk_bytes`). Both marks cover the process's
+whole life up to the moment the episode was recorded. A page moved back from
+disk to memory also counts in both marks. As a result, `peak_heap` can run
+higher than the hydration itself needed, which errs on the safe side for
+sizing. `heap_limit` is the memory plus disk the size provides, from
+[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
+Both figures are per process. Compare them to determine the ideal cluster size.
 
 To find which object dominated the episode, read the per-object table,
 [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
@@ -122,7 +124,8 @@ FROM mz_internal.mz_object_hydration_history AS h
 JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
 JOIN mz_catalog.mz_objects AS o ON o.id = g.id
 JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
-WHERE rh.cluster_name = 'analytics'
+JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id
+WHERE c.name = 'analytics'
 ORDER BY hydration_time DESC
 LIMIT 5;
 ```
@@ -161,10 +164,10 @@ measurement you need to confirm the new size. Re-run the query from [step
 3](#read-what-the-last-hydration-needed) once the new replica is hydrated:
 
 ```none
- replica | size  |          started_at           | hydration_time | object_count | peak_memory | peak_disk
----------+-------+-------------------------------+----------------+--------------+-------------+-----------
- r2      | 100cc | 2026-09-08 10:41:22.913044+00 | 00:12:37.42    |           41 | 12 GB       | 4310 MB
- r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
+ replica | size  |          started_at           | hydration_time | object_count | peak_heap | heap_limit
+---------+-------+-------------------------------+----------------+--------------+-----------+------------
+ r2      | 100cc | 2026-09-08 10:41:22.913044+00 | 00:12:37.42    |           41 | 16 GB     | 38 GB
+ r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 13 GB     | 152 GB
 (2 rows)
 ```
 
@@ -177,7 +180,8 @@ restart loop shows up as a missing row plus repeated restarts in
 SELECT sh.occurred_at, sh.process_id, sh.status, sh.reason
 FROM mz_internal.mz_cluster_replica_status_history AS sh
 JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = sh.replica_id
-WHERE rh.cluster_name = 'analytics'
+JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id
+WHERE c.name = 'analytics'
 ORDER BY sh.occurred_at DESC
 LIMIT 10;
 ```
@@ -213,14 +217,14 @@ approximate, it is approximate in ways that matter for sizing:
   turn leaves no trace. Nothing incorrect is recorded, the episode is simply
   absent.
 
-- **`peak_memory_bytes` is an upper bound on the episode.** It comes from the
-  kernel's own high-water mark, covering each process's whole lifetime up to the
-  moment the episode is recorded, so post-hydration work can raise it and a
-  later episode can inherit an earlier episode's mark. For sizing memory this
-  errs the safe way: the recorded value is never below the true hydration peak.
-
-- **`peak_disk_bytes` is a lower bound.** Materialize periodically samples this metric and can miss spikes. Leave more headroom on disk
-  than the number by itself implies.
+- **`peak_heap` is an upper bound on the episode where disk is swap.** On
+  Materialize Cloud and with the Self-Managed defaults, disk is provided as
+  swap, and both marks come from the kernel, covering each process's whole
+  lifetime up to the moment the episode is recorded. Post-hydration work can
+  raise them, and a later episode can inherit an earlier episode's mark. For
+  sizing, this errs the safe way. On a replica with a scratch disk, Materialize
+  samples `peak_disk_bytes` periodically instead, so it can miss spikes: leave
+  more headroom on disk there.
 
 - **Timestamps can carry clock skew.** On a multi-process replica the endpoints
   of an interval come from different process clocks, so a recorded duration
@@ -229,12 +233,15 @@ approximate, it is approximate in ways that matter for sizing:
 
 - **Rows outlive what they name.** `replica_id`, `cluster_id`, and `object_id`
   may all name objects that no longer exist, which is what makes the history
-  useful across a resize. Join `mz_cluster_replica_history` for replica and
-  cluster names, and expect the join through `mz_object_global_ids` to drop
+  useful across a resize. Join `mz_cluster_replica_history` for replica names,
+  and `mz_clusters` for the cluster's current name: `mz_cluster_replica_history`
+  keeps the cluster name from when each replica was created, so it goes stale
+  after a rename or swap. Expect the join through `mz_object_global_ids` to drop
   objects that have since been dropped.
 
-- **Rows are retained for 30 days by default.** Sizing decisions should come
-  from the recent history rather than the earliest episode still stored.
+- **Replica episodes are kept for 120 days and per-object rows for 30 days by
+  default.** Sizing decisions should come from the recent history rather than
+  the earliest episode still stored.
 
 ## What should I do if hydration history is empty?
 
@@ -242,8 +249,9 @@ Recording is controlled by the `hydration_history_collection_interval` system
 parameter, which sets how often Materialize samples replicas for completed
 episodes. A value of zero disables recording, and the tables then stay as they
 are: rows already collected remain, and no new ones are added.
-`hydration_history_retention_period` bounds how long rows live, and defaults to
-30 days.
+`replica_hydration_history_retention_period` and
+`hydration_history_retention_period` bound how long replica episodes and
+per-object rows live, and default to 120 and 30 days.
 
 On Materialize Cloud, these parameters are managed for you. If both tables are
 empty for a cluster that has certainly hydrated, contact

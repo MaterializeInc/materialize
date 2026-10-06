@@ -13,6 +13,7 @@ use mz_compute_types::dyncfgs::{
     ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_ACTIVATION_BUDGET, INDEX_PEEK_INLINE_BUDGET,
 };
 use mz_dyncfg::ConfigUpdates;
+use mz_ore::cast::CastLossy;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{IntoRowIterator, RowIterator, RowRef};
 use mz_secrets::InMemorySecretsController;
@@ -23,6 +24,7 @@ use tokio::sync::mpsc;
 
 use crate::metrics::ComputeMetrics;
 use crate::server::ComputeRuntimeRole;
+use crate::sharing::ArrangementSharingRegistry;
 
 use super::index_peek_tests::{
     TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
@@ -104,7 +106,9 @@ impl Harness {
         };
 
         let state = ComputeState::new(
+            ComputeRuntimeRole::Solo,
             Arc::new(PersistClientCache::new_no_metrics()),
+            ArrangementSharingRegistry::new(),
             TxnsContext::default(),
             metrics,
             Arc::new(TracingHandle::disabled()),

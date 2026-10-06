@@ -109,6 +109,8 @@
 /src/rocksdb                        @MaterializeInc/cluster
 /src/s3-datagen                     @MaterializeInc/cluster
 /src/secrets                        @MaterializeInc/cloud
+/src/secrets-cli                    @MaterializeInc/cluster
+/src/secrets-loader                 @MaterializeInc/cluster
 /src/segment
 /src/service                        @MaterializeInc/cluster
 /src/sql                            @MaterializeInc/adapter

@@ -9,9 +9,9 @@
 
 //! Types for the adapter.
 
-pub mod bootstrap_builtin_cluster_config;
 pub mod cluster_state;
 pub mod compaction;
-pub mod connection;
-pub mod dyncfgs;
-pub mod timestamp_oracle;
+
+pub use mz_adapter_dyncfgs::{
+    bootstrap_builtin_cluster_config, connection, dyncfgs, timestamp_oracle,
+};

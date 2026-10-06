@@ -379,6 +379,14 @@ impl From<Timestamp> for u64 {
     }
 }
 
+// NOTE: Only timestamps of the `EpochMilliseconds` timeline are wall-clock times.
+// For other timelines the result is not meaningful.
+impl mz_ore::now::AsEpochMillis for Timestamp {
+    fn as_epoch_millis(&self) -> mz_ore::now::EpochMillis {
+        self.internal
+    }
+}
+
 impl From<Timestamp> for u128 {
     fn from(ts: Timestamp) -> Self {
         u128::from(ts.internal)

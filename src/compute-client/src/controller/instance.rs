@@ -18,14 +18,15 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dataflows::{BuildDesc, DataflowClass, DataflowDescription};
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS, ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
@@ -1422,7 +1423,7 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        mut dataflow: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
         import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
@@ -1445,6 +1446,24 @@ impl Instance {
         }
         if as_of.is_empty() && dataflow.copy_to_ids().next().is_some() {
             return Err(EmptyAsOfForCopyTo);
+        }
+        // A replica with a second runtime renders a one-shot read there, and that runtime can only
+        // serve one: its imports of maintained indexes are snapshots bounded one step past the
+        // `as_of`, so they cannot feed a dataflow that runs further, a subscribe never stops, and
+        // reconciliation refuses a copy-to's S3 sink. The runtime that renders a one-shot read also
+        // reports frontiers only for the collections it renders, which must therefore be transient.
+        mz_ore::soft_assert_or_log!(
+            dataflow.class_fits_shape(),
+            "dataflow {} has class {:?} but not its shape: exports={} until={:?}",
+            dataflow.debug_name,
+            dataflow.class,
+            dataflow.display_export_ids(),
+            dataflow.until.elements(),
+        );
+        if dataflow.class == DataflowClass::OneShotRead
+            && !ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS.get(&self.dyncfg)
+        {
+            dataflow.class = DataflowClass::Maintained;
         }
 
         // Collect all dependencies of the dataflow, and read holds on them at the `as_of`.
@@ -1610,6 +1629,7 @@ impl Instance {
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            class: dataflow.class,
         };
 
         if augmented_dataflow.is_transient() {

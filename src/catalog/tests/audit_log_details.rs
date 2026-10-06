@@ -23,9 +23,9 @@
 //! variant with an unhandled divergence will fail this test.
 
 use mz_audit_log::EventDetails;
+use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog_protos::objects::audit_log_event_v1;
 use mz_expr::func::{EagerUnaryFunc, ParseCatalogAuditLogDetails};
-use mz_proto::RustType;
 use mz_repr::adt::jsonb::Jsonb;
 use proptest::prelude::*;
 

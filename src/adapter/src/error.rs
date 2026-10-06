@@ -323,9 +323,6 @@ pub enum AdapterError {
     /// Attempt to convert a cluster to unmanaged while a hydration burst is in
     /// flight.
     AlterClusterUnmanagedWhileBursting,
-    /// Attempt to change a cluster's replication factor while a graceful
-    /// reconfiguration is in progress.
-    AlterClusterReplicationFactorWhileReconfiguring,
     /// Attempt to change a cluster's schedule while a graceful reconfiguration
     /// is in progress.
     AlterClusterScheduleWhileReconfiguring,
@@ -813,11 +810,6 @@ impl AdapterError {
                 or wait for the burst to wind down, then convert."
                     .to_string(),
             ),
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => Some(
-                "Cancel the reconfiguration by altering the cluster back to its current \
-                configuration, or wait for it to settle, then change the replication factor."
-                    .to_string(),
-            ),
             AdapterError::AlterClusterScheduleWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
                 configuration, or wait for it to settle, then change the schedule."
@@ -1103,9 +1095,6 @@ impl AdapterError {
             AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
-                SqlState::OBJECT_IN_USE
-            }
             AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
@@ -1602,12 +1591,6 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot convert cluster to unmanaged while a hydration burst is in progress"
-                )
-            }
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
-                write!(
-                    f,
-                    "cannot change replication factor while a reconfiguration is in progress"
                 )
             }
             AdapterError::AlterClusterScheduleWhileReconfiguring => {

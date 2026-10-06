@@ -408,6 +408,16 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_compute_interactive_dataflows",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_compute_interactive_runtime",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -421,6 +431,11 @@ def get_variable_system_parameters(
             "force_source_table_syntax",
             "true" if force_source_table_syntax else "false",
             ["true", "false"] if force_source_table_syntax else ["false"],
+        ),
+        # Low default so CI exercises the periodic recommit, which production
+        # only reaches after ten minutes.
+        VariableSystemParameter(
+            "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
         ),
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]

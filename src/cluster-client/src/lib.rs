@@ -18,10 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
-use mz_ore::now::NowFn;
+use mz_ore::now::{AsEpochMillis, NowFn};
 use serde::{Deserialize, Serialize};
 
 pub mod client;
+pub mod instances;
 pub mod metrics;
 
 /// A function that computes the lag between the given time and wallclock time.
@@ -32,12 +33,11 @@ pub mod metrics;
 #[derive(Clone)]
 pub struct WallclockLagFn<T>(Arc<dyn Fn(T) -> Duration + Send + Sync>);
 
-impl<T: Into<mz_repr::Timestamp>> WallclockLagFn<T> {
+impl<T: AsEpochMillis> WallclockLagFn<T> {
     /// Create a new [`WallclockLagFn`].
     pub fn new(now: NowFn) -> Self {
         let inner = Arc::new(move |time: T| {
-            let time_ts: mz_repr::Timestamp = time.into();
-            let time_ms: u64 = time_ts.into();
+            let time_ms = time.as_epoch_millis();
             let lag_ms = now().saturating_sub(time_ms);
             let lag_s = lag_ms.div_ceil(1000);
             Duration::from_secs(lag_s)

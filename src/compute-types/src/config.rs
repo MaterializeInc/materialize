@@ -43,6 +43,11 @@ pub struct ComputeReplicaLogging {
     /// The interval at which to log.
     ///
     /// A `None` value indicates that logging is disabled.
+    ///
+    /// NOTE: 0dt cutovers measure their stability period from the replica's
+    /// hydration log (see `mz_adapter::coord::caught_up`). With logging
+    /// disabled they still wait for hydration, but not for the period, so a
+    /// crash-looping replica can pass.
     pub interval: Option<Duration>,
 }
 

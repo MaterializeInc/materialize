@@ -3147,6 +3147,12 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_interactive_dataflows"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["enable_compute_interactive_runtime"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_any_all_null_array_semantics"] = (
             BOOLEAN_FLAG_VALUES
@@ -3400,6 +3406,7 @@ class FlipFlagsAction(Action):
             "wallclock_lag_history_retention_interval",
             "wallclock_global_lag_histogram_retention_interval",
             "kafka_client_id_enrichment_rules",
+            "kafka_offset_commit_refresh_interval",
             "kafka_poll_max_wait",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",
@@ -5934,15 +5941,6 @@ class AlterClusterSetAction(Action):
     Resizing or changing the replica count of a cluster hosting indexes, MVs,
     sources, and sinks forces rehydration and replica teardown/spin-up under
     concurrent DDL and DML."""
-
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            # A SET (SIZE) here or a ReconfigureCluster on the same cluster
-            # leaves a reconfiguration record in flight past the statement
-            # that started it. Replication factor is folded in at cut-over,
-            # so changing it meanwhile is refused.
-            "cannot change replication factor while a reconfiguration is in progress",
-        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:

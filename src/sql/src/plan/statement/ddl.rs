@@ -349,7 +349,7 @@ pub fn plan_create_table(
                     }
                 }
                 ColumnOption::Versioned { action, version } => {
-                    let version = RelationVersion::from(*version);
+                    let version = normalize::relation_version(*version);
                     versioned = true;
 
                     let name = normalize::column_name(c.name.clone());
@@ -4483,7 +4483,7 @@ pub fn plan_create_index(
                 .map(|i| {
                     let name = on_desc.get_name(*i);
                     if name_counts.get(name).copied() == Some(1) {
-                        Expr::Identifier(vec![name.clone().into()])
+                        Expr::Identifier(vec![normalize::column_name_ident(name)])
                     } else {
                         Expr::Value(Value::Number((i + 1).to_string()))
                     }
@@ -6748,19 +6748,20 @@ pub fn plan_alter_cluster(
                         ClusterAlterOptionExtracted::try_from(with_options)?;
                     alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
 
-                    // Only a replica config shape change has a hydrate-overlap
-                    // to wait on. Reject a `WAIT` on anything else rather than
-                    // accept a wait that silently has nothing to do.
+                    // WAIT applies to replica shape changes and RF retargets of
+                    // an in-flight reconfiguration. For an RF-only change with
+                    // nothing in flight, WAIT has no effect.
                     if !matches!(alter_strategy, AlterClusterPlanStrategy::None)
                         && size.is_none()
+                        && replication_factor.is_none()
                         && availability_zones.is_none()
                         && introspection_debugging.is_none()
                         && introspection_interval.is_none()
                         && experimental_arrangement_compression.is_none()
                     {
                         sql_bail!(
-                            "WAIT can only be used together with a SIZE, AVAILABILITY ZONES, \
-                            INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
+                            "WAIT can only be used together with a SIZE, REPLICATION FACTOR, \
+                            AVAILABILITY ZONES, INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
                         );
                     }
 

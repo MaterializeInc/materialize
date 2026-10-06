@@ -92,10 +92,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
-use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE,
-    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
-};
+use mz_adapter_types::dyncfgs::{ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE};
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -121,6 +118,7 @@ use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
+use mz_controller_types::dyncfgs::ENABLE_COMPUTE_INTERACTIVE_RUNTIME;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_dyncfg::{ConfigUpdates, ParameterScope};
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
@@ -182,7 +180,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{Notify, OwnedMutexGuard, Semaphore, mpsc, oneshot, watch};
-use tokio::time::{Interval, MissedTickBehavior};
+use tokio::time::Interval;
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -407,6 +405,7 @@ pub enum Message {
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     HydrationHistorySchedule,
     HydrationHistoryRun,
+    CaughtUpCheck(caught_up::CaughtUpCheckRequest),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -568,6 +567,7 @@ impl Message {
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::HydrationHistorySchedule => "hydration_history_schedule",
             Message::HydrationHistoryRun => "hydration_history_run",
+            Message::CaughtUpCheck(_) => "caught_up_check",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -2226,12 +2226,9 @@ pub struct Coordinator {
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
 
-    /// When doing 0dt upgrades/in read-only mode, periodically ask all known
-    /// clusters/collections whether they are caught up.
-    caught_up_check_interval: Interval,
-
     /// Context needed to check whether all clusters/collections have caught up.
-    /// Only used during 0dt deployment, while in read-only mode.
+    /// Only present during 0dt deployment, while in read-only mode, and taken
+    /// by [`Coordinator::spawn_caught_up_check_task`].
     caught_up_check: Option<CaughtUpCheckContext>,
 
     /// The metrics registry, handed to the catalog info-metrics background task
@@ -2654,6 +2651,10 @@ impl Coordinator {
             )?;
             for replica in instance.replicas() {
                 let role = instance.role();
+                let interactive_runtime = self
+                    .catalog()
+                    .state()
+                    .replica_scoped(replica.replica_id, &ENABLE_COMPUTE_INTERACTIVE_RUNTIME);
                 self.controller.create_replica(
                     instance.id,
                     replica.replica_id,
@@ -2662,6 +2663,7 @@ impl Coordinator {
                     role,
                     replica.config.clone(),
                     enable_worker_core_affinity,
+                    interactive_runtime,
                 )?;
             }
         }
@@ -4193,6 +4195,7 @@ impl Coordinator {
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
             self.spawn_cluster_controller_task();
+            self.spawn_caught_up_check_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4337,18 +4340,6 @@ impl Coordinator {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);
                     }
-                    // `tick()` on `Interval` is cancel-safe:
-                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                    // Receive a single command.
-                    _ = self.caught_up_check_interval.tick() => {
-                        // We do this directly on the main loop instead of
-                        // firing off a message. We are still in read-only mode,
-                        // so optimizing for latency, not blocking the main loop
-                        // is not that important.
-                        self.maybe_check_caught_up().await;
-
-                        continue;
-                    },
 
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
                     // `recv()` on `Receiver` is cancellation safe:
@@ -5270,26 +5261,6 @@ pub fn serve(
         let advance_timelines_interval =
             tokio::time::interval(catalog.system_config().default_timestamp_interval());
 
-        let clusters_caught_up_check_interval = if read_only_controllers {
-            let dyncfgs = catalog.system_config().dyncfgs();
-            let interval = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL.get(dyncfgs);
-
-            let mut interval = tokio::time::interval(interval);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            interval
-        } else {
-            // When not in read-only mode, we don't do hydration checks. But we
-            // still have to provide _some_ interval. This is large enough that
-            // it doesn't matter.
-            //
-            // TODO(aljoscha): We cannot use Duration::MAX right now because of
-            // https://github.com/tokio-rs/tokio/issues/6634. Use that once it's
-            // fixed for good.
-            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            interval
-        };
-
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
@@ -5331,7 +5302,6 @@ pub fn serve(
                 CaughtUpCheckContext {
                     trigger,
                     exclude_collections,
-                    cluster_stability: BTreeMap::new(),
                 }
             });
 
@@ -5467,7 +5437,6 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
-                    caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),

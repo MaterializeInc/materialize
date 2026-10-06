@@ -1,0 +1,1575 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! This module is responsible for serializing objects from the
+//! [`mz_audit_log`] crate into protobuf.
+
+use mz_audit_log::{
+    AlterAddColumnV1, AlterApplyReplacementV1, AlterClusterReconfigurationV1,
+    AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
+    AlterSourceTimestampIntervalV1, BurstFinishCauseV1, ClusterHydrationBurstV1,
+    ClusterReplicaLoggingV1, CreateClusterReplicaV1, CreateClusterReplicaV2,
+    CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
+    CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
+    CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
+    DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1,
+    ReconfigurationLifecycleV1, RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1,
+    SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
+    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+};
+use mz_proto::TryFromProtoError;
+
+use crate::durable::objects::serialization::proto::Empty;
+use crate::durable::objects::serialization::{ProtoType, RustType, proto};
+
+impl RustType<proto::AuditLogEvent> for VersionedEvent {
+    fn into_proto(&self) -> proto::AuditLogEvent {
+        match self {
+            VersionedEvent::V1(event) => proto::AuditLogEvent::V1(event.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::AuditLogEvent) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::AuditLogEvent::V1(event) => Ok(VersionedEvent::V1(event.into_rust()?)),
+        }
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::EventType> for EventType {
+    fn into_proto(&self) -> proto::audit_log_event_v1::EventType {
+        match self {
+            EventType::Create => proto::audit_log_event_v1::EventType::Create,
+            EventType::Drop => proto::audit_log_event_v1::EventType::Drop,
+            EventType::Alter => proto::audit_log_event_v1::EventType::Alter,
+            EventType::Grant => proto::audit_log_event_v1::EventType::Grant,
+            EventType::Revoke => proto::audit_log_event_v1::EventType::Revoke,
+            EventType::Comment => proto::audit_log_event_v1::EventType::Comment,
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::EventType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::audit_log_event_v1::EventType::Create => Ok(EventType::Create),
+            proto::audit_log_event_v1::EventType::Drop => Ok(EventType::Drop),
+            proto::audit_log_event_v1::EventType::Alter => Ok(EventType::Alter),
+            proto::audit_log_event_v1::EventType::Grant => Ok(EventType::Grant),
+            proto::audit_log_event_v1::EventType::Revoke => Ok(EventType::Revoke),
+            proto::audit_log_event_v1::EventType::Comment => Ok(EventType::Comment),
+            proto::audit_log_event_v1::EventType::Unknown => Err(
+                TryFromProtoError::unknown_enum_variant("EventType::Unknown"),
+            ),
+        }
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectType {
+    fn into_proto(&self) -> proto::audit_log_event_v1::ObjectType {
+        match self {
+            mz_audit_log::ObjectType::Cluster => proto::audit_log_event_v1::ObjectType::Cluster,
+            mz_audit_log::ObjectType::ClusterReplica => {
+                proto::audit_log_event_v1::ObjectType::ClusterReplica
+            }
+            mz_audit_log::ObjectType::Connection => {
+                proto::audit_log_event_v1::ObjectType::Connection
+            }
+            mz_audit_log::ObjectType::ContinualTask => {
+                proto::audit_log_event_v1::ObjectType::ContinualTask
+            }
+            mz_audit_log::ObjectType::Database => proto::audit_log_event_v1::ObjectType::Database,
+            mz_audit_log::ObjectType::Func => proto::audit_log_event_v1::ObjectType::Func,
+            mz_audit_log::ObjectType::Index => proto::audit_log_event_v1::ObjectType::Index,
+            mz_audit_log::ObjectType::MaterializedView => {
+                proto::audit_log_event_v1::ObjectType::MaterializedView
+            }
+            mz_audit_log::ObjectType::MetricSink => {
+                proto::audit_log_event_v1::ObjectType::MetricSink
+            }
+            mz_audit_log::ObjectType::NetworkPolicy => {
+                proto::audit_log_event_v1::ObjectType::NetworkPolicy
+            }
+            mz_audit_log::ObjectType::Role => proto::audit_log_event_v1::ObjectType::Role,
+            mz_audit_log::ObjectType::Secret => proto::audit_log_event_v1::ObjectType::Secret,
+            mz_audit_log::ObjectType::Schema => proto::audit_log_event_v1::ObjectType::Schema,
+            mz_audit_log::ObjectType::Sink => proto::audit_log_event_v1::ObjectType::Sink,
+            mz_audit_log::ObjectType::Source => proto::audit_log_event_v1::ObjectType::Source,
+            mz_audit_log::ObjectType::System => proto::audit_log_event_v1::ObjectType::System,
+            mz_audit_log::ObjectType::Table => proto::audit_log_event_v1::ObjectType::Table,
+            mz_audit_log::ObjectType::Type => proto::audit_log_event_v1::ObjectType::Type,
+            mz_audit_log::ObjectType::View => proto::audit_log_event_v1::ObjectType::View,
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::ObjectType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::audit_log_event_v1::ObjectType::Cluster => Ok(mz_audit_log::ObjectType::Cluster),
+            proto::audit_log_event_v1::ObjectType::ClusterReplica => {
+                Ok(mz_audit_log::ObjectType::ClusterReplica)
+            }
+            proto::audit_log_event_v1::ObjectType::Connection => {
+                Ok(mz_audit_log::ObjectType::Connection)
+            }
+            proto::audit_log_event_v1::ObjectType::ContinualTask => {
+                Ok(mz_audit_log::ObjectType::ContinualTask)
+            }
+            proto::audit_log_event_v1::ObjectType::Database => {
+                Ok(mz_audit_log::ObjectType::Database)
+            }
+            proto::audit_log_event_v1::ObjectType::Func => Ok(mz_audit_log::ObjectType::Func),
+            proto::audit_log_event_v1::ObjectType::Index => Ok(mz_audit_log::ObjectType::Index),
+            proto::audit_log_event_v1::ObjectType::MaterializedView => {
+                Ok(mz_audit_log::ObjectType::MaterializedView)
+            }
+            proto::audit_log_event_v1::ObjectType::MetricSink => {
+                Ok(mz_audit_log::ObjectType::MetricSink)
+            }
+            proto::audit_log_event_v1::ObjectType::NetworkPolicy => {
+                Ok(mz_audit_log::ObjectType::NetworkPolicy)
+            }
+            proto::audit_log_event_v1::ObjectType::Role => Ok(mz_audit_log::ObjectType::Role),
+            proto::audit_log_event_v1::ObjectType::Secret => Ok(mz_audit_log::ObjectType::Secret),
+            proto::audit_log_event_v1::ObjectType::Schema => Ok(mz_audit_log::ObjectType::Schema),
+            proto::audit_log_event_v1::ObjectType::Sink => Ok(mz_audit_log::ObjectType::Sink),
+            proto::audit_log_event_v1::ObjectType::Source => Ok(mz_audit_log::ObjectType::Source),
+            proto::audit_log_event_v1::ObjectType::System => Ok(mz_audit_log::ObjectType::System),
+            proto::audit_log_event_v1::ObjectType::Table => Ok(mz_audit_log::ObjectType::Table),
+            proto::audit_log_event_v1::ObjectType::Type => Ok(mz_audit_log::ObjectType::Type),
+            proto::audit_log_event_v1::ObjectType::View => Ok(mz_audit_log::ObjectType::View),
+            proto::audit_log_event_v1::ObjectType::Unknown => Err(
+                TryFromProtoError::unknown_enum_variant("ObjectType::Unknown"),
+            ),
+        }
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::IdFullNameV1> for IdFullNameV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::IdFullNameV1 {
+        proto::audit_log_event_v1::IdFullNameV1 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::IdFullNameV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(IdFullNameV1 {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::FullNameV1> for FullNameV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::FullNameV1 {
+        proto::audit_log_event_v1::FullNameV1 {
+            database: self.database.to_string(),
+            schema: self.schema.to_string(),
+            item: self.item.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::FullNameV1) -> Result<Self, TryFromProtoError> {
+        Ok(FullNameV1 {
+            database: proto.database,
+            schema: proto.schema,
+            item: proto.item,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::IdNameV1> for IdNameV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::IdNameV1 {
+        proto::audit_log_event_v1::IdNameV1 {
+            id: self.id.to_string(),
+            name: self.name.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::IdNameV1) -> Result<Self, TryFromProtoError> {
+        Ok(IdNameV1 {
+            id: proto.id,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RenameItemV1> for RenameItemV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameItemV1 {
+        proto::audit_log_event_v1::RenameItemV1 {
+            id: self.id.to_string(),
+            old_name: self.old_name.into_proto(),
+            new_name: self.new_name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameItemV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameItemV1 {
+            id: proto.id,
+            old_name: proto.old_name.into_rust()?,
+            new_name: proto.new_name.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RenameClusterV1> for RenameClusterV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameClusterV1 {
+        proto::audit_log_event_v1::RenameClusterV1 {
+            id: self.id.to_string(),
+            old_name: self.old_name.into_proto(),
+            new_name: self.new_name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameClusterV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameClusterV1 {
+            id: proto.id,
+            old_name: proto.old_name,
+            new_name: proto.new_name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RenameClusterReplicaV1> for RenameClusterReplicaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameClusterReplicaV1 {
+        proto::audit_log_event_v1::RenameClusterReplicaV1 {
+            cluster_id: self.cluster_id.to_string(),
+            replica_id: self.replica_id.to_string(),
+            old_name: self.old_name.into_proto(),
+            new_name: self.new_name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameClusterReplicaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameClusterReplicaV1 {
+            cluster_id: proto.cluster_id,
+            replica_id: proto.replica_id,
+            old_name: proto.old_name,
+            new_name: proto.new_name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::ReconfigurationLifecycleV1>
+    for ReconfigurationLifecycleV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::ReconfigurationLifecycleV1 {
+        use proto::audit_log_event_v1::reconfiguration_lifecycle_v1::Transition;
+        let transition = match self {
+            ReconfigurationLifecycleV1::Started => Transition::Started(Empty {}),
+            ReconfigurationLifecycleV1::Finalized => Transition::Finalized(Empty {}),
+            ReconfigurationLifecycleV1::TimedOut => Transition::TimedOut(Empty {}),
+            ReconfigurationLifecycleV1::Cancelled => Transition::Cancelled(Empty {}),
+            ReconfigurationLifecycleV1::ResourceExhausted => {
+                Transition::ResourceExhausted(Empty {})
+            }
+        };
+        proto::audit_log_event_v1::ReconfigurationLifecycleV1 { transition }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::ReconfigurationLifecycleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto::audit_log_event_v1::reconfiguration_lifecycle_v1::Transition;
+        Ok(match proto.transition {
+            Transition::Started(_) => ReconfigurationLifecycleV1::Started,
+            Transition::Finalized(_) => ReconfigurationLifecycleV1::Finalized,
+            Transition::TimedOut(_) => ReconfigurationLifecycleV1::TimedOut,
+            Transition::Cancelled(_) => ReconfigurationLifecycleV1::Cancelled,
+            Transition::ResourceExhausted(_) => ReconfigurationLifecycleV1::ResourceExhausted,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterClusterReconfigurationV1>
+    for AlterClusterReconfigurationV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterClusterReconfigurationV1 {
+        proto::audit_log_event_v1::AlterClusterReconfigurationV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            transition: self.transition.into_proto(),
+            forced: self.forced,
+            target_size: self.target_size.to_string(),
+            target_replication_factor: self.target_replication_factor,
+            target_availability_zones: self.target_availability_zones.clone(),
+            target_logging: self.target_logging.into_proto(),
+            deadline: self.deadline,
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterClusterReconfigurationV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterClusterReconfigurationV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            transition: proto.transition.into_rust()?,
+            forced: proto.forced,
+            target_size: proto.target_size,
+            target_replication_factor: proto.target_replication_factor,
+            target_availability_zones: proto.target_availability_zones,
+            target_logging: proto.target_logging.into_rust()?,
+            deadline: proto.deadline,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::ClusterReplicaLoggingV1> for ClusterReplicaLoggingV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::ClusterReplicaLoggingV1 {
+        proto::audit_log_event_v1::ClusterReplicaLoggingV1 {
+            log_logging: self.log_logging,
+            interval: self.interval.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::ClusterReplicaLoggingV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaLoggingV1 {
+            log_logging: proto.log_logging,
+            interval: proto.interval.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::HydrationBurstLifecycleV1> for HydrationBurstLifecycleV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::HydrationBurstLifecycleV1 {
+        use proto::audit_log_event_v1::hydration_burst_lifecycle_v1::Transition;
+        let transition = match self {
+            HydrationBurstLifecycleV1::Started => Transition::Started(Empty {}),
+            HydrationBurstLifecycleV1::Finished => Transition::Finished(Empty {}),
+        };
+        proto::audit_log_event_v1::HydrationBurstLifecycleV1 { transition }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::HydrationBurstLifecycleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto::audit_log_event_v1::hydration_burst_lifecycle_v1::Transition;
+        Ok(match proto.transition {
+            Transition::Started(_) => HydrationBurstLifecycleV1::Started,
+            Transition::Finished(_) => HydrationBurstLifecycleV1::Finished,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::BurstFinishCauseV1> for BurstFinishCauseV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::BurstFinishCauseV1 {
+        use proto::audit_log_event_v1::burst_finish_cause_v1::Cause;
+        let cause = match self {
+            BurstFinishCauseV1::LingerElapsed => Cause::LingerElapsed(Empty {}),
+            BurstFinishCauseV1::NoLongerWarranted => Cause::NoLongerWarranted(Empty {}),
+        };
+        proto::audit_log_event_v1::BurstFinishCauseV1 { cause }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::BurstFinishCauseV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto::audit_log_event_v1::burst_finish_cause_v1::Cause;
+        Ok(match proto.cause {
+            Cause::LingerElapsed(_) => BurstFinishCauseV1::LingerElapsed,
+            Cause::NoLongerWarranted(_) => BurstFinishCauseV1::NoLongerWarranted,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::ClusterHydrationBurstV1> for ClusterHydrationBurstV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::ClusterHydrationBurstV1 {
+        proto::audit_log_event_v1::ClusterHydrationBurstV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            transition: self.transition.into_proto(),
+            finish_cause: self.finish_cause.map(|cause| cause.into_proto()),
+            burst_size: self.burst_size.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::ClusterHydrationBurstV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterHydrationBurstV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            transition: proto.transition.into_rust()?,
+            finish_cause: proto
+                .finish_cause
+                .map(|cause| cause.into_rust())
+                .transpose()?,
+            burst_size: proto.burst_size,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::DropClusterReplicaV1> for DropClusterReplicaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::DropClusterReplicaV1 {
+        proto::audit_log_event_v1::DropClusterReplicaV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::DropClusterReplicaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DropClusterReplicaV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_name: proto.replica_name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::DropClusterReplicaV2> for DropClusterReplicaV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::DropClusterReplicaV2 {
+        proto::audit_log_event_v1::DropClusterReplicaV2 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            reason: self.reason.into_proto(),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::DropClusterReplicaV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DropClusterReplicaV2 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_name: proto.replica_name,
+            reason: proto.reason.into_rust()?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::DropClusterReplicaV3> for DropClusterReplicaV3 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::DropClusterReplicaV3 {
+        proto::audit_log_event_v1::DropClusterReplicaV3 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            reason: self.reason.into_proto(),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::DropClusterReplicaV3,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DropClusterReplicaV3 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_name: proto.replica_name,
+            reason: proto.reason.into_rust()?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClusterReplicaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV1 {
+        proto::audit_log_event_v1::CreateClusterReplicaV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+            disk: self.disk,
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateClusterReplicaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+            disk: proto.disk,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV2> for CreateClusterReplicaV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV2 {
+        proto::audit_log_event_v1::CreateClusterReplicaV2 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+            disk: self.disk,
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
+            reason: self.reason.into_proto(),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateClusterReplicaV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV2 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+            disk: proto.disk,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
+            reason: proto.reason.into_rust()?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV3> for CreateClusterReplicaV3 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV3 {
+        proto::audit_log_event_v1::CreateClusterReplicaV3 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+            disk: self.disk,
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
+            reason: self.reason.into_proto(),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateClusterReplicaV3,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV3 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+            disk: proto.disk,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
+            reason: proto.reason.into_rust()?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV4> for CreateClusterReplicaV4 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV4 {
+        proto::audit_log_event_v1::CreateClusterReplicaV4 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
+            reason: self.reason.into_proto(),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateClusterReplicaV4,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV4 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
+            reason: proto.reason.into_rust()?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1>
+    for CreateOrDropClusterReplicaReasonV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+        match self {
+            CreateOrDropClusterReplicaReasonV1::Manual => {
+                use proto::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Manual(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::Schedule => {
+                use proto::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Schedule(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::System => {
+                use proto::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::System(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::Reconfiguration => {
+                use proto::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Reconfiguration(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::HydrationBurst => {
+                use proto::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::HydrationBurst(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::Retired => {
+                use proto::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Retired(Empty {}),
+                }
+            }
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason as Reason;
+        match proto.reason {
+            Reason::Manual(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
+            Reason::Schedule(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
+            Reason::System(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::System),
+            Reason::Reconfiguration(Empty {}) => {
+                Ok(CreateOrDropClusterReplicaReasonV1::Reconfiguration)
+            }
+            Reason::HydrationBurst(Empty {}) => {
+                Ok(CreateOrDropClusterReplicaReasonV1::HydrationBurst)
+            }
+            Reason::Retired(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Retired),
+        }
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1>
+    for SchedulingDecisionsWithReasonsV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
+        proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
+            on_refresh: self.on_refresh.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(SchedulingDecisionsWithReasonsV1 {
+            on_refresh: proto.on_refresh.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV2>
+    for SchedulingDecisionsWithReasonsV2
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV2 {
+        proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV2 {
+            on_refresh: self.on_refresh.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(SchedulingDecisionsWithReasonsV2 {
+            on_refresh: proto.on_refresh.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
+    for RefreshDecisionWithReasonV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
+        let decision = match &self.decision {
+            SchedulingDecisionV1::On => proto::audit_log_event_v1::RefreshDecision::On(Empty {}),
+            SchedulingDecisionV1::Off => proto::audit_log_event_v1::RefreshDecision::Off(Empty {}),
+        };
+        proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
+            decision,
+            objects_needing_refresh: self.objects_needing_refresh.clone(),
+            rehydration_time_estimate: self.hydration_time_estimate.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RefreshDecisionWithReasonV1,
+    ) -> Result<Self, TryFromProtoError> {
+        let decision = match proto.decision {
+            proto::audit_log_event_v1::RefreshDecision::On(Empty {}) => SchedulingDecisionV1::On,
+            proto::audit_log_event_v1::RefreshDecision::Off(Empty {}) => SchedulingDecisionV1::Off,
+        };
+        Ok(RefreshDecisionWithReasonV1 {
+            decision,
+            objects_needing_refresh: proto.objects_needing_refresh,
+            hydration_time_estimate: proto.rehydration_time_estimate,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV2>
+    for RefreshDecisionWithReasonV2
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::RefreshDecisionWithReasonV2 {
+        let decision = match &self.decision {
+            SchedulingDecisionV1::On => proto::audit_log_event_v1::RefreshDecision::On(Empty {}),
+            SchedulingDecisionV1::Off => proto::audit_log_event_v1::RefreshDecision::Off(Empty {}),
+        };
+        proto::audit_log_event_v1::RefreshDecisionWithReasonV2 {
+            decision,
+            objects_needing_refresh: self.objects_needing_refresh.clone(),
+            objects_needing_compaction: self.objects_needing_compaction.clone(),
+            rehydration_time_estimate: self.hydration_time_estimate.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RefreshDecisionWithReasonV2,
+    ) -> Result<Self, TryFromProtoError> {
+        let decision = match proto.decision {
+            proto::audit_log_event_v1::RefreshDecision::On(Empty {}) => SchedulingDecisionV1::On,
+            proto::audit_log_event_v1::RefreshDecision::Off(Empty {}) => SchedulingDecisionV1::Off,
+        };
+        Ok(RefreshDecisionWithReasonV2 {
+            decision,
+            objects_needing_refresh: proto.objects_needing_refresh,
+            objects_needing_compaction: proto.objects_needing_compaction,
+            hydration_time_estimate: proto.rehydration_time_estimate,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV1> for CreateSourceSinkV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV1 {
+        proto::audit_log_event_v1::CreateSourceSinkV1 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+            size: self.size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV1 {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+            size: proto.size.map(|s| s.inner),
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV2> for CreateSourceSinkV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV2 {
+        proto::audit_log_event_v1::CreateSourceSinkV2 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+            size: self.size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+            external_type: self.external_type.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV2 {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+            size: proto.size.map(|s| s.inner),
+            external_type: proto.external_type,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV3> for CreateSourceSinkV3 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV3 {
+        proto::audit_log_event_v1::CreateSourceSinkV3 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+            external_type: self.external_type.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV3,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV3 {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+            external_type: proto.external_type,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV4> for CreateSourceSinkV4 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV4 {
+        proto::audit_log_event_v1::CreateSourceSinkV4 {
+            id: self.id.to_string(),
+            cluster_id: self.cluster_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            name: self.name.into_proto(),
+            external_type: self.external_type.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV4,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV4 {
+            id: proto.id,
+            cluster_id: proto.cluster_id.map(|s| s.inner),
+            name: proto.name.into_rust()?,
+            external_type: proto.external_type,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateIndexV1> for CreateIndexV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateIndexV1 {
+        proto::audit_log_event_v1::CreateIndexV1 {
+            id: self.id.to_string(),
+            cluster_id: self.cluster_id.to_string(),
+            name: self.name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateIndexV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateIndexV1 {
+            id: proto.id,
+            cluster_id: proto.cluster_id,
+            name: proto.name.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateMaterializedViewV1> for CreateMaterializedViewV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateMaterializedViewV1 {
+        proto::audit_log_event_v1::CreateMaterializedViewV1 {
+            id: self.id.to_string(),
+            cluster_id: self.cluster_id.to_string(),
+            name: self.name.into_proto(),
+            replacement_target_id: self.replacement_target_id.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateMaterializedViewV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateMaterializedViewV1 {
+            id: proto.id,
+            cluster_id: proto.cluster_id,
+            name: proto.name.into_rust()?,
+            replacement_target_id: proto.replacement_target_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterApplyReplacementV1> for AlterApplyReplacementV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterApplyReplacementV1 {
+        proto::audit_log_event_v1::AlterApplyReplacementV1 {
+            target: self.target.into_proto(),
+            replacement: self.replacement.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterApplyReplacementV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterApplyReplacementV1 {
+            target: proto.target.into_rust()?,
+            replacement: proto.replacement.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterSourceSinkV1> for AlterSourceSinkV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterSourceSinkV1 {
+        proto::audit_log_event_v1::AlterSourceSinkV1 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+            old_size: self.old_size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+            new_size: self.new_size.as_ref().map(|s| proto::StringWrapper {
+                inner: s.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterSourceSinkV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterSourceSinkV1 {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+            old_size: proto.old_size.map(|s| s.inner),
+            new_size: proto.new_size.map(|s| s.inner),
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterSetClusterV1> for AlterSetClusterV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterSetClusterV1 {
+        proto::audit_log_event_v1::AlterSetClusterV1 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+            old_cluster_id: self.old_cluster_id.into_proto(),
+            new_cluster_id: self.new_cluster_id.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterSetClusterV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+            old_cluster_id: proto.old_cluster_id,
+            new_cluster_id: proto.new_cluster_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::GrantRoleV1> for GrantRoleV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::GrantRoleV1 {
+        proto::audit_log_event_v1::GrantRoleV1 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::GrantRoleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(GrantRoleV1 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+            grantor_id: proto.grantor_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::GrantRoleV2> for GrantRoleV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::GrantRoleV2 {
+        proto::audit_log_event_v1::GrantRoleV2 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+            executed_by: self.executed_by.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::GrantRoleV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(GrantRoleV2 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+            grantor_id: proto.grantor_id,
+            executed_by: proto.executed_by,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RevokeRoleV1> for RevokeRoleV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RevokeRoleV1 {
+        proto::audit_log_event_v1::RevokeRoleV1 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RevokeRoleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RevokeRoleV1 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RevokeRoleV2> for RevokeRoleV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RevokeRoleV2 {
+        proto::audit_log_event_v1::RevokeRoleV2 {
+            role_id: self.role_id.to_string(),
+            member_id: self.member_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+            executed_by: self.executed_by.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RevokeRoleV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RevokeRoleV2 {
+            role_id: proto.role_id,
+            member_id: proto.member_id,
+            grantor_id: proto.grantor_id,
+            executed_by: proto.executed_by,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::UpdatePrivilegeV1> for UpdatePrivilegeV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdatePrivilegeV1 {
+        proto::audit_log_event_v1::UpdatePrivilegeV1 {
+            object_id: self.object_id.to_string(),
+            grantee_id: self.grantee_id.to_string(),
+            grantor_id: self.grantor_id.to_string(),
+            privileges: self.privileges.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdatePrivilegeV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdatePrivilegeV1 {
+            object_id: proto.object_id,
+            grantee_id: proto.grantee_id,
+            grantor_id: proto.grantor_id,
+            privileges: proto.privileges,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterDefaultPrivilegeV1> for AlterDefaultPrivilegeV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterDefaultPrivilegeV1 {
+        proto::audit_log_event_v1::AlterDefaultPrivilegeV1 {
+            role_id: self.role_id.to_string(),
+            database_id: self.database_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            schema_id: self.schema_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            grantee_id: self.grantee_id.to_string(),
+            privileges: self.privileges.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterDefaultPrivilegeV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterDefaultPrivilegeV1 {
+            role_id: proto.role_id,
+            database_id: proto.database_id.map(|id| id.inner),
+            schema_id: proto.schema_id.map(|id| id.inner),
+            grantee_id: proto.grantee_id,
+            privileges: proto.privileges,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::UpdateOwnerV1> for UpdateOwnerV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdateOwnerV1 {
+        proto::audit_log_event_v1::UpdateOwnerV1 {
+            object_id: self.object_id.to_string(),
+            old_owner_id: self.old_owner_id.to_string(),
+            new_owner_id: self.new_owner_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdateOwnerV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdateOwnerV1 {
+            object_id: proto.object_id,
+            old_owner_id: proto.old_owner_id,
+            new_owner_id: proto.new_owner_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::SchemaV1> for SchemaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchemaV1 {
+        proto::audit_log_event_v1::SchemaV1 {
+            id: self.id.to_string(),
+            name: self.name.to_string(),
+            database_name: self.database_name.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SchemaV1) -> Result<Self, TryFromProtoError> {
+        Ok(SchemaV1 {
+            id: proto.id,
+            name: proto.name,
+            database_name: proto.database_name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::SchemaV2> for SchemaV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchemaV2 {
+        proto::audit_log_event_v1::SchemaV2 {
+            id: self.id.to_string(),
+            name: self.name.to_string(),
+            database_name: self.database_name.as_ref().map(|d| proto::StringWrapper {
+                inner: d.to_string(),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SchemaV2) -> Result<Self, TryFromProtoError> {
+        Ok(SchemaV2 {
+            id: proto.id,
+            name: proto.name,
+            database_name: proto.database_name.map(|d| d.inner),
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RenameSchemaV1> for RenameSchemaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameSchemaV1 {
+        proto::audit_log_event_v1::RenameSchemaV1 {
+            id: self.id.to_string(),
+            database_name: self.database_name.clone(),
+            old_name: self.old_name.clone(),
+            new_name: self.new_name.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameSchemaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameSchemaV1 {
+            id: proto.id,
+            database_name: proto.database_name,
+            old_name: proto.old_name,
+            new_name: proto.new_name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::UpdateItemV1> for UpdateItemV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::UpdateItemV1 {
+        proto::audit_log_event_v1::UpdateItemV1 {
+            id: self.id.to_string(),
+            name: self.name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::UpdateItemV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(UpdateItemV1 {
+            id: proto.id,
+            name: proto.name.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterRetainHistoryV1> for AlterRetainHistoryV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterRetainHistoryV1 {
+        proto::audit_log_event_v1::AlterRetainHistoryV1 {
+            id: self.id.to_string(),
+            old_history: self.old_history.clone(),
+            new_history: self.new_history.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterRetainHistoryV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterRetainHistoryV1 {
+            id: proto.id,
+            old_history: proto.old_history,
+            new_history: proto.new_history,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterAddColumnV1> for AlterAddColumnV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterAddColumnV1 {
+        proto::audit_log_event_v1::AlterAddColumnV1 {
+            id: self.id.to_string(),
+            column: self.column.clone(),
+            column_type: self.column_type.clone(),
+            nullable: self.nullable,
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterAddColumnV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterAddColumnV1 {
+            id: proto.id,
+            column: proto.column,
+            column_type: proto.column_type,
+            nullable: proto.nullable,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::AlterSourceTimestampIntervalV1>
+    for AlterSourceTimestampIntervalV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::AlterSourceTimestampIntervalV1 {
+        proto::audit_log_event_v1::AlterSourceTimestampIntervalV1 {
+            id: self.id.to_string(),
+            old_interval: self.old_interval.clone(),
+            new_interval: self.new_interval.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::AlterSourceTimestampIntervalV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterSourceTimestampIntervalV1 {
+            id: proto.id,
+            old_interval: proto.old_interval,
+            new_interval: proto.new_interval,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::ToNewIdV1> for ToNewIdV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::ToNewIdV1 {
+        proto::audit_log_event_v1::ToNewIdV1 {
+            id: self.id.to_string(),
+            new_id: self.new_id.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::ToNewIdV1) -> Result<Self, TryFromProtoError> {
+        Ok(ToNewIdV1 {
+            id: proto.id,
+            new_id: proto.new_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::FromPreviousIdV1> for FromPreviousIdV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::FromPreviousIdV1 {
+        proto::audit_log_event_v1::FromPreviousIdV1 {
+            id: self.id.to_string(),
+            previous_id: self.previous_id.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::FromPreviousIdV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(FromPreviousIdV1 {
+            id: proto.id,
+            previous_id: proto.previous_id,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::SetV1> for SetV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SetV1 {
+        proto::audit_log_event_v1::SetV1 {
+            name: self.name.clone(),
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SetV1) -> Result<Self, TryFromProtoError> {
+        Ok(SetV1 {
+            name: proto.name,
+            value: proto.value,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RotateKeysV1> for RotateKeysV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RotateKeysV1 {
+        proto::audit_log_event_v1::RotateKeysV1 {
+            id: self.id.clone(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RotateKeysV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RotateKeysV1 {
+            id: proto.id,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateRoleV1> for CreateRoleV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateRoleV1 {
+        proto::audit_log_event_v1::CreateRoleV1 {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            auto_provision_source: self.auto_provision_source.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateRoleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateRoleV1 {
+            id: proto.id,
+            name: proto.name,
+            auto_provision_source: proto.auto_provision_source,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
+    fn into_proto(&self) -> proto::audit_log_event_v1::Details {
+        use proto::audit_log_event_v1::Details::*;
+
+        match self {
+            EventDetails::CreateClusterReplicaV1(details) => {
+                CreateClusterReplicaV1(details.into_proto())
+            }
+            EventDetails::CreateClusterReplicaV2(details) => {
+                CreateClusterReplicaV2(details.into_proto())
+            }
+            EventDetails::CreateClusterReplicaV3(details) => {
+                CreateClusterReplicaV3(details.into_proto())
+            }
+            EventDetails::CreateClusterReplicaV4(details) => {
+                CreateClusterReplicaV4(details.into_proto())
+            }
+            EventDetails::DropClusterReplicaV1(details) => {
+                DropClusterReplicaV1(details.into_proto())
+            }
+            EventDetails::DropClusterReplicaV2(details) => {
+                DropClusterReplicaV2(details.into_proto())
+            }
+            EventDetails::DropClusterReplicaV3(details) => {
+                DropClusterReplicaV3(details.into_proto())
+            }
+            EventDetails::CreateSourceSinkV1(details) => CreateSourceSinkV1(details.into_proto()),
+            EventDetails::CreateSourceSinkV2(details) => CreateSourceSinkV2(details.into_proto()),
+            EventDetails::CreateSourceSinkV3(details) => CreateSourceSinkV3(details.into_proto()),
+            EventDetails::CreateSourceSinkV4(details) => CreateSourceSinkV4(details.into_proto()),
+            EventDetails::CreateIndexV1(details) => CreateIndexV1(details.into_proto()),
+            EventDetails::CreateMaterializedViewV1(details) => {
+                CreateMaterializedViewV1(details.into_proto())
+            }
+            EventDetails::AlterApplyReplacementV1(details) => {
+                AlterApplyReplacementV1(details.into_proto())
+            }
+            EventDetails::AlterSourceSinkV1(details) => AlterSourceSinkV1(details.into_proto()),
+            EventDetails::AlterSetClusterV1(details) => AlterSetClusterV1(details.into_proto()),
+            EventDetails::GrantRoleV1(details) => GrantRoleV1(details.into_proto()),
+            EventDetails::GrantRoleV2(details) => GrantRoleV2(details.into_proto()),
+            EventDetails::RevokeRoleV1(details) => RevokeRoleV1(details.into_proto()),
+            EventDetails::RevokeRoleV2(details) => RevokeRoleV2(details.into_proto()),
+            EventDetails::UpdatePrivilegeV1(details) => UpdatePrivilegeV1(details.into_proto()),
+            EventDetails::AlterDefaultPrivilegeV1(details) => {
+                AlterDefaultPrivilegeV1(details.into_proto())
+            }
+            EventDetails::UpdateOwnerV1(details) => UpdateOwnerV1(details.into_proto()),
+            EventDetails::IdFullNameV1(details) => IdFullNameV1(details.into_proto()),
+            EventDetails::RenameClusterV1(details) => RenameClusterV1(details.into_proto()),
+            EventDetails::RenameClusterReplicaV1(details) => {
+                RenameClusterReplicaV1(details.into_proto())
+            }
+            EventDetails::RenameItemV1(details) => RenameItemV1(details.into_proto()),
+            EventDetails::IdNameV1(details) => IdNameV1(details.into_proto()),
+            EventDetails::SchemaV1(details) => SchemaV1(details.into_proto()),
+            EventDetails::SchemaV2(details) => SchemaV2(details.into_proto()),
+            EventDetails::RenameSchemaV1(details) => RenameSchemaV1(details.into_proto()),
+            EventDetails::UpdateItemV1(details) => UpdateItemV1(details.into_proto()),
+            EventDetails::AlterRetainHistoryV1(details) => {
+                AlterRetainHistoryV1(details.into_proto())
+            }
+            EventDetails::AlterAddColumnV1(details) => AlterAddColumnV1(details.into_proto()),
+            EventDetails::AlterSourceTimestampIntervalV1(details) => {
+                AlterSourceTimestampIntervalV1(details.into_proto())
+            }
+            EventDetails::AlterClusterReconfigurationV1(details) => {
+                AlterClusterReconfigurationV1(details.into_proto())
+            }
+            EventDetails::ClusterHydrationBurstV1(details) => {
+                ClusterHydrationBurstV1(details.into_proto())
+            }
+            EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
+            EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
+            EventDetails::SetV1(details) => SetV1(details.into_proto()),
+            EventDetails::ResetAllV1 => ResetAllV1(Empty {}),
+            EventDetails::RotateKeysV1(details) => RotateKeysV1(details.into_proto()),
+            EventDetails::CreateRoleV1(details) => CreateRoleV1(details.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::Details) -> Result<Self, TryFromProtoError> {
+        use proto::audit_log_event_v1::Details::*;
+
+        match proto {
+            CreateClusterReplicaV1(details) => {
+                Ok(EventDetails::CreateClusterReplicaV1(details.into_rust()?))
+            }
+            CreateClusterReplicaV2(details) => {
+                Ok(EventDetails::CreateClusterReplicaV2(details.into_rust()?))
+            }
+            CreateClusterReplicaV3(details) => {
+                Ok(EventDetails::CreateClusterReplicaV3(details.into_rust()?))
+            }
+            CreateClusterReplicaV4(details) => {
+                Ok(EventDetails::CreateClusterReplicaV4(details.into_rust()?))
+            }
+            DropClusterReplicaV1(details) => {
+                Ok(EventDetails::DropClusterReplicaV1(details.into_rust()?))
+            }
+            DropClusterReplicaV2(details) => {
+                Ok(EventDetails::DropClusterReplicaV2(details.into_rust()?))
+            }
+            DropClusterReplicaV3(details) => {
+                Ok(EventDetails::DropClusterReplicaV3(details.into_rust()?))
+            }
+            CreateSourceSinkV1(details) => {
+                Ok(EventDetails::CreateSourceSinkV1(details.into_rust()?))
+            }
+            CreateSourceSinkV2(details) => {
+                Ok(EventDetails::CreateSourceSinkV2(details.into_rust()?))
+            }
+            CreateSourceSinkV3(details) => {
+                Ok(EventDetails::CreateSourceSinkV3(details.into_rust()?))
+            }
+            CreateSourceSinkV4(details) => {
+                Ok(EventDetails::CreateSourceSinkV4(details.into_rust()?))
+            }
+            CreateIndexV1(details) => Ok(EventDetails::CreateIndexV1(details.into_rust()?)),
+            CreateMaterializedViewV1(details) => {
+                Ok(EventDetails::CreateMaterializedViewV1(details.into_rust()?))
+            }
+            AlterApplyReplacementV1(details) => {
+                Ok(EventDetails::AlterApplyReplacementV1(details.into_rust()?))
+            }
+            AlterSourceSinkV1(details) => Ok(EventDetails::AlterSourceSinkV1(details.into_rust()?)),
+            AlterSetClusterV1(details) => Ok(EventDetails::AlterSetClusterV1(details.into_rust()?)),
+            GrantRoleV1(details) => Ok(EventDetails::GrantRoleV1(details.into_rust()?)),
+            GrantRoleV2(details) => Ok(EventDetails::GrantRoleV2(details.into_rust()?)),
+            RevokeRoleV1(details) => Ok(EventDetails::RevokeRoleV1(details.into_rust()?)),
+            RevokeRoleV2(details) => Ok(EventDetails::RevokeRoleV2(details.into_rust()?)),
+            UpdatePrivilegeV1(details) => Ok(EventDetails::UpdatePrivilegeV1(details.into_rust()?)),
+            AlterDefaultPrivilegeV1(details) => {
+                Ok(EventDetails::AlterDefaultPrivilegeV1(details.into_rust()?))
+            }
+            UpdateOwnerV1(details) => Ok(EventDetails::UpdateOwnerV1(details.into_rust()?)),
+            IdFullNameV1(details) => Ok(EventDetails::IdFullNameV1(details.into_rust()?)),
+            RenameClusterV1(details) => Ok(EventDetails::RenameClusterV1(details.into_rust()?)),
+            RenameClusterReplicaV1(details) => {
+                Ok(EventDetails::RenameClusterReplicaV1(details.into_rust()?))
+            }
+            RenameItemV1(details) => Ok(EventDetails::RenameItemV1(details.into_rust()?)),
+            IdNameV1(details) => Ok(EventDetails::IdNameV1(details.into_rust()?)),
+            SchemaV1(details) => Ok(EventDetails::SchemaV1(details.into_rust()?)),
+            SchemaV2(details) => Ok(EventDetails::SchemaV2(details.into_rust()?)),
+            RenameSchemaV1(details) => Ok(EventDetails::RenameSchemaV1(details.into_rust()?)),
+            UpdateItemV1(details) => Ok(EventDetails::UpdateItemV1(details.into_rust()?)),
+            AlterRetainHistoryV1(details) => {
+                Ok(EventDetails::AlterRetainHistoryV1(details.into_rust()?))
+            }
+            ToNewIdV1(details) => Ok(EventDetails::ToNewIdV1(details.into_rust()?)),
+            FromPreviousIdV1(details) => Ok(EventDetails::FromPreviousIdV1(details.into_rust()?)),
+            SetV1(details) => Ok(EventDetails::SetV1(details.into_rust()?)),
+            ResetAllV1(Empty {}) => Ok(EventDetails::ResetAllV1),
+            RotateKeysV1(details) => Ok(EventDetails::RotateKeysV1(details.into_rust()?)),
+            CreateRoleV1(details) => Ok(EventDetails::CreateRoleV1(details.into_rust()?)),
+            AlterAddColumnV1(details) => Ok(EventDetails::AlterAddColumnV1(details.into_rust()?)),
+            AlterSourceTimestampIntervalV1(details) => Ok(
+                EventDetails::AlterSourceTimestampIntervalV1(details.into_rust()?),
+            ),
+            AlterClusterReconfigurationV1(details) => Ok(
+                EventDetails::AlterClusterReconfigurationV1(details.into_rust()?),
+            ),
+            ClusterHydrationBurstV1(details) => {
+                Ok(EventDetails::ClusterHydrationBurstV1(details.into_rust()?))
+            }
+        }
+    }
+}
+
+impl RustType<proto::AuditLogEventV1> for EventV1 {
+    fn into_proto(&self) -> proto::AuditLogEventV1 {
+        proto::AuditLogEventV1 {
+            id: self.id,
+            event_type: self.event_type.into_proto(),
+            object_type: self.object_type.into_proto(),
+            user: self.user.as_ref().map(|u| proto::StringWrapper {
+                inner: u.to_string(),
+            }),
+            occurred_at: proto::EpochMillis {
+                millis: self.occurred_at,
+            },
+            details: self.details.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::AuditLogEventV1) -> Result<Self, TryFromProtoError> {
+        Ok(EventV1 {
+            id: proto.id,
+            event_type: proto.event_type.into_rust()?,
+            object_type: proto.object_type.into_rust()?,
+            details: proto.details.into_rust()?,
+            user: proto.user.map(|u| u.inner),
+            occurred_at: proto.occurred_at.into_rust()?,
+        })
+    }
+}
