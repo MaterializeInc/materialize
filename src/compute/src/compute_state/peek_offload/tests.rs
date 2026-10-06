@@ -13,14 +13,14 @@ use std::num::NonZeroUsize;
 
 use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
 use mz_dyncfg::ConfigUpdates;
-use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
+use mz_expr::{MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::num::NonNeg;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
-use mz_repr::{IntoRowIterator, Row, RowIterator, RowRef};
+use mz_repr::{Datum, IntoRowIterator, ReprScalarType, Row, RowIterator, RowRef};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::index_peek_tests::{
@@ -165,9 +165,38 @@ fn counted_blob_config(yield_granularity: usize) -> OffloadConfig {
     })
 }
 
-/// A run limit above the parts any walk here writes, which is at most one per key of the
-/// longest trace these tests hold.
-const NO_RUN_MERGING: usize = 8_000;
+/// The highest run limit a batch builder honors.
+///
+/// Persist clamps the limit to 1024 in `BatchParts::new_compacting`, so an upload of more parts
+/// than this merges whatever the limit says. A test counting what a walk over [`LONG_WALK_KEYS`]
+/// positions wrote therefore also bounds the rows it uploads, with [`long_walk_peek`].
+const NO_RUN_MERGING: usize = 1_024;
+
+/// How many of the keys of a [`long_walk_peek`] reach its answer.
+///
+/// [`CountedBlob::new`] writes a part per row, and how many rows a walk uploads before it observes
+/// its cancellation is wall clock. Bounding the answer is what keeps the parts below
+/// [`NO_RUN_MERGING`] however late that observation lands.
+const LONG_WALK_ANSWER_KEYS: u64 = 512;
+
+/// A peek over the index `wide_ok_rows(LONG_WALK_KEYS)` builds whose filter keeps the keys below
+/// [`LONG_WALK_ANSWER_KEYS`].
+///
+/// The walk still visits every position, so it takes as long as one without the filter.
+fn long_walk_peek() -> Peek {
+    let mut peek = index_peek(trivial_finishing(), None);
+    let predicate = MirScalarExpr::column(0).call_binary(
+        MirScalarExpr::literal_ok(Datum::UInt64(LONG_WALK_ANSWER_KEYS), ReprScalarType::UInt64),
+        mz_expr::func::Lt,
+    );
+    peek.map_filter_project = MapFilterProject::new(1)
+        .filter([predicate])
+        .into_plan()
+        .expect("valid plan")
+        .into_nontemporal()
+        .expect("non-temporal plan");
+    peek
+}
 
 /// A finishing that orders the peek's one column descending, which is the reverse of the order
 /// the trace holds its keys in.
@@ -707,11 +736,12 @@ fn the_permit_fraction_scales_with_the_worker_count() {
 #[mz_ore::test(tokio::test)]
 async fn an_aborted_walk_deletes_the_parts_its_upload_wrote() {
     let keys = wide_ok_rows(LONG_WALK_KEYS);
-    let peek = index_peek(trivial_finishing(), None);
+    let peek = long_walk_peek();
     let mut bundle = trace_bundle(&keys, cancelling_errors(0));
-    // Crossed by the third row, so the walk opens an upload a few positions in and keeps
-    // feeding it for the rest of a trace it cannot reach the end of before it is aborted.
-    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+    // Crossed by the third answered row, so the walk opens an upload a few rows in and is still
+    // under way over a trace it cannot reach the end of when it is aborted.
+    let answered = wide_ok_rows(LONG_WALK_ANSWER_KEYS);
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&answered)));
 
     let metrics = worker_metrics();
     let permits = Arc::new(PeekPermits::new(1));
@@ -760,9 +790,10 @@ async fn an_aborted_walk_deletes_the_parts_its_upload_wrote() {
 #[mz_ore::test(tokio::test)]
 async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
     let keys = wide_ok_rows(LONG_WALK_KEYS);
-    let peek = index_peek(trivial_finishing(), None);
+    let peek = long_walk_peek();
     let mut bundle = trace_bundle(&keys, cancelling_errors(0));
-    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+    let answered = wide_ok_rows(LONG_WALK_ANSWER_KEYS);
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&answered)));
 
     let metrics = worker_metrics();
     let walk_metrics = PeekWalkMetrics::new(&metrics);
