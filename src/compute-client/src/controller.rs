@@ -1039,7 +1039,7 @@ impl ComputeController {
         map_filter_project: mz_expr::SafeMfpPlan,
         read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
-        peek_response_tx: oneshot::Sender<PeekResponse>,
+        peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 

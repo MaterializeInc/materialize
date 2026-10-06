@@ -1061,7 +1061,7 @@ impl crate::coord::Coordinator {
     /// TODO(peek-seq): Move this out of `coord` once we delete the old peek sequencing.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn create_peek_response_stream(
-        rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
+        rows_rx: tokio::sync::oneshot::Receiver<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
         finishing: RowSetFinishing,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
@@ -1074,7 +1074,10 @@ impl crate::coord::Coordinator {
             let result = rows_rx.await;
 
             let rows = match result {
-                Ok(rows) => rows,
+                Ok((rows, resume)) => {
+                    resume.finish();
+                    rows
+                }
                 Err(e) => {
                     yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
                     return;

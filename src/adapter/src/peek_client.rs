@@ -126,12 +126,11 @@ impl CoordinatorClient {
     pub(crate) fn try_send(&self, command: Command) -> bool {
         match self {
             CoordinatorClient::Session(client) => client.try_send(command),
-            CoordinatorClient::Background { tx, .. } => tx
-                .send(Message::Command(
-                    mz_ore::tracing::OpenTelemetryContext::obtain(),
-                    command,
-                ))
-                .is_ok(),
+            CoordinatorClient::Background { tx, metrics } => {
+                let otel_ctx = mz_ore::tracing::OpenTelemetryContext::obtain();
+                let queued = metrics.qps.command_queue(&command);
+                tx.send(Message::Command(otel_ctx, command, queued)).is_ok()
+            }
         }
     }
 
@@ -276,8 +275,13 @@ impl PeekClient {
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
-        self.coordinator_client.send(f(tx));
-        Ok(rx.await?)
+        let phase = &self.coordinator_client.metrics().qps.coordinator_roundtrip;
+        phase
+            .time(async {
+                self.coordinator_client.send(f(tx));
+                Ok(rx.await?)
+            })
+            .await
     }
 
     /// The client for sending commands to the coordinator.
@@ -380,6 +384,7 @@ impl PeekClient {
         watch_set: Option<WatchSetCreation>,
         logging: &mut ExecutionLogging,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
+        let phases = Arc::clone(&self.coordinator_client.metrics().qps);
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
             // For constant queries with statement logging, immediately log that
@@ -490,8 +495,9 @@ impl PeekClient {
         let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
         let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
 
-        let client = self
-            .ensure_compute_instance_client(compute_instance)
+        let client = phases
+            .frontend_compute_client
+            .time(self.ensure_compute_instance_client(compute_instance))
             .await
             .map_err(|error| {
                 AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
@@ -504,16 +510,20 @@ impl PeekClient {
         //
         // Warning: If we fail to actually issue the peek after this point, then we need to
         // unregister it to avoid an orphaned registration.
-        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
-            uuid,
-            conn_id: conn_id.clone(),
-            cluster_id: compute_instance,
-            depends_on,
-            is_fast_path: true,
-            watch_set,
-            tx,
-        })
-        .await??;
+        let (registered, resume) = phases
+            .frontend_register
+            .time(self.call_coordinator(|tx| Command::RegisterFrontendPeek {
+                uuid,
+                conn_id: conn_id.clone(),
+                cluster_id: compute_instance,
+                depends_on,
+                is_fast_path: true,
+                watch_set,
+                tx,
+            }))
+            .await?;
+        resume.finish();
+        registered?;
 
         // The peek is registered: the coordinator's `pending_peeks` entry now
         // owns end-of-execution logging. It logs the end on peek completion,
@@ -529,8 +539,9 @@ impl PeekClient {
         fail::fail_point!("peek_after_register_before_issue");
 
         let finishing_for_instance = finishing.clone();
-        let peek_result = client
-            .peek(
+        let peek_result = phases
+            .frontend_peek_issue
+            .time(client.peek(
                 peek_target,
                 literal_constraints,
                 uuid,
@@ -541,7 +552,7 @@ impl PeekClient {
                 target_read_hold,
                 target_replica,
                 rows_tx,
-            )
+            ))
             .await;
 
         if let Err(err) = peek_result {
