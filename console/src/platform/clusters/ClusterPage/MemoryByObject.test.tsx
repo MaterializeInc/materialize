@@ -10,18 +10,31 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 
+import { DatabaseObject } from "~/api/materialize/objects";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 import {
+  buildColumn,
   buildColumns,
   buildSqlQueryHandlerV2,
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
+import { getStore } from "~/jotai";
 import { clusterQueryKeys } from "~/platform/clusters/queries";
-import { renderComponent } from "~/test/utils";
+import { allObjectsCollection } from "~/store/allObjectsCollection";
+import { syncEngineCacheScopeAtom } from "~/store/syncEngineCache";
+import { mockSubscribeSocket } from "~/test/mockSubscribeSocket";
+import {
+  healthyEnvironment,
+  renderComponent,
+  setFakeEnvironment,
+} from "~/test/utils";
+import { assert } from "~/util";
+import { parseDbVersion } from "~/version/api";
 
 import { MemoryByObject } from "./MemoryByObject";
 import { segmentWidths } from "./memoryByObjectModel";
+import { sizesByReplica } from "./useLiveLargestObjects";
 
 const flags = vi.hoisted(() => ({ values: {} as Record<string, boolean> }));
 
@@ -29,11 +42,12 @@ vi.mock("~/hooks/useFlags", () => ({ useFlags: () => flags.values }));
 
 const HEAP_LIMIT = 4069523456;
 
-const largestReplicaHandler = (rows: Array<Record<string, string>>) =>
+const largestReplicaHandler = (rows: Array<Record<string, string | null>>) =>
   buildSqlQueryHandlerV2({
     queryKey: clusterQueryKeys.largestClusterReplica({ clusterId: "u1" }),
     results: mapKyselyToTabular({
       columns: buildColumns([
+        "id",
         "name",
         "size",
         { type_oid: MzDataType.numeric, name: "heapLimit" },
@@ -185,6 +199,131 @@ describe("MemoryByObject", () => {
     expect(
       await screen.findByText(/from replica r1, which might mean it's busy/),
     ).toBeVisible();
+  });
+});
+
+// Sizes stream from mz_object_arrangement_sizes on 26.35 and later.
+const LIVE_SIZES_ENVIRONMENT = {
+  ...healthyEnvironment,
+  status: {
+    ...healthyEnvironment.status,
+    version: parseDbVersion("v26.45.0 (0000000000)"),
+  },
+};
+const GIB = 2 ** 30;
+
+const catalogObject = (id: string, name: string): DatabaseObject => ({
+  databaseName: "materialize",
+  databaseId: "u1",
+  name,
+  schemaName: "public",
+  schemaId: "u2",
+  id,
+  objectType: "materialized-view",
+  sourceType: null,
+  isWebhookTable: null,
+  clusterId: "u1",
+  clusterName: "quickstart",
+});
+
+// Query keys embed the environment version, so set the environment before
+// building the handlers that match on them. Each test streams a replica of its
+// own: the sizes collections outlive a test.
+const renderLiveMemoryByObject = async ({
+  replicaId,
+  heapLimit = String(HEAP_LIMIT),
+}: {
+  replicaId: string;
+  heapLimit?: string | null;
+}) => {
+  await setFakeEnvironment(
+    getStore().set,
+    "aws/us-east-1",
+    LIVE_SIZES_ENVIRONMENT,
+  );
+  server.use(
+    largestReplicaHandler([
+      { id: replicaId, name: "r1", size: "25cc", heapLimit },
+    ]),
+    mockSubscribeSocket((sql, params) =>
+      sql.includes("mz_object_arrangement_sizes") && params.includes(replicaId)
+        ? {
+            columns: [
+              buildColumn({ name: "objectId" }),
+              buildColumn({ name: "size", type_oid: MzDataType.float8 }),
+            ],
+            rows: [
+              ["u188", String(2 * GIB)],
+              ["u404", String(GIB)],
+            ],
+          }
+        : undefined,
+    ),
+  );
+  return renderComponent(
+    <MemoryByObject clusterId="u1" clusterName="quickstart" />,
+    {
+      initializeState: ({ set }) =>
+        setFakeEnvironment(set, "aws/us-east-1", LIVE_SIZES_ENVIRONMENT),
+    },
+  );
+};
+
+describe("MemoryByObject with streamed sizes", () => {
+  beforeEach(() => {
+    flags.values = {};
+    allObjectsCollection.applySnapshot({
+      data: [catalogObject("u188", "customer_view")],
+      snapshotComplete: true,
+      error: undefined,
+    });
+  });
+
+  it("names streamed objects from the catalog", async () => {
+    await renderLiveMemoryByObject({ replicaId: "u5" });
+
+    const objects = await screen.findByRole("list", { name: "Objects" });
+    expect(
+      within(objects).getByRole("link", { name: "customer_view" }),
+    ).toBeVisible();
+    // Not in the catalog, so a dropped object's dataflow.
+    expect(within(objects).getByText("u404")).toBeVisible();
+    expect(
+      within(objects).queryByRole("link", { name: "u404" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lists sizes without a bar when the replica reports no heap limit", async () => {
+    await renderLiveMemoryByObject({ replicaId: "u6", heapLimit: null });
+
+    const objects = await screen.findByRole("list", { name: "Objects" });
+    expect(within(objects).getByText("customer_view")).toBeVisible();
+    expect(within(objects).getByText("2.00 GB")).toBeVisible();
+    expect(screen.getByText("Size on r1")).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: "Memory by object" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Infinity|NaN/)).not.toBeInTheDocument();
+  });
+
+  it("waits for the catalog before naming objects", async () => {
+    allObjectsCollection.reset();
+    await renderLiveMemoryByObject({ replicaId: "u7" });
+
+    const scope = await getStore().get(syncEngineCacheScopeAtom);
+    assert(scope);
+    const sizes = sizesByReplica.get(scope, "u7");
+    await waitFor(() =>
+      expect(getStore().get(sizes.statusAtom).snapshotComplete).toBe(true),
+    );
+    expect(screen.getByTestId("loading-spinner")).toBeVisible();
+    expect(screen.queryByText("u188")).not.toBeInTheDocument();
+    allObjectsCollection.applySnapshot({
+      data: [catalogObject("u188", "customer_view")],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    expect(await screen.findByText("customer_view")).toBeVisible();
   });
 });
 

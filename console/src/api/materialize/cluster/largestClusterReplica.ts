@@ -38,6 +38,7 @@ export function buildLargestClusterReplicaQuery(clusterId: string) {
       )
       .leftJoin("mz_cluster_replica_sizes as crs", "crs.size", "cr.size")
       .select([
+        "cr.id",
         "cr.name",
         "cr.size",
         sql<string | null>`${replicaHeapLimit}::text`.as("heapLimit"),
