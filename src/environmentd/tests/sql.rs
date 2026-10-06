@@ -1700,16 +1700,28 @@ binding constraints:
 lower:
   (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
-    let row = client
-        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
-        .unwrap();
-    let explain: String = row.get(0);
-    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     // The storage inputs constraint appears non-deterministically depending on
     // whether the storage frontier has advanced before the query runs.
     let storage_inputs_re = Regex::new(r"  \(Storage inputs: \[.*\]\): \[<TIMESTAMP>\]\n").unwrap();
-    let explain = storage_inputs_re.replace_all(&explain, "");
-    assert_eq!(explain, expect, "{explain}\n\n{expect}");
+    // Catalog publications can advance the oracle before the table keepalive
+    // completes. Preserve the ready output assertion without assuming those
+    // independent writes complete together.
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let row = client
+                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
+                .unwrap();
+            let explain: String = row.get(0);
+            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+            let explain = storage_inputs_re.replace_all(&explain, "");
+            if explain == expect {
+                Ok(())
+            } else {
+                Err(format!("{explain}\n\nexpected:\n{expect}"))
+            }
+        })
+        .unwrap();
 }
 
 // Test `EXPLAIN TIMESTAMP AS JSON`
