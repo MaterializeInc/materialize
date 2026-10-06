@@ -50,6 +50,8 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::placement::Placement;
+use crate::process_globals::ProcessGlobals;
 use crate::sharing::ArrangementSharingRegistry;
 
 /// Caller-provided configuration for compute.
@@ -101,21 +103,52 @@ impl ComputeRuntimeRole {
         }
     }
 
-    /// Whether this role runs the non-idempotent, process-global initializers.
+    /// The name of this runtime's tracing span.
     ///
-    /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
-    /// inherits the globals maintenance installs, so re-running them would either double-apply a
-    /// non-idempotent effect or race maintenance.
-    pub fn owns_process_globals(self) -> bool {
-        matches!(
-            self,
-            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
-        )
+    /// `Solo` and `Maintenance` keep compute's bare name so single-runtime logs are unchanged.
+    fn span_name(self) -> &'static str {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => Config::NAME,
+            ComputeRuntimeRole::Interactive => "compute-interactive",
+        }
+    }
+
+    /// The name prefix of this runtime's worker threads.
+    fn thread_name_prefix(self) -> &'static str {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => Config::NAME,
+            ComputeRuntimeRole::Interactive => "interactive",
+        }
+    }
+
+    /// Whether this role applies the process-global settings or inherits them.
+    ///
+    /// An interactive runtime shares the process with maintenance and inherits the globals
+    /// maintenance applies.
+    pub(crate) fn process_globals(self) -> ProcessGlobals {
+        match self {
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => ProcessGlobals::Apply,
+            ComputeRuntimeRole::Interactive => ProcessGlobals::Inherit,
+        }
+    }
+
+    /// The dataflow classes this role renders.
+    pub(crate) fn placement(self) -> Placement {
+        match self {
+            ComputeRuntimeRole::Solo => Placement::All,
+            ComputeRuntimeRole::Maintenance => Placement::Maintained,
+            ComputeRuntimeRole::Interactive => Placement::OneShotRead,
+        }
     }
 
     /// Whether this role publishes its indexes for the process's other runtime to read.
     pub(crate) fn publishes_indexes(self) -> bool {
         matches!(self, ComputeRuntimeRole::Maintenance)
+    }
+
+    /// Whether this role reads the indexes the process's other runtime publishes.
+    pub(crate) fn reads_peer_indexes(self) -> bool {
+        matches!(self, ComputeRuntimeRole::Interactive)
     }
 }
 
@@ -419,6 +452,17 @@ impl ResponseSender {
         self.nonce = Some(nonce);
     }
 
+    /// Builds a `ResponseSender` with the nonce pre-initialized, for tests that drive an
+    /// `ActiveComputeState` outside the full `serve` protocol.
+    #[cfg(test)]
+    pub(crate) fn for_test(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>) -> Self {
+        Self {
+            inner,
+            worker_id: 0,
+            nonce: Some(Uuid::nil()),
+        }
+    }
+
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let nonce = self.nonce.expect("nonce must be initialized");
@@ -533,6 +577,14 @@ impl ClusterSpec for Config {
     type Response = ComputeResponse;
 
     const NAME: &str = "compute";
+
+    fn cluster_name(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(self.role.span_name())
+    }
+
+    fn thread_name_prefix(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(self.role.thread_name_prefix())
+    }
 
     fn run_worker(
         &self,
