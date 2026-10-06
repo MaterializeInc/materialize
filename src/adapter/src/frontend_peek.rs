@@ -262,10 +262,15 @@ impl PeekClient {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) -> Result<Vec<Row>, AdapterError> {
+        let execute_started = std::time::Instant::now();
         // Not `catalog_snapshot`, which expects the coordinator to outlive its
         // caller. A background client may race the coordinator's shutdown.
-        let CatalogSnapshot { catalog } = self
-            .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+        let CatalogSnapshot { catalog, .. } = self
+            .call_coordinator(|tx| Command::CatalogSnapshot {
+                tx,
+                include_durable_upper: false,
+                through: None,
+            })
             .await?;
         let (cluster_name, replica_name) = {
             let cluster = catalog
@@ -302,9 +307,12 @@ impl PeekClient {
             .try_frontend_peek_inner(
                 &mut session,
                 catalog,
+                None,
                 Some(Arc::new(stmt)),
-                Params::empty(),
+                &Params::empty(),
                 &mut logging,
+                futures::future::pending::<()>(),
+                execute_started,
             )
             .await?;
 

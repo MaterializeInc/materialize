@@ -1128,17 +1128,9 @@ impl Coordinator {
         let status_changed = event.status != old_process_status.status;
         let restart_count_changed = event.restart_count != old_process_status.restart_count;
 
-        // We mirror the restart count in memory even when only it changes (and the
-        // status stays the same), so the 0dt caught-up check can detect replica
-        // restarts it would otherwise miss by only sampling the status. The status
-        // history and the status-changed notice are keyed on the status itself, so
-        // we only touch those when the status actually changes.
-        //
-        // NOTE: The 0dt stability gate detects flaps by watching a process's
-        // status-change `time` advance between checks. That only works because we
-        // freeze `time` on no-op events, i.e. we return early here instead of
-        // rewriting the record when neither the status nor the restart count
-        // changed.
+        // Restart counts must remain current even when status does not change.
+        // Status history and notices track actual status transitions, and no-op
+        // events must not advance the mirrored status-change time.
         if !status_changed && !restart_count_changed {
             return;
         }

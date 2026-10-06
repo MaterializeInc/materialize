@@ -3438,7 +3438,7 @@ def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
 
 
 def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
-    """Verify a DDL-triggered restart of mz_new keeps its stability progress.
+    """Verify an environmentd-only restart preserves replica hydration age.
 
     mz_new's replicas outlive the restart, and the stability gate reads their
     hydration times from the replicas, so the period keeps counting from the
@@ -3446,18 +3446,13 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
     earlier than the restart plus a full period.
     """
     period = 120
-    ddl_after = 60
+    restart_after = 60
 
     c.down(destroy_volumes=True)
     c.up("mz_old")
 
-    # Poll for DDL every second, so the restart comes right after the DDL and
-    # not at the end of the period.
     c.sql(
-        f"""
-        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s';
-        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
-        """,
+        f"ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s'",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -3474,19 +3469,22 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
     )
 
     c.up("mz_new")
-    time.sleep(ddl_after)
+    time.sleep(restart_after)
     environmentd = _pids(c, "mz_new", "environmentd")
     replicas = _pids(c, "mz_new", "clusterd")
+    assert environmentd, "mz_new has no environmentd process before restart"
+    assert replicas, "mz_new has no clusterd processes before restart"
 
-    # A table has no dataflow, so no replica gets a new export to hydrate.
-    c.sql("CREATE TABLE unrelated (a int)", service="mz_old")
+    # mz_new's on-failure entrypoint loop restarts environmentd after SIGKILL.
+    # Keep the container and clusterd alive so replica hydration age is retained.
+    c.exec("mz_new", "bash", "-c", f"kill -9 {' '.join(sorted(environmentd))}")
 
     deadline = time.time() + 60
     while True:
         pids = _pids(c, "mz_new", "environmentd")
         if pids and pids != environmentd:
             break
-        assert time.time() < deadline, "the DDL did not restart mz_new"
+        assert time.time() < deadline, "mz_new's environmentd did not restart"
         time.sleep(0.5)
     restarted = time.time()
 

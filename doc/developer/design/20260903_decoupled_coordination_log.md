@@ -10,9 +10,11 @@ status belong in the PR.
 
 Implementer session: `2026-09-14-13-05-31-256`.
 
-The linear replay onto upstream `49b61f3904` is complete. Reconciliation restores
-native ownership on the shared compute/storage runtime and keeps connection state
-at the storage boundary. History is consolidated on `decoupled-coordination`,
+Linear upstream integration retains native ownership on the shared compute/storage
+runtime and keeps connection state at the storage boundary. The replica-reported
+hydration stability gate uses native query protection and deployment-local
+observations. Scheduling timestamps are obtained off the coordinator loop.
+History is consolidated on `decoupled-coordination`,
 with side-branch work accounted for and original trees preserved in local archival
 tags. Verify the combined integration and approved corrections in regular PR CI.
 Preserve designer commits and useful implementation boundaries.

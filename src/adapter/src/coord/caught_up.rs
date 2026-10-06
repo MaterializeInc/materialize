@@ -758,12 +758,7 @@ impl Coordinator {
         }
 
         let mut all_caught_up = true;
-        let mut ignored_compute_collections: BTreeSet<_> = self
-            .controller
-            .compute
-            .collection_ids(cluster.id)?
-            .filter(|id| exclude_collections.contains(id))
-            .collect();
+        let mut ignored_compute_collections = exclude_collections.clone();
 
         let storage_frontiers = self
             .controller
@@ -782,49 +777,56 @@ impl Coordinator {
             // not yet installed and builtin objects absent from bound_objects.
             // Catalog introspection indexes participate through their reported
             // output and hydration, rather than the raw replica-local log IDs.
-            itertools::Either::Left(self.catalog().entries().filter_map(|entry| {
-                if entry.item().cluster_id() != Some(cluster.id) {
-                    return None;
-                }
-                let (id, target) = match entry.item() {
-                    CatalogItem::Index(index) => (index.global_id(), None),
-                    CatalogItem::MaterializedView(mv) => {
-                        // Completed finite-refresh writers need no runtime.
-                        // A replacement cannot borrow its target's completion.
-                        let complete = mv.replacement_target.is_none()
-                            && mv
-                                .refresh_schedule
-                                .as_ref()
-                                .and_then(|s| s.last_refresh())
-                                .is_some_and(|last| {
-                                    self.controller
-                                        .storage_collections
-                                        .collection_frontiers(mv.global_id_writes())
-                                        .is_ok_and(|f| !f.write_frontier.less_equal(&last))
-                                });
-                        if complete {
+            itertools::Either::Left(
+                self.catalog()
+                    .entries()
+                    .filter_map(|entry| {
+                        if entry.item().cluster_id() != Some(cluster.id) {
                             return None;
                         }
-                        (mv.global_id_writes(), mv.target_replica)
-                    }
-                    CatalogItem::MetricSink(sink) => (sink.global_id, None),
-                    _ => return None,
-                };
-                if id.is_transient() || exclude_collections.contains(&id) {
-                    return None;
-                }
-                let output = self.query_client.as_ref().and_then(|client| {
-                    client.hydrated_output_frontier(self.catalog(), cluster.id, id, target)
-                });
-                let hydrated = output.is_some();
-                // Unknown observations must fail readiness, but only after the
-                // policy's live cutoff and completed-live exceptions are applied.
-                Some(Ok((
-                    id,
-                    output.unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
-                    CollectionType::NativeCompute { hydrated },
-                )))
-            }))
+                        let (id, target) = match entry.item() {
+                            CatalogItem::Index(index) => (index.global_id(), None),
+                            CatalogItem::MaterializedView(mv) => {
+                                // Completed finite-refresh writers need no runtime.
+                                // A replacement cannot borrow its target's completion.
+                                let complete = mv.replacement_target.is_none()
+                                    && mv
+                                        .refresh_schedule
+                                        .as_ref()
+                                        .and_then(|s| s.last_refresh())
+                                        .is_some_and(|last| {
+                                            self.controller
+                                                .storage_collections
+                                                .collection_frontiers(mv.global_id_writes())
+                                                .is_ok_and(|f| !f.write_frontier.less_equal(&last))
+                                        });
+                                if complete {
+                                    ignored_compute_collections.insert(mv.global_id_writes());
+                                    return None;
+                                }
+                                (mv.global_id_writes(), mv.target_replica)
+                            }
+                            CatalogItem::MetricSink(sink) => (sink.global_id, None),
+                            _ => return None,
+                        };
+                        if id.is_transient() || exclude_collections.contains(&id) {
+                            return None;
+                        }
+                        let output = self.query_client.as_ref().and_then(|client| {
+                            client.hydrated_output_frontier(self.catalog(), cluster.id, id, target)
+                        });
+                        let hydrated = output.is_some();
+                        // Unknown observations must fail readiness, but only after the
+                        // policy's live cutoff and completed-live exceptions are applied.
+                        Some(Ok((
+                            id,
+                            output.unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
+                            CollectionType::NativeCompute { hydrated },
+                        )))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            )
         } else {
             itertools::Either::Right(
                 self.controller
@@ -933,7 +935,10 @@ impl Coordinator {
                     "live write frontier of collection {id} is too far behind 'now'; \
                      ignoring for caught-up checks"
                 );
-                if matches!(collection_type, CollectionType::Compute) {
+                if matches!(
+                    collection_type,
+                    CollectionType::Compute | CollectionType::NativeCompute { .. }
+                ) {
                     ignored_compute_collections.insert(id);
                 }
                 continue;
@@ -965,7 +970,10 @@ impl Coordinator {
             // started, etc. when they are already at the empty write frontier.
             if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
                 if readiness != CollectionReadiness::Ready
-                    && matches!(collection_type, CollectionType::Compute)
+                    && matches!(
+                        collection_type,
+                        CollectionType::Compute | CollectionType::NativeCompute { .. }
+                    )
                 {
                     ignored_compute_collections.insert(id);
                 }
