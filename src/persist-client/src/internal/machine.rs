@@ -2654,6 +2654,44 @@ pub mod tests {
             .expect("upgrade respects target");
         assert_eq!(version(&client, shard).await, older);
 
+        // Independent versioned clients must exchange actual output while the
+        // catalog still requires the older format, not just read its metadata.
+        let mut old_client = client.clone();
+        old_client.cfg = new_test_client_cache(&dyncfgs).cfg.clone();
+        old_client.cfg.build_version = older.clone();
+        old_client
+            .cfg
+            .require_state_version_target(Some(older.clone()));
+        old_client.shared_states = Arc::new(StateCache::new_no_metrics());
+        let (mut old_write, mut old_read) =
+            old_client.expect_open::<String, (), u64, i64>(shard).await;
+        let (mut new_write, new_read) = client.expect_open::<String, (), u64, i64>(shard).await;
+        let updates = [
+            (("1".to_owned(), ()), 1, 1),
+            (("2".to_owned(), ()), 2, 1),
+            (("3".to_owned(), ()), 3, 1),
+        ];
+        old_write
+            .expect_compare_and_append(&updates[..1], 0, 2)
+            .await;
+        new_write
+            .expect_compare_and_append(&updates[1..2], 2, 3)
+            .await;
+        old_write
+            .expect_compare_and_append(&updates[2..], 3, 4)
+            .await;
+        assert_eq!(
+            old_read.expect_snapshot_and_fetch(3).await,
+            updates
+                .iter()
+                .map(|(kv, _, diff)| (kv.clone(), 3, *diff))
+                .collect::<Vec<_>>()
+        );
+        old_write.expire().await;
+        old_read.expire().await;
+        new_write.expire().await;
+        new_read.expire().await;
+
         cache
             .cfg
             .set_state_version_target(binary.clone())
