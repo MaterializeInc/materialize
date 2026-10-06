@@ -63,13 +63,13 @@ mod prepared_rewrites;
 /// after DROP.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_peer_index_pending_installation() {
+    use mz_catalog::durable::objects::serialization::{ProtoType, RustType};
     use mz_catalog::durable::objects::{CollectionCompactionBound, DurableType};
     use mz_catalog::durable::{
         CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
     };
     use mz_catalog::expr_cache::ExpressionCacheHandle;
     use mz_postgres_util::{batch_execute, query, query_one, sql};
-    use mz_proto::{ProtoType, RustType};
 
     let test_case = async {
         let server = test_util::TestHarness::default().start().await;
