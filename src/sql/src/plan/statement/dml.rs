@@ -1020,6 +1020,11 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                         // region's `elapsed_ns` already contains the time of the operators inside it.
                         // Summing every operator in the span would count that time once per nesting
                         // level, so only operators whose parent lies outside the span are counted.
+                        // TODO: log each operator's own time (its elapsed time minus its children's)
+                        // in the compute timely logging, whose `handle_schedule` already tracks
+                        // nested schedules. The CTEs could then sum the whole span without the
+                        // parents join, which made `EXPLAIN ANALYZE CLUSTER CPU` 1.5x to 4x slower
+                        // (0.1 s to 0.4 s) in measurements on replicas with 600 to 23,000 operators.
                         ctes.push((
                             "summary_cpu",
                             r#"
