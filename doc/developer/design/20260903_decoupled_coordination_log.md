@@ -55,10 +55,12 @@ its setup or cost. EXPLAIN reports selected recovery plans, not necessarily the
 running dataflow after imported-index removal.
 
 The missing hydration-history episode recurs in CI137825 Testdrive4 at line 596.
-Existing scoped collector logging identifies visits, captured cutoffs
-and completed row counts. Inspect this failing capture before changing retention,
-scheduling or episode grouping. Keep history across deployments. Remove the
-diagnostic once its question is answered.
+The capture shows a zero-row visit followed 24s later by a one-row append,
+beyond the roughly 20s observation budget. A scoped 60s observation wait preserves
+the retention assertions and serial collector behavior. Temporary collection logs
+are removed. The appended row's identity and initial raw hydration completion were
+not logged, so this is evidence of delayed sampling, not a proven write/read mismatch.
+Keep history across deployments.
 
 Zippy passes in CI137778. Retain the CI137762 observation: seven promotions
 complete while readiness grows from 42s to 363s, then backup/restore exhausts the

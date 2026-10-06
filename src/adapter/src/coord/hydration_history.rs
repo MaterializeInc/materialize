@@ -721,11 +721,6 @@ impl Sweep {
         kind: MutationKind,
         sql: &str,
     ) -> Option<usize> {
-        tracing::debug!(
-            %step, %cluster_id, %replica_id,
-            object_cutoff = %self.object_cutoff, replica_cutoff = %self.replica_cutoff,
-            "hydration history step starting"
-        );
         let mutation = async {
             let plan = plan_mutation(&self.catalog, history_id, kind, sql)?;
             let mut session = Session::dummy();
@@ -762,11 +757,6 @@ impl Sweep {
                     .inc_by(u64::cast_from(rows));
                 let outcome = if rows == 0 { "noop" } else { "success" };
                 self.observe_mutation(step, outcome);
-                tracing::debug!(
-                    %step, %cluster_id, %replica_id, rows,
-                    object_cutoff = %self.object_cutoff, replica_cutoff = %self.replica_cutoff,
-                    "hydration history step completed"
-                );
                 Some(rows)
             }
             Ok(Err(error)) => {

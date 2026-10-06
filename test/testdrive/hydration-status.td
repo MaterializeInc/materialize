@@ -27,7 +27,6 @@
 # replica per cycle. Shorten its cadence so episodes land within this test's
 # retry budget.
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET log_filter = 'info,mz_adapter::coord::hydration_history=debug';
 ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
@@ -593,12 +592,18 @@ ALTER SYSTEM SET replica_hydration_history_retention_period = '0s';
 
 > CREATE MATERIALIZED VIEW retention_probe AS SELECT * FROM t;
 
+# History collection visits replicas serially. The collection interval is not
+# a per-replica visibility bound, so allow a full sweep for this observation.
+$ set-sql-timeout duration=60s
+
 > SELECT count(*) > 0
   FROM mz_internal.mz_object_hydration_history AS h
   JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
   JOIN mz_catalog.mz_objects AS o ON o.id = g.id
   WHERE o.name = 'retention_probe';
 true
+
+$ set-sql-timeout duration=default
 
 > SELECT count(*) FROM mz_internal.mz_replica_hydration_history;
 0
@@ -802,9 +807,6 @@ ALTER SYSTEM SET replica_hydration_history_retention_period = '120d';
 
 > DROP CLUSTER episodes CASCADE
 > SET cluster = test
-
-$ postgres-execute connection=mz_system
-ALTER SYSTEM RESET log_filter;
 
 # Test that incorrectly configured sinks do _not_ show as hydrated.
 
