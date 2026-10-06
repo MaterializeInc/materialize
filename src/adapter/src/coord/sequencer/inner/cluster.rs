@@ -1751,10 +1751,16 @@ impl Coordinator {
         // already created. Refuse instead: the user can cancel (ALTER back to
         // the realized size) or wait for the record to settle first.
         if let ClusterVariant::Managed(managed) = &cluster.config.variant {
+            // Check both the shared request and our deployment's realization.
+            // Peers reconcile their own replicas against the unmanaged declarations.
+            let runtime = self.catalog().state().cluster_runtime(cluster_id);
             if managed
                 .reconfiguration
                 .as_ref()
                 .is_some_and(|record| record.is_in_progress())
+                || runtime
+                    .and_then(|runtime| runtime.reconfiguration.as_ref())
+                    .is_some_and(|record| record.is_in_progress())
             {
                 return Err(AdapterError::AlterClusterUnmanagedWhileReconfiguring);
             }
@@ -1764,7 +1770,7 @@ impl Coordinator {
             // ordinary unmanaged replica nothing ever tears down. Absence of a
             // record means the burst has settled, so no in-progress check is
             // needed.
-            if managed.burst.is_some() {
+            if managed.burst.is_some() || runtime.is_some_and(|runtime| runtime.burst.is_some()) {
                 return Err(AdapterError::AlterClusterUnmanagedWhileBursting);
             }
         }
