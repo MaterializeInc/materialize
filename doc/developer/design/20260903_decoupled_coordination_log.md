@@ -18,6 +18,13 @@ History is consolidated on `decoupled-coordination`,
 with side-branch work accounted for and original trees preserved in local archival
 tags. Verify the combined integration and approved corrections in regular PR CI.
 Preserve designer commits and useful implementation boundaries.
+The replay onto upstream `f5217bd2d7` retains all 136 local commits. Its three
+conflict resolutions combine upstream redacted-log truncation with catalog
+certification and retain the deterministic blob-write-gated cancellation fixture.
+The imported drop-only prewarming workflow is removed because it asserts legacy
+restarts. Native retirement and SQL DROP membership contracts remain unchanged.
+CI137869 found four explicit-Arc-clone lint errors in the new OCC tests, corrected
+before combined verification. No OCC runtime result is claimed from that build.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
 Older branch-built catalogs are not a compatibility requirement.
 
