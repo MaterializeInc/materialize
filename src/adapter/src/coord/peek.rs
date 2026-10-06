@@ -1041,6 +1041,7 @@ impl crate::coord::Coordinator {
                 tx: self.internal_cmd_tx.clone(),
                 metrics: self.metrics.clone(),
             },
+            Arc::clone(&self.frontend_peeks),
             catalog,
             Arc::clone(&self.controller.storage_collections),
             Arc::clone(&self.transient_id_gen),
@@ -1377,71 +1378,95 @@ impl crate::coord::Coordinator {
         pending_peek
     }
 
-    /// Implements a slow-path peek by creating a transient dataflow.
-    /// This is called from the command handler for ExecuteSlowPathPeek.
-    ///
-    /// (For now, this method simply delegates to implement_peek_plan by constructing
-    /// the necessary PlannedPeek structure.)
+    /// Creates transient resources for a frontend-owned slow-path peek.
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
+        peek: crate::peek_client::FrontendPeek,
         dataflow_plan: PeekDataflowPlan,
         determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         intermediate_result_type: SqlRelationType,
-        source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
         watch_set: Option<WatchSetCreation>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        // Install watch sets for statement lifecycle logging if enabled.
-        // This must happen _before_ creating ExecuteContextExtra, so that if it fails,
-        // we don't have an ExecuteContextExtra that needs to be retired (the frontend
-        // will handle logging for the error case).
-        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
-        if let Some(ws) = watch_set {
-            self.install_peek_watch_sets(conn_id.clone(), ws)
-                .map_err(|e| {
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)
+        let result = async {
+            if let Some(ws) = watch_set {
+                self.install_peek_watch_sets(conn_id, ws).map_err(
+                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error,
+                )?;
+            }
+            let client = self
+                .controller
+                .compute
+                .instance_client(compute_instance)
+                .map_err(|error| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: error.0.to_string(),
                 })?;
-        }
-
-        let source_arity = intermediate_result_type.arity();
-
-        let planned_peek = PlannedPeek {
-            plan: PeekPlan::SlowPath(dataflow_plan),
-            determination,
-            conn_id,
-            intermediate_result_type,
-            source_arity,
-            source_ids,
-        };
-
-        // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
-        // relevant parts of the old `implement_peek_plan` into this method, and remove the old
-        // `implement_peek_plan`.
-        let mut ctx_guard =
-            ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone());
-        let result = self
-            .implement_peek_plan(
-                &mut ctx_guard,
-                planned_peek,
-                finishing,
+            let (index_id, read_hold, mfp) = self.create_transient_peek_target(
+                dataflow_plan,
+                intermediate_result_type.arity(),
                 compute_instance,
-                target_replica,
+            )?;
+            let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+            let result_desc = RelationDesc::new(intermediate_result_type, cols);
+            let (rows_tx, rows_rx) = oneshot::channel();
+            let issued = client
+                .peek_with_lifecycle(
+                    PeekTarget::Index { id: index_id },
+                    None,
+                    peek.uuid,
+                    determination.timestamp_context.timestamp_or_default(),
+                    result_desc,
+                    finishing.clone(),
+                    mfp,
+                    read_hold,
+                    target_replica,
+                    rows_tx,
+                    Arc::clone(&peek.lifecycle),
+                )
+                .await;
+            // Release the controller's implied/warmup holds after queuing the
+            // peek. Its own read hold protects it until completion. This also
+            // cleans up setup when issue fails or cancellation prevents issue.
+            self.drop_compute_collections(vec![(compute_instance, index_id)]);
+            issued.map_err(|error| {
+                AdapterError::concurrent_dependency_drop_from_instance_peek_error(
+                    error,
+                    compute_instance,
+                )
+            })?;
+            let dyncfgs = self.catalog().system_config().dyncfgs();
+            let stream = Self::create_peek_response_stream(
+                rows_rx,
+                finishing,
                 max_result_size,
                 max_query_result_size,
-            )
-            .await;
-        // On error `implement_peek_plan` left the guard's contents intact (see
-        // its doc comment) and the frontend logs the error end, so we defuse
-        // rather than let the guard's `Drop` emit a spurious `Aborted`.
-        if result.is_err() {
-            let _ = ctx_guard.defuse();
+                self.metrics.row_set_finishing_seconds(),
+                self.persist_client.clone(),
+                mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES.get(dyncfgs),
+                mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
+                    .get(dyncfgs),
+            );
+            Ok::<_, AdapterError>(stream)
         }
-        result
+        .await;
+        match result {
+            Ok(stream) => Ok(ExecuteResponse::SendingRowsStreaming {
+                rows: Box::pin(peek.guard_stream(stream)),
+                instance_id: compute_instance,
+                strategy: StatementExecutionStrategy::Standard,
+            }),
+            Err(error) => {
+                peek.lifecycle
+                    .complete(PeekNotification::Error(error.to_string()));
+                Err(error)
+            }
+        }
     }
 
     /// Implements a `COPY TO` command by installing peek watch sets,

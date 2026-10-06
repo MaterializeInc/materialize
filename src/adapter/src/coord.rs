@@ -540,8 +540,7 @@ impl Message {
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
                 Command::LookupConnection { .. } => "lookup-connection",
-                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
-                Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
+                Command::InstallFrontendPeekWatchSets { .. } => "install-frontend-peek-watch-sets",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
@@ -2155,6 +2154,7 @@ pub struct Coordinator {
     pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
     client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    frontend_peeks: Arc<crate::peek_registry::PeekRegistry>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -5452,6 +5452,7 @@ pub fn serve(
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
+                    frontend_peeks: Arc::default(),
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),

@@ -61,7 +61,7 @@ use crate::optimize::Optimize;
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
 };
-use crate::peek_client::{ExecutionLogging, TakeOver};
+use crate::peek_client::{ExecutionLogging, FrontendPeekCancelSafety, TakeOver};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
@@ -77,14 +77,18 @@ impl PeekClient {
     /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
     ///
     /// `logging` holds the end-of-execution obligation for this statement. The
-    /// caller retires it, this function only takes the statement over and, at
-    /// the dispatch sites that hand execution off, defuses the slot.
+    /// caller retires it unless dispatch transfers it to the peek lifecycle
+    /// or a coordinator-owned non-peek operation.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
         logging: &mut ExecutionLogging,
+        cancel_safety: &FrontendPeekCancelSafety,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let cancellation_epoch = self
+            .connection_peeks(session.conn_id())
+            .cancellation_epoch();
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -211,8 +215,17 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_frontend_peek_inner(session, catalog, stmt, query, params, logging)
-            .await
+        self.try_frontend_peek_inner(
+            session,
+            catalog,
+            stmt,
+            query,
+            params,
+            logging,
+            cancellation_epoch,
+            cancel_safety,
+        )
+        .await
     }
 
     /// Executes a coordinator-owned `SELECT`, pinned to `replica_id`, and
@@ -223,12 +236,8 @@ impl PeekClient {
     /// statement-logged. This calls into the coordinator, so awaiting it on the
     /// coordinator's main loop deadlocks.
     ///
-    /// NOTE: Dropping the returned future does not cancel the peek, since
-    /// there is no connection to cancel it with. A peek dropped after its issue
-    /// keeps its read holds until the replica answers or goes away. One dropped
-    /// between its registration with the coordinator and its issue leaves the
-    /// registration behind, since only a response, a cancel of its connection,
-    /// or a drop of its inputs retires it.
+    /// Dropping the returned future retires its frontend-owned peek and
+    /// requests compute cancellation if the peek has already been issued.
     pub(crate) async fn background_peek(
         &mut self,
         sql: &str,
@@ -271,6 +280,10 @@ impl PeekClient {
         session.start_transaction_single_stmt(mz_ore::now::to_datetime((catalog.config().now)()));
 
         let mut logging = ExecutionLogging::adopt(None, self);
+        let cancellation_epoch = self
+            .connection_peeks(session.conn_id())
+            .cancellation_epoch();
+        let cancel_safety = FrontendPeekCancelSafety::new();
         let response = self
             .try_frontend_peek_inner(
                 &mut session,
@@ -279,6 +292,8 @@ impl PeekClient {
                 None,
                 Params::empty(),
                 &mut logging,
+                cancellation_epoch,
+                &cancel_safety,
             )
             .await?;
 
@@ -314,11 +329,8 @@ impl PeekClient {
     /// This is encapsulated in an inner function so that the outer function can still do statement
     /// logging after the `?` returns of the inner function.
     ///
-    /// Dispatch sites that hand the statement to the coordinator for
-    /// asynchronous completion (registered peeks, subscribes) `defuse` the
-    /// logging slot at the point where the coordinator takes over. Everywhere
-    /// else the slot stays armed and `SessionClient::execute` logs the end from
-    /// the returned result.
+    /// Streaming peeks transfer logging to their lifecycle. Subscribes transfer
+    /// it to the protocol layer. Immediate responses leave it with the caller.
     async fn try_frontend_peek_inner(
         &mut self,
         session: &mut Session,
@@ -327,6 +339,8 @@ impl PeekClient {
         query: Option<Arc<crate::session::PreparedQuery>>,
         params: Params,
         logging: &mut ExecutionLogging,
+        cancellation_epoch: u64,
+        cancel_safety: &FrontendPeekCancelSafety,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -494,6 +508,7 @@ impl PeekClient {
                 )?;
 
                 // RBAC passed. Delegate execution to the Coordinator.
+                cancel_safety.delegate_side_effect();
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSideEffectingFunc {
                         plan: sef_plan.clone(),
@@ -1495,6 +1510,8 @@ impl PeekClient {
                             source_ids,
                             watch_set,
                             logging,
+                            Arc::clone(&catalog),
+                            cancellation_epoch,
                         )
                         .await?
                     }
@@ -1502,17 +1519,33 @@ impl PeekClient {
                         session.require_coordinator_completion();
                         if let Some(logging_id) = logging.id() {
                             self.log_set_transient_index_id(logging_id, dataflow_plan.id);
+                            self.log_set_timestamp(
+                                logging_id,
+                                determination.timestamp_context.timestamp_or_default(),
+                            );
                         }
+
+                        let peek = self
+                            .register_frontend_peek(
+                                session.conn_id(),
+                                target_cluster_id,
+                                source_ids,
+                                Arc::clone(&catalog),
+                                cancellation_epoch,
+                                logging,
+                                false,
+                            )
+                            .await?;
 
                         let response = self
                             .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
+                                peek,
                                 dataflow_plan: Box::new(dataflow_plan),
                                 determination,
                                 finishing,
                                 compute_instance: target_cluster_id,
                                 target_replica,
                                 intermediate_result_type: typ,
-                                source_ids,
                                 conn_id: session.conn_id().clone(),
                                 max_result_size,
                                 max_query_result_size,
@@ -1520,12 +1553,6 @@ impl PeekClient {
                                 tx,
                             })
                             .await??;
-                        // On success the peek is registered in `pending_peeks`,
-                        // which now owns end-of-execution logging. On error the
-                        // coordinator logs nothing (see
-                        // `implement_slow_path_peek`), so the guard stays armed
-                        // and the caller logs the error.
-                        logging.defuse();
                         response
                     }
                 };
@@ -1560,6 +1587,7 @@ impl PeekClient {
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
+                cancel_safety.delegate_side_effect();
                 session.require_coordinator_completion();
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds {
@@ -1605,6 +1633,7 @@ impl PeekClient {
                 global_lir_plan,
                 source_ids,
             } => {
+                cancel_safety.delegate_side_effect();
                 let (df_desc, df_meta) = global_lir_plan.unapply();
 
                 coord::sequencer::emit_optimizer_notices(

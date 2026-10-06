@@ -72,7 +72,7 @@ use crate::frontend_read_then_write::{
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, FrontendPeekCancelSafety, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -296,6 +296,7 @@ impl Client {
         // handle termination.
         // Build the PeekClient with controller handles returned from startup.
         let StartupResponse {
+            peek_registry,
             role_id,
             write_notify,
             session_defaults,
@@ -313,8 +314,9 @@ impl Client {
             frontend_cancel_rx,
         } = response;
 
-        let peek_client = PeekClient::new(
+        let mut peek_client = PeekClient::new(
             CoordinatorClient::Session(self.clone()),
+            peek_registry,
             &catalog,
             storage_collections,
             transient_id_gen,
@@ -326,6 +328,9 @@ impl Client {
             group_commit_notifier,
             read_only,
         );
+        // Keep the partition alive before any execution awaits. Cancellation
+        // and termination must observe the same partition as the first query.
+        peek_client.connection_peeks(session.conn_id());
 
         let mut client = SessionClient {
             inner: Some(self.clone()),
@@ -837,6 +842,7 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        self.frontend_cancel_rx.borrow_and_update();
         let cancel_future = cancel_future.map(|_| ()).shared();
 
         // Owning the end-of-execution obligation in this frame is what lets
@@ -878,8 +884,9 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // TODO(peek-seq): wire up cancel_future
-        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
+        let peek_result = self
+            .try_frontend_peek(&portal_name, logging, cancel_future.clone())
+            .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             return Ok(resp);
@@ -1405,8 +1412,7 @@ impl SessionClient {
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
                 | Command::LookupConnection { .. }
-                | Command::RegisterFrontendPeek { .. }
-                | Command::UnregisterFrontendPeek { .. }
+                | Command::InstallFrontendPeekWatchSets { .. }
                 | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
@@ -1494,12 +1500,49 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
+        cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
+            let conn_id = self.session().conn_id().clone();
+            let connection = self.peek_client.connection_peeks(&conn_id);
+            let timeout = *self.session().vars().statement_timeout();
+            let mut cancellation = self.frontend_cancel_rx.clone();
+            let cancel_safety = FrontendPeekCancelSafety::new();
             let session = self.session.as_mut().expect("SessionClient invariant");
-            self.peek_client
-                .try_frontend_peek(portal_name, session, logging)
-                .await
+            let attempt =
+                self.peek_client
+                    .try_frontend_peek(portal_name, session, logging, &cancel_safety);
+            tokio::pin!(attempt);
+            let statement_timeout = async move {
+                if timeout.is_zero() {
+                    futures::future::pending::<()>().await;
+                } else {
+                    tokio::time::sleep(timeout).await;
+                }
+            };
+            let connection_cancel = async move {
+                if cancellation.changed().await.is_err() {
+                    futures::future::pending::<()>().await;
+                }
+            };
+            let reason = tokio::select! {
+                biased;
+                _ = connection_cancel => AdapterError::Canceled,
+                _ = cancel_future => AdapterError::Canceled,
+                _ = statement_timeout => AdapterError::StatementTimeout,
+                result = &mut attempt => return result,
+            };
+            if cancel_safety.can_abort() {
+                // Invalidate registration's execution epoch before dropping
+                // the future. Commands already queued for slow peeks carry
+                // the same lifecycle and cannot issue after this cancellation.
+                connection.cancel();
+                Err(reason)
+            } else {
+                // A non-peek command can already have a side effect. Dropping
+                // its waiter would lose its definitive response and ownership.
+                attempt.await
+            }
         } else {
             Ok(None)
         }
