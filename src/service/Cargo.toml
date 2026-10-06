@@ -18,7 +18,7 @@ clap = { workspace = true, features = ["env"] }
 futures.workspace = true
 itertools.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["network"] }
 os_info.workspace = true
 pin-project.workspace = true
 prometheus.workspace = true

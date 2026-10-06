@@ -26,7 +26,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-mz-ore = { path = "../ore", features = ["turmoil"] }
+mz-ore = { path = "../ore", features = ["test", "turmoil"] }
 tracing-subscriber.workspace = true
 turmoil.workspace = true
 

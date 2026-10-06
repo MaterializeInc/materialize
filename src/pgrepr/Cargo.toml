@@ -15,7 +15,7 @@ bytes.workspace = true
 chrono.workspace = true
 dec.workspace = true
 itertools.workspace = true
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["network"] }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
 postgres-types.workspace = true
