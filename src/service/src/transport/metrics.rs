@@ -12,6 +12,8 @@
 use std::io;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::UNIX_EPOCH;
 
@@ -31,6 +33,65 @@ pub trait Metrics<Out, In>: Clone + Send + 'static {
     fn message_sent(&mut self, msg: &Out);
     /// Callback reporting messages received.
     fn message_received(&mut self, msg: &In);
+}
+
+// The reader and writer can run on different cores. Their progress signals must not
+// invalidate the same cache line on every successful I/O operation.
+#[derive(Default)]
+#[repr(align(64))]
+struct ProgressFlag(AtomicBool);
+
+#[derive(Default)]
+pub(super) struct Progress {
+    received: ProgressFlag,
+    sent: ProgressFlag,
+}
+
+impl Progress {
+    pub(super) fn take_received(&self) -> bool {
+        self.received.0.swap(false, Ordering::Relaxed)
+    }
+
+    pub(super) fn take_sent(&self) -> bool {
+        self.sent.0.swap(false, Ordering::Relaxed)
+    }
+}
+
+/// Records byte progress without reading the clock or touching a timer on the I/O path.
+#[derive(Clone)]
+pub(super) struct ProgressMetrics<M> {
+    metrics: M,
+    progress: Option<Arc<Progress>>,
+}
+
+impl<M> ProgressMetrics<M> {
+    pub(super) fn new(metrics: M, progress: Option<Arc<Progress>>) -> Self {
+        Self { metrics, progress }
+    }
+}
+
+impl<M: Metrics<Out, In>, Out, In> Metrics<Out, In> for ProgressMetrics<M> {
+    fn bytes_received(&mut self, len: usize) {
+        if let Some(progress) = &self.progress {
+            progress.received.0.store(true, Ordering::Relaxed);
+        }
+        self.metrics.bytes_received(len);
+    }
+
+    fn bytes_sent(&mut self, len: usize) {
+        if let Some(progress) = &self.progress {
+            progress.sent.0.store(true, Ordering::Relaxed);
+        }
+        self.metrics.bytes_sent(len);
+    }
+
+    fn message_received(&mut self, msg: &In) {
+        self.metrics.message_received(msg);
+    }
+
+    fn message_sent(&mut self, msg: &Out) {
+        self.metrics.message_sent(msg);
+    }
 }
 
 /// No-op [`Metrics`] implementation that ignores all events.
