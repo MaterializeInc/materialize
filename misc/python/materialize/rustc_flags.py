@@ -24,6 +24,27 @@ coverage = [
     "-Cllvm-args=-runtime-counter-relocation",
 ]
 
+# Flags for Antithesis coverage instrumentation. The runtime shim comes from
+# the `antithesis-instrumentation` crate, which `mz-ore/antithesis` links.
+# Symbolization needs GNU build ids and DWARF inside the shipped binary, so
+# debuginfo is not split out. See
+# https://antithesis.com/docs/reference/sdk/rust/instrumentation/
+antithesis = [
+    "--cfg=tokio_unstable",
+    "-Csplit-debuginfo=off",
+    "-Ccodegen-units=1",
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=3",
+    "-Cllvm-args=-sanitizer-coverage-trace-pc-guard",
+    "-Clink-args=-Wl,--build-id",
+]
+
+# Build environment for the Antithesis flavor. AWS-LC seeds its DRBG from CPU
+# timing jitter and calls `abort()` when the jitter health tests fail, which
+# they do on Antithesis's deterministic CPU. Without jitter entropy AWS-LC
+# seeds from the OS, with RDRAND as the second source.
+antithesis_env = {"AWS_LC_SYS_NO_JITTER_ENTROPY": "1"}
+
 
 class Sanitizer(Enum):
     """What sanitizer to use"""
