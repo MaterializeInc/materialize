@@ -23,19 +23,22 @@ Older branch-built catalogs are not a compatibility requirement.
 
 Prioritize the remaining read-then-write timeouts in parallel checks. The
 catalog-only completion regression passes: table keepalives remain staged but
-are not awaited on the coordinator. Current failing DML lacks evidence of its
-OCC permit ownership, selected timestamp and subscribe progress. Scoped RTW
-debug events enabled only for parallel CI distinguish those waits. Remove the
-diagnostic once attributed. Neither this correction nor stale-bound resampling
-establishes the cause of every timeout. Keep protection and deadlines unchanged.
-The restart fixture brackets sink admission before catalog diagnostics to avoid
-consuming its physical-lag window. The complete workflow passes in CI137762.
+are not awaited on the coordinator. CI137778 traces show advancing subscribe
+progress and repeated global-oracle timestamp rejection while foreground writes
+hold admission permits. Compare baseline behavior and trace catalog-write and
+resource-pressure effects before changing timestamp correctness. The frontier
+UPDATE also repeatedly replans before execution. Keep coordinator/DDL stalls
+distinct unless evidence connects them. Remove scoped RTW diagnostics when their
+question is answered. Keep protection and deadlines unchanged.
+The DROP-preparation correction refreshes the owner's committed requirement
+after metadata contention without deriving it from an import's available history.
+The unchanged selected-plan-explain regression passes in CI137817. Its companion
+retention fixture uses blind INSERTs for compaction work, not read-dependent
+UPDATEs. That isolates the fixture and does not resolve the parallel UPDATEs.
 
-Keep the scheduled-compaction 1/0/1 membership and audit assertions. Its final
-observation uses a fixed sleep and a real-time window. Establish convergence and
-the window prerequisite before changing the fixture. Streaming statements
-captures the compaction window in the timestamped job log. RBAC-view SLT
-completes in CI137762, so its temporary streaming diagnostic is removed.
+All five SQL logic test shards pass in CI137778, including scheduled-compaction's
+unchanged 1/0/1 membership and audit assertions. Preserve those assertions.
+Earlier real-time-window observations do not create another investigation campaign.
 The imported hydration-stability restart and no-dataflow workflows pass in
 CI137762, alongside warm handover.
 
@@ -50,10 +53,10 @@ and completed row counts. Use a failing capture before changing retention,
 scheduling or episode grouping. Keep history across deployments. Remove the
 diagnostic once its question is answered.
 
-Continue concrete integration failures. CI137762 Zippy completes seven promotions
-but readiness grows from 42s to 363s. Final backup/restore exhausts the job budget
-with only the catalog shard unfinished after 353s. Investigate that concrete
-Persist restoration boundary without attributing it to an unfinished promotion.
+Zippy passes in CI137778. Retain the CI137762 observation: seven promotions
+complete while readiness grows from 42s to 363s, then backup/restore exhausts the
+job budget with only the catalog shard unfinished after 353s. This is not evidence
+of an unfinished promotion or a new investigation campaign.
 Keep the observed retention costs and unproven plateau visible. Preserve native
 ownership, read protection, external-sink safeguards and compatible-version
 handover on fresh environments. The outage, targeted DDL and bounded-throughput
