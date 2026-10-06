@@ -78,6 +78,7 @@ from materialize.feature_benchmark.scenarios.benchmark_main import (
 )
 from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F403
 from materialize.feature_benchmark.scenarios.customer import *  # noqa: F403
+from materialize.feature_benchmark.scenarios.interactive_runtime import *  # noqa: F403
 from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F403
 from materialize.feature_benchmark.scenarios.scale import *  # noqa: F403
 from materialize.feature_benchmark.scenarios.skew import *  # noqa: F403
@@ -401,12 +402,22 @@ def create_clusterd_service(
     unified_cluster = (additional_system_parameter_defaults or {}).get(
         "enable_unified_cluster", "false"
     ) == "true"
+    # For the same reason `enable_compute_interactive_runtime` never reaches
+    # it, so the second runtime is configured here, keyed off the parameter
+    # and defaulting to the CI default. An image without the option ignores
+    # the variable and stays single-runtime.
+    interactive_compute = (additional_system_parameter_defaults or {}).get(
+        "enable_compute_interactive_runtime", "true"
+    ) == "true"
     # A tagged instance runs the standalone `clusterd` image. Run the same
     # binary when building from source: the unified `materialized` binary
     # has a different code layout, which shifted FastPathFilterNoIndex by
     # 11% between otherwise identical builds.
     return Clusterd(
-        image=clusterd_image, mzbuild="clusterd", unified_cluster=unified_cluster
+        image=clusterd_image,
+        mzbuild="clusterd",
+        unified_cluster=unified_cluster,
+        interactive_compute=interactive_compute,
     )
 
 

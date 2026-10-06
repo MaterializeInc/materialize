@@ -10,6 +10,7 @@
 import queue
 import time
 from copy import deepcopy
+from dataclasses import replace
 
 import psycopg
 
@@ -27,6 +28,7 @@ from materialize.parallel_benchmark.framework import (
     Scenario,
     StandaloneQuery,
     State,
+    SystemParameterPhase,
     TdAction,
     TdPhase,
     disabled,
@@ -1288,6 +1290,17 @@ class StagingBench(Scenario):
         )
 
 
+# Regression thresholds for a query measured while something else contends for
+# its replica. Contended tails vary more between runs than a quiet query's. Only the
+# stats the suite gates on everywhere are listed, so p99 stays reported but ungated.
+CONTENDED_THRESHOLDS = {
+    "qps": 1.5,
+    "avg": 1.5,
+    "p50": 1.5,
+    "p95": 1.5,
+}
+
+
 class HydrationChurn(Action):
     """Continuously builds a heavy maintained materialized view, forces it to
     hydrate, then drops it, keeping the replica's maintenance workers busy.
@@ -1479,7 +1492,7 @@ class ReadIsolationUnderHydration(Scenario):
                         OpenLoop(
                             action=PooledQuery("SELECT v FROM hot WHERE k = 42"),
                             dist=Periodic(per_second=50),
-                            report_regressions=False,
+                            report_regressions=True,
                         ),
                         # Measured: slow-path range scan + reduce peek (more
                         # sensitive to contention on the replica).
@@ -1488,7 +1501,7 @@ class ReadIsolationUnderHydration(Scenario):
                                 "SELECT count(*) FROM hot WHERE k < 50000"
                             ),
                             dist=Periodic(per_second=12),
-                            report_regressions=False,
+                            report_regressions=True,
                         ),
                     ]
                     + [
@@ -1511,12 +1524,16 @@ class ReadIsolationUnderHydration(Scenario):
             ],
             conn_pool_size=1000,
             conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
+            regression_thresholds={
+                "SELECT v FROM hot WHERE k = 42 (pooled)": CONTENDED_THRESHOLDS,
+                "SELECT count(*) FROM hot WHERE k < 50000 (pooled)": CONTENDED_THRESHOLDS,
+            },
         )
 
 
 class PeekIsolationUnderExpensivePeeks(Scenario):
-    r"""Measures whether a cheap peek stays fast while expensive peeks occupy the
-    same workers.
+    r"""Measures whether a cheap peek stays fast while expensive peeks walk the
+    same index.
 
     Every query is a fast-path index peek, so nothing renders a dataflow during
     the load phase. That is what separates this from
@@ -1528,24 +1545,31 @@ class PeekIsolationUnderExpensivePeeks(Scenario):
     size and the peek response stash out of the measurement. The cheap query is
     a literal lookup on the key, and its p99 is what this reports.
 
+    A walk that exceeds `compute_index_peek_inline_budget` leaves the timely
+    worker and finishes on its own task, so walks run in parallel with each
+    other and with the lookups, and a lookup does not queue behind a walk. This
+    guards that offload. Both queries are peeks, so a second runtime moves them
+    together and changes nothing this measures. The scenario's replica runs one
+    runtime so that the measurement does not depend on that flag.
+
     Three things the numbers depend on, none of which the output would reveal if
     they stopped holding:
 
-    * The expensive loop has to leave the worker idle between walks, or the
-      lookups queue without bound and the percentiles report the length of the
-      load phase. The measured cluster is one worker, since `Materialized` boots
-      at the `bootstrap` replica size and `--size` does not reach it, so the rate
-      is set against one walk: at 100ns to 1us per position, 100,000 positions
-      is 10ms to 100ms, and 2/s of those is 2% to 20% of that worker. Raising
-      the rate or the row count means redoing this.
+    * A walk that ran on the worker would have to leave it idle between walks,
+      or the lookups would queue without bound and the percentiles would report
+      the length of the load phase. The replica is one worker, so the rate is
+      set against one walk: 100,000 positions measured about 40ms, so 500,000
+      is about 200ms, and 3/s of those would hold that worker about 60% of the
+      time. That is the regression this catches. Offloaded, walks of 100,000
+      positions at 2/s left the lookups unaffected. Raising the rate or the row
+      count means redoing this.
     * The loops are pooled and the pool is far larger than the ~3 connections
       they hold. Waiting for a connection is timed like waiting for the replica,
       and `ReuseConnQuery` would cap concurrency at one and report a client-side
       backlog instead.
     * The pool is SERIALIZABLE. Under STRICT SERIALIZABLE a peek waits for the
-      index's frontier, which is work on the same worker the walks occupy, so
-      the tail would include frontier lag that no change to peek placement
-      shortens.
+      index's frontier, so the tail would include frontier lag, which
+      `FreshnessUnderPeekWalks` measures on its own.
 
     Check `queries` on both sides before comparing percentiles: a query that
     raises is dropped from the sample rather than recorded as slow.
@@ -1564,17 +1588,32 @@ class PeekIsolationUnderExpensivePeeks(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
+                # The flag is read when a replica is provisioned, so it only
+                # has to hold while `peek_iso` is created.
+                SystemParameterPhase(
+                    conn_infos["mz_system"],
+                    "enable_compute_interactive_runtime",
+                    "false",
+                ),
                 TdPhase("""
+                    > DROP CLUSTER IF EXISTS peek_iso CASCADE
                     > DROP TABLE IF EXISTS hot CASCADE
+                    > CREATE CLUSTER peek_iso SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
 
-                    # Sized so one full walk is long enough to delay what is
-                    # queued behind it and short enough to leave the worker idle
-                    # between walks. The class docstring has the arithmetic.
+                    # Sized so that a walk on the worker would delay what is
+                    # queued behind it. The class docstring has the arithmetic.
                     > CREATE TABLE hot (k int, v int)
-                    > INSERT INTO hot SELECT n, n * 2 FROM generate_series(1, 100000) AS n
-                    > CREATE INDEX hot_k ON hot (k)
-
+                    > INSERT INTO hot SELECT n, n * 2 FROM generate_series(1, 500000) AS n
+                    > CREATE INDEX hot_k IN CLUSTER peek_iso ON hot (k)
+                    """),
+                SystemParameterPhase(
+                    conn_infos["mz_system"],
+                    "enable_compute_interactive_runtime",
+                    None,
+                ),
+                TdPhase("""
                     # Wait for the index to hydrate before measuring.
+                    > SET cluster = peek_iso
                     > SELECT v FROM hot WHERE k = 42
                     84
                     """),
@@ -1586,19 +1625,363 @@ class PeekIsolationUnderExpensivePeeks(Scenario):
                         OpenLoop(
                             action=PooledQuery("SELECT v FROM hot WHERE k = 42"),
                             dist=Periodic(per_second=50),
-                            report_regressions=False,
+                            report_regressions=True,
                         ),
                         # Contention: a full walk of the same index. `v` is
                         # always even and positive, so the filter matches
                         # nothing and every position is examined for no rows.
                         OpenLoop(
                             action=PooledQuery("SELECT v FROM hot WHERE v = -1"),
+                            dist=Periodic(per_second=3),
+                            report_regressions=False,
+                        ),
+                    ],
+                ),
+                TdPhase("""
+                    > DROP CLUSTER IF EXISTS peek_iso CASCADE
+                    > DROP TABLE IF EXISTS hot CASCADE
+                    """),
+            ],
+            conn_pool_size=100,
+            conn_pool_setup=[
+                "SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'",
+                "SET cluster = peek_iso",
+            ],
+            regression_thresholds={
+                "SELECT v FROM hot WHERE k = 42 (pooled)": CONTENDED_THRESHOLDS,
+            },
+        )
+
+
+class TemporaryDataflowFloor(Scenario):
+    """Measures the cost of a peek that has to build a dataflow, on a quiet
+    replica.
+
+    A join of two indexed tables cannot take the fast path, so every query
+    renders a dataflow that imports both indexes, runs it to its single time,
+    and tears it down. That fixed cost is the floor under every non-fast-path
+    read, and it is what placement on another runtime adds to or removes from.
+    The tables are small so the join itself is a negligible part of the
+    measurement.
+
+    The loop is closed on one connection, so the reported latency is service
+    time with no queueing in it.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        mz = conn_infos["materialized"]
+        self.init(
+            [
+                TdPhase("""
+                    > DROP TABLE IF EXISTS tdf_a CASCADE
+                    > DROP TABLE IF EXISTS tdf_b CASCADE
+
+                    > CREATE TABLE tdf_a (k int, v int)
+                    > CREATE TABLE tdf_b (k int, v int)
+                    > INSERT INTO tdf_a SELECT n, n FROM generate_series(1, 1000) AS n
+                    > INSERT INTO tdf_b SELECT n, n FROM generate_series(1, 1000) AS n
+                    > CREATE INDEX tdf_a_k ON tdf_a (k)
+                    > CREATE INDEX tdf_b_k ON tdf_b (k)
+
+                    # Wait for both indexes to hydrate before measuring.
+                    > SELECT count(*) FROM tdf_a JOIN tdf_b USING (k)
+                    1000
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SELECT count(*) FROM tdf_a JOIN tdf_b USING (k)",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                        ),
+                    ],
+                ),
+                TdPhase("""
+                    > DROP TABLE IF EXISTS tdf_a CASCADE
+                    > DROP TABLE IF EXISTS tdf_b CASCADE
+                    """),
+            ],
+        )
+
+
+class IntrospectionUnderHydration(Scenario):
+    """Measures whether per-replica introspection stays answerable while the
+    replica's maintenance workers are saturated by hydration.
+
+    Introspection is what an operator reaches for when a replica is busy, and
+    a replica that answers it only once the hydration yields is unobservable
+    exactly when it matters. The measured query reads an introspection
+    arrangement of the replica doing the hydrating. The contention is the same
+    churn `ReadIsolationUnderHydration` uses.
+
+    Open loop at a fixed rate, so a replica that cannot keep up accumulates
+    queue-wait latency the reported p50/p99 capture. See that scenario for why
+    the loop is pooled and SERIALIZABLE, and why qps is not a signal.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        mz = conn_infos["materialized"]
+        churn_view_sql = "SELECT a, count(*) AS c FROM big GROUP BY a"
+        self.init(
+            [
+                TdPhase("""
+                    > DROP TABLE IF EXISTS big CASCADE
+
+                    > CREATE TABLE big (a int, b int)
+                    > INSERT INTO big SELECT n, n % 1000 FROM generate_series(1, 1000000) AS n
+
+                    # Something for introspection to report on.
+                    > CREATE INDEX big_a ON big (a)
+                    > SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes
+                    true
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Measured: a per-replica introspection read.
+                        OpenLoop(
+                            action=PooledQuery(
+                                "SELECT count(*) FROM mz_introspection.mz_dataflow_arrangement_sizes"
+                            ),
+                            dist=Periodic(per_second=10),
+                            report_regressions=True,
+                        ),
+                    ]
+                    + [
+                        ClosedLoop(
+                            action=HydrationChurn(mz, f"ichurn_{i}", churn_view_sql),
+                            report_regressions=False,
+                        )
+                        for i in range(2)
+                    ],
+                ),
+                TdPhase("""
+                    > DROP TABLE IF EXISTS big CASCADE
+                    """),
+            ],
+            conn_pool_size=1000,
+            conn_pool_setup=[
+                "SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'",
+                # The read must run on the replica being hydrated, not be routed
+                # to the catalog server.
+                "SET auto_route_introspection_queries TO false",
+            ],
+            regression_thresholds={
+                "SELECT count(*) FROM mz_introspection.mz_dataflow_arrangement_sizes (pooled)": CONTENDED_THRESHOLDS,
+            },
+        )
+
+
+class FreshnessUnderPeekWalks(Scenario):
+    """Measures whether expensive peeks hold back a maintained index's frontier.
+
+    Time a peek spends on the worker that maintains an index is time that worker
+    does not spend applying writes to it. A walk that exceeds
+    `compute_index_peek_inline_budget` leaves the worker and finishes on its own
+    task, so each walk costs the worker at most that budget and the index's
+    frontier keeps up. This guards that bound. A STRICT SERIALIZABLE read after
+    a write cannot answer until the frontier passes the write's timestamp, so a
+    regression that keeps walks on the worker shows as that read's latency. A
+    closed loop of writes runs beside a closed loop of such reads, each on a
+    connection of its own, so a read waits for the writes that landed before it.
+    The contention is a fixed rate of full index walks on the same replica.
+
+    The replica runs one runtime. A second runtime serves the walks away from
+    the maintenance worker whether or not they are bounded, which would hide
+    the regression this catches. `FreshnessUnderPeekDataflows` measures what
+    the second runtime adds.
+
+    The walk table is 100,000 rows at 2/s. A walk of that size measured about
+    40ms, so on the worker each would hold the frontier back measurably while
+    leaving the worker idle between walks, and the read would not queue without
+    bound.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        # `connect()` issues `SET cluster` itself, which has to run in autocommit:
+        # `ReuseConnQuery` turns autocommit on afterwards and cannot while that
+        # statement's transaction is open.
+        mz = replace(conn_infos["materialized"], cluster="fresh", autocommit=True)
+        self.init(
+            [
+                # The flag is read when a replica is provisioned, so it only
+                # has to hold while `fresh` is created.
+                SystemParameterPhase(
+                    conn_infos["mz_system"],
+                    "enable_compute_interactive_runtime",
+                    "false",
+                ),
+                TdPhase("""
+                    > DROP CLUSTER IF EXISTS fresh CASCADE
+                    > DROP TABLE IF EXISTS fresh_w CASCADE
+                    > DROP TABLE IF EXISTS fresh_hot CASCADE
+                    > CREATE CLUSTER fresh SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
+
+                    # The written index, whose frontier the read waits for.
+                    > CREATE TABLE fresh_w (k int, v int)
+                    > INSERT INTO fresh_w SELECT n, n FROM generate_series(1, 1000) AS n
+                    > CREATE INDEX fresh_w_k IN CLUSTER fresh ON fresh_w (k)
+
+                    # The walked index. `v` is always positive, so a filter on
+                    # -1 examines every position and returns nothing.
+                    > CREATE TABLE fresh_hot (k int, v int)
+                    > INSERT INTO fresh_hot SELECT n, n * 2 FROM generate_series(1, 100000) AS n
+                    > CREATE INDEX fresh_hot_k IN CLUSTER fresh ON fresh_hot (k)
+                    """),
+                SystemParameterPhase(
+                    conn_infos["mz_system"],
+                    "enable_compute_interactive_runtime",
+                    None,
+                ),
+                TdPhase("""
+                    > SET cluster = fresh
+                    > SELECT count(*) FROM fresh_w
+                    1000
+                    > SELECT v FROM fresh_hot WHERE k = 42
+                    84
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Contention: writes the read has to wait for.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO fresh_w VALUES (0, 0)",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                            report_regressions=False,
+                        ),
+                        # Measured: a read that waits for the index frontier to
+                        # pass the latest write.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SELECT count(*) FROM fresh_w WHERE k = 0",
+                                mz,
+                                strict_serializable=True,
+                            ),
+                        ),
+                        # Contention: full walks of the other index.
+                        OpenLoop(
+                            action=PooledQuery("SELECT v FROM fresh_hot WHERE v = -1"),
                             dist=Periodic(per_second=2),
                             report_regressions=False,
                         ),
                     ],
                 ),
+                TdPhase("""
+                    > DROP CLUSTER IF EXISTS fresh CASCADE
+                    > DROP TABLE IF EXISTS fresh_w CASCADE
+                    > DROP TABLE IF EXISTS fresh_hot CASCADE
+                    """),
             ],
             conn_pool_size=100,
-            conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
+            conn_pool_setup=[
+                "SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'",
+                "SET cluster = fresh",
+            ],
+            regression_thresholds={
+                "SELECT count(*) FROM fresh_w WHERE k = 0 (reuse connection)": CONTENDED_THRESHOLDS,
+            },
+        )
+
+
+class FreshnessUnderPeekDataflows(Scenario):
+    """Measures whether peek dataflows hold back a maintained view's frontier.
+
+    A peek that cannot take the fast path renders a dataflow, and offload does
+    not apply to it: the dataflow runs on a timely worker until it has answered.
+    On a replica with one runtime that is the worker that maintains the view,
+    so the view's frontier lags while the dataflow runs. The interactive runtime
+    renders peek dataflows on workers of their own, and this guards that the
+    maintenance worker stays free of them.
+
+    The view is read from another cluster, so the measured read does not share
+    a worker with the contention on either layout. A STRICT SERIALIZABLE read
+    after a write cannot answer until the view's frontier passes the write's
+    timestamp, so its latency is the view's lag made visible. A closed loop of
+    writes runs beside a closed loop of such reads, each on a connection of its
+    own.
+
+    The contention is a fixed rate of aggregates over a 500,000-row index on the
+    view's replica, a dataflow that measured about 125ms on one worker. At 3/s
+    that holds a single runtime's worker about 37% of the time, which the read
+    notices while leaving the worker idle between dataflows.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        mz = conn_infos["materialized"]
+        self.init(
+            [
+                TdPhase("""
+                    > DROP CLUSTER IF EXISTS fresh_df CASCADE
+                    > DROP TABLE IF EXISTS fresh_df_w CASCADE
+                    > DROP TABLE IF EXISTS fresh_df_hot CASCADE
+                    > CREATE CLUSTER fresh_df SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
+
+                    # The written view, whose frontier the read waits for.
+                    > CREATE TABLE fresh_df_w (k int, v int)
+                    > CREATE MATERIALIZED VIEW fresh_df_mv IN CLUSTER fresh_df AS SELECT count(*) AS c FROM fresh_df_w
+
+                    # The aggregated index. `v` is always positive, so a filter
+                    # on -1 examines every row and counts none.
+                    > CREATE TABLE fresh_df_hot (k int, v int)
+                    > INSERT INTO fresh_df_hot SELECT n, n * 2 FROM generate_series(1, 500000) AS n
+                    > CREATE INDEX fresh_df_hot_k IN CLUSTER fresh_df ON fresh_df_hot (k)
+
+                    > SELECT c FROM fresh_df_mv
+                    0
+                    > SET cluster = fresh_df
+                    > SELECT count(*) FROM fresh_df_hot WHERE v = -1
+                    0
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Contention: writes the read has to wait for.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO fresh_df_w VALUES (0, 0)",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                            report_regressions=False,
+                        ),
+                        # Measured: a read of the view, from the default
+                        # cluster, that waits for the view's frontier to pass
+                        # the latest write.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SELECT c FROM fresh_df_mv",
+                                mz,
+                                strict_serializable=True,
+                            ),
+                        ),
+                        # Contention: peek dataflows on the view's replica.
+                        OpenLoop(
+                            action=PooledQuery(
+                                "SELECT count(*) FROM fresh_df_hot WHERE v = -1"
+                            ),
+                            dist=Periodic(per_second=3),
+                            report_regressions=False,
+                        ),
+                    ],
+                ),
+                TdPhase("""
+                    > DROP CLUSTER IF EXISTS fresh_df CASCADE
+                    > DROP TABLE IF EXISTS fresh_df_w CASCADE
+                    > DROP TABLE IF EXISTS fresh_df_hot CASCADE
+                    """),
+            ],
+            conn_pool_size=100,
+            conn_pool_setup=[
+                "SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'",
+                "SET cluster = fresh_df",
+            ],
+            regression_thresholds={
+                "SELECT c FROM fresh_df_mv (reuse connection)": CONTENDED_THRESHOLDS,
+            },
         )
