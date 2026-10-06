@@ -370,55 +370,9 @@ pub fn plan_create_table(
         defaults.push(default);
     }
 
-    let mut seen_primary = false;
-    'c: for constraint in constraints {
+    for constraint in constraints {
         match constraint {
-            TableConstraint::Unique {
-                name: _,
-                columns,
-                is_primary,
-                nulls_not_distinct,
-            } => {
-                if seen_primary && *is_primary {
-                    sql_bail!(
-                        "multiple primary keys for table {} are not allowed",
-                        name.to_ast_string_stable()
-                    );
-                }
-                seen_primary = *is_primary || seen_primary;
-
-                let mut key = vec![];
-                for column in columns {
-                    let column = normalize::column_name(column.clone());
-                    match names.iter().position(|name| *name == column) {
-                        None => sql_bail!("unknown column in constraint: {}", column),
-                        Some(i) => {
-                            let nullable = &mut column_types[i].nullable;
-                            if *is_primary {
-                                if *nulls_not_distinct {
-                                    sql_bail!(
-                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
-                                    );
-                                }
-
-                                *nullable = false;
-                            } else if !(*nulls_not_distinct || !*nullable) {
-                                // Non-primary key unique constraints are only keys if all of their
-                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
-                                break 'c;
-                            }
-
-                            key.push(i);
-                        }
-                    }
-                }
-
-                if *is_primary {
-                    keys.insert(0, key);
-                } else {
-                    keys.push(key);
-                }
-            }
+            TableConstraint::Unique { .. } => {}
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
                 // them with feature flags for sqllogictest's sake.
@@ -431,6 +385,14 @@ pub fn plan_create_table(
             }
         }
     }
+    plan_unique_constraints(
+        "table",
+        name,
+        &names,
+        &mut column_types,
+        &mut keys,
+        constraints,
+    )?;
 
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them with feature flags for
@@ -1520,54 +1482,9 @@ fn plan_source_export_desc(
         column_types.push(ty.nullable(nullable));
     }
 
-    let mut seen_primary = false;
-    'c: for constraint in constraints {
+    for constraint in constraints {
         match constraint {
-            TableConstraint::Unique {
-                name: _,
-                columns,
-                is_primary,
-                nulls_not_distinct,
-            } => {
-                if seen_primary && *is_primary {
-                    sql_bail!(
-                        "multiple primary keys for source export {} are not allowed",
-                        name.to_ast_string_stable()
-                    );
-                }
-                seen_primary = *is_primary || seen_primary;
-
-                let mut key = vec![];
-                for column in columns {
-                    let column = normalize::column_name(column.clone());
-                    match names.iter().position(|name| *name == column) {
-                        None => sql_bail!("unknown column in constraint: {}", column),
-                        Some(i) => {
-                            let nullable = &mut column_types[i].nullable;
-                            if *is_primary {
-                                if *nulls_not_distinct {
-                                    sql_bail!(
-                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
-                                    );
-                                }
-                                *nullable = false;
-                            } else if !(*nulls_not_distinct || !*nullable) {
-                                // Non-primary key unique constraints are only keys if all of their
-                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
-                                break 'c;
-                            }
-
-                            key.push(i);
-                        }
-                    }
-                }
-
-                if *is_primary {
-                    keys.insert(0, key);
-                } else {
-                    keys.push(key);
-                }
-            }
+            TableConstraint::Unique { .. } => {}
             TableConstraint::ForeignKey { .. } => {
                 bail_unsupported!("Source export with a foreign key")
             }
@@ -1576,10 +1493,89 @@ fn plan_source_export_desc(
             }
         }
     }
+    plan_unique_constraints(
+        "source export",
+        name,
+        &names,
+        &mut column_types,
+        &mut keys,
+        constraints,
+    )?;
 
     let typ = SqlRelationType::new(column_types).with_keys(keys);
     let desc = RelationDesc::new(typ, names);
     Ok(desc)
+}
+
+/// Applies the `UNIQUE` and `PRIMARY KEY` constraints among `constraints` to
+/// `column_types` and `keys`, where `names` are the column names in the order
+/// of `column_types`. Other constraints are ignored, callers must validate them.
+///
+/// A `PRIMARY KEY` marks its columns `NOT NULL` and becomes the first key. A
+/// `UNIQUE` constraint becomes a key only if all its columns are `NOT NULL` at
+/// the point it is processed, or it is `NULLS NOT DISTINCT`. `object_kind`
+/// names the planned object in errors.
+fn plan_unique_constraints(
+    object_kind: &str,
+    name: &UnresolvedItemName,
+    names: &[ColumnName],
+    column_types: &mut [SqlColumnType],
+    keys: &mut Vec<Vec<usize>>,
+    constraints: &[TableConstraint<Aug>],
+) -> Result<(), PlanError> {
+    let mut seen_primary = false;
+    'c: for constraint in constraints {
+        let TableConstraint::Unique {
+            name: _,
+            columns,
+            is_primary,
+            nulls_not_distinct,
+        } = constraint
+        else {
+            continue;
+        };
+        if seen_primary && *is_primary {
+            sql_bail!(
+                "multiple primary keys for {} {} are not allowed",
+                object_kind,
+                name.to_ast_string_stable()
+            );
+        }
+        seen_primary = *is_primary || seen_primary;
+
+        let mut key = vec![];
+        for column in columns {
+            let column = normalize::column_name(column.clone());
+            match names.iter().position(|name| *name == column) {
+                None => sql_bail!("unknown column in constraint: {}", column),
+                Some(i) => {
+                    let nullable = &mut column_types[i].nullable;
+                    if *is_primary {
+                        if *nulls_not_distinct {
+                            sql_bail!(
+                                "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                            );
+                        }
+                        *nullable = false;
+                    } else if !(*nulls_not_distinct || !*nullable) {
+                        // Non-primary key unique constraints are only keys if all of their
+                        // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                        // Skip only this constraint, later ones may still be keys.
+                        continue 'c;
+                    }
+
+                    key.push(i);
+                }
+            }
+        }
+
+        if *is_primary {
+            keys.insert(0, key);
+        } else {
+            keys.push(key);
+        }
+    }
+    Ok(())
 }
 
 generate_extracted_config!(
