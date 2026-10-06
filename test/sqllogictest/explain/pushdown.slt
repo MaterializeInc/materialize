@@ -249,11 +249,8 @@ EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
 ----
 materialize.public.numbers  1313  0  1  0
 
-# Regression test for a panic (SQL-519): EXPLAIN FILTER PUSHDOWN FOR
-# MATERIALIZED VIEW panicked with "missing compute collection" when the view's
-# plan imported an index that was dropped after the view was created. The
-# dropped index no longer has a compute collection, but the view's dataflow
-# keeps running and reading from it.
+# EXPLAIN FILTER PUSHDOWN must remain valid after an imported index is dropped.
+# It describes the written recovery plan, independently of the running dataflow.
 
 statement ok
 CREATE INDEX numbers_value_idx ON numbers (value);
@@ -264,11 +261,11 @@ CREATE MATERIALIZED VIEW indexed_numbers AS SELECT * FROM numbers WHERE value > 
 statement ok
 DROP INDEX numbers_value_idx;
 
-# The view's plan reads entirely from the (dropped) index, so there are no
-# storage imports to report stats for.
+# The written plan imports storage rather than the dropped index.
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW indexed_numbers
 ----
+materialize.public.numbers  1313  0  1  0
 
 # EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
 statement ok
