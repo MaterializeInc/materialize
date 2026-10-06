@@ -43,6 +43,12 @@ export const absoluteFreshnessPath = (
     ? `${regionPath(regionSlug)}/freshness?cluster=${encodeURIComponent(clusterId)}`
     : `${regionPath(regionSlug)}/freshness`;
 
+/** An object's detail drawer, on Monitoring's Objects page. */
+export const absoluteMaintainedObjectPath = (
+  regionSlug: string,
+  objectId: string,
+) => `${regionPath(regionSlug)}/maintained-objects/${objectId}`;
+
 export const relativeClusterPath = (cluster: ClusterPathParams) =>
   `${cluster.id}/${encodeURIComponent(cluster.name)}`;
 

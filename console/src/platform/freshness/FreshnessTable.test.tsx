@@ -135,6 +135,17 @@ describe("FreshnessTable", () => {
     expect(screen.queryByText(/∞|Infinity/)).not.toBeInTheDocument();
   });
 
+  it("links each object to its detail drawer", async () => {
+    await renderComponent(<FreshnessTable rows={rows} />);
+
+    const link = await screen.findByRole("link", { name: "orders_mv" });
+    // A link rather than a row handler, so it is reachable without a mouse.
+    expect(link).toHaveAttribute(
+      "href",
+      expect.stringContaining("/maintained-objects/u1"),
+    );
+  });
+
   it("opens sorted worst first", async () => {
     await renderComponent(<FreshnessTable rows={rows} />);
 

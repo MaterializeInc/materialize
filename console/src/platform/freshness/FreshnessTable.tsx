@@ -10,6 +10,7 @@
 import { Box, Text, useTheme, VStack } from "@chakra-ui/react";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
+import { Link as RouterLink } from "react-router-dom";
 
 import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
 import StatusPill from "~/components/StatusPill";
@@ -17,11 +18,14 @@ import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { TablePagination } from "~/components/Table/TablePagination";
 import { UniversalTable } from "~/components/Table/UniversalTable";
 import { useUniversalTable } from "~/components/Table/useUniversalTable";
+import TextLink from "~/components/TextLink";
 import {
   bucketForHydration,
   HYDRATION_LABELS,
   STATUS_COLOR_SCHEMES,
 } from "~/platform/maintained-objects/filters";
+import { absoluteMaintainedObjectPath } from "~/platform/routeHelpers";
+import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { kebabToTitleCase } from "~/util";
@@ -34,11 +38,26 @@ const PAGE_SIZE = 25;
 /** Shown where a statistic has no value, matching the rest of the Console. */
 const NO_VALUE = "—";
 
+/**
+ * The object's name, linking to its detail drawer.
+ *
+ * A link rather than a click handler on the row: `UniversalTable`'s
+ * `onRowClick` binds `onClick` alone, so a row is reachable with a mouse and
+ * with nothing else.
+ */
 const ObjectCell = ({ row }: { row: FreshnessRow }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const regionSlug = useRegionSlug();
   return (
     <>
-      <Text noOfLines={1}>{row.objectName}</Text>
+      <TextLink
+        as={RouterLink}
+        to={absoluteMaintainedObjectPath(regionSlug, row.key)}
+        textStyle="text-ui-med"
+        noOfLines={1}
+      >
+        {row.objectName}
+      </TextLink>
       {row.namespace && (
         <Text
           textStyle="text-small"
