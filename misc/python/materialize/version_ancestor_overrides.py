@@ -28,6 +28,15 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in ("PgCdcInitialLoad", "PgCdcStreaming"):
+        # PR#38935 (storage: group a pinned snapshot's updates into one batch)
+        # delays a Postgres source's data visibility by about
+        # storage_persist_sink_description_lookahead, which CI sets while the
+        # flag defaults off in production.
+        min_ancestor_mz_version_per_commit[
+            "80e24400e7636cad60f7410abe0249bc87b25938"
+        ] = MzVersion.parse_mz("v26.45.0")
+
     if scenario_class_name in (
         "MySqlInitialLoad",
         "MySqlInitialLoadMultiWorkerSampled",
