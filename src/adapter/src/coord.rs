@@ -1775,13 +1775,6 @@ impl ExecuteContext {
         self.statement_deadline
     }
 
-    /// Preserve the parent's diagnostic budget when transferring one execution
-    /// into a child or restored context.
-    pub(crate) fn with_statement_deadline(mut self, deadline: Option<Instant>) -> Self {
-        self.statement_deadline = deadline;
-        self
-    }
-
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -6740,8 +6733,8 @@ mod execute_context_tests {
             vec![Box::pin(async move {
                 barrier.await.expect("release barrier");
             })],
-        )
-        .with_statement_deadline(Some(Instant::now() + Duration::from_secs(60)));
+        );
+        ctx.statement_deadline = Some(Instant::now() + Duration::from_secs(60));
         let statement = mz_sql_parser::parser::parse_statements("SUBSCRIBE (SELECT 1)")
             .expect("valid subscribe")
             .remove(0)

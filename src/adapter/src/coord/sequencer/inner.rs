@@ -39,8 +39,8 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    Row, Timestamp,
+    CatalogItemId, Datum, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector, Row,
+    Timestamp,
 };
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
