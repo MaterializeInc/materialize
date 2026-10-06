@@ -2126,7 +2126,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2258,7 +2258,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     async fn sequence_end_transaction_inner(
         &mut self,
         ctx: &mut ExecuteContext,
