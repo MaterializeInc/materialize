@@ -241,6 +241,14 @@ Checking uniqueness in the dataflow means maintaining a count per key, i.e. an a
 It removes the incompleteness of the key proof but adds a large and surprising cost.
 It can be added later as an opt-in for keys the optimizer cannot prove.
 
+### Sink-style `KEY (...)` instead of `PRIMARY KEY` / `UNIQUE`
+
+Materialize has two precedents for declaring keys.
+User-facing, `CREATE SINK ... KEY (...) [NOT ENFORCED]` validates a requested key against the inferred keys, which is the same check this design applies.
+In column-definition lists, `PRIMARY KEY` and `UNIQUE` are what `CREATE TABLE` parses and what purification writes into the `create_sql` of tables created from Postgres, MySQL and SQL Server sources.
+Since the declared schema is a column-definition list, we follow the second precedent and reuse its grammar and planning code.
+A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we reject for materialized views (see [Unenforced keys](#unenforced-keys)).
+
 ### Schema as a `WITH` option
 
 `WITH (SCHEMA (...))` or similar would avoid touching the column list, but it splits naming (column list) from typing (option) and departs from the `CREATE TABLE` grammar users and tools already know.
