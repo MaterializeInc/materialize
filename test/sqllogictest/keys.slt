@@ -50,3 +50,50 @@ Explained Query:
 Target cluster: quickstart
 
 EOF
+
+# A UNIQUE constraint over a nullable column is not a key, but must not cause
+# the constraints after it to be ignored.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_table_keys = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE unique_then_pk (a int, b int, UNIQUE (a), PRIMARY KEY (b))
+
+query TT
+SELECT c.name, c.nullable::text
+FROM mz_columns c JOIN mz_tables t ON c.id = t.id
+WHERE t.name = 'unique_then_pk'
+ORDER BY c.position
+----
+a  true
+b  false
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM unique_then_pk
+----
+Explained Query:
+  ReadStorage materialize.public.unique_then_pk // { keys: "([1])" }
+
+Source materialize.public.unique_then_pk
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE TABLE unique_then_unique (a int, b int NOT NULL, UNIQUE (a), UNIQUE (b))
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM unique_then_unique
+----
+Explained Query:
+  ReadStorage materialize.public.unique_then_unique // { keys: "([1])" }
+
+Source materialize.public.unique_then_unique
+
+Target cluster: quickstart
+
+EOF
