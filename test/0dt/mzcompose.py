@@ -1462,13 +1462,28 @@ def workflow_kafka_source_rehydration(
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
         # Retire mz_old only after timing the promotion.
+        promotion_timeout = 2400 if env_is_truthy("CI_COVERAGE_ENABLED") else 1200
+        start_time = time.monotonic()
+        promotion_deadline = start_time + promotion_timeout
         c.promote_mz("mz_new", retire_mz_service=None)
-        start_time = time.time()
         c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+            DeploymentStatus.IS_LEADER,
+            "mz_new",
+            timeout=max(1, int(promotion_deadline - time.monotonic())),
+            sleep_time=None,
         )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+        # Completing the handshake waits for SQL serving without warming a query.
+        psycopg.connect(
+            host="127.0.0.1",
+            port=c.default_port("mz_new"),
+            user="materialize",
+            dbname="materialize",
+            sslmode="disable",
+            connect_timeout=max(1, int(promotion_deadline - time.monotonic())),
+        ).close()
+        elapsed = time.monotonic() - start_time
+        print(f"promotion took {elapsed} seconds (through SQL readiness)")
+        assert elapsed < promotion_timeout, f"Promotion exceeded {promotion_timeout}s"
         c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
@@ -1481,12 +1496,6 @@ def workflow_kafka_source_rehydration(
         assert (
             elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
-
-        start_time = time.time()
-        result = c.sql_query("SELECT 1", service="mz_new")
-        elapsed = time.time() - start_time
-        print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
-        assert result[0][0] == 1, f"Wrong result: {result}"
 
         new_version = c.query_mz_version(service="mz_new")
         print(f"mz_new SQL binary version: {new_version}")

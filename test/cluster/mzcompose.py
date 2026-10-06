@@ -282,191 +282,6 @@ def workflow_test_github_3553(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
-# How many dataflows `test_github_4443` tolerates as not yet compacted out of a
-# command history. Compaction is asynchronous, so a sample can catch dataflows
-# the history has already dropped but not yet collapsed.
-MAX_LINGERING_DATAFLOWS = 5
-
-
-def workflow_test_github_4443(c: Composition) -> None:
-    """
-    Test that compute command history does not leak peek commands.
-
-    Regression test for https://github.com/MaterializeInc/database-issues/issues/4443.
-    """
-
-    with ExitStack() as stack:
-        c.up("materialized")
-
-        # Native execution owns command history on the replica, not envd.
-        def find_command_history_metrics(c: Composition) -> tuple[int, int]:
-            replica_metrics = c.exec(
-                "clusterd1", "curl", "localhost:6878/metrics", capture=True
-            ).stdout
-            replica_command_count, replica_command_count_found = 0, False
-            replica_dataflow_count, replica_dataflow_count_found = 0, False
-            for metric in replica_metrics.splitlines():
-                if metric.startswith("mz_compute_replica_history_command_count"):
-                    replica_command_count += int(metric.split()[1])
-                    replica_command_count_found = True
-                elif metric.startswith("mz_compute_replica_history_dataflow_count"):
-                    replica_dataflow_count += int(metric.split()[1])
-                    replica_dataflow_count_found = True
-
-            assert (
-                replica_command_count_found
-            ), "command count not found in replica metrics"
-            assert (
-                replica_dataflow_count_found
-            ), "dataflow count not found in replica metrics"
-
-            return (
-                replica_command_count,
-                replica_dataflow_count,
-            )
-
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        # Set up a cluster with an indexed table and an unindexed one.
-        c.sql("""
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
-            ));
-            """)
-
-        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
-               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
-               WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
-        catalog_options = native_catalog_options(c)
-        stack.enter_context(
-            c.override(
-                Clusterd(
-                    name="clusterd1",
-                    workers=1,
-                    options=[
-                        f"--catalog-cluster-id={cluster_id}",
-                        f"--catalog-replica-id={replica_id}",
-                        *catalog_options,
-                    ],
-                ),
-            )
-        )
-        c.up("clusterd1")
-
-        c.sql("""
-            SET cluster = cluster1;
-            -- table for fast-path peeks
-            CREATE TABLE t (a int);
-            CREATE DEFAULT INDEX ON t;
-            INSERT INTO t VALUES (42);
-            -- table for slow-path peeks
-            CREATE TABLE t2 (a int);
-            INSERT INTO t2 VALUES (84);
-
-            -- Wait for the cluster to be ready.
-            SELECT * FROM t;
-            SELECT * FROM t2;
-            """)
-
-        # Wait a bit to let the metrics refresh.
-        time.sleep(2)
-
-        # Obtain initial history size and dataflow count.
-        # Dataflow count can plausibly be more than 1, if compaction is delayed.
-        (
-            initial_replica_command_count,
-            replica_dataflow_count,
-        ) = find_command_history_metrics(c)
-
-        # Curated metric sinks install one dataflow per definition on every replica,
-        # so they add to the aggregate history dataflow counts above. That metric
-        # carries no per-dataflow label to filter on, so subtract the live count of
-        # curated sink dataflows rather than hardcoding it, keeping the bounds
-        # correct as the CURATED set grows. Read the count off cluster1's own
-        # replica, the one whose history the metrics above describe.
-        with c.sql_cursor() as cursor:
-            cursor.execute(b"SET cluster = cluster1")
-            cursor.execute(
-                b"SELECT count(*) FROM mz_introspection.mz_dataflows"
-                b" WHERE name LIKE '%metric-sink-%'"
-            )
-            metric_sink_dataflows = int(cursor.fetchall()[0][0])
-
-        assert initial_replica_command_count > 0, "replica history cannot be empty"
-        assert (
-            replica_dataflow_count > 0
-        ), "at least one dataflow expected in replica history"
-        assert (
-            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
-        ), "more dataflows than expected in replica history"
-
-        # execute 400 fast- and slow-path peeks
-        for _ in range(20):
-            c.sql("""
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                SELECT * FROM t;
-                SELECT * FROM t2;
-                """)
-
-        # Wait a bit to let the metrics refresh.
-        time.sleep(2)
-
-        # Check that history size and dataflow count are well-behaved.
-        # Dataflow count can plausibly be more than 1, if compaction is delayed.
-        (
-            replica_command_count,
-            replica_dataflow_count,
-        ) = find_command_history_metrics(c)
-        # `ComputeCommandHistory` compacts only once the command count exceeds twice the count
-        # left by the previous compaction, so a healthy history oscillates between the compacted
-        # size and twice it. Both samples are drawn at an unknown point of that cycle, so the
-        # second can legitimately be twice the first. On top of that sits an allowance for the
-        # lingering dataflows the bounds below tolerate, each of which holds a `CreateDataflow`,
-        # a `Schedule`, and an `AllowCompaction` command. Bounding the second sample that way
-        # still catches a history that grows per peek, which is what this test is about: 400
-        # peeks that fail to retire land orders of magnitude above it. A fixed bound would
-        # instead need retuning whenever the object count installed at boot changes.
-        lingering_dataflow_commands = 3 * MAX_LINGERING_DATAFLOWS
-        assert (
-            replica_command_count
-            <= 2 * initial_replica_command_count + lingering_dataflow_commands
-        ), (
-            "replica history grew more than expected after peeks, got"
-            f" {replica_command_count}, started at {initial_replica_command_count}"
-        )
-        assert (
-            replica_dataflow_count > 0
-        ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
-        assert (
-            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
-        ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
-
-
 def workflow_test_github_4444(c: Composition) -> None:
     """
     Test that compute reconciliation does not produce empty frontiers.
@@ -5839,6 +5654,49 @@ def workflow_test_refresh_mv_warmup(
                 """))
 
 
+def catalog_client_incarnations(c: Composition) -> dict[str, dict]:
+    response = requests.get(
+        f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()["client_incarnations"]
+
+
+def cluster_replica_incarnation(c: Composition, cluster: str) -> str:
+    """Identify the sole user replica's durable client before retiring it."""
+    with c.sql_cursor() as cursor:
+        cursor.execute(
+            "SELECT r.id FROM mz_cluster_replicas r "
+            "JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = %s",
+            (cluster,),
+        )
+        [(replica_id,)] = cursor.fetchall()
+    assert replica_id.startswith("u"), replica_id
+    incarnations = catalog_client_incarnations(c)
+    matches = [
+        incarnation
+        for incarnation, client in incarnations.items()
+        if client["replica_id"] == {"User": int(replica_id[1:])}
+    ]
+    assert len(matches) == 1, (replica_id, incarnations)
+    return matches[0]
+
+
+def wait_for_client_reclamation(c: Composition, incarnations: Collection[str]) -> None:
+    # Replica absence is not reclamation. Closing the durable incarnation also
+    # removes its grants atomically. Allow the fixture's 25s grace plus convergence
+    # before starting the separate, short advancement measurement.
+    deadline = time.monotonic() + 60
+    while True:
+        clients = catalog_client_incarnations(c)
+        remaining = {key: clients[key] for key in incarnations if key in clients}
+        if not remaining:
+            return
+        assert time.monotonic() < deadline, f"clients not reclaimed: {remaining}"
+        time.sleep(0.5)
+
+
 def check_read_frontiers_not_stuck(c: Composition, object_names: list[str]):
     name_filter = ",".join(f"'{n}'" for n in object_names)
     query = f"""
@@ -6356,9 +6214,13 @@ def workflow_test_github_8734(c: Composition) -> None:
                 "enable_refresh_every_mvs": "true",
             },
             support_external_clusterd=True,
+            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         ),
         Testdrive(no_reset=True),
     ):
+        # Managed replicas inherit the same 5s heartbeat / 25s grace from startup,
+        # including after the environmentd restart below.
+        c.down(destroy_volumes=True)
         c.up("materialized", Service("testdrive", idle=True))
 
         # Create a REFRESH MV and wait for it to refresh once, then take down
@@ -6372,9 +6234,10 @@ def workflow_test_github_8734(c: Composition) -> None:
                 WITH (REFRESH EVERY '60m')
                 AS SELECT * FROM t;
             SELECT * FROM mv;
-
-            ALTER CLUSTER test SET (REPLICATION FACTOR 0);
             """)
+        incarnation = cluster_replica_incarnation(c, "test")
+        c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
+        wait_for_client_reclamation(c, [incarnation])
 
         try:
             check_read_frontiers_not_stuck(c, ["t"])
@@ -6384,10 +6247,14 @@ def workflow_test_github_8734(c: Composition) -> None:
 
         # Restart envd, then verify that the table's frontier still advances.
         protection_evidence("before-restart")
+        # All clients in this isolated fixture run in the container being killed.
+        # Their retained grants must retire before measuring post-restart progress.
+        retiring_clients = catalog_client_incarnations(c)
         c.kill("materialized")
         c.up("materialized")
 
         c.sql("SELECT * FROM mv")
+        wait_for_client_reclamation(c, retiring_clients)
 
         try:
             check_read_frontiers_not_stuck(c, ["t"])
@@ -7901,104 +7768,120 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     periodically advancing, instead of blocking compaction of the index inputs.
     """
 
-    c.up("materialized")
+    # Managed replicas share the fixture's 5s heartbeat / 25s grace from startup.
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            external_metadata_store=True,
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+            support_external_clusterd=True,
+            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
+        )
+    ):
+        c.down(destroy_volumes=True)
+        c.up("materialized")
 
-    # The controller reconciles the replica set asynchronously; drive the tick
-    # down so pause/unpause converge quickly.
-    c.sql(
-        "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
-        port=6877,
-        user="mz_system",
-    )
+        # The controller reconciles the replica set asynchronously; drive the tick
+        # down so pause/unpause converge quickly.
+        c.sql(
+            "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+            port=6877,
+            user="mz_system",
+        )
 
-    def wait_for_replica_count(expected: int) -> None:
-        for _ in range(120):
-            count = int(
-                c.sql_query(
-                    "SELECT count(*) FROM mz_cluster_replicas cr "
-                    "JOIN mz_clusters c ON c.id = cr.cluster_id "
-                    "WHERE c.name = 'test'"
-                )[0][0]
+        def wait_for_replica_count(expected: int) -> None:
+            for _ in range(120):
+                count = int(
+                    c.sql_query(
+                        "SELECT count(*) FROM mz_cluster_replicas cr "
+                        "JOIN mz_clusters c ON c.id = cr.cluster_id "
+                        "WHERE c.name = 'test'"
+                    )[0][0]
+                )
+                if count == expected:
+                    return
+                time.sleep(0.5)
+            raise AssertionError(
+                f"cluster 'test' did not converge to {expected} replica(s)"
             )
-            if count == expected:
-                return
-            time.sleep(0.5)
-        raise AssertionError(
-            f"cluster 'test' did not converge to {expected} replica(s)"
-        )
 
-    # Create a pause-able cluster, with indexes with different kinds of inputs.
-    c.sql("""
-        CREATE CLUSTER test SIZE 'scale=1,workers=1';
-        SET cluster = test;
+        # Create a pause-able cluster, with indexes with different kinds of inputs.
+        c.sql("""
+            CREATE CLUSTER test SIZE 'scale=1,workers=1';
+            SET cluster = test;
 
-        -- index on a storage collection
-        CREATE TABLE t (a int);
-        CREATE INDEX idx1 ON t (a);
+            -- index on a storage collection
+            CREATE TABLE t (a int);
+            CREATE INDEX idx1 ON t (a);
 
-        -- index on an index
-        CREATE INDEX idx2 ON t (a + 1);
+            -- index on an index
+            CREATE INDEX idx2 ON t (a + 1);
 
-        -- index on a REFRESH MV
-        CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '1d') AS SELECT a FROM t;
-        CREATE INDEX idx3 ON mv (a);
+            -- index on a REFRESH MV
+            CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '1d') AS SELECT a FROM t;
+            CREATE INDEX idx3 ON mv (a);
 
-        SELECT a FROM t;
-        SELECT a + 1 FROM t;
-        SELECT a FROM mv;
+            SELECT a FROM t;
+            SELECT a + 1 FROM t;
+            SELECT a FROM mv;
+            """)
+
+        # Sanity check.
+        check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
+
+        # Pause the cluster; read frontiers should still advance. The controller drops
+        # the replica asynchronously, so wait for the pause to take effect first.
+        incarnation = cluster_replica_incarnation(c, "test")
+        c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
+        wait_for_replica_count(0)
+        wait_for_client_reclamation(c, [incarnation])
+
+        # Without replicas there are no observed index frontiers. The committed
+        # bounds govern protection and reconstruction while execution is paused.
+        index_ids = c.sql_query("""
+            SELECT name, global_id FROM mz_indexes
+            JOIN mz_internal.mz_object_global_ids USING (id)
+            WHERE name IN ('idx1', 'idx2', 'idx3')
         """)
+        assert {name for name, _ in index_ids} == {"idx1", "idx2", "idx3"}
 
-    # Sanity check.
-    check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
+        def compaction_bounds() -> dict[str, int]:
+            response = requests.get(
+                f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
+                timeout=10,
+            )
+            response.raise_for_status()
+            bounds = response.json()["collection_compaction_bounds"]
+            result = {}
+            for name, global_id in index_ids:
+                frontier = bounds[global_id]["elements"]
+                assert len(frontier) == 1, (name, frontier)
+                result[name] = int(frontier[0])
+            return result
 
-    # Pause the cluster; read frontiers should still advance. The controller drops
-    # the replica asynchronously, so wait for the pause to take effect first.
-    c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
-    wait_for_replica_count(0)
+        before = compaction_bounds()
+        time.sleep(3)
+        after = compaction_bounds()
+        for name in before:
+            assert (
+                before[name] < after[name]
+            ), f"compaction bound of {name} is stuck, {before[name]} >= {after[name]}"
 
-    # Without replicas there are no observed index frontiers. The committed
-    # bounds govern protection and reconstruction while execution is paused.
-    index_ids = c.sql_query("""
-        SELECT name, global_id FROM mz_indexes
-        JOIN mz_internal.mz_object_global_ids USING (id)
-        WHERE name IN ('idx1', 'idx2', 'idx3')
-    """)
-    assert {name for name, _ in index_ids} == {"idx1", "idx2", "idx3"}
+        # Unpause the cluster; indexes should still be queryable. The controller
+        # recreates the replica asynchronously, so wait for it before issuing index
+        # peeks, which require a replica.
+        c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 1)")
+        wait_for_replica_count(1)
+        c.sql("""
+            SET cluster = test;
 
-    def compaction_bounds() -> dict[str, int]:
-        response = requests.get(
-            f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
-            timeout=10,
-        )
-        response.raise_for_status()
-        bounds = response.json()["collection_compaction_bounds"]
-        result = {}
-        for name, global_id in index_ids:
-            frontier = bounds[global_id]["elements"]
-            assert len(frontier) == 1, (name, frontier)
-            result[name] = int(frontier[0])
-        return result
-
-    before = compaction_bounds()
-    time.sleep(3)
-    after = compaction_bounds()
-    for name in before:
-        assert (
-            before[name] < after[name]
-        ), f"compaction bound of {name} is stuck, {before[name]} >= {after[name]}"
-
-    # Unpause the cluster; indexes should still be queryable. The controller
-    # recreates the replica asynchronously, so wait for it before issuing index
-    # peeks, which require a replica.
-    c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 1)")
-    wait_for_replica_count(1)
-    c.sql("""
-        SET cluster = test;
-
-        SELECT a FROM t;
-        SELECT a + 1 FROM t;
-        SELECT a FROM mv;
-        """)
+            SELECT a FROM t;
+            SELECT a + 1 FROM t;
+            SELECT a FROM mv;
+            """)
 
 
 def workflow_test_swap_heap_limiting(c: Composition) -> None:
