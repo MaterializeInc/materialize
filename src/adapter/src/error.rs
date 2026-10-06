@@ -330,7 +330,7 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
-    /// Attempt to apply a replacement to a sealed materialized view.
+    /// Attempt to replace a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
     },
@@ -748,8 +748,9 @@ impl AdapterError {
                 Some(lines.join("\n"))
             }
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
-                "The materialized view has already computed its output until the end of time, \
-                 so replacing its definition would have no effect."
+                "The materialized view's contents are final for all future times, so they can \
+                 no longer be changed. This happens once it can't receive any more updates, \
+                 for example after an unrecoverable source error."
                     .into(),
             ),
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
@@ -908,6 +909,9 @@ impl AdapterError {
             ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
+            ),
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "Create a new materialized view with the new definition instead.".into()
             ),
             _ => None,
         }
