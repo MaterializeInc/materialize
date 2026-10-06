@@ -27,7 +27,6 @@ import {
 import { absoluteMaintainedObjectPath } from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
-import { truncateMaxWidth } from "~/theme/components/Table";
 import { kebabToTitleCase } from "~/util";
 import { formatDurationExact } from "~/utils/format";
 
@@ -136,13 +135,18 @@ const columns = [
     id: "swatch",
     header: () => <Box aria-label="Graph color" />,
     cell: (info) => <ColorSwatch row={info.row.original} />,
-    size: 32,
   }),
   columnHelper.accessor("objectName", {
     header: "Object",
     sortingFn: sortingFunctions.nullsLast,
     cell: (info) => <ObjectCell row={info.row.original} />,
-    meta: { cellProps: truncateMaxWidth },
+    // The Object column takes all the width the others do not need, so every
+    // other column, the swatch included, sizes to its content.
+    //
+    // NOTE: `maxW: 0` is what makes the name truncate. An auto-layout table
+    // cell otherwise grows to fit its text, so without it the name would
+    // widen the table rather than truncate.
+    meta: { cellProps: { width: "100%", maxW: 0 } },
   }),
   columnHelper.accessor("objectType", {
     header: "Type",

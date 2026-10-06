@@ -123,12 +123,6 @@ const FreshnessContent = ({
     },
   } = useClusterFreshness({ lookbackMs, objects });
 
-  // Hydration is its own query: `buildLagHistoryQuery` is shared with pages
-  // that never show it, and joined there it cost all of them a scan.
-  //
-  // Its IDs come from `objects` rather than from the lag result, so the two
-  // requests go together. Taking them from the result would make this one wait,
-  // since a suspending query stops the component before this line is reached.
   const { data: hydrationByObjectId } = useFreshnessHydration(
     objects.map((object) => object.objectId),
   );
