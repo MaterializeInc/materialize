@@ -470,9 +470,8 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
-        // Compaction proposals depend on sampled execution holds. Enacting newly
-        // observed DDL can add holds, so that producer must resample after a
-        // planning change rather than retrying its original SetReadProtection.
+        // Client operations validate against current durable state. Prepared SQL
+        // operations must return to their producer when planning changes.
         let retry_after_planning_change = ops.iter().all(|op| {
             matches!(
                 op,
@@ -1008,6 +1007,15 @@ impl Coordinator {
                         .wall_time()
                         .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
                         .await?;
+                    // Compaction proposals sample other clients' requirements.
+                    // A metadata-only grant can invalidate that sample without
+                    // changing the planning revision. Let the publisher resample
+                    // with its pending work intact, rather than replaying bounds.
+                    if ops.iter().any(|op| {
+                        matches!(op, Op::SetReadProtection { bounds, .. } if !bounds.is_empty())
+                    }) {
+                        return Err(AdapterError::DDLTransactionRace);
+                    }
                     if self.catalog().transient_revision() != prepared_revision {
                         return Err(error);
                     }
