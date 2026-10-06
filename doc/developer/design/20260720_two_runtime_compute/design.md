@@ -835,8 +835,10 @@ a `CreateDataflow` only if its placement covers the dataflow's class, and otherw
 the dataflow's exports as *peers*.
 
 **A peer hold per published index.** A runtime that reads its peer's indexes holds each
-one from the index's own `CreateDataflow` at that dataflow's `as_of`, through a
-logical-only reader on the publication point. The hold is the index's trace in
+one at the `as_of` of the index's `CreateDataflow`, through a logical-only reader on the
+publication point. The publishing runtime registers that hold when it publishes the index,
+which comes before any `AllowCompaction` for the index on its own stream, and the reading
+runtime takes it over when it records the peer. The hold is then the index's trace in
 `compute_state.traces`, so `AllowCompaction` moves it exactly as it compacts a local trace,
 and an empty frontier removes it. The publishing trace compacts to the meet of its local
 holds and its readers' holds, so the peer hold bounds it.
@@ -859,7 +861,10 @@ from its point of view the dataflow is gone.
 
 The peer hold closes exactly that window. The bound is the reading runtime's applied
 frontier, still 0, and it advances only when that runtime applies the broadcast compaction,
-which is queued *behind* the create.
+which is queued *behind* the create. It has to exist before the reading runtime reaches the
+index's own create, too. A reading runtime that far behind would otherwise register its
+hold only after maintenance had compacted past the read, which is why the publisher
+registers it.
 
 **The peer hold costs nothing.** It pins each index at the controller's compaction
 frontier as the reading runtime has applied it, which the controller already guarantees is
@@ -876,11 +881,12 @@ dataflow identity.
 #### As implemented
 
 The peer hold is `Shared::reader_at_least`, a reader whose logical hold is the join of the
-`as_of` and the published `since`, with no physical hold. It never refuses: a peer recorded
-at an index's creation can carry an `as_of` below what the trace has since compacted to, and
-the join raises it rather than rejecting it. `ArrangementSharingRegistry::peer_bundle` wraps
-the `oks` and `errs` readers in a `TraceBundle` of `IndexTrace::Shared` traces that also
-retains the registry slot. Imports never read through the peer hold itself.
+`as_of` and the published `since`, with no physical hold, so it never refuses. Each slot
+pairs its publications with their peers in order: `publish` registers a hold unless a peer
+was recorded first, and `peer_bundle` takes the oldest registered hold or, when there is
+none, registers its own and marks the publication to come as already held. A hold nobody
+takes dies with the slot. `peer_bundle` wraps the `oks` and `errs` readers in a
+`TraceBundle` of `IndexTrace::Shared` traces that also retains the registry slot. Imports never read through the peer hold itself.
 `IndexTrace::import_frontier_core` mints a fresh reader at the hold's frontier that also
 holds the chain physically at the coverage it seeds the import with, as an import must.
 
@@ -1183,7 +1189,13 @@ holding the published `oks` and `errs` points of one index on one worker.
   two publishing workers would back one slot with different shards of an index, and a
   second reader would take over the wake, so the first one's waiting peeks would never
   wake.
-* **Get-or-create is symmetric.** Whichever runtime touches an id first creates its slot.
+* **A slot is one incarnation of an id.** The slot records the `as_of` of the dataflow that
+  exports the index, and both runtimes look it up by the id and that `as_of`, which they read
+  off the same `CreateDataflow`. A reconnect can recreate an index under its id with an
+  `as_of` below the old incarnation's `since`, and the two runtimes reconcile in either
+  order, so keying on the `as_of` keeps a read of the new incarnation off the old one's
+  compacted chain.
+* **Get-or-create is symmetric.** Whichever runtime touches an incarnation first creates its slot.
   The maintenance runtime publishing an index adopts the slot's points. The interactive
   runtime recording a peer index takes its peer bundle on the same slot, and when that
   happens first the bundle holds unbacked points that the later adopt fills in place
@@ -1238,7 +1250,9 @@ The interactive runtime serves every peek and renders every `OneShotRead` datafl
 * **Introspection reads the maintenance runtime's logging.** The interactive runtime
   renders no logging dataflow. It records every log index as a peer and serves
   introspection peeks from the indexes the maintenance runtime publishes, so introspection
-  during hydration returns promptly, possibly stale, instead of blocking.
+  during hydration returns promptly, possibly stale, instead of blocking. Reconciliation
+  pads the peer bundles of logging indexes as it pads local logging traces, because the
+  maintenance runtime's padding stays on its own handles and never reaches the publication.
 * **Late-bound imports, never a deferred build.** A query dataflow whose imported indexes
   are not yet published is built immediately anyway, against the real but empty points the
   peer bundle holds, which the maintenance trace later attaches to in place. Deferring the
@@ -1356,20 +1370,6 @@ The defects that could be verified against the code are fixed. These are the one
 remain, kept here because each is a real hazard with a known mechanism rather than a
 speculation, and each needs a decision rather than a patch.
 
-* **A peer hold registered too late does not bound compaction.** The reading runtime takes
-  its peer hold when it applies the index's `CreateDataflow`. If it lags behind maintenance
-  by that much, and in the meantime the controller creates a one-shot read at `t0`, cancels
-  it, and allows the index to compact to `t1 > t0`, maintenance compacts to `t1` with no
-  hold in place. The reading runtime then joins its hold up to `t1` and panics on the
-  `since <= as_of` assertion when it reaches the read's create. The fix is for the publisher
-  to register the peer hold at the index's `as_of` when it publishes, which happens before
-  maintenance applies any compaction for the index, and for the reading runtime to take that
-  hold over.
-* **Logging reads after a reconnect differ between layouts.** Reconciliation pads the
-  logging traces so the controller can read them from the minimum time again. Maintenance
-  pads its local handles, but the padding does not reach the publication point, so the
-  interactive runtime still reports the real `since`, and a peek below it gets a compaction
-  error where a single runtime returns an empty result.
 * **Persist-backed reads are not isolated from hydration** (CPU-298). Persist bounds the
   bytes being fetched and parsed in a process with one first-come, first-served semaphore,
   sized to the memory limit times `persist_fetch_semaphore_permit_adjustment`, and a part
@@ -1528,39 +1528,21 @@ actually arbitrate. Ordered by expected value per line of change.
    ticks. What doubles is thread stacks, per-worker progress tracking, and the
    frontier-following work that gives an idle replica its resting utilization.
 
-   If pinning is ever available, the asymmetric form is the wrong one. Pinning
-   maintenance and floating interactive sounds right because throughput work wants
-   locality and latency work wants placement freedom, but that reasoning applies to
-   a thread pool and the interactive runtime is not one. It is a second
-   barrier-synchronous engine with the same peer count, so floating its workers
-   moves the jitter into its own barrier rather than removing it. Pinning
-   maintenance to every core is also not a reservation. It only fixes where
-   maintenance runs, so interactive lands on a core holding a pinned runnable
-   worker the scheduler can no longer balance away, which is worse than pinning
-   nothing.
-
-   The form that follows from the design is to co-pin worker `i` of both runtimes
-   to the same core. The equal-peer requirement is not only a soundness pairing, it
-   is a locality pairing: interactive worker `i` reads publisher worker `i`'s
-   batches, and under first-touch those pages live wherever the publisher
-   allocated them. Co-pinning keeps a bandwidth-bound cursor walk on the same
-   core's cache hierarchy and the same NUMA node as the data, where pinning the two
-   apart guarantees remote traffic for every cursor step. This also needs no new
-   plumbing, because `set_core_affinity` maps the global peer index modulo the core
-   count and both runtimes agree on that index, so enabling the existing flag on
-   both runtimes already co-pins. The asymmetric variant is the one that would need
-   new code. Contention on the shared core is tolerable because interactive worker
-   `i` is mostly parked, and where it is not, items 3 and the reservation above are
-   what govern the steal.
-
-   Two things to measure rather than assume. Placing maintenance `i` and
-   interactive `i` on sibling hyperthreads of one physical core would give the
-   pairwise read a shared L1 and L2, but siblings share execution resources and a
-   bandwidth-heavy maintenance worker degrades its sibling, which is one of the
-   interference channels the colocation literature says must be controlled
-   explicitly. And `core_affinity::get_core_ids()` enumerates logical CPUs with no
-   guaranteed order, which is why the existing code sorts them, so whether the
-   first N ids are N distinct physical cores is platform-dependent.
+   No pinning layout has been measured, so none is argued for here. What the code
+   does is fixed: `set_core_affinity` maps the global peer index modulo the core
+   count, both runtimes agree on that index, and both pass the same
+   `worker_core_affinity` setting, so enabling the flag pins worker `i` of both
+   runtimes to the same core. That layout keeps a pairwise read on the cache
+   hierarchy and NUMA node where the publisher allocated the batches, and it puts
+   two runnable threads on one core the scheduler can no longer balance apart when
+   the interactive worker is busy. Pinning maintenance and floating interactive, or
+   the reverse, trades those the other way. Which wins is an experiment: peek p99 and
+   maintenance throughput under each layout, during hydration and quiet. Two
+   platform facts bear on it. Sibling hyperthreads share execution resources, so a
+   bandwidth-heavy maintenance worker degrades its sibling. And
+   `core_affinity::get_core_ids()` enumerates logical CPUs with no guaranteed order,
+   which is why the existing code sorts them, so whether the first N ids are N
+   distinct physical cores is platform-dependent.
 3. **Shared-cache and memory-bandwidth interference during hydration.** Core
    partitioning is not sufficient on its own. A batch task streaming through the
    last-level cache degrades a colocated latency-sensitive task's tail even when
@@ -1639,19 +1621,20 @@ the existing answer and a better one.
 * Unit tests cover the sharing primitive and registry: the single-lock feed,
   placeholder-attached-late joins, cross-thread reads, the compaction invariants, a join
   and a reduce over a chain the writer's spine has merged across read at a stale
-  `as_of`, a trace published under several ids, and one publishing and one reading thread
-  per registry. The multiplexer's broadcast and peek routing and the index peek sweep have
+  `as_of`, a trace published under several ids, a hold registered below an attaching trace's
+  `since`, incarnations of one id, and one publishing and one reading thread per registry. The multiplexer's broadcast and peek routing and the index peek sweep have
   their own.
 * `compute_state` tests drive a maintenance and an interactive `ActiveComputeState` over one
   registry with the same command stream, which covers placement, peers and their holds, and
-  peeks served from a peer index. `render` tests cover the shared import and joins over
-  shared arrangements.
+  peeks served from a peer index. `render` tests cover the shared import, joins over shared
+  arrangements, the publisher's reserved peer hold in either order, and padded peer bundles.
 * Four `clusterd-test-driver` specs, run at one and two workers, cover the runtime boundary:
   a fast-path read through a published index, a query dataflow that binds to an index before
   it has produced anything and resolves after, a read through an index that re-exports
   another's arrangement under a point of its own, and a query dataflow on the interactive
-  runtime whose export is the arrangement it imports. The driver marks a dataflow
-  `OneShotRead` when it reads a single time, as the adapter does.
+  runtime whose export is the arrangement it imports. They also run the reconciliation
+  spec, which reconnects with peers on the runtime that does not render a dataflow. The
+  driver marks a dataflow `OneShotRead` when it reads a single time, as the adapter does.
 * `interactive_runtime.slt` pins the flag before creating a two-worker cluster and reads
   through indexes, re-exports, errors on both paths, a join that needs a peek dataflow, with
   `enable_compute_interactive_dataflows` on and off, strict serializable reads, and
@@ -1739,6 +1722,12 @@ thread, made the registry one per worker ordinal, folded the shared trace into t
 the shared import the maintenance import's `SnapshotMode` handling for free. Role
 branches in shared functions became components chosen at construction: `Placement`,
 `ProcessGlobals`, the publisher, and the peer traces.
+
+A review of the reworked stack found that the peer hold, taken when the reading runtime
+applied the index's create, came too late when that runtime lagged by a whole create, and
+that a reconnect could hand the new incarnation of an index the old one's slot. The
+publisher now registers the hold, slots are keyed by incarnation, and the trace no longer
+rewinds to a hold registered below its `since`.
 
 The peek path was unified with the peek execution work: the interactive runtime's own
 `PendingPeek` variant was folded into `IndexPeek`, so budgeting, offload and the stash apply
