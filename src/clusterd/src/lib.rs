@@ -189,6 +189,7 @@ fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
 
 pub fn main() {
     mz_ore::panic::install_enhanced_handler();
+    mz_ore::antithesis::init();
 
     // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
     // hyper-rustls, so building its client resolves the process-default rustls
