@@ -1794,7 +1794,13 @@ fn test_subscribe_outlive_cluster() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_insert_concurrent_alter_table() {
-    let server = test_util::TestHarness::default().start_blocking();
+    // The synchronization failpoint lives in the coordinator's constant-INSERT path.
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "false".to_string(),
+        )
+        .start_blocking();
     server.enable_feature_flags(&["enable_alter_table_add_column"]);
 
     let mut ddl_client = server.connect(postgres::NoTls).unwrap();
@@ -1885,14 +1891,12 @@ fn test_read_then_write_serializability_frontend_occ() {
 
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability_inner(frontend_occ: bool) {
-    let mut harness = test_util::TestHarness::default();
-    if frontend_occ {
-        harness = harness.with_system_parameter_default(
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
             "enable_adapter_frontend_occ_read_then_write".to_string(),
-            "true".to_string(),
-        );
-    }
-    let server = harness.start_blocking();
+            frontend_occ.to_string(),
+        )
+        .start_blocking();
 
     // Create table with initial value
     {

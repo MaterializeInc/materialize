@@ -545,7 +545,7 @@ pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
 
 pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
     "enable_adapter_frontend_occ_read_then_write",
-    false,
+    true,
     "Use frontend sequencing (with optimistic concurrency control) for \
      DELETE, UPDATE, and INSERT operations. Read at startup, so changing it \
      takes effect on the next restart.",

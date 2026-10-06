@@ -7555,7 +7555,7 @@ fn test_startup_only_system_var_warns() {
     };
 
     for stmt in [
-        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
+        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = false",
         "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
     ] {
         client.batch_execute(stmt).unwrap();
@@ -7599,7 +7599,7 @@ fn test_startup_only_system_var_warns() {
 
     // `RESET ALL` also goes through, and warns for the parameter it changes.
     client
-        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
+        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = false")
         .unwrap();
     let _ = drain(&mut rx);
     client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
