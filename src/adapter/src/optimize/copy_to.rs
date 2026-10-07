@@ -283,7 +283,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // No `REFRESH` for copy_to.
             refresh_schedule: None,
             // Populated during LIR lowering.
-            from_key: None,
+            from_arrangement: None,
         };
         df_desc.export_sink(self.select_id, sink_description);
 

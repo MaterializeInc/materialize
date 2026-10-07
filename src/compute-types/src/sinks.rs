@@ -9,7 +9,7 @@
 
 //! Types for describing dataflow sinks.
 
-use mz_expr::ColumnOrder;
+use mz_expr::{ColumnOrder, MfpPlan};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -36,15 +36,15 @@ pub struct ComputeSinkDesc<S: 'static = ()> {
     pub non_null_assertions: Vec<usize>,
     /// TODO(database-issues#7533): Add documentation.
     pub refresh_schedule: Option<RefreshSchedule>,
-    /// The arrangement key by which the renderer should consume the `from` collection.
+    /// The arrangement of `from` the renderer consumes, and how to read rows from it.
     ///
-    /// `None` means consume the unarranged collection. `Some(key)` names an arrangement of
-    /// `from` from which the renderer reconstructs full rows before feeding the sink. The
-    /// permutation and thinning are a pure function of `key` and are derived at render time.
+    /// `None` means consume the unarranged collection. `Some((key, mfp))` names an arrangement
+    /// of `from` by its key, and `mfp` reconstructs full rows of `from_desc` from the
+    /// arrangement's key and value.
     ///
     /// Chosen during LIR lowering, where the available arrangements of `from` are known. It is
     /// `None` before lowering runs.
-    pub from_key: Option<Vec<LirScalarExpr>>,
+    pub from_arrangement: Option<(Vec<LirScalarExpr>, MfpPlan<LirScalarExpr>)>,
 }
 
 /// TODO(database-issues#7533): Add documentation.

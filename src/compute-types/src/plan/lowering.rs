@@ -205,15 +205,20 @@ impl Context {
             // Prefer the unarranged collection when it exists, even if arrangements exist too.
             // The renderer reads `bundle.collection` whenever it is present, and reading it
             // avoids reconstructing full rows from an arrangement's key and value.
-            sink.from_key = if available.raw {
+            sink.from_arrangement = if available.raw {
                 None
             } else {
                 // `AvailableCollections` holds at least one form, so without `raw` there is an
                 // arrangement. `arbitrary_arrangement` asserts this.
-                let (key, _permutation, _thinning) = available
+                let (key, permutation, thinning) = available
                     .arbitrary_arrangement()
                     .expect("non-raw collection has an arrangement");
-                Some(key.clone())
+                let mut mfp = MapFilterProject::<LirScalarExpr>::new(sink.from_desc.arity());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+                let mfp = mfp
+                    .into_plan()
+                    .map_err(|e| format!("planning sink {} MFP: {e}", sink.from))?;
+                Some((key.clone(), mfp))
             };
         }
 

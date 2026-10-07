@@ -197,7 +197,7 @@ impl Optimizer {
             // No `REFRESH` for subscribes
             refresh_schedule: None,
             // Populated during LIR lowering.
-            from_key: None,
+            from_arrangement: None,
         };
         df_desc.export_sink(self.sink_id, sink_description);
 

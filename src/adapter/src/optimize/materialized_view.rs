@@ -260,7 +260,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             non_null_assertions: self.non_null_assertions.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
             // Populated during LIR lowering.
-            from_key: None,
+            from_arrangement: None,
         };
         df_desc.export_sink(self.sink_id, sink_description);
 
