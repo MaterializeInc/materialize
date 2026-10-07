@@ -269,8 +269,8 @@ pub enum EvalTime {
 }
 
 /// Returns an ID bundle with the given dataflows imports.
-pub fn dataflow_import_id_bundle<P>(
-    dataflow: &DataflowDescription<P>,
+pub fn dataflow_import_id_bundle<P, O>(
+    dataflow: &DataflowDescription<P, (), O>,
     compute_instance: ComputeInstanceId,
 ) -> CollectionIdBundle {
     let storage_ids = dataflow.source_imports.keys().copied().collect();

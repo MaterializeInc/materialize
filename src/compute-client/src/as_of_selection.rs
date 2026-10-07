@@ -81,8 +81,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_repr::{GlobalId, Timestamp};
@@ -99,7 +98,7 @@ use tracing::{info, warn};
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
 pub fn run(
-    dataflows: &mut [DataflowDescription<LirRelationExpr, ()>],
+    dataflows: &mut [LirDataflowDescription],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
@@ -340,7 +339,7 @@ struct Context<'a> {
 impl<'a> Context<'a> {
     /// Initializes an as-of selection context for the given `dataflows`.
     fn new(
-        dataflows: &[DataflowDescription<LirRelationExpr, ()>],
+        dataflows: &[LirDataflowDescription],
         storage_collections: &'a dyn StorageCollections,
         read_policies: &'a BTreeMap<GlobalId, ReadPolicy>,
         current_time: Timestamp,
@@ -847,7 +846,7 @@ mod tests {
     use async_trait::async_trait;
     use futures::future::BoxFuture;
     use futures::stream::BoxStream;
-    use mz_compute_types::dataflows::{IndexDesc, IndexImport};
+    use mz_compute_types::dataflows::{DataflowDescription, IndexDesc, IndexImport};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
     use mz_compute_types::sinks::MaterializedViewSinkConnection;
@@ -1060,7 +1059,7 @@ mod tests {
         export_id: &str,
         input_ids: &[&str],
         storage_ids: &BTreeSet<&str>,
-    ) -> DataflowDescription<LirRelationExpr> {
+    ) -> LirDataflowDescription {
         let source_imports = input_ids
             .iter()
             .filter(|s| storage_ids.contains(*s))

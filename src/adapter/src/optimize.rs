@@ -68,7 +68,6 @@ use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
-use mz_compute_types::plan::LirRelationExpr;
 use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
@@ -86,8 +85,7 @@ use mz_transform::{MaybeShouldPanic, TransformCtx, TransformError};
 /// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
 /// by the optimizer implementations.
 type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
-/// A type for a [`DataflowDescription`] backed by `Lir~` plans.
-pub type LirDataflowDescription = DataflowDescription<LirRelationExpr>;
+pub use mz_compute_types::dataflows::LirDataflowDescription;
 
 // Core API
 // --------
