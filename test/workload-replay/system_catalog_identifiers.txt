@@ -874,6 +874,7 @@ mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refreshes
 mz_materialized_view_refresh_strategies
+mz_materialized_view_unconfirmed_keys
 mz_materialized_views
 mz_materialized_views_ind
 mz_mcp_data_product_details

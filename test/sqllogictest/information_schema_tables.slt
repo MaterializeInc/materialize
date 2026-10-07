@@ -453,6 +453,10 @@ mz_materialized_view_refreshes
 SOURCE
 materialize
 mz_internal
+mz_materialized_view_unconfirmed_keys
+BASE TABLE
+materialize
+mz_internal
 mz_mcp_data_product_details
 VIEW
 materialize

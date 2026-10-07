@@ -1423,10 +1423,16 @@ pub struct MaterializedView {
     pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
-    /// Whether `desc` is declared with column definitions in the `create_sql`.
-    /// Otherwise it is inferred from the query and can change with the
-    /// optimizer.
-    pub declared_schema: bool,
+    /// The schema declared with column definitions in the `create_sql`, with
+    /// all declared keys. Without it, `desc` is inferred from the query and can
+    /// change with the optimizer.
+    ///
+    /// The latest version of `desc` equals the declared schema, except that it
+    /// keeps only the declared keys the running version confirms.
+    pub declared_desc: Option<RelationDesc>,
+    /// Declared keys that the running version does not confirm, and which
+    /// `desc` therefore does not have.
+    pub unconfirmed_keys: Vec<Vec<usize>>,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1555,7 +1561,8 @@ impl MaterializedView {
             raw_expr: replacement.raw_expr,
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
-            declared_schema: replacement.declared_schema,
+            declared_desc: replacement.declared_desc,
+            unconfirmed_keys: replacement.unconfirmed_keys,
             resolved_ids,
             dependencies,
             replacement_target: None,

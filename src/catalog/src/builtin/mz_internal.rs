@@ -502,6 +502,39 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
     }
 });
 
+pub static MZ_MATERIALIZED_VIEW_UNCONFIRMED_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| {
+    BuiltinTable {
+        name: "mz_materialized_view_unconfirmed_keys",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_MATERIALIZED_VIEW_UNCONFIRMED_KEYS_OID,
+        desc: RelationDesc::builder()
+            .with_column(
+                "materialized_view_id",
+                SqlScalarType::String.nullable(false),
+            )
+            .with_column(
+                "key",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("mz_version", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "materialized_view_id",
+                "The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`",
+            ),
+            ("key", "The names of the columns of the declared key."),
+            (
+                "mz_version",
+                "The version of Materialize that could not confirm the key.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
 pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_network_policies",

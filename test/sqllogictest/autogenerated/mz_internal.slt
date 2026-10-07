@@ -335,6 +335,13 @@ last_completed_refresh  mz_timestamp  The␠time␠of␠the␠last␠successfull
 next_refresh  mz_timestamp  The␠time␠of␠the␠next␠scheduled␠refresh.␠`NULL`␠if␠the␠materialized␠view␠has␠no␠future␠scheduled␠refreshes.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_unconfirmed_keys' ORDER BY position
+----
+materialized_view_id  text  The␠ID␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_catalog.mz_materialized_views.id`
+key  text[]  The␠names␠of␠the␠columns␠of␠the␠declared␠key.
+mz_version  text  The␠version␠of␠Materialize␠that␠could␠not␠confirm␠the␠key.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_products' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
@@ -853,6 +860,7 @@ mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
+mz_materialized_view_unconfirmed_keys
 mz_mcp_data_product_details
 mz_mcp_data_products
 mz_metric_sinks

@@ -48,6 +48,7 @@ use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::materialized_view::confirm_declared_keys;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
@@ -491,7 +492,7 @@ impl Coordinator {
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                         // `EXPLAIN REPLAN` re-plans an existing materialized view,
-                        // whose keys were proven on creation.
+                        // which drops unconfirmed keys as catalog loading does.
                         let is_replan = matches!(
                             &explain_ctx,
                             ExplainContext::Plan(ExplainPlanContext { replan: Some(_), .. })
@@ -499,7 +500,7 @@ impl Coordinator {
                         if let (Some(declared), false) =
                             (&plan.materialized_view.declared_desc, is_replan)
                         {
-                            prove_declared_keys(declared, &local_mir_plan.typ().keys)?;
+                            check_declared_keys(declared, &local_mir_plan.typ().keys)?;
                         }
                         let global_mir_plan =
                             optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
@@ -623,12 +624,23 @@ impl Coordinator {
             // Applying the replacement makes its `create_sql` the target's, so
             // an implicit replacement would turn a declared schema back into an
             // inferred one.
-            if target.declared_schema && declared_desc.is_none() {
+            if target.declared_desc.is_some() && declared_desc.is_none() {
                 return Err(AdapterError::ReplacementSchemaNotDeclared);
             }
 
             // For now, we don't support schema evolution for materialized views.
-            let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
+            //
+            // A declared schema is compared with its declared keys, because the
+            // target's `desc` lacks the declared keys that the running version
+            // does not confirm.
+            let target_desc = match &target.declared_desc {
+                Some(declared) => declared.clone(),
+                None => target.desc.latest(),
+            };
+            let replacement_desc = declared_desc
+                .as_ref()
+                .unwrap_or_else(|| global_lir_plan.desc());
+            let schema_diff = target_desc.diff(replacement_desc);
             if !schema_diff.is_empty() {
                 return Err(AdapterError::ReplacementSchemaMismatch(schema_diff));
             }
@@ -703,7 +715,10 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
-                    declared_schema: declared_desc.is_some(),
+                    declared_desc,
+                    // Optimization rejects unconfirmed keys of a new
+                    // materialized view.
+                    unconfirmed_keys: Vec::new(),
                     collections,
                     resolved_ids,
                     dependencies,
@@ -1075,29 +1090,22 @@ impl Coordinator {
     }
 }
 
-/// Checks that every key of `declared` contains one of the `proven` keys.
-///
-/// Declared keys are trusted by every query that reads the materialized view,
-/// so they must follow from the keys the optimizer proves. The check runs only
-/// on creation, not when the `create_sql` is re-planned: key inference is
-/// conservative, so a key proven once stays true even if a later optimizer can
-/// no longer derive it.
-fn prove_declared_keys(declared: &RelationDesc, proven: &[Vec<usize>]) -> Result<(), AdapterError> {
+/// Checks that the running version confirms every key of `declared`.
+fn check_declared_keys(
+    declared: &RelationDesc,
+    inferred: &[Vec<usize>],
+) -> Result<(), AdapterError> {
+    let (_, unconfirmed) = confirm_declared_keys(declared, inferred);
+    let Some(key) = unconfirmed.first() else {
+        return Ok(());
+    };
     let names = |key: &[usize]| -> Vec<String> {
         key.iter()
             .map(|&i| declared.get_name(i).to_string())
             .collect()
     };
-    for key in &declared.typ().keys {
-        if !proven
-            .iter()
-            .any(|proven_key| proven_key.iter().all(|c| key.contains(c)))
-        {
-            return Err(AdapterError::MaterializedViewKeyNotProven {
-                key: names(key),
-                proven_keys: proven.iter().map(|k| names(k)).collect(),
-            });
-        }
-    }
-    Ok(())
+    Err(AdapterError::MaterializedViewKeyNotProven {
+        key: names(key),
+        proven_keys: inferred.iter().map(|k| names(k)).collect(),
+    })
 }
