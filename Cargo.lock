@@ -6898,6 +6898,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "columnar",
+ "criterion",
  "differential-dataflow",
  "fail",
  "hex",

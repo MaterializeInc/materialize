@@ -9,6 +9,10 @@ publish = false
 [lints]
 workspace = true
 
+[[bench]]
+name = "batched_mfp"
+harness = false
+
 [dependencies]
 columnar.workspace = true
 differential-dataflow.workspace = true
@@ -26,6 +30,7 @@ tracing.workspace = true
 [dev-dependencies]
 chrono.workspace = true
 chrono-tz.workspace = true
+criterion.workspace = true
 hex.workspace = true
 mz-expr = { path = "../expr", features = ["func-registry"] }
 mz-pgtz = { path = "../pgtz" }
