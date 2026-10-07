@@ -3440,10 +3440,20 @@ class EnvdCpuSweep(Scenario):
     # extending to 64.)
     ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
 
-    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+    def __init__(
+        self,
+        name: str,
+        workload: ClusterScalingScenario,
+        cpu_scales: list[int] | None = None,
+    ) -> None:
         self._name = name
         self._workload = workload
         self._fixed_replica_size: str | None = None
+        self._cpu_scales = self.ENVD_CPU_SCALES if cpu_scales is None else cpu_scales
+        if not self._cpu_scales or any(c < 1 for c in self._cpu_scales):
+            raise ValueError("Environmentd CPU sizes must be positive")
+        if self._cpu_scales != sorted(set(self._cpu_scales)):
+            raise ValueError("Environmentd CPU sizes must be unique and increasing")
 
     def version(self) -> str:
         return self._workload.VERSION
@@ -3462,7 +3472,7 @@ class EnvdCpuSweep(Scenario):
     def scale_points(
         self, target: "BenchTarget", max_scale: int
     ) -> Iterable[ScalePoint]:
-        for cpus in self.ENVD_CPU_SCALES:
+        for cpus in self._cpu_scales:
             if cpus > max_scale:
                 break
             yield ScalePoint(label=f"envd_cpus={cpus}", envd_cpus=cpus)
@@ -4076,6 +4086,12 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         default=QPS_CONCURRENCIES,
     )
     parser.add_argument(
+        "--qps-envd-cpus",
+        type=lambda s: [int(x) for x in s.split(",")],
+        default=None,
+        help="Optional environmentd CPU sizes for focused QPS runs",
+    )
+    parser.add_argument(
         "--qps-protocols",
         type=lambda s: s.split(","),
         default=["prepared"],
@@ -4597,6 +4613,7 @@ SCENARIOS: list[ScenarioSpec] = [
                     a.qps_query_timeout,
                 )
             ),
+            cpu_scales=a.qps_envd_cpus,
         ),
         groups=("envd_qps_scalability",),
     ),

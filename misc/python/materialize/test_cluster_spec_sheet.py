@@ -108,7 +108,8 @@ def composition_module():
     return module
 
 
-def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path):
+@pytest.mark.parametrize("cpu_scales", [None, [32]])
+def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path, cpu_scales):
     monkeypatch.chdir(tmp_path)
     from materialize.mzcompose import loader
 
@@ -116,7 +117,8 @@ def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path):
     module = composition_module()
     options = QpsSweep([1, 4, 16], ["prepared", "simple"], clusters=2)
     workload = module.QpsEnvdStrongScalingScenario(options)
-    sweep = module.EnvdCpuSweep(workload.name(), workload)
+    sweep = module.EnvdCpuSweep(workload.name(), workload, cpu_scales)
+    expected_cpus = [1, 2, 4, 8, 16, 32] if cpu_scales is None else cpu_scales
     target = module.DockerTarget(None)
     measured = []
     workload.measure = lambda runner, size, concurrency, protocol: measured.append(
@@ -137,16 +139,29 @@ def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path):
     for point in sweep.scale_points(target, 32):
         runner.envd_cpus = point.envd_cpus
         sweep.measure(runner, point)
-    assert len(measured) == 6 * 3 * 2
-    assert measured[0] == (1, 1, "prepared", "scale=1,workers=1")
+    assert len(measured) == len(expected_cpus) * 3 * 2
+    assert measured[0] == (expected_cpus[0], 1, "prepared", "scale=1,workers=1")
     assert measured[-1] == (32, 16, "simple", "scale=1,workers=1")
-    assert sum("CREATE CLUSTER qps_" in q for q in runner.sql) == 6
+    assert sum("CREATE CLUSTER qps_" in q for q in runner.sql) == len(expected_cpus)
     assert [q for q in runner.sql if q.startswith("CREATE CLUSTER qps_")] == [
         f"CREATE CLUSTER qps_{i} SIZE 'scale=1,workers=1', REPLICATION FACTOR 1"
-        for _ in range(6)
+        for _ in expected_cpus
         for i in range(1, 2)
     ]
-    assert sum("DROP CLUSTER IF EXISTS qps_" in q for q in runner.sql) == 6
+    assert sum("DROP CLUSTER IF EXISTS qps_" in q for q in runner.sql) == len(
+        expected_cpus
+    )
+
+
+@pytest.mark.parametrize("cpu_scales", [[], [0], [-1], [32, 16], [16, 16]])
+def test_invalid_cpu_selection(monkeypatch, tmp_path, cpu_scales):
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    module = composition_module()
+    workload = module.QpsEnvdStrongScalingScenario(QpsSweep([128, 512], ["prepared"]))
+    with pytest.raises(ValueError):
+        module.EnvdCpuSweep(workload.name(), workload, cpu_scales)
 
 
 def test_ten_query_clusters_fit_ten_cluster_account(monkeypatch, tmp_path):
