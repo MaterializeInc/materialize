@@ -35,6 +35,11 @@ from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
 from materialize import MZ_ROOT, buildkite
+from materialize.cluster_spec_sheet import (
+    QPS_CONCURRENCIES,
+    QpsSweep,
+    validate_qps_result,
+)
 from materialize.mz_env_util import print_environment_id
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
@@ -61,7 +66,8 @@ PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 PRODUCTION_APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
-STAGING_REGION = "aws/eu-west-1"
+# Keep closed-loop clients in the same region as the staging CI agents.
+STAGING_REGION = "aws/us-east-1"
 STAGING_ENVIRONMENT = "staging"
 
 
@@ -317,6 +323,7 @@ class ScenarioRunner:
         qps: float | None = None,
         healthy: int | None = None,
         failure_mode: str | None = None,
+        qps_details: dict | None = None,
     ) -> None:
         """Write one result row.
 
@@ -341,6 +348,7 @@ class ScenarioRunner:
                 "qps": qps,
                 "healthy": healthy,
                 "failure_mode": failure_mode,
+                **(qps_details or {}),
             }
         )
 
@@ -2040,6 +2048,13 @@ class AuctionScenario(ClusterScalingScenario):
 
 class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
+    VERSION = "2.0.0"
+
+    def __init__(self, options: QpsSweep) -> None:
+        super().__init__(1, None)
+        self.options = options
+        self.warnings: list[str] = []
+
     def name(self) -> str:
         return SCENARIO_QPS_ENVD_STRONG_SCALING
 
@@ -2047,55 +2062,141 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         return []
 
     def run(self, runner: ScenarioRunner) -> None:
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_256_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
-            query=[
-                "select * from gen_view",
-            ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=256,
-        )
+        size = "50cc" if isinstance(runner.target, CloudTarget) else "scale=1,workers=1"
+        try:
+            runner.run_query(
+                "CREATE VIEW qps_gen_view AS SELECT generate_series AS x FROM generate_series(1, 10)"
+            )
+            for i in range(self.options.clusters):
+                runner.run_query(
+                    f"CREATE CLUSTER qps_{i} SIZE '{size}' REPLICATION FACTOR 1"
+                )
+                runner.run_query(
+                    f"CREATE INDEX qps_idx_{i} IN CLUSTER qps_{i} ON qps_gen_view (x)"
+                )
+                runner.run_query(f"SET cluster = 'qps_{i}'")
+                runner.run_query("SELECT * FROM qps_gen_view")
+            runner.run_query("SET cluster = 'c'")
+            for protocol in self.options.protocols:
+                for concurrency in self.options.concurrencies:
+                    self.measure(runner, size, concurrency, protocol)
+        finally:
+            runner.run_query("SET cluster = 'c'")
+            runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
+            for i in range(self.options.clusters):
+                runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
 
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_512_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
-            query=[
-                "select * from gen_view",
-            ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=512,
+    def measure(
+        self, runner: ScenarioRunner, size: str, concurrency: int, protocol: str
+    ) -> None:
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
+        print(
+            f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
-
-        # TODO: Add more scenarios as the QPS/CPS work progresses:
-        # - different connection counts
-        # - distribute queries across more clusters;
-        #   see manual test results with multiple clusters here:
-        #   https://docs.google.com/presentation/d/1bIyTWaRiyEqBXFxoxpHwWSywztSW1jRw_JP3M-Zj_6A/edit?slide=id.g39de8b7440c_0_86#slide=id.g39de8b7440c_0_86
-        # - explicit transactions (which are currently super slow)
-        # - (slow-path queries are kinda expected to be slow, so it's not so important to measure them)
-        # - I think dbbench uses the "Simple Query Protocol" by default. We might want to also measure the
-        #   "Extended Query Protocol" / prepared statements.
-        # - Lookups in a large index, especially on a larger replica.
-        # - Larger result sets.
-        #
-        # We'll also want to measure latency, including tail latency.
+        config = self.options.config(
+            runner.target.dbbench_connection_flags(), concurrency, protocol
+        )
+        output = runner.target.composition.run(
+            "dbbench",
+            entrypoint="qpsbench",
+            rm=True,
+            capture=True,
+            stdin=json.dumps(config),
+        )
+        result = json.loads(output.stdout)
+        validate_qps_result(result, concurrency, protocol)
+        warnings = list(result["driver"]["warnings"])
+        replica_cpu = None
+        replica_samples = 0
+        try:
+            metrics = runner.run_query(
+                """SELECT max(u.cpu_percent), count(u.cpu_percent)
+                   FROM mz_internal.mz_cluster_replica_utilization_history u
+                   JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
+                   JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+                   WHERE c.name LIKE 'qps_%%'
+                     AND u.occurred_at >= %(start)s::timestamptz
+                     AND u.occurred_at <= %(end)s::timestamptz""",
+                fetch=True,
+                start=result["started_at"],
+                end=result["finished_at"],
+            )
+            assert metrics is not None
+            replica_cpu, replica_samples = metrics[0]
+        except psycopg.Error:
+            warnings.append("query-replica utilization telemetry unavailable")
+        if replica_samples == 0:
+            warnings.append("no query-replica CPU samples in measurement window")
+        if replica_cpu is not None and replica_cpu >= 80:
+            warnings.append(
+                "query replica reached at least 80% CPU; increase --qps-clusters before attributing the plateau to environmentd"
+            )
+        if isinstance(runner.target, DockerTarget):
+            warnings.append(
+                "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
+            )
+        result.update(
+            replica_cpu_peak_percent=replica_cpu,
+            replica_cpu_samples=replica_samples,
+            warnings=warnings,
+            system_parameter_defaults=runner.target.system_parameter_defaults,
+            envd_cpus=runner.envd_cpus,
+            query_cluster_size=size,
+        )
+        logs_dir = os.path.join("test", "cluster-spec-sheet", "qps-logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        with open(os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        if buildkite.is_in_buildkite():
+            buildkite.upload_artifact(
+                os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"),
+                cwd=MZ_ROOT,
+                quiet=True,
+            )
+        print(json.dumps(result))
+        runner.add_result(
+            "peek_qps",
+            name,
+            0,
+            None,
+            qps=result["qps"],
+            qps_details={
+                "concurrency": concurrency,
+                "protocol": protocol,
+                "query_clusters": self.options.clusters,
+                "active_query_clusters": result["clusters"],
+                "cluster_size": size,
+                **{
+                    k: result[k]
+                    for k in (
+                        "mean_latency_ms",
+                        "p50_latency_ms",
+                        "p95_latency_ms",
+                        "p99_latency_ms",
+                        "replica_cpu_peak_percent",
+                        "replica_cpu_samples",
+                    )
+                },
+                "driver_cpu_percent": result["driver"]["cpu_percent"],
+                "driver_throttled_period_percent": result["driver"][
+                    "throttled_period_percent"
+                ],
+                "driver_scheduling_lag_p99_ms": result["driver"][
+                    "scheduling_lag_p99_ms"
+                ],
+                "warnings": json.dumps(warnings),
+            },
+        )
+        for warning in warnings:
+            print(f"WARNING: {name} at {runner.envd_cpus} CPUs: {warning}")
+            self.warnings.append(f"- {name}, envd={runner.envd_cpus}: {warning}")
+        if self.warnings and buildkite.is_in_buildkite():
+            buildkite.add_annotation(
+                "warning",
+                "QPS benchmark qualification warnings",
+                "\n".join(self.warnings),
+                context="qps-headroom",
+            )
 
 
 class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
@@ -2426,6 +2527,21 @@ ENVD_FIELDNAMES: list[str] = [
     "envd_cpus",
     "repetition",
     "qps",
+    "concurrency",
+    "protocol",
+    "query_clusters",
+    "active_query_clusters",
+    "cluster_size",
+    "mean_latency_ms",
+    "p50_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "replica_cpu_peak_percent",
+    "replica_cpu_samples",
+    "driver_cpu_percent",
+    "driver_throttled_period_percent",
+    "driver_scheduling_lag_p99_ms",
+    "warnings",
 ]
 
 
@@ -3510,6 +3626,10 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
             "--version",
             staging_version(),
         ]
+        args += [
+            f"--environmentd-extra-arg=--system-parameter-default={name}={value}"
+            for name, value in target.system_parameter_defaults.items()
+        ]
 
     target.composition.run("mz", "region", "enable", *args, rm=True)
 
@@ -3626,7 +3746,8 @@ def reconfigure_envd_cpus(
             # Keep other defaults consistent with SERVICES.
             overridden = Materialized(
                 propagate_crashes=True,
-                additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+                additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS
+                | target.system_parameter_defaults,
                 # This is just an upper limit; it won't make a noise if your local machine doesn't have enough cores.
                 # If you'd like to avoid going over your machine's core count, you can use `--max-scale`.
                 cpu=str(envd_cpus),
@@ -3942,6 +4063,48 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-tpch", type=float, default=8, help="TPCH scale factor."
     )
     parser.add_argument(
+        "--qps-concurrencies",
+        type=lambda s: [int(x) for x in s.split(",")],
+        default=QPS_CONCURRENCIES,
+    )
+    parser.add_argument(
+        "--qps-protocols",
+        type=lambda s: s.split(","),
+        default=["prepared"],
+        help="prepared (default), simple, or prepared,simple",
+    )
+    parser.add_argument(
+        "--qps-clusters",
+        type=int,
+        default=32,
+        help="Independently routed one-worker query clusters (Cloud size 50cc)",
+    )
+    parser.add_argument(
+        "--qps-duration",
+        type=float,
+        default=20,
+        help="Measurement seconds per concurrency/protocol/CPU point",
+    )
+    parser.add_argument(
+        "--qps-warmup",
+        type=float,
+        default=5,
+        help="Unmeasured warmup seconds per point",
+    )
+    parser.add_argument(
+        "--qps-query-timeout",
+        type=float,
+        default=30,
+        help="Startup and individual-query timeout seconds",
+    )
+    parser.add_argument(
+        "--system-parameter-default",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Explicit environmentd defaults for staging/Docker comparisons; not supported on production",
+    )
+    parser.add_argument(
         "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
     )
     parser.add_argument(
@@ -3997,6 +4160,22 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
 
     args = parser.parse_args()
+    QpsSweep(
+        args.qps_concurrencies,
+        args.qps_protocols,
+        args.qps_clusters,
+        args.qps_duration,
+        args.qps_warmup,
+        args.qps_query_timeout,
+    )
+    parameter_defaults = {}
+    for parameter in args.system_parameter_default:
+        name, separator, value = parameter.partition("=")
+        if not separator or not name or not value:
+            raise UIError("--system-parameter-default requires NAME=VALUE")
+        parameter_defaults[name] = value
+    if parameter_defaults and args.target == "cloud-production":
+        raise UIError("Custom system parameter defaults require staging or Docker")
 
     scenarios: set[str] = set()
     for s in args.scenarios or ["all"]:
@@ -4023,6 +4202,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         )
 
     target, mz = make_target(composition, args.target)
+    if SCENARIO_QPS_ENVD_STRONG_SCALING in scenarios and args.target == "cloud-staging":
+        parameter_defaults.setdefault("max_clusters", str(args.qps_clusters + 10))
+    target.system_parameter_defaults = parameter_defaults
 
     with composition.override(mz):
         target_max = target.max_scale()
@@ -4108,6 +4290,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
 
 class BenchTarget:
+    system_parameter_defaults: dict[str, str] = {}
     composition: Composition
 
     @abstractmethod
@@ -4398,7 +4581,16 @@ SCENARIOS: list[ScenarioSpec] = [
         "QPS envd strong scaling",
         lambda a, t: EnvdCpuSweep(
             SCENARIO_QPS_ENVD_STRONG_SCALING,
-            QpsEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+            QpsEnvdStrongScalingScenario(
+                QpsSweep(
+                    a.qps_concurrencies,
+                    a.qps_protocols,
+                    a.qps_clusters,
+                    a.qps_duration,
+                    a.qps_warmup,
+                    a.qps_query_timeout,
+                )
+            ),
         ),
         groups=("envd_qps_scalability",),
     ),
@@ -4654,6 +4846,53 @@ def analyze_envd_results_file(file: str) -> None:
         sub_q = sub[sub["qps"].notna() & (sub["qps"] > 0)]
         if sub_q.empty:
             raise UIError(f"No QPS data found for {title} in {file}")
+        sweep = (
+            sub_q[sub_q["concurrency"].notna()]
+            if "concurrency" in sub_q
+            else pd.DataFrame()
+        )
+        if not sweep.empty:
+            for protocol, protocol_df in sweep.groupby("protocol"):
+                for metric, label in [
+                    ("qps", "Queries / second"),
+                    ("mean_latency_ms", "Mean latency (ms)"),
+                    ("p99_latency_ms", "p99 latency upper bound (ms)"),
+                ]:
+                    fig, ax = plt.subplots()
+                    for cpus, points in protocol_df.groupby("envd_cpus"):
+                        points = points.sort_values("concurrency")
+                        ax.plot(
+                            points["concurrency"],
+                            points[metric],
+                            "o-",
+                            label=f"{cpus} CPUs",
+                        )
+                        single = points[points["concurrency"] == 1]
+                        if metric == "qps" and not single.empty:
+                            ax.plot(
+                                points["concurrency"],
+                                points["concurrency"]
+                                * 1000
+                                / single["mean_latency_ms"].iloc[0],
+                                ":",
+                                color=ax.lines[-1].get_color(),
+                                alpha=0.5,
+                                label=f"{cpus} CPUs ideal C / L1",
+                            )
+                    ax.set_xscale("log", base=2)
+                    ax.set_yscale("log")
+                    ax.set_xlabel("Concurrent clients")
+                    ax.set_ylabel(label)
+                    ax.set_title(f"{title}: {protocol}")
+                    ax.grid(True, which="both", color="#dddddd", linewidth=0.5)
+                    ax.legend()
+                    fig.tight_layout()
+                    fig.savefig(
+                        os.path.join(plot_dir, f"{slug}_{protocol}_{metric}.png"),
+                        dpi=160,
+                    )
+                    plt.close(fig)
+            continue
         plot(
             plot_dir,
             sub_q,
