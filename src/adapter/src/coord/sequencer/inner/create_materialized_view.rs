@@ -756,11 +756,10 @@ impl Coordinator {
             }
             // Dependency existence checks alone do not pin a view's logical scope.
             // Do not use a retained request to certify a different set of inputs.
-            if stage
-                .read_protection
-                .as_ref()
-                .is_some_and(|request| request.bundle() != &inputs)
-            {
+            if stage.read_protection.as_ref().is_some_and(|request| {
+                !request.bundle().difference(&inputs).is_empty()
+                    || !inputs.difference(request.bundle()).is_empty()
+            }) {
                 return Err(AdapterError::ChangedPlan(
                     "the set of possible inputs changed during the creation of the materialized view"
                         .to_string(),
