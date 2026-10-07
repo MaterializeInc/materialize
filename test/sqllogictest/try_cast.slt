@@ -20,10 +20,6 @@
 # one failing value; a block with no failing value is a cast that cannot fail.
 #
 # The numeric(5,2) target's blocks are in try_cast_noindex.slt, see there.
-#
-# `"char"` sources appear only against the targets with a dedicated `"char"`
-# cast: the other targets route through text and panic on its datum (DB-201),
-# in CAST and TRY_CAST alike.
 
 mode cockroach
 
@@ -102,8 +98,17 @@ SELECT TRY_CAST(ROW('100000', 'a') AS rec2)::text, TRY_CAST(ROW('1', 'a') AS rec
 ----
 NULL (1,a)
 
-# Because the literal is typed on its own, an empty collection literal needs
-# its own type annotation.
+# Because the literal is typed on its own, its elements must agree on a type
+# (CAST would coerce them all to the target's element type), and an empty
+# literal needs its own type annotation.
+statement error ARRAY types text and integer cannot be matched
+SELECT TRY_CAST(ARRAY[s, 2] AS int4[]) FROM (VALUES ('1')) AS v(s)
+
+query T
+SELECT TRY_CAST(ARRAY[s, 2::text] AS int4[])::text FROM (VALUES ('1')) AS v(s)
+----
+{1,2}
+
 statement error cannot determine type of empty array
 SELECT TRY_CAST(ARRAY[] AS int4[])
 
@@ -129,92 +134,93 @@ SELECT TRY_CAST(1 AS jsonb)
 # The catalog-lookup casts are implemented in SQL and have no null-fallback
 # form. String-like types route through text, so all of them are refused.
 
-statement error TRY_CAST does not support casting from text to regclass
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regclass
 SELECT TRY_CAST(NULL::text AS regclass)
 
-statement error TRY_CAST does not support casting from regclass to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regclass to text
 SELECT TRY_CAST(NULL::regclass AS text)
 
-statement error TRY_CAST does not support casting from text to regproc
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regproc
 SELECT TRY_CAST(NULL::text AS regproc)
 
-statement error TRY_CAST does not support casting from regproc to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regproc to text
 SELECT TRY_CAST(NULL::regproc AS text)
 
-statement error TRY_CAST does not support casting from text to regtype
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regtype
 SELECT TRY_CAST(NULL::text AS regtype)
 
-statement error TRY_CAST does not support casting from regtype to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regtype to text
 SELECT TRY_CAST(NULL::regtype AS text)
 
-statement error TRY_CAST does not support casting from text to regclass
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regclass
 SELECT TRY_CAST(NULL::char(3) AS regclass)
 
-statement error TRY_CAST does not support casting from regclass to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regclass to text
 SELECT TRY_CAST(NULL::regclass AS char(3))
 
-statement error TRY_CAST does not support casting from text to regproc
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regproc
 SELECT TRY_CAST(NULL::char(3) AS regproc)
 
-statement error TRY_CAST does not support casting from regproc to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regproc to text
 SELECT TRY_CAST(NULL::regproc AS char(3))
 
-statement error TRY_CAST does not support casting from text to regtype
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regtype
 SELECT TRY_CAST(NULL::char(3) AS regtype)
 
-statement error TRY_CAST does not support casting from regtype to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regtype to text
 SELECT TRY_CAST(NULL::regtype AS char(3))
 
-statement error TRY_CAST does not support casting from text to regclass
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regclass
 SELECT TRY_CAST(NULL::varchar(3) AS regclass)
 
-statement error TRY_CAST does not support casting from regclass to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regclass to text
 SELECT TRY_CAST(NULL::regclass AS varchar(3))
 
-statement error TRY_CAST does not support casting from text to regproc
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regproc
 SELECT TRY_CAST(NULL::varchar(3) AS regproc)
 
-statement error TRY_CAST does not support casting from regproc to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regproc to text
 SELECT TRY_CAST(NULL::regproc AS varchar(3))
 
-statement error TRY_CAST does not support casting from text to regtype
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regtype
 SELECT TRY_CAST(NULL::varchar(3) AS regtype)
 
-statement error TRY_CAST does not support casting from regtype to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regtype to text
 SELECT TRY_CAST(NULL::regtype AS varchar(3))
 
-statement error TRY_CAST does not support casting from text to regclass
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regclass
 SELECT TRY_CAST(NULL::name AS regclass)
 
-statement error TRY_CAST does not support casting from regclass to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regclass to text
 SELECT TRY_CAST(NULL::regclass AS name)
 
-statement error TRY_CAST does not support casting from text to regproc
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regproc
 SELECT TRY_CAST(NULL::name AS regproc)
 
-statement error TRY_CAST does not support casting from regproc to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regproc to text
 SELECT TRY_CAST(NULL::regproc AS name)
 
-statement error TRY_CAST does not support casting from text to regtype
+statement error TRY_CAST cannot fall back to NULL for the cast from text to regtype
 SELECT TRY_CAST(NULL::name AS regtype)
 
-statement error TRY_CAST does not support casting from regtype to text
+statement error TRY_CAST cannot fall back to NULL for the cast from regtype to text
 SELECT TRY_CAST(NULL::regtype AS name)
 
-statement error TRY_CAST does not support casting from aclitem to text
+statement error TRY_CAST cannot fall back to NULL for the cast from aclitem to text
 SELECT TRY_CAST(NULL::aclitem AS text)
 
-statement error TRY_CAST does not support casting from mz_aclitem to text
+statement error TRY_CAST cannot fall back to NULL for the cast from mz_aclitem to text
 SELECT TRY_CAST(NULL::mz_aclitem AS text)
 
-statement error TRY_CAST does not support casting from aclitem to mz_aclitem
+statement error TRY_CAST cannot fall back to NULL for the cast from aclitem to mz_aclitem
 SELECT TRY_CAST(NULL::aclitem AS mz_aclitem)
 
-statement error TRY_CAST does not support casting from mz_aclitem to aclitem
+statement error TRY_CAST cannot fall back to NULL for the cast from mz_aclitem to aclitem
 SELECT TRY_CAST(NULL::mz_aclitem AS aclitem)
 
 # TRY_CAST over a NOT NULL column is nullable, and NULL fallbacks flow through
-# dataflows without error.
+# dataflows without error. A TRY_CAST that cannot fail, here bool to int4 over
+# a NOT NULL column, is planned as the plain cast and stays NOT NULL.
 statement ok
 CREATE TABLE t (s text NOT NULL)
 
@@ -222,23 +228,24 @@ statement ok
 INSERT INTO t VALUES ('1'), ('2'), ('x'), ('3000000000'), ('2020-01-01')
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT s, TRY_CAST(s AS int4) AS i, TRY_CAST(s AS date) AS d, TRY_CAST(s AS int4 list) AS l FROM t
+CREATE MATERIALIZED VIEW mv AS SELECT s, TRY_CAST(s AS int4) AS i, TRY_CAST(s AS date) AS d, TRY_CAST(s AS int4 list) AS l, TRY_CAST(s = '' AS int4) AS b FROM t
 
 statement ok
 CREATE INDEX mv_i ON mv (i)
 
-query TTTT rowsort
-SELECT s, i::text, d::text, l::text FROM mv
+query TTTTI rowsort
+SELECT s, i::text, d::text, l::text, b FROM mv
 ----
-1 1 NULL NULL
-2 2 NULL NULL
-2020-01-01 NULL 2020-01-01 NULL
-3000000000 NULL NULL NULL
-x NULL NULL NULL
+1 1 NULL NULL 0
+2 2 NULL NULL 0
+2020-01-01 NULL 2020-01-01 NULL 0
+3000000000 NULL NULL NULL 0
+x NULL NULL NULL 0
 
 query TT rowsort
-SELECT name, nullable::text FROM mz_columns WHERE id = (SELECT id FROM mz_materialized_views WHERE name = 'mv') AND name IN ('s', 'i')
+SELECT name, nullable::text FROM mz_columns WHERE id = (SELECT id FROM mz_materialized_views WHERE name = 'mv') AND name IN ('s', 'i', 'b')
 ----
+b false
 i true
 s false
 
@@ -3882,12 +3889,23 @@ SELECT TRY_CAST('a'::"char" AS varchar(3))::text, TRY_CAST('a'::"char" AS varcha
 ----
 a  true  true
 
-# "char" -> int4
+# "char" -> int4 (by byte value)
+query TBB
+SELECT TRY_CAST('a'::"char" AS int4)::text, TRY_CAST('a'::"char" AS int4)::text IS NOT DISTINCT FROM CAST('a'::"char" AS int4)::text, TRY_CAST(NULL::"char" AS int4) IS NULL
+----
+97  true  true
+
+# "char" -> int8 (rendered to text, then parsed)
+query TBB
+SELECT TRY_CAST('7'::"char" AS int8)::text, TRY_CAST('7'::"char" AS int8)::text IS NOT DISTINCT FROM CAST('7'::"char" AS int8)::text, TRY_CAST(NULL::"char" AS int8) IS NULL
+----
+7  true  true
+
 statement error
-SELECT CAST('a'::"char" AS int4)
+SELECT CAST('a'::"char" AS int8)
 
 query T
-SELECT TRY_CAST('a'::"char" AS int4)::text
+SELECT TRY_CAST('a'::"char" AS int8)::text
 ----
 NULL
 

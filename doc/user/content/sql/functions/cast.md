@@ -197,27 +197,46 @@ SELECT TRY_CAST(1 / 0 AS text);
 ERROR:  division by zero
 ```
 
+A parameter whose type is inferred from `TRY_CAST` is decoded as the target
+type when the statement is bound, so a bound value that does not convert is a
+bind error rather than `NULL`. To get `NULL` instead, give the parameter an
+explicit type:
+
+```mzsql
+SELECT TRY_CAST($1::text AS int);
+```
+
 Converting a value of a composite type ([`array`](../../types/array/),
 [`list`](../../types/list/), or [`record`](../../types/record/)) converts each
 element. If any element fails to convert, `TRY_CAST` returns `NULL` for the
-whole value rather than a value with `NULL` elements. This also applies to
-`ARRAY`, `LIST`, and `ROW` constructors written directly inside `TRY_CAST`,
-which are typed on their own before the conversion, so an empty constructor
-needs an explicit type:
+whole value rather than a value with `NULL` elements.
 
-```mzsql
-SELECT TRY_CAST(ARRAY[]::text[] AS int[]);
-```
+`TRY_CAST` accepts every explicit cast that `CAST` does, with these
+differences, each of which is reported when the statement is planned:
 
-A `MAP` constructor cannot be the argument of `TRY_CAST`, because there is no
-cast between two [`map`](../../types/map/) types to fall back on. Convert it
-with `CAST` or `::` instead.
+- `TRY_CAST` does not support the casts that look up objects in the catalog:
+  casts to or from `regclass`, `regproc`, `regtype`, `aclitem`, and
+  [`mz_aclitem`](../../types/mz_aclitem/), other than those between the `oid`
+  alias types and the integer types.
 
-`TRY_CAST` supports every explicit cast that `CAST` does with some exceptions:
-it does not currently casts between `MAP` types; it does not support casts to or
-from `regclass`, `regproc`, `regtype`, `aclitem`, and [`mz_aclitem`](../../types/mz_aclitem/),
-other than those between the `oid` alias types and the integer types. Trying
-to use `TRY_CAST` for these casts will be rejected when the statement is planned.
+- An `ARRAY`, `LIST`, or `ROW` constructor written directly inside `TRY_CAST`
+  is typed on its own before the conversion, where `CAST` would type it from
+  the target. Its elements must therefore already agree on a type, and an
+  empty constructor needs an explicit type:
+
+  ```mzsql
+  -- With a text column s, CAST(ARRAY[s, 2] AS int[]) plans, but this does not:
+  -- "ARRAY types text and integer cannot be matched".
+  SELECT TRY_CAST(ARRAY[s, 2] AS int[]) FROM t;
+  -- Give the elements a common type instead.
+  SELECT TRY_CAST(ARRAY[s, 2::text] AS int[]) FROM t;
+  SELECT TRY_CAST(ARRAY[]::text[] AS int[]);
+  ```
+
+- A `MAP` constructor written directly inside `TRY_CAST` is rejected. It would
+  be typed on its own like the other constructors, and there is no cast
+  between two [`map`](../../types/map/) types to convert it afterward. Convert
+  it with `CAST` or `::` instead.
 
 ## Examples
 

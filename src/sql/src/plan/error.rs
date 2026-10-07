@@ -666,7 +666,10 @@ impl fmt::Display for PlanError {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
             Self::TryCastUnsupported { from, to } => {
-                write!(f, "TRY_CAST does not support casting from {from} to {to}")
+                write!(
+                    f,
+                    "TRY_CAST cannot fall back to NULL for the cast from {from} to {to}; use CAST instead"
+                )
             }
             Self::InvalidCast { name, ccx, from, to } =>{
                 write!(

@@ -1740,7 +1740,7 @@ pub fn plan_cast_with_failure_mode(
         // registered cast when one exists (`int4`, by byte value) and
         // otherwise render it to text first.
         let expr = match from {
-            SqlScalarType::PgLegacyChar => match get_cast(ecx, ccx, &from, to) {
+            SqlScalarType::PgLegacyChar => match get_cast(ecx, ccx, mode, &from, to) {
                 Ok(cast) => return Ok(cast(expr)),
                 Err(_) => cast_inner(&from, &SqlScalarType::String, expr)?,
             },
