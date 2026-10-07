@@ -454,6 +454,20 @@ structural changes invalidated it rather than merging. Each writer follows the
 durable stream it commits to. Cooperating writers do not fence one another with
 per-process epochs.
 
+Conflict recovery applies committed diffs incrementally. Catch-up and transaction
+repreparation scale with changes and affected dependencies, rather than rebuilding
+or decoding the whole catalog on each retry. Retry against refreshed, validated
+state, including recomputing compaction proposals when their inputs change.
+
+Stagger periodic publications across participants, including at startup. Conflicts
+use bounded, randomized backoff that accounts for renewal deadlines without
+extending protection validity. Retry delays and repeated attempts must not
+monopolize the coordinator: pending operations leave it available for other
+requests, cancellation and maintenance. Scheduling and task placement remain
+implementation choices. New protection still commits before use, delayed
+advancement retains committed protection, and submitted writes retain definitive
+outcome handling.
+
 Persist critical since handles follow the committed bound only. Every valid
 read requirement is in that bound, so applying it is monotone and needs no
 per-process opaque. Local hold accounting does not drive critical handles.

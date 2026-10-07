@@ -20,21 +20,18 @@ when folding our remaining fixups. Detailed verification belongs in the
 Prioritize the parallel-workload stalls. Repeated catalog conflicts amplify
 client read-protection publication and ordinary DDL into long coordinator-owned
 intervals. Measured write and subscribe handoffs overlap these intervals.
-Transaction opens, losing CAS calls and conflict synchronization dominate the
-longest measured publication, not one oracle wait or successful completion.
-The bounded retry trim rejects stale opens before snapshot construction and
-refreshes through the already-synchronized conflict prefix. It does not establish
-workload liveness. Do not reuse candidates across arbitrary metadata changes or
-retry stale bounds.
+Implement the [cooperating-writer contention requirements](20260903_decoupled_coordination.md#cooperating-catalog-writers):
+incremental catch-up and transaction repreparation, staggered maintenance, bounded
+randomized backoff, and retries that relinquish the coordinator. Apply this at
+adapter and replica owners. Waiting for new protection keeps the requesting
+operation pending, not the coordinator occupied. Revalidate against refreshed
+state rather than retrying stale bounds or blindly reusing candidates.
 
-The approved cadence correction coalesces advancement-only replica aggregates at
-the existing publication interval. New or stronger protection still commits before
-use, delayed releases retain committed protection, and heartbeat renewal remains
-independent. The current 1s interval still has demonstrated runtime contention.
-A single 5s comparison in the existing workloads has been requested, not approved.
-Keep heartbeat/grace, retry policy and deadlines unchanged. Measure contention and
-retained frontiers before proposing a default change, not a fixture-only slowdown.
-Keep this correction separate from the conflict-work trims.
+Keep the 1s publication default while making contention cheap and nonblocking.
+Defer the 5s comparison until that repair is measured. Preserve heartbeat/grace,
+statement deadlines, commit-before-use and definitive write outcomes. Verify with
+the existing failing workflows, measuring retry work, foreground progress, renewal
+progress and retained frontiers rather than only job success.
 
 Investigate increasing native warm catch-up cost in the existing Short Zippy
 workflow. The retained-metrics hydration index reconstructs at its initial
