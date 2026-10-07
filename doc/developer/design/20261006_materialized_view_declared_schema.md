@@ -35,8 +35,9 @@ The drift leaks into everything that consumes the schema:
 * A user can state the full schema of a materialized view: column names, types, nullability, and keys.
 * A declared schema is independent of the optimizer.
   Re-planning the same `create_sql` with a different optimizer yields the same `RelationDesc`.
-* Declared constraints are never trusted without justification.
-  Results stay correct if a declared constraint does not hold for the data.
+* A declared `NOT NULL` is enforced: a violation surfaces as an error, independent of the optimizer.
+* A declared key is an unenforced constraint, as in SQL systems that accept `NOT ENFORCED` keys.
+  Materialize rejects keys its analysis of the query does not support at creation, but it does not validate them against the data, so a wrong key gives wrong results.
 * Replacements are validated against the declared schema, and can be written to fit a given schema.
 * No change to the durable catalog format, persist, or the compute protocol.
 
@@ -92,6 +93,12 @@ A materialized view with column definitions has a *declared schema*.
 Its `RelationDesc` is exactly the declared one: names, scalar types, nullability, and keys come from the column definitions, and nothing inferred by the optimizer is merged in.
 Without column definitions, behavior is unchanged.
 
+The declared schema has two tiers.
+Names and scalar types are structural: the query is cast to them, so they hold by construction.
+Nullability and keys are semantic properties of the data, which the optimizer can only estimate by analysis, and that analysis can be incomplete or wrong in a given version.
+Declaring them fixes what the system assumes, but analysis never decides after creation whether they hold: `NOT NULL` is checked against the data at runtime, and keys are the user's assertion.
+This avoids the ambiguity of comparing a declared property against a later optimizer's analysis, where a disagreement could be a violation in the data or a miss in the analysis.
+
 Opting in has a cost: a key or non-null fact the optimizer infers today but the user does not declare is gone.
 Dependent queries lose the optimizations it enabled (e.g. `Distinct` or `Reduce` elision), and an upsert sink `KEY (...)` on an undeclared key fails to plan.
 Users who want to keep them have to declare them.
@@ -118,16 +125,15 @@ Using `WITH (ASSERT NOT NULL ...)` together with a declared schema, written out 
 **Keys.**
 Keys in a `RelationDesc` are consumed by the optimizer of every dependent query (e.g. to elide `Distinct` and `Reduce`).
 An incorrect key produces wrong results, which is why `CREATE TABLE` keys are gated behind `unsafe_enable_table_keys`.
-We therefore do not trust declared keys blindly.
-At creation, each declared `PRIMARY KEY` or `UNIQUE` key must be a superset of some key the optimizer infers for the (cast) query, otherwise creation fails with an error listing the keys we could prove.
+Declared keys are unenforced and unvalidated against the data, so they are a promise by the user.
+To catch obvious mistakes, creation requires each declared `PRIMARY KEY` or `UNIQUE` key to contain some key the optimizer infers for the (cast) query, otherwise it fails with an error listing the inferred keys.
 This mirrors the existing upsert sink `KEY` validation.
+The check is a guard, not a guarantee: MIR key inference is an analysis of the optimizer version that runs it, and it can be wrong.
 
 The check runs when the statement is first optimized, for `CREATE` and `EXPLAIN CREATE` alike, but not when `create_sql` is re-planned on boot or by `EXPLAIN REPLAN`.
-This relies on MIR key inference being correct in the version that runs the proof: a key it proved once is a property of the query and its inputs' schemas, not of the optimizer version.
-A later optimizer that fails to re-derive the key does not make the key false.
-The inputs' keys are themselves either declared (and proven), inferred (and sound), or source keys we already trust today.
+After creation, a key the check accepted is taken to be a property of the query and its inputs' schemas.
+A later optimizer that fails to infer the key does not reject the materialized view, and it could not tell a wrong key from a gap in its own analysis anyway.
 The flip side is that a key-inference bug at creation time is frozen into `create_sql`, where today a fixed optimizer would stop inferring the bad key on the next upgrade.
-Re-running the proof on boot as a soft check that only logs is a cheap way to detect that.
 
 A `UNIQUE` constraint on nullable columns without `NULLS NOT DISTINCT` is an error.
 This includes column-level `UNIQUE`, which has no `NULLS NOT DISTINCT` spelling and therefore requires `NOT NULL`.
@@ -136,7 +142,7 @@ This includes column-level `UNIQUE`, which has no `NULLS NOT DISTINCT` spelling 
 `RelationDesc` stores key columns sorted, so the declared column order of a key is not preserved, as for tables.
 
 Note that assignment casts can drop keys from the inferred set when the cast function does not report `preserves_uniqueness`.
-The user then sees the key-proof error and can adjust the query or the declared type.
+The user then sees the key check error and can adjust the query or the declared type.
 
 **Types that cannot be spelled.**
 The type grammar has no anonymous record type (`ResolvedDataType` has no such variant).
@@ -149,7 +155,7 @@ With a declared schema, a replacement is validated against the target's declared
 The difference is that both sides are now under the user's control, so a mismatch in nullability or keys is something the user wrote, not something the optimizer decided.
 
 A replacement without a column list for a target *with* a declared schema inherits the target's schema.
-Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with assignment casts, `NOT NULL` becomes an assertion, keys must be provable, and the feature flag applies.
+Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with assignment casts, `NOT NULL` becomes an assertion, keys go through the creation-time check, and the feature flag applies.
 The replacement's `create_sql` then states its schema.
 Re-planning it on boot does not depend on the target, custom types in the definitions are recorded as dependencies, and `MaterializedView::apply_replacement` keeps taking the column list from the replacement's statement.
 
@@ -181,7 +187,7 @@ This is the migration path from an implicit to a declared schema for an existing
    Apply the same rule: `desc = declared_desc` if present, otherwise `infer_sql_type_for_catalog` plus assertions.
    This is the single point that makes the schema optimizer-independent on boot.
 5. **Sequencer** (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs`).
-   Run the key proof on the keys of the local MIR plan's type, in the optimize stage so that `EXPLAIN CREATE` rejects what `CREATE` rejects.
+   Run the key check against the keys of the local MIR plan's type, in the optimize stage so that `EXPLAIN CREATE` rejects what `CREATE` rejects.
    Reject a replacement without a declared schema for a target with one.
    Schema inheritance for replacements lives in purification (`src/sql/src/pure.rs`), which can read the target from the catalog and add to the statement's resolved ids.
 6. **Feature flag** `enable_materialized_view_column_definitions`, off in production and on in the test and CI configuration.
@@ -210,7 +216,7 @@ The main risks are:
   Two-token lookahead resolves it, and roundtrip tests cover it.
 * **Cast semantics surprising users**, e.g. assignment casts to `varchar(n)` or `numeric(p, s)`.
   This is the same behavior as `INSERT`, see open questions.
-* **Key proofs failing for reasonable queries** because MIR key inference is incomplete (e.g. through casts or `UNION ALL` of disjoint inputs).
+* **Key checks failing for reasonable queries** because MIR key inference is incomplete (e.g. through casts or `UNION ALL` of disjoint inputs).
   In particular, `Map` carries a key over to a new column only if exactly one of its expressions preserves uniqueness, and `cast_relation` puts all casts into one `Map`, so declaring two columns with widening casts loses every key through them.
   Users can drop the key from the declaration. Runtime enforcement could be added later for those cases.
 
@@ -221,7 +227,7 @@ Two follow-ups would remove the implicit schema entirely:
 
 * **Freeze at creation.**
   When a materialized view is created without column definitions, write the inferred schema into `create_sql`, the same way the selected `AS OF` is written back today.
-  Inferred keys were proven by the optimizer at creation, so they satisfy the key rule.
+  Inferred keys pass the key check by construction, with the same caveat that the inference can be wrong.
   Inferred `NOT NULL` becomes a runtime assertion, which also turns a nullability-inference bug from a persist encoder panic into a query error.
 * **Migrate existing materialized views.**
   Rewrite their `create_sql` with the schema their shard currently has.
@@ -234,10 +240,10 @@ Both change what `SHOW CREATE MATERIALIZED VIEW` prints for users who never aske
 ## Minimal Viable Prototype
 
 * Parser, planner, optimizer and catalog changes for names, types, `NULL`/`NOT NULL`, behind the feature flag.
-* Key declarations with the creation-time proof.
+* Key declarations with the creation-time check.
 * Replacement validation against declared schemas and schema inheritance.
 * Tests:
-  * sqllogictest for parsing, casts, error messages, `SHOW CREATE`, key proof failures, and the `MustNotBeNull` runtime error.
+  * sqllogictest for parsing, casts, error messages, `SHOW CREATE`, key check failures, and the `MustNotBeNull` runtime error.
   * testdrive for an upsert sink keyed on a declared primary key.
   * A platform check that a materialized view with a declared schema survives upgrade and restart with an unchanged `RelationDesc`.
 
@@ -257,16 +263,23 @@ Freezing the inferred desc in a new catalog field fixes drift without any syntax
 It does not let users or replacements *state* the schema, and it creates a second source of truth next to `create_sql` that the two would have to agree with.
 Phase 2 achieves the same freezing through `create_sql`.
 
-### Unenforced keys
+### Keys without the creation-time check
 
-Accepting declared keys without proof (like `KEY (...) NOT ENFORCED` on sinks) is simpler, but the optimizer consumes `RelationDesc` keys, so a wrong declaration silently produces wrong results downstream.
+Accepting declared keys without any check (like `KEY (...) NOT ENFORCED` on sinks) is simpler.
+The optimizer consumes `RelationDesc` keys, so a mistyped declaration silently produces wrong results downstream, and the check catches the common case of a key the query plainly does not have.
 Keys that are informational only would need a place in `RelationDesc` that the optimizer ignores, which does not exist today.
+
+### Nullability and keys stay inferred
+
+Only names and scalar types could be declarable, with nullability and keys left to analysis as a second tier of the type.
+That avoids freezing an analysis result, but it keeps the drift this design sets out to remove: nullability and keys are part of the `RelationDesc` that persist stores as the shard's schema, and that sinks, dependent views and replacements consume.
+Separating them from the persist schema identity is possible, but it is a larger change to persist and the controller.
 
 ### Runtime-enforced keys
 
 Checking uniqueness in the dataflow means maintaining a count per key, i.e. an arrangement the size of the materialized view.
-It removes the incompleteness of the key proof but adds a large and surprising cost.
-It can be added later as an opt-in for keys the optimizer cannot prove.
+It turns declared keys into enforced constraints, but adds a large and surprising cost.
+It can be added later as an opt-in, also for keys the optimizer cannot infer.
 
 ### Sink-style `KEY (...)` instead of `PRIMARY KEY` / `UNIQUE`
 
@@ -287,9 +300,12 @@ A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we rejec
   The prototype uses assignment casts.
 * Should replacement schema inheritance reject casts?
   The prototype allows them, see [Replacements](#replacements).
-* Should `NOT NULL` skip the runtime assertion when the optimizer proves non-nullability?
+* Should `NOT NULL` skip the runtime assertion when the optimizer infers non-nullability?
   The assertion is a per-row datum scan in the sink, and skipping it would make performance, though not correctness, depend on the optimizer.
   The prototype never skips it.
+* Should a `NOT NULL` violation error the materialized view, or route the row to a dead-letter queue?
+  An error blocks reads at the affected times. A dead-letter queue keeps the materialized view readable, but drops data silently unless someone watches the queue.
+  The prototype errors.
 * Should `mz_materialized_views` expose whether the schema is declared?
   The prototype does not.
 * Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
