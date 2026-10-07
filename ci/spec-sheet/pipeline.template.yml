@@ -130,6 +130,10 @@ steps:
             - --cleanup
             - --target=cloud-staging
             - --qps-clusters=10
+            - --qps-envd-cpus=32
+            - --qps-concurrencies=128,512
+            - --qps-duration=90
+            - --qps-warmup=10
             - --system-parameter-default=enable_prepared_query_reuse=true
             - --system-parameter-default=enable_prepared_query_templates=true
             - --system-parameter-default=enable_frontend_transaction_completion=true
