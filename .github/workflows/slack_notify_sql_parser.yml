@@ -52,7 +52,7 @@ jobs:
     steps:
       - name: "Path filter"
         id: filter
-        uses: dorny/paths-filter@4512585405083f25c027a35db413c2b3b9006d50 # v2.11.1
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             sql-parser:
