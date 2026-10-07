@@ -1438,7 +1438,10 @@ async fn test_persist_committed_row_traffic() {
                 .map(|(key, value)| {
                     packed_bytes(
                         proto::StateUpdateKind::StorageCollectionMetadata(
-                            proto::StorageCollectionMetadata { key, value },
+                            proto::StorageCollectionMetadata {
+                                key: key.into_proto(),
+                                value: value.into_proto(),
+                            },
                         ),
                         "StorageCollectionMetadata",
                     )
@@ -1454,8 +1457,8 @@ async fn test_persist_committed_row_traffic() {
             .unwrap();
         let bound_bytes = packed_bytes(
             proto::StateUpdateKind::CollectionCompactionBound(proto::CollectionCompactionBound {
-                key,
-                value,
+                key: key.into_proto(),
+                value: value.into_proto(),
             }),
             "CollectionCompactionBound",
         );
@@ -1466,8 +1469,8 @@ async fn test_persist_committed_row_traffic() {
             .unwrap();
         let requirement_bytes = packed_bytes(
             proto::StateUpdateKind::MaintainedReadRequirement(proto::MaintainedReadRequirement {
-                key,
-                value,
+                key: key.into_proto(),
+                value: value.into_proto(),
             }),
             "MaintainedReadRequirement",
         );
