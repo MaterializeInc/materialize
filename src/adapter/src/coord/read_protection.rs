@@ -28,6 +28,7 @@ use timely::progress::Antichain;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Op};
 use crate::coord::{Coordinator, Message};
 use crate::query_client::{PreparedRead, QueryClient};
+use crate::util::ResultExt;
 use crate::{AdapterError, CollectionIdBundle, ReadHolds, TimelineContext};
 
 pub(super) const CATALOG_SUBSCRIPTION_INTERVAL: Duration = Duration::from_secs(1);
@@ -429,7 +430,9 @@ impl Coordinator {
                     )) {
                         // An early refresh must not bypass transaction-open's
                         // terminal fence handling and leave cached grants usable.
-                        mz_ore::halt!("catalog writer fenced: {error}");
+                        Err::<(), _>(error)
+                            .unwrap_or_terminate("refreshing catalog for read protection");
+                        unreachable!("unwrap_or_terminate does not return on Err");
                     }
                     return Err(error);
                 }
