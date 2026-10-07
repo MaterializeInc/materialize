@@ -115,9 +115,8 @@ impl Coordinator {
             }) {
                 continue;
             }
-            if let TimelineContext::TimelineDependent(timeline) =
-                Catalog::validate_timeline_context_in(candidate, [id])?
-            {
+            let context = Catalog::validate_timeline_context_in(candidate, [id])?;
+            if let TimelineContext::TimelineDependent(timeline) = context {
                 by_timeline.entry(timeline).or_insert_with(Vec::new).push((
                     id,
                     index.cluster_id,
