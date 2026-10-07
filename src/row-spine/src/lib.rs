@@ -227,7 +227,7 @@ mod tests {
         use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
         use differential_dataflow::trace::{Builder, Description};
         use mz_timely_util::columnar::body::ColumnBody;
-        use mz_timely_util::columnar::chunk::{ColumnChunk, UnchunkBuilder};
+        use mz_timely_util::columnar::chunk::{ColumnChunk, ComputeSpill, UnchunkBuilder};
         use timely::container::PushInto;
         use timely::progress::{Antichain, Timestamp as _};
 
@@ -275,12 +275,12 @@ mod tests {
         };
 
         type Paged = crate::RowRowColPagedBuilder<Timestamp, i64>;
-        type Chunked = UnchunkBuilder<Paged, (Row, Row), Timestamp, i64>;
+        type Chunked = UnchunkBuilder<Paged, (Row, Row), Timestamp, i64, ComputeSpill>;
 
         let mut chain = columns();
         let from_columns = <Paged as Builder>::seal(&mut chain, description());
 
-        let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64>> =
+        let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64, ComputeSpill>> =
             columns().into_iter().map(ColumnChunk::from_body).collect();
         let from_chunks = <Chunked as Builder>::seal(&mut chain, description());
 
