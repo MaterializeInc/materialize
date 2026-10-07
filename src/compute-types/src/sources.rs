@@ -10,6 +10,8 @@
 //! Types for describing dataflow sources.
 
 use mz_expr::MapFilterProject;
+#[cfg(doc)]
+use mz_expr::MfpPlan;
 use mz_repr::SqlRelationType;
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +33,9 @@ pub struct SourceInstanceDesc<M, O = MapFilterProject> {
 /// Per-source construction arguments.
 ///
 /// `O` is the form of the operators: a [`MapFilterProject`] while the
-/// optimizer may still rewrite them.
+/// optimizer may still rewrite them, and an [`MfpPlan`] once lowered.
+/// Rendering evaluates an `MfpPlan` as given, so lowering is the only place
+/// source operators are planned.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments<O = MapFilterProject> {
     /// Linear operators to be applied record-by-record.

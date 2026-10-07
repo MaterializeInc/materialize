@@ -208,7 +208,7 @@ impl Context {
         // source's reads and hoist the shared prefix into the source itself.
         self.refine_source_mfps(&mut dataflow);
 
-        Ok(dataflow)
+        dataflow.try_map_source_operators(MfpPlan::create_from)
     }
 
     /// Identifies common parts of the `MapFilterProject`s pushed onto sibling `Get::Collection`
@@ -220,7 +220,7 @@ impl Context {
     /// utter the `mz_now()` predicates that temporal bounds fold into, so it
     /// consumes the MIR `MfpPlan`s stashed in [`Self::source_get_mfps`] rather
     /// than round-tripping the lowered LIR plans back through MIR.
-    fn refine_source_mfps(&mut self, dataflow: &mut LirDataflowDescription) {
+    fn refine_source_mfps(&mut self, dataflow: &mut DataflowDescription<LirRelationExpr>) {
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
             let source = &mut source_import.desc;
             let source_id = *source_id;

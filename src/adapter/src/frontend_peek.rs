@@ -1133,7 +1133,9 @@ impl PeekClient {
                                             .source_imports
                                             .into_iter()
                                             .filter_map(|(id, import)| {
-                                                import.desc.arguments.operators.map(|mfp| (id, mfp))
+                                                import.desc.arguments.operators.map(|plan| {
+                                                    (id, plan.into_map_filter_project())
+                                                })
                                             })
                                             .collect(),
                                         PeekPlan::FastPath(_) => {

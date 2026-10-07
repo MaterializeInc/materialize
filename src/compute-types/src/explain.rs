@@ -11,6 +11,7 @@
 
 pub(crate) mod text;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
@@ -70,7 +71,10 @@ impl<'a> LirDataflowDescription {
             .source_imports
             .iter_mut()
             .map(|(id, import)| {
+                // Folding the plan back is display-only, and need not
+                // reproduce the planned operators exactly.
                 let op = import.desc.arguments.operators.as_ref();
+                let op = op.map(|plan| Cow::Owned(plan.clone().into_map_filter_project()));
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
@@ -138,7 +142,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             .source_imports
             .iter_mut()
             .map(|(id, import)| {
-                let op = import.desc.arguments.operators.as_ref();
+                let op = import.desc.arguments.operators.as_ref().map(Cow::Borrowed);
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();

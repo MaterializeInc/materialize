@@ -281,8 +281,7 @@ pub fn build_compute_dataflow(
                             read_schema = Some(new_desc);
                         }
 
-                        mz_expr::MfpPlan::create_from(ops)
-                            .expect("Linear operators should always be valid")
+                        ops
                     });
 
                     let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization

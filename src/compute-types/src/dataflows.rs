@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use mz_expr::{
-    CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    CollectionPlan, MapFilterProject, MfpPlan, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
@@ -258,6 +259,70 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
 }
 
 impl<P, S, O> DataflowDescription<P, S, O> {
+    /// Applies `f` to the operators of every source import, failing on the
+    /// first error.
+    pub fn try_map_source_operators<O2, E>(
+        self,
+        mut f: impl FnMut(O) -> Result<O2, E>,
+    ) -> Result<DataflowDescription<P, S, O2>, E> {
+        let DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        } = self;
+        let source_imports = source_imports
+            .into_iter()
+            .map(|(id, import)| {
+                let SourceImport {
+                    desc:
+                        SourceInstanceDesc {
+                            arguments: SourceInstanceArguments { operators },
+                            storage_metadata,
+                            typ,
+                        },
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                } = import;
+                let desc = SourceInstanceDesc {
+                    arguments: SourceInstanceArguments {
+                        operators: operators.map(&mut f).transpose()?,
+                    },
+                    storage_metadata,
+                    typ,
+                };
+                let import = SourceImport {
+                    desc,
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                };
+                Ok((id, import))
+            })
+            .collect::<Result<_, E>>()?;
+        Ok(DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        })
+    }
+
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -608,10 +673,10 @@ where
 pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
 /// A dataflow lowered to LIR.
-pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S>;
+pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S, MfpPlan>;
 
 /// A dataflow ready to render.
-pub type RenderDataflowDescription<S = ()> = DataflowDescription<RenderPlan, S>;
+pub type RenderDataflowDescription<S = ()> = DataflowDescription<RenderPlan, S, MfpPlan>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
@@ -670,7 +735,8 @@ pub struct BuildDesc<P> {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::{AccessStrategy, Id, MirRelationExpr};
+    use mz_expr::{AccessStrategy, Id, MirRelationExpr, UnmaterializableFunc, func};
+    use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
 
     use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -806,5 +872,31 @@ mod tests {
         );
 
         assert_eq!(df.used_import_ids(), BTreeSet::from([imported_index]));
+    }
+
+    #[mz_ore::test]
+    fn lowering_plans_source_operators() {
+        // `#1 = #0::mz_timestamp`, filtered by `mz_now() < #1` and
+        // `mz_now() = #0::mz_timestamp`.
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let mfp = MapFilterProject::new(1).map([cast()]).filter([
+            mz_now().call_binary(MirScalarExpr::column(1), func::Lt),
+            mz_now().call_binary(cast(), func::Eq),
+        ]);
+        let planned = MfpPlan::create_from(mfp.clone()).expect("plannable");
+
+        let mut df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(READ),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        });
+        let unread = df.source_imports.get_mut(&UNREAD).expect("imported");
+        unread.desc.arguments.operators = Some(mfp);
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = &lowered.source_imports[&UNREAD].desc.arguments.operators;
+        assert_eq!(operators.as_ref(), Some(&planned));
     }
 }
