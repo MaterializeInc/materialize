@@ -63,10 +63,13 @@ dispatch either. A successful bound publication near one gap's end takes only
 CI137969 locates 96.1% of completed maintenance time in client read-protection
 publication, including a 264.610s call. Bounds publication peaks at 5.427s.
 An independently measured 178.893s ordinary handler also delays dispatch, so not
-every stall has one owner. Nested diagnostic timing now separates transaction
-attempts, refresh, catalog locking/validation, oracle/CAS and completion. Measure
-the expensive sub-await and retry cost before choosing a remedy. Nested durations
-overlap. Remove these diagnostics and handoff events once that question is answered.
+every stall has one owner. CI137986 Parallel1 aborts from coordinator stack overflow
+during nested catalog refresh, not the old timeout or OOM. Its pre-abort publication
+sample is retry-heavy, but too short to explain the earlier minute-long calls.
+Catalog probes now expand around awaited expressions rather than adding generic
+async wrappers along the nested path. Direct common/durable timings remain.
+Verify this stack-pressure correction and identify the expensive sub-await/retry
+cost before a scheduling remedy. Nested durations overlap. Remove probes after repair.
 Preserve freshness, future-time checks, catalog completion before acknowledgement,
 refolding at every new target and existing deadlines. Lower-priority read/timeline
 branches retain their ordering. No broader scheduler redesign is included.
@@ -77,6 +80,10 @@ retention fixture uses blind INSERTs for compaction work, not read-dependent
 UPDATEs, and passes in CI137825. That isolates the fixture and does not resolve
 the parallel UPDATEs. Cluster1 also passes after removing the transient retained
 compaction-command count assertion, without changing runtime measurements.
+CI137986 Cluster3 also exposes two distinct observations: DROP metrics have an
+independent observer, so their fixture now polls actual absence for both IDs.
+The paused-index bound assertion stays unchanged: six returning publication
+conflicts interrupted its progress window after replica reclamation.
 
 All five SQL logic test shards pass in CI137778, including scheduled-compaction's
 unchanged 1/0/1 membership and audit assertions. Preserve those assertions.

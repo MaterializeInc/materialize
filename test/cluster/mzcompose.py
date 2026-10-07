@@ -3177,10 +3177,19 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
             """),
     )
 
-    # Check that the per-collection metrics have been cleaned up.
-    metrics = fetch_metrics()
-    assert metrics.get_wallclock_lag_count(index_id) is None
-    assert metrics.get_wallclock_lag_count(mv_id) is None
+    # MV frontiers and native lag metrics have independent observers. Observe
+    # metric retirement itself, within the fixture's ordinary 20-second budget.
+    retained = None
+    for _ in ui.timeout_loop(20):
+        metrics = fetch_metrics()
+        retained = {
+            object_id: count
+            for object_id in (index_id, mv_id)
+            if (count := metrics.get_wallclock_lag_count(object_id)) is not None
+        }
+        if not retained:
+            break
+    assert retained == {}, f"dropped collections retain lag metrics: {retained}"
 
 
 def workflow_test_storage_controller_metrics(c: Composition) -> None:
