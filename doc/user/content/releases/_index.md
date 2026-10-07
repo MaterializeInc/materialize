@@ -32,20 +32,12 @@ Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deplo
 
 - **Ready-made alert rules**: 34 alerts are on by default, covering Materialize and the Kubernetes platform under it. They include `environmentd` going down, clusters falling behind or stuck hydrating, replicas nearing their memory limit or being OOM-killed, and panics in Materialize's logs.
 - **Route each alert to whoever acts on it**: Every alert carries a severity and an audience, `platform` for the team operating the deployment and `workload` for the teams that own the clusters, so you can send each to the right people.
-- **Notify the tools your team already uses**: Configure PagerDuty, Slack, Microsoft Teams, email, or webhook receivers from Terraform. Notifications link to the alert in Grafana and to a pre-filled silence.
+- **Notify the tools your team already uses**: Configure PagerDuty, Slack, Microsoft Teams, email, or webhook receivers from Terraform.
 
-A default install configures no receiver, so alerts notify nobody until you add one. For more information, see [Alerting](/observability/self-managed/alerting/), [Customize alerting](/observability/self-managed/customize-alerting/), and the [list of bundled alerts ⧉](https://materializeinc.github.io/materialize-monitoring/reference/common-alerts/).
+A default install configures no receiver, so alerts notify nobody until you add one. For more information, see [Alerting](/observability/self-managed/alerting/) and [Customize alerting](/observability/self-managed/customize-alerting/).
 
-### External dependency monitoring for Self-Managed {#v26.45.1-external-dependencies}
-
-<red>*Materialize Self-Managed only*</red>
-
-Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), you can tell quickly whether a problem is in Materialize or in the object storage and metadata database it depends on:
-
-- **Dashboards**: **Materialize Persist (Storage)** and **Materialize Consensus (Metadata)** show both dependencies as Materialize experiences them. **Infrastructure Cloud Provider** adds what your cloud provider reports about them, once you turn on [cloud provider metrics ⧉](https://materializeinc.github.io/materialize-monitoring/metrics/collecting/cloud-provider-metrics/).
-- **Alerts**: `consensus-unreachable`, `consensus-failures`, and `blob-failures` fire when Materialize's calls to the metadata database or object storage keep failing.
-
-For more information, see the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
+### Improvements {#v26.45.1-improvements}
+- **External dependency monitoring for Self-Managed**: Starting with v15.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), new **Materialize Persist (Storage)** and **Materialize Consensus (Metadata)** dashboards show the object storage and metadata database that Materialize depends on, as Materialize experiences them, so you can tell quickly whether a problem is in Materialize or in one of its dependencies. **Infrastructure Cloud Provider** adds what your cloud provider reports about them, once you turn on [cloud provider metrics ⧉](https://materializeinc.github.io/materialize-monitoring/metrics/collecting/cloud-provider-metrics/). See the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
 
 ## v26.44.1
 *Released to Materialize Cloud: 2026-09-30* <br>
