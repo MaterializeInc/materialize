@@ -184,7 +184,8 @@ COPY INTO csv_table FROM '<s3 presigned URL>' (FORMAT CSV);
 Materialize does not follow HTTP redirects when fetching from a URL. If the
 server returns a `3xx` response, the `COPY FROM` will fail rather than follow
 the `Location` header. Use the final URL directly (for example, the resolved
-presigned URL) instead of one that redirects.
+presigned URL) instead of one that redirects. Any other non-`2xx` response
+also fails the `COPY FROM`.
 {{< /note >}}
 
 ## Privileges
