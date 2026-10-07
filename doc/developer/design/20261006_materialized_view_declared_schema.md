@@ -152,6 +152,12 @@ A dropped key does not tell whether the key is false or the analysis got weaker.
 The system cannot decide that, and the design does not try to: it only refuses to trust what the running version cannot confirm, and says so.
 Dropping a key changes the materialized view's `RelationDesc` on boot, which today's inferred keys already do: `evolve_nullability_for_bootstrap` re-registers the shard schema with the re-planned desc.
 
+A dropped key must not stop dependents from re-planning, because a re-plan error at catalog load panics (`invalid persisted SQL` in `src/adapter/src/catalog/apply.rs`).
+An upsert sink checks its `KEY (...)` against the keys of its input on every plan (`plan_sink` in `src/sql/src/plan/statement/ddl.rs`), so a sink keyed on a dropped key would crash-loop the next boot.
+When re-planning persisted SQL, which is planned without a `PlanContext`, an upsert key that is no longer a key of the input is therefore treated as `NOT ENFORCED`: the sink keeps running and the planner adds a notice.
+New `CREATE SINK` statements keep the error.
+Today's inferred keys can disappear on upgrade in the same way, so this also closes an existing crash.
+
 A `UNIQUE` constraint on nullable columns without `NULLS NOT DISTINCT` is an error.
 This includes column-level `UNIQUE`, which has no `NULLS NOT DISTINCT` spelling and therefore requires `NOT NULL`.
 (`plan_create_table` stops processing constraints at the first such one instead, which drops it and every later key, so a declared key would silently disappear.)
@@ -332,9 +338,6 @@ A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we rejec
   The prototype errors.
 * Should `mz_materialized_views` expose whether the schema is declared?
   The prototype does not.
-* What happens to an upsert sink keyed on a key that a new version drops?
-  Its `create_sql` fails to re-plan on boot, as it does today when an inferred key disappears.
-  Planning such a sink could keep running with a notice instead, like `KEY (...) NOT ENFORCED`.
 * Should a dropped key say why it was dropped?
   Recording at creation how a key was derived (only structural steps, through which uniqueness-preserving functions, from which input keys) would let a later version tell an analysis gap apart from a changed function or a missing input key.
 * Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
