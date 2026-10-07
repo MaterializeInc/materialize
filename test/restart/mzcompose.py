@@ -1384,6 +1384,8 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 "persist_inline_writes_single_max_bytes": "0",
                 "persist_compaction_heuristic_min_inputs": "2",
             },
+            # environmentd and its native children share the fixture's 5s/25s timing.
+            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         ),
         Testdrive(
             name="testdrive_no_reset",
@@ -1506,19 +1508,37 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         assert len(initial_since) == 1
         assert initial_since[0] >= physical_since[0] > 0
         indexed_read_before_advancement("initial")
+        pre_crash_incarnations = set(catalog_snapshot()["client_incarnations"])
+        assert pre_crash_incarnations, "crash proof requires live client incarnations"
+        print(f"Pre-crash client incarnations: {sorted(pre_crash_incarnations)}")
         c.kill("materialized")
         c.up("materialized")
         assert gid("protected_index") == index
         indexed_read_before_advancement("restarted")
         assert time.monotonic() - advancement_paused_at < 300
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
-        td(f"""
+        advancement_deadline = time.monotonic() + 120
+        # Paused publication retains the killed clients' grants. Their actual
+        # reclamation, not elapsed sleep time, releases that protection.
+        while surviving := pre_crash_incarnations.intersection(
+            catalog_snapshot()["client_incarnations"]
+        ):
+            if time.monotonic() >= advancement_deadline:
+                raise UIError(f"Pre-crash incarnations were not reclaimed: {surviving}")
+            time.sleep(0.5)
+        remaining = advancement_deadline - time.monotonic()
+        if remaining <= 0:
+            raise UIError("Incarnation reclamation exhausted the advancement deadline")
+        td(
+            f"""
             > SELECT (v->>'frontier')::numeric > {initial_since[0]}
               FROM ({index_bound_sql}) r(v);
             true
             > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;
             true
-        """)
+            """,
+            timeout=remaining,
+        )
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
         # Stay well inside the positive cadence while driving progress past the cap.
         # No peek is kept open to retain index history.

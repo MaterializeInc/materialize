@@ -35,6 +35,13 @@ current interval in existing failing workloads. A larger interval needs a measur
 contention/retention decision, not a fixture-only slowdown. Keep this correction
 separate from the conflict-work trims.
 
+The restart fixture uses the approved 5s/25s timing consistently from startup.
+It records pre-crash incarnations and waits for their actual reclamation before
+asserting advancement, sharing the existing 120-second advancement budget.
+Preserve SIGKILL, indexed recovery reads, committed bounds and physical retention.
+This fixture correction does not establish that cadence fixes catalog contention.
+Production and parallel-workload timing remain unchanged.
+
 The shared adapter client also loses protection after renewal repeatedly fails
 for longer than the unchanged-heartbeat grace. Earlier query timeouts precede
 that loss. No intervening successful renewal or premature reclamation is shown,
