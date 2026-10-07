@@ -752,12 +752,26 @@ impl Pretty {
             },
             v.name,
         )));
-        if !v.columns.is_empty() {
-            docs.push(bracket(
-                "(",
-                comma_separate(|c| self.doc_display_pass(c), &v.columns),
-                ")",
-            ));
+        match &v.columns {
+            MaterializedViewColumns::Names(names) => {
+                if !names.is_empty() {
+                    docs.push(bracket(
+                        "(",
+                        comma_separate(|c| self.doc_display_pass(c), names),
+                        ")",
+                    ));
+                }
+            }
+            MaterializedViewColumns::Definitions {
+                columns,
+                constraints,
+            } => {
+                let defs = columns
+                    .iter()
+                    .map(|c| self.doc_display_pass(c))
+                    .chain(constraints.iter().map(|c| self.doc_display_pass(c)));
+                docs.push(bracket("(", comma_separated(defs), ")"));
+            }
         }
         if let Some(target) = &v.replacement_for {
             docs.push(RcDoc::text(format!(
