@@ -319,6 +319,11 @@ updates:
     default-days: 3
   open-pull-requests-limit: 20
   labels: [A-dependencies]
+  ignore:
+    # Chakra v3 is a rewrite, migrated separately.
+    - dependency-name: "@chakra-ui/*"
+      update-types:
+        - version-update:semver-major
   # Packages that only work at matching versions share a group, so an update
   # arrives as one PR instead of several that each fail on their own. A
   # dependency joins the first group it matches, so the families come before
@@ -405,6 +410,10 @@ updates:
       applies-to: version-updates
       patterns:
         - "@tanstack/react-query*"
+    chakra:
+      applies-to: version-updates
+      patterns:
+        - "@chakra-ui/*"
     # msw, downshift, and @frontegg/* tighten types in minor releases that
     # existing code relies on, and @intercom/* is on 0.0.x, where any release
     # can break. Each comes as its own PR rather than breaking the whole group.
