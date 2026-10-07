@@ -77,8 +77,10 @@ class QpsSweep:
             "warmup_seconds": self.warmup,
             "duration_seconds": self.duration,
             "query_timeout_seconds": self.query_timeout,
-            "query": "SELECT * FROM qps_gen_view",
-            "expected_rows": 10,
+            # Constrain the complete index key so prepared executions can reuse
+            # the compiled point-lookup template, rather than reoptimize a scan.
+            "query": "SELECT * FROM qps_gen_view WHERE x = 5",
+            "expected_rows": 1,
             "require_statement_logging_disabled": True,
         }
 

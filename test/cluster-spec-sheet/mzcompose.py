@@ -2048,7 +2048,7 @@ class AuctionScenario(ClusterScalingScenario):
 
 class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
-    VERSION = "2.0.0"
+    VERSION = "3.0.0"
 
     def __init__(self, options: QpsSweep) -> None:
         super().__init__(1, None)
@@ -2150,6 +2150,8 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             system_parameter_defaults=runner.target.system_parameter_defaults,
             envd_cpus=runner.envd_cpus,
             query_cluster_size=size,
+            query=config["query"],
+            expected_rows=config["expected_rows"],
         )
         logs_dir = os.path.join("test", "cluster-spec-sheet", "qps-logs")
         os.makedirs(logs_dir, exist_ok=True)
