@@ -424,6 +424,11 @@ pub enum Message {
         span: Span,
         stage: PeekStage,
     },
+    DdlCommitStageReady {
+        ctx: DdlCommitContext,
+        span: Span,
+        stage: DdlCommitStage,
+    },
     CatalogCommitStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -589,6 +594,7 @@ impl Message {
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
+            Message::DdlCommitStageReady { .. } => "ddl_commit_stage_ready",
             Message::CatalogCommitStageReady { .. } => "catalog_commit_stage_ready",
             Message::DropObjectsStageReady { .. } => "drop_objects_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
@@ -807,6 +813,26 @@ pub struct PeekStageExplainPushdown {
     validity: PlanValidity,
     determination: TimestampDetermination,
     imports: BTreeMap<GlobalId, MapFilterProject>,
+}
+
+/// Owns COMMIT after the session's accumulated transaction has been extracted.
+#[derive(Debug)]
+pub struct DdlCommitContext(ExecuteContext);
+
+pub struct DdlCommitStage {
+    validity: PlanValidity,
+    planning_revision: u64,
+    ops: Vec<crate::catalog::Op>,
+    prepared: Option<ddl::PreparedCatalogTransaction>,
+    side_effects: Vec<crate::session::DdlSideEffect>,
+}
+
+impl std::fmt::Debug for DdlCommitStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DdlCommitStage")
+            .field("planning_revision", &self.planning_revision)
+            .finish_non_exhaustive()
+    }
 }
 
 /// SQL work whose only remaining effect is a catalog commit and response.
@@ -1336,6 +1362,12 @@ pub(crate) trait Staged: Send {
     type Ctx: StagedContext;
 
     fn validity(&mut self) -> &mut PlanValidity;
+
+    /// Validates this continuation before execution. Explicit transactions may
+    /// require a stricter structural check than individual statement plans.
+    fn check_validity(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
+        self.validity().check(catalog)
+    }
 
     /// Returns the next stage or final result.
     async fn stage(

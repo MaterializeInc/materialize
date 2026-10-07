@@ -139,7 +139,7 @@ impl Coordinator {
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<F>(
         &mut self,
-        mut ctx: Option<&mut ExecuteContext>,
+        ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
@@ -152,9 +152,33 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let (table_updates, catalog_updates, _created_clients, admission_holds) = self
+        let committed = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
+        Box::pin(self.complete_catalog_transaction_with_side_effects(
+            ctx,
+            committed,
+            start,
+            side_effect,
+        ))
+        .await
+    }
+
+    async fn complete_catalog_transaction_with_side_effects<F>(
+        &mut self,
+        mut ctx: Option<&mut ExecuteContext>,
+        committed: CommittedCatalogTransaction,
+        start: Instant,
+        side_effect: F,
+    ) -> Result<(), AdapterError>
+    where
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + 'static,
+    {
+        let (table_updates, catalog_updates, _created_clients, admission_holds) = committed;
 
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
@@ -293,12 +317,65 @@ impl Coordinator {
     ) -> Result<bool, AdapterError> {
         let start = Instant::now();
         let conn_id = ctx.session().conn_id().clone();
-        if !self.active_conns.contains_key(&conn_id) {
+        let Some(committed) = self
+            .try_catalog_transact_prepared(&conn_id, ops, prepared)
+            .await?
+        else {
+            return Ok(false);
+        };
+        // Keep the selected plans' input holds through committed completion.
+        let _prepared = prepared.take();
+        Box::pin(self.complete_catalog_transaction(Some(ctx), committed, start)).await?;
+        Ok(true)
+    }
+
+    pub(super) async fn try_catalog_transact_with_side_effects(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        ops: &[Op],
+        prepared: &mut Option<PreparedCatalogTransaction>,
+        side_effects: &mut Vec<crate::session::DdlSideEffect>,
+    ) -> Result<bool, AdapterError> {
+        let start = Instant::now();
+        let conn_id = ctx.session().conn_id().clone();
+        let Some(committed) = self
+            .try_catalog_transact_prepared(&conn_id, ops, prepared)
+            .await?
+        else {
+            return Ok(false);
+        };
+        // Effects are consumed only after a definitive commit. A retry retains
+        // both the closures and the prepared plans' input protection.
+        let _prepared = prepared.take();
+        let side_effects = std::mem::take(side_effects);
+        Box::pin(self.complete_catalog_transaction_with_side_effects(
+            Some(ctx),
+            committed,
+            start,
+            move |coord, mut ctx| {
+                Box::pin(async move {
+                    for side_effect in side_effects {
+                        side_effect(coord, ctx.as_deref_mut()).await;
+                    }
+                })
+            },
+        ))
+        .await?;
+        Ok(true)
+    }
+
+    async fn try_catalog_transact_prepared(
+        &mut self,
+        conn_id: &ConnectionId,
+        ops: &[Op],
+        prepared: &mut Option<PreparedCatalogTransaction>,
+    ) -> Result<Option<CommittedCatalogTransaction>, AdapterError> {
+        if !self.active_conns.contains_key(conn_id) {
             return Err(AdapterError::Canceled);
         }
         let revision = self.catalog().transient_revision();
         let preparation = if prepared.is_none() {
-            Box::pin(self.prepare_catalog_transaction(Some(&conn_id), ops.to_vec()))
+            Box::pin(self.prepare_catalog_transaction(Some(conn_id), ops.to_vec()))
                 .await
                 .map(|value| *prepared = Some(value))
         } else {
@@ -307,7 +384,7 @@ impl Coordinator {
         let result = match preparation {
             Ok(()) => {
                 Box::pin(self.commit_prepared_catalog_transaction(
-                    Some(&conn_id),
+                    Some(conn_id),
                     prepared.as_mut().expect("prepared above"),
                     false,
                 ))
@@ -316,12 +393,7 @@ impl Coordinator {
             Err(error) => Err(error),
         };
         match result {
-            Ok(committed) => {
-                // Keep rewrite holds through completion, then release them once.
-                let _prepared = prepared.take();
-                Box::pin(self.complete_catalog_transaction(Some(ctx), committed, start)).await?;
-                Ok(true)
-            }
+            Ok(committed) => Ok(Some(committed)),
             Err(AdapterError::Catalog(error)) => {
                 let mz_catalog::memory::error::ErrorKind::Durable(
                     mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { upper, .. },
@@ -333,7 +405,7 @@ impl Coordinator {
                 if self.catalog().transient_revision() != revision {
                     return Err(AdapterError::DDLTransactionRace);
                 }
-                Ok(false)
+                Ok(None)
             }
             Err(error) => Err(error),
         }

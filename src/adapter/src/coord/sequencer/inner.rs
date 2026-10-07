@@ -127,6 +127,7 @@ mod create_index;
 mod create_materialized_view;
 mod create_metric_sink;
 mod create_view;
+mod ddl_commit;
 mod drop_objects;
 mod explain_timestamp;
 mod peek;
@@ -219,7 +220,7 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::Canceled));
             return;
         }
-        if let Err(error) = stage.validity().check(self.catalog()) {
+        if let Err(error) = stage.check_validity(self.catalog()) {
             ctx.handle_error(error);
             return;
         }
@@ -2110,6 +2111,16 @@ impl Coordinator {
                 }
                 (response, action)
             }
+            Ok(Some(TransactionOps::DDL {
+                ops,
+                side_effects,
+                transient_revision,
+                ..
+            })) => {
+                self.sequence_ddl_commit(ctx, ops, side_effects, transient_revision)
+                    .await;
+                return;
+            }
             Ok(Some(TransactionOps::SingleStatement { stmt, params })) => {
                 self.internal_cmd_tx
                     .send(Message::ExecuteSingleStatementTransaction {
@@ -2158,32 +2169,6 @@ impl Coordinator {
 
                         // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                         writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                    }
-                    TransactionOps::DDL {
-                        ops,
-                        state: _,
-                        side_effects,
-                        transient_revision,
-                        snapshot: _,
-                    } => {
-                        if *transient_revision != self.catalog().transient_revision() {
-                            return Err(AdapterError::DDLTransactionRace);
-                        }
-                        // Commit all of our queued ops.
-                        let ops = std::mem::take(ops);
-                        let side_effects = std::mem::take(side_effects);
-                        self.catalog_transact_with_side_effects(
-                            Some(ctx),
-                            ops,
-                            move |a, mut ctx| {
-                                Box::pin(async move {
-                                    for side_effect in side_effects {
-                                        side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
-                                    }
-                                })
-                            },
-                        )
-                        .await?;
                     }
                     _ => (),
                 }

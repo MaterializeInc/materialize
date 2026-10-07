@@ -60,6 +60,13 @@ replan releases its DDL guard and wakes queued statements before reacquiring it.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+Explicit DDL COMMIT extracts the session transaction before its first attempt.
+Its continuation must own the extracted operations and completion effects, not
+run transaction cleanup again on retry. Structural invalidation fails that
+transaction rather than replanning already acknowledged statements. Finalize
+session variables on every terminal outcome, including cancellation, and run
+completion effects only after a definitive commit.
+
 #### Legacy paths being migrated away from
 
 The migration into the implications framework is incremental and unfinished.

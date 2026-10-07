@@ -324,7 +324,7 @@ impl Coordinator {
                     // "commit" pgwire command. Thus, we just generate a default statement
                     // execution context (once statement logging is implemented, this will cause nothing to be logged
                     // when the execution finishes.)
-                    let ctx = ExecuteContext::from_parts(
+                    let mut ctx = ExecuteContext::from_parts(
                         tx,
                         self.internal_cmd_tx.clone(),
                         session,
@@ -344,14 +344,13 @@ impl Coordinator {
                     };
 
                     let conn_id = ctx.session().conn_id().clone();
+                    // Guarantee cleanup even if plan validation rejects COMMIT.
+                    // Do it before sequencing can install a retry continuation's
+                    // cancel watch, and retain its durable response barrier.
+                    let retire_notify = self.clear_connection(&conn_id).await;
+                    ctx.delay_response_until(retire_notify);
                     self.sequence_plan(ctx, plan, ResolvedIds::empty(), ResolvedIds::empty())
                         .await;
-                    // Part of the Command::Commit contract is that the Coordinator guarantees that
-                    // it has cleared its transaction state for the connection.
-                    let retire_notify = self.clear_connection(&conn_id).await;
-                    // `sequence_plan` has already handled the client response.
-                    // This call only satisfies the internal cleanup contract.
-                    drop(retire_notify);
                 }
 
                 Command::CatalogSnapshot {

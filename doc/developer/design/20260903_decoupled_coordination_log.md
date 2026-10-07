@@ -44,9 +44,13 @@ SQL CREATE ROLE and COMMENT use a shared retained catalog-commit stage. Startup
 role creation retains its separate owner. The existing parallel password fixture
 must verify the demonstrated role stall rather than infer success from cheaper
 candidate work.
-Next finish remaining ordinary DDL and explicit DDL COMMIT resumption,
-plus direct preparation acquisition. Preserve cancellation and commit-once
-completion. Do not trade CAS spinning for repeated optimization.
+Explicit DDL COMMIT retains extracted operations and completion effects across
+retries, with final variable/response completion on success, error or cancellation.
+Protocol cleanup precedes continuation creation. The original transaction revision
+takes precedence over statement-level validity checks. This slice needs CI.
+Next finish remaining ordinary DDL and direct preparation acquisition. Preserve
+cancellation and commit-once completion. Do not trade CAS spinning for repeated
+optimization.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
 not per candidate. IDs, validation and audit effects remain candidate-owned.
 This removes repeated hashing, but aggregate candidate timings do not isolate

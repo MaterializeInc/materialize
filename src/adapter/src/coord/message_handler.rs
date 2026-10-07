@@ -272,6 +272,9 @@ impl Coordinator {
             Message::PeekStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
+            Message::DdlCommitStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
             Message::CatalogCommitStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }

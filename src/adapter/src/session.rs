@@ -1528,6 +1528,16 @@ impl From<&TransactionStatus> for TransactionCode {
     }
 }
 
+/// An owned DDL completion effect, run once after durable commit.
+pub(crate) type DdlSideEffect = Box<
+    dyn for<'a> FnOnce(
+            &'a mut Coordinator,
+            Option<&'a mut ExecuteContext>,
+        ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+        + Send
+        + Sync,
+>;
+
 /// The type of operation being performed by the transaction.
 ///
 /// This is needed because we currently do not allow mixing reads and writes in
@@ -1573,16 +1583,7 @@ pub enum TransactionOps {
         state: CatalogState,
         /// A list of side effects that should be executed if this DDL transaction commits.
         #[derivative(Debug = "ignore")]
-        side_effects: Vec<
-            Box<
-                dyn for<'a> FnOnce(
-                        &'a mut Coordinator,
-                        Option<&'a mut ExecuteContext>,
-                    ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-                    + Send
-                    + Sync,
-            >,
-        >,
+        side_effects: Vec<DdlSideEffect>,
         /// [`mz_catalog::catalog::Catalog::transient_revision`] when this transaction started.
         transient_revision: u64,
         /// Snapshot of the durable transaction state after the last dry run.
