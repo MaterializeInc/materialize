@@ -1115,6 +1115,7 @@ pub struct ExplainPlanContext {
 pub enum CreateMaterializedViewStage {
     Optimize(CreateMaterializedViewOptimize),
     Finish(CreateMaterializedViewFinish),
+    Commit(CreateMaterializedViewCommit),
     Explain(CreateMaterializedViewExplain),
 }
 
@@ -1142,6 +1143,17 @@ pub struct CreateMaterializedViewFinish {
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
     optimizer_features: OptimizerFeatures,
     read_protection: Option<read_protection::ReadProtectionRequest>,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewCommit {
+    validity: PlanValidity,
+    planning_revision: u64,
+    ops: Vec<crate::catalog::Op>,
+    prepared: Option<ddl::CatalogTransactionState>,
+    raw_df_meta: DataflowMetainfo,
+    item_name: String,
+    if_not_exists: bool,
 }
 
 #[derive(Debug)]

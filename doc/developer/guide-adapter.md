@@ -60,6 +60,15 @@ replan releases its DDL guard and wakes queued statements before reacquiring it.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
+transaction, joining logical-input and selected-import permission. The definition,
+timestamp, selected plan and protection commit together. A metadata conflict
+reconsiders the timestamp without repeating optimization or publishing preliminary
+client grants. REFRESH retains its existing early-grant path, including protection
+for fixed refresh times, with unchanged warmup and retention behavior. Final commit
+retries relinquish the coordinator while retaining the selection, and complete
+notices only after definitive success.
+
 Written-plan preparation may also yield while acquiring protection. Retain the
 candidate, selected plans, current optimized replacement and earlier input holds
 across metadata contention. Resume the same fixed-timestamp acquisition against

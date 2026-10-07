@@ -20,6 +20,19 @@ when folding our remaining fixups. Detailed verification belongs in the
 Prioritize the parallel-workload stalls. Repeated catalog conflicts amplify
 client read-protection publication and ordinary DDL into long coordinator-owned
 intervals. Measured write and subscribe handoffs overlap these intervals.
+Pause further staged-retry expansion. Ordinary CREATE MV now computes its birth
+in common catalog admission with definition, selected plan and logical/actual-input
+protection, without preliminary grants. Final commit retries retain the immutable
+selection and reconsider current compaction permission. Verify the integrated path.
+REFRESH retains its existing admission and grants, protecting chosen timestamps
+through planning without changing warmup or retention. The common boundary is
+not a general admission solver for dependent batches of new MVs and indexes.
+SQL requires these CREATE statements to run singly.
+After CREATE MV, assess the same boundary in DROP's written-plan preparation.
+Keep necessary commit retries nonblocking and submitted outcomes definitive.
+Measure successful catalog commits separately from failed attempts and other I/O,
+then verify foreground and renewal progress in existing workloads.
+
 Implement the [cooperating-writer contention requirements](20260903_decoupled_coordination.md#cooperating-catalog-writers):
 incremental catch-up and transaction repreparation, staggered maintenance, bounded
 randomized backoff, and retries that relinquish the coordinator. Apply this at
@@ -50,15 +63,17 @@ takes precedence over statement-level validity checks. This slice needs CI.
 Written-plan preparation retains its candidate, immutable selections, current
 optimized replacement and earlier holds across single-attempt acquisition retries.
 The existing SQL continuations yield and revalidate revision/incarnation on resume.
-Only fallback to different imports repeats optimization. This slice needs CI
-verification. Introspection SUBSCRIBE timestamp admission and initial MV admission
-also have demonstrated inline acquisition stalls. Their retained stages now yield
-single-attempt grants, keeping optimization and purification holds intact. Verify
-these paths before attributing later failures to the earlier ordinary-DDL stall.
+Only fallback to different imports repeats optimization. Introspection SUBSCRIBE
+timestamp admission now yields single-attempt grants. The analogous local initial
+MV acquisition continuation is used only by the fixed-birth path, not ordinary
+automatic admission or a template for more intermediate stages.
 CREATE INDEX also retains its written selection and notices through a staged
 catalog commit, rebuilding creator protection per attempt. Verify its dispatcher
-yield independently of renewal success: repeated bounded renewal failures remain
-under investigation. The frontier INSERT's year-3000 read wait is separate.
+yield independently of renewal success. Most measured bounded renewal failures
+reject a projection refreshed before backoff rather than at the next attempt.
+An attempt-start refresh must preserve terminal serving-writer fencing handling.
+That repair remains separate from reducing CREATE MV publications.
+The frontier INSERT's year-3000 read wait is separate.
 The source-table EXPLAIN timeout remains unlocalized between certification and
 grant acquisition. Keep its protection and deadline unchanged.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,

@@ -1346,39 +1346,6 @@ impl Catalog {
             }
         }
 
-        // Validate the final requirement, including a creator's optional frontier
-        // selection. Dropped owners need no protection. Publications may advance
-        // recovery, but may not change the logical inputs that define it.
-        for id in updated_requirements {
-            let Some(entry) = preliminary_state.try_get_entry_by_global_id(&id) else {
-                continue;
-            };
-            let CatalogItem::MaterializedView(mv) = entry.item() else {
-                continue;
-            };
-            let requirement = &preliminary_state.maintained_read_requirements()[&id];
-            // Applying a replacement can retain aliases of the retired writer.
-            // Their completed requirements describe the retired definition.
-            if id != mv.global_id_writes() {
-                if requirement.frontier.is_some() {
-                    return Err(CatalogError::internal(
-                        "materialized view read protection",
-                        format!("retired writer {id} has an active recovery requirement"),
-                    ));
-                }
-                continue;
-            }
-            if requirement.inputs != materialized_view_recovery_inputs(&preliminary_state, mv) {
-                return Err(CatalogError::internal(
-                    "materialized view read protection",
-                    format!("incomplete logical inputs for {id}"),
-                ));
-            }
-            if born_mvs.contains(&id) {
-                validate_materialized_view_birth(mv, requirement.frontier)?;
-            }
-        }
-
         // The last client release can retire metadata after its SQL object is gone.
         // Visit changed requirement targets, not every collection on each heartbeat.
         for update in &updates {
@@ -1446,6 +1413,56 @@ impl Catalog {
         // Admission failures must return before entering the fatal commit path.
         // Batch extraction repeats this check for other durable callers.
         super::retention::admit_index_bounds(tx, &preliminary_state, &admitted_plans)?;
+        if admit_automatic_materialized_views(
+            tx,
+            &preliminary_state,
+            &born_mvs,
+            &admitted_plans,
+            mode,
+        )? {
+            // Admission stamps the definition and its requirements together. Make
+            // them visible to the same validators as explicitly selected births.
+            let mut admission_updates = tx.get_and_commit_op_updates();
+            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            preliminary_state
+                .to_mut()
+                .apply_updates(admission_updates.clone(), &mut local_expr_cache)
+                .await;
+            updates.append(&mut admission_updates);
+        }
+        // Validate the final requirement, including a creator's optional frontier
+        // selection. Dropped owners need no protection. Publications may advance
+        // recovery, but may not change the logical inputs that define it.
+        for id in updated_requirements {
+            let Some(entry) = preliminary_state.try_get_entry_by_global_id(&id) else {
+                continue;
+            };
+            let CatalogItem::MaterializedView(mv) = entry.item() else {
+                continue;
+            };
+            let requirement = &preliminary_state.maintained_read_requirements()[&id];
+            // Applying a replacement can retain aliases of the retired writer.
+            // Their completed requirements describe the retired definition.
+            if id != mv.global_id_writes() {
+                if requirement.frontier.is_some() {
+                    return Err(CatalogError::internal(
+                        "materialized view read protection",
+                        format!("retired writer {id} has an active recovery requirement"),
+                    ));
+                }
+                continue;
+            }
+            if requirement.inputs != materialized_view_recovery_inputs(&preliminary_state, mv) {
+                return Err(CatalogError::internal(
+                    "materialized view read protection",
+                    format!("incomplete logical inputs for {id}"),
+                ));
+            }
+            if born_mvs.contains(&id) {
+                validate_materialized_view_birth(mv, requirement.frontier)?;
+            }
+        }
+
         tx.finalize_index_compaction_bounds();
         if matches!(mode, TransactInnerMode::Commit) {
             // A dry run has synthetic storage identities and grants no compaction
@@ -2331,16 +2348,19 @@ impl Catalog {
                             storage_collections_to_register.insert(mv_gid, shard_id);
                         } else {
                             if state.catalog_read_protection_enabled() {
-                                let initial_as_of = mv.initial_as_of.as_ref().ok_or_else(|| {
-                                    CatalogError::internal(
+                                if let Some(initial_as_of) = &mv.initial_as_of {
+                                    tx.set_collection_compaction_bound(
+                                        mv_gid,
+                                        initial_as_of.as_option().copied(),
+                                    )?;
+                                } else if mv.refresh_schedule.is_some() {
+                                    return Err(CatalogError::internal(
                                         "create materialized view",
-                                        "missing initial storage frontier",
-                                    )
-                                })?;
-                                tx.set_collection_compaction_bound(
-                                    mv_gid,
-                                    initial_as_of.as_option().copied(),
-                                )?;
+                                        "missing initial storage frontier for REFRESH",
+                                    ));
+                                }
+                                // An automatic birth is admitted with its selected
+                                // imports after all operations have been applied.
                             }
                             storage_collections_to_create.insert(mv_gid);
                         }
@@ -4236,6 +4256,84 @@ fn materialized_view_recovery_inputs(
     )
 }
 
+/// Admits unstamped ordinary MV definitions against this transaction's inputs.
+/// The immutable selection is independent of its birth timestamp, so compaction
+/// conflicts can reconsider the timestamp without repeating optimization.
+fn admit_automatic_materialized_views(
+    tx: &mut Transaction<'_>,
+    state: &CatalogState,
+    born: &BTreeSet<GlobalId>,
+    selected: &BTreeSet<GlobalId>,
+    mode: TransactInnerMode,
+) -> Result<bool, CatalogError> {
+    if !state.catalog_read_protection_enabled() {
+        return Ok(false);
+    }
+    let mut changed = false;
+    for id in born {
+        let Some(entry) = state.try_get_entry_by_global_id(id) else {
+            continue;
+        };
+        let CatalogItem::MaterializedView(mv) = entry.item() else {
+            continue;
+        };
+        if mv.initial_as_of.is_some() {
+            continue;
+        }
+        if mv.refresh_schedule.is_some() {
+            return Err(CatalogError::internal(
+                "materialized view admission",
+                "REFRESH requires an explicitly selected birth",
+            ));
+        }
+        if matches!(mode, TransactInnerMode::Commit) && !selected.contains(id) {
+            return Err(CatalogError::internal(
+                "materialized view admission",
+                format!("materialized view {id} was created without a selected plan"),
+            ));
+        }
+        let logical_inputs = materialized_view_recovery_inputs(state, mv);
+        let mut inputs = logical_inputs.clone();
+        for (_, plan) in state.written_plans_for_owner(*id) {
+            inputs.extend(plan.imports.iter().copied());
+        }
+        let mut floor = mz_repr::Timestamp::MIN;
+        for input in inputs {
+            let bound = tx.proposed_compaction_bound(input).ok_or_else(|| {
+                CatalogError::internal(
+                    "materialized view admission",
+                    format!("missing input permission for {input}"),
+                )
+            })?;
+            let timestamp = bound.as_option().ok_or_else(|| {
+                CatalogError::internal(
+                    "materialized view admission",
+                    format!("input {input} has no readable frontier"),
+                )
+            })?;
+            floor = floor.max(*timestamp);
+        }
+        let mut item = tx.get_item(&entry.id()).expect("born materialized view");
+        let Statement::CreateMaterializedView(mut stmt) = mz_sql::parse::parse(&item.create_sql)
+            .map_err(|error| CatalogError::internal("materialized view admission", error))?
+            .into_element()
+            .ast
+        else {
+            unreachable!("materialized view definition");
+        };
+        stmt.as_of = Some(floor.into());
+        item.create_sql = stmt.to_ast_string_stable();
+        tx.update_item(entry.id(), item)?;
+        tx.set_maintained_read_requirement(*id, logical_inputs, Some(floor))?;
+        // Replacement writers share the target shard and inherit its permission.
+        if mv.replacement_target.is_none() {
+            tx.set_collection_compaction_bound(*id, Some(floor))?;
+        }
+        changed = true;
+    }
+    Ok(changed)
+}
+
 /// Birth protection must retain every result promised by the stored definition.
 /// The output shard's permission is separate, especially for replacement MVs.
 fn validate_materialized_view_birth(
@@ -5487,6 +5585,94 @@ mod tests {
                         }
                     }
                 }
+            }
+
+            // Automatic births follow both logical and actual-import permission.
+            // Reconsidering the same immutable selection after compaction does
+            // not pin its first candidate timestamp or require a client grant.
+            let (index_id, index_gid) = catalog.allocate_user_id_for_test().await.unwrap();
+            let index_sql = format!("CREATE INDEX mv_input_idx IN CLUSTER quickstart ON {prefix}.mv_input (a)");
+            let index = state.with_enable_for_item_parsing(|state| state.parse_item(
+                index_gid, &index_sql, &BTreeMap::new(), None, false, None,
+                &mut LocalExpressionCache::Closed, None,
+            )).expect("parse input index");
+            let (mut indexed, indexed_snapshot) = catalog.transact_incremental_dry_run(
+                &state,
+                vec![
+                    Op::CreateItem {
+                        id: index_id,
+                        name: QualifiedItemName { qualifiers: qualifiers.clone(), item: "mv_input_idx".into() },
+                        item: index,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
+                    },
+                    Op::SetWrittenPlan {
+                        id: index_gid,
+                        build_version: "test-build".into(),
+                        expected_revision: None,
+                        revision: Some(uuid::Uuid::new_v4()),
+                        imports: BTreeSet::from([ids["mv_input"].1]),
+                        replica_owner: None,
+                    },
+                ], None, snapshot.clone(), birth,
+            ).await.expect("admit input index");
+            let (automatic_id, automatic_gid) = catalog.allocate_user_id_for_test().await.unwrap();
+            let automatic_sql = format!("CREATE MATERIALIZED VIEW {prefix}.mv_automatic IN CLUSTER quickstart AS SELECT * FROM {prefix}.mv_input UNION ALL SELECT * FROM {prefix}.mv_view WHERE false");
+            let automatic = indexed.with_enable_for_item_parsing(|state| state.parse_item(
+                automatic_gid, &automatic_sql, &BTreeMap::new(), None, false, None,
+                &mut LocalExpressionCache::Closed, None,
+            )).expect("parse automatic birth");
+            let revision = uuid::Uuid::new_v4();
+            let automatic_ops = vec![
+                Op::CreateItem {
+                    id: automatic_id,
+                    name: QualifiedItemName { qualifiers: qualifiers.clone(), item: "mv_automatic".into() },
+                    item: automatic,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                },
+                Op::SetWrittenPlan {
+                    id: automatic_gid,
+                    build_version: "test-build".into(),
+                    expected_revision: None,
+                    revision: Some(revision),
+                    imports: BTreeSet::from([index_gid]),
+                    replica_owner: None,
+                },
+            ];
+            for (index_permission, floor) in [(birth, permission), (visibility, visibility)] {
+                let (advanced, advanced_snapshot) = catalog.transact_incremental_dry_run(
+                    &indexed,
+                    vec![Op::SetReadProtection {
+                        requirements: vec![],
+                        bounds: vec![CollectionCompactionBound {
+                            id: index_gid, frontier: Some(index_permission),
+                        }],
+                    }], None, Some(indexed_snapshot.clone()), birth,
+                ).await.expect("advance imported index permission");
+                let (mut admitted, _) = catalog.transact_incremental_dry_run(
+                    &advanced, automatic_ops.clone(), None, Some(advanced_snapshot), birth,
+                ).await.expect("admit the retained selection at current permission");
+                let mv = admitted.get_entry(&automatic_id).materialized_view().unwrap();
+                assert_eq!(mv.initial_as_of, Some(Antichain::from_elem(floor)));
+                assert_eq!(
+                    admitted.collection_compaction_bounds()[&automatic_gid],
+                    Antichain::from_elem(floor),
+                );
+                assert_eq!(
+                    admitted.maintained_read_requirements()[&automatic_gid],
+                    MaintainedReadRequirement {
+                        id: automatic_gid, inputs: inputs.clone(), frontier: Some(floor),
+                    },
+                );
+                assert_eq!(admitted.written_plan(automatic_gid, "test-build"), Some(revision));
+                let stored_sql = mv.create_sql.clone();
+                let restored = admitted.with_enable_for_item_parsing(|state| state.parse_item(
+                    automatic_gid, &stored_sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).expect("stored birth roundtrips");
+                let CatalogItem::MaterializedView(restored) = restored else {
+                    panic!("expected materialized view");
+                };
+                assert_eq!(restored.initial_as_of, Some(Antichain::from_elem(floor)));
             }
 
             // A final drop retires protection, including a same-batch creation.

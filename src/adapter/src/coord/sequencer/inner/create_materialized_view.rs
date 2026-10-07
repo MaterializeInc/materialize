@@ -95,6 +95,7 @@ impl Staged for CreateMaterializedViewStage {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
             Self::Finish(stage) => &mut stage.validity,
+            Self::Commit(stage) => &mut stage.validity,
             Self::Explain(stage) => &mut stage.validity,
         }
     }
@@ -110,6 +111,9 @@ impl Staged for CreateMaterializedViewStage {
             }
             CreateMaterializedViewStage::Finish(stage) => {
                 coord.create_materialized_view_finish(ctx, stage).await
+            }
+            CreateMaterializedViewStage::Commit(stage) => {
+                coord.create_materialized_view_commit(ctx, stage).await
             }
             CreateMaterializedViewStage::Explain(stage) => {
                 coord
@@ -698,7 +702,32 @@ impl Coordinator {
         }
 
         let mv = &stage.plan.materialized_view;
+        let automatic_birth = self.catalog().state().catalog_read_protection_enabled()
+            && mv.refresh_schedule.is_none()
+            && mv.as_of.is_none();
         let cluster_id = mv.cluster_id;
+        if automatic_birth
+            && stage
+                .global_lir_plan
+                .df_desc()
+                .index_imports
+                .keys()
+                .chain(stage.global_mir_plan.df_desc().index_imports.keys())
+                .any(|id| {
+                    !self
+                        .catalog()
+                        .try_get_entry_by_global_id(id)
+                        .is_some_and(|entry| match entry.item() {
+                            CatalogItem::Index(index) => index.cluster_id == cluster_id,
+                            _ => false,
+                        })
+                })
+        {
+            // Optimization runs off-thread. A changed access path requires
+            // replanning, but advancing input permission does not.
+            self.release_ddl_lock(ctx.session().conn_id());
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
         let logical_inputs = self.materialized_view_logical_inputs(
             mv.query_ids
                 .collections()
@@ -715,7 +744,11 @@ impl Coordinator {
         // Purification may have fixed REFRESH timestamps. Its grants stay owned
         // by the transaction while the stage waits for any additional inputs.
         let txn_reads = self.txn_read_holds.get(ctx.session().conn_id()).cloned();
-        let (read_holds, additional_read_holds) = if let Some(client) = &self.query_client {
+        let (read_holds, additional_read_holds) = if automatic_birth {
+            // Planning does not fix a historical read. The content transaction
+            // admits the birth against its logical inputs and selected imports.
+            (crate::ReadHolds::new(), crate::ReadHolds::new())
+        } else if let Some(client) = &self.query_client {
             let mut inputs = id_bundle.clone();
             inputs.extend(&logical_inputs);
             if let Some(holds) = &txn_reads {
@@ -765,6 +798,7 @@ impl Coordinator {
         };
 
         let CreateMaterializedViewFinish {
+            validity,
             item_id,
             global_id,
             plan:
@@ -797,30 +831,34 @@ impl Coordinator {
             ..
         } = stage;
 
-        let (dataflow_as_of, storage_as_of, until) = self
-            .select_timestamps(
-                id_bundle,
-                refresh_schedule.as_ref(),
-                &read_holds,
-                &additional_read_holds,
-                &logical_inputs,
-            )
-            .await?;
-
-        tracing::info!(
-            dataflow_as_of = ?dataflow_as_of,
-            storage_as_of = ?storage_as_of,
-            until = ?until,
-            "materialized view timestamp selection",
-        );
-
-        let initial_as_of = storage_as_of.clone();
+        let birth = if automatic_birth {
+            None
+        } else {
+            let (dataflow_as_of, storage_as_of, until) = self
+                .select_timestamps(
+                    id_bundle,
+                    refresh_schedule.as_ref(),
+                    &read_holds,
+                    &additional_read_holds,
+                    &logical_inputs,
+                )
+                .await?;
+            tracing::info!(
+                dataflow_as_of = ?dataflow_as_of,
+                storage_as_of = ?storage_as_of,
+                until = ?until,
+                "materialized view timestamp selection",
+            );
+            Some((dataflow_as_of, storage_as_of, until))
+        };
 
         // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
         // is persisted to the catalog and can be relied on during bootstrapping.
         // This has to be the `storage_as_of`, because bootstrapping uses this in
         // `bootstrap_storage_collections`.
-        if let Some(storage_as_of_ts) = storage_as_of.as_option() {
+        if let Some((_, storage_as_of, _)) = &birth
+            && let Some(storage_as_of_ts) = storage_as_of.as_option()
+        {
             let stmt = mz_sql::parse::parse(&create_sql)
                 .map_err(|_| {
                     AdapterError::internal(
@@ -867,7 +905,9 @@ impl Coordinator {
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule: refresh_schedule.clone(),
-                    initial_as_of: Some(initial_as_of.clone()),
+                    initial_as_of: birth
+                        .as_ref()
+                        .map(|(_, storage_as_of, _)| storage_as_of.clone()),
                     optimized_plan: None,
                     physical_plan: None,
                     dataflow_metainfo: None,
@@ -875,7 +915,9 @@ impl Coordinator {
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
-        if self.catalog().state().catalog_read_protection_enabled() {
+        if self.catalog().state().catalog_read_protection_enabled()
+            && let Some((dataflow_as_of, _, _)) = &birth
+        {
             ops.push(catalog::Op::SetReadProtection {
                 requirements: vec![MaintainedReadRequirement {
                     id: global_id,
@@ -886,10 +928,11 @@ impl Coordinator {
             });
         }
 
-        // Physical protection bridges writing the candidate and installation's
-        // acquisition of execution holds in catalog implications. Logical holds
-        // alone cannot preserve an index trace at the chosen historical AS OF.
-        let physical_read_holds = if let Some(client) = self.query_client.clone() {
+        // A fixed REFRESH timestamp cannot move with compaction. Protect its
+        // selected imports through commit, not just its logical inputs.
+        let physical_read_holds = if let Some(client) = self.query_client.clone()
+            && let Some((dataflow_as_of, initial_as_of, _)) = &birth
+        {
             let planning_revision = self.catalog().transient_revision();
             let (candidate, _) = loop {
                 match self
@@ -1070,6 +1113,20 @@ impl Coordinator {
             .await?;
         ops.extend(selection);
 
+        if automatic_birth {
+            return Ok(StageResult::Immediate(Box::new(
+                CreateMaterializedViewStage::Commit(crate::coord::CreateMaterializedViewCommit {
+                    validity,
+                    planning_revision: self.catalog().transient_revision(),
+                    ops,
+                    prepared: None,
+                    raw_df_meta,
+                    item_name: name.item,
+                    if_not_exists,
+                }),
+            )));
+        }
+
         let transact_result = self
             .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
@@ -1106,6 +1163,64 @@ impl Coordinator {
             Err(err) => Err(err),
         }
         .map(StageResult::Response)
+    }
+
+    async fn create_materialized_view_commit(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        mut stage: crate::coord::CreateMaterializedViewCommit,
+    ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        if self.catalog().transient_revision() != stage.planning_revision {
+            self.release_ddl_lock(ctx.session().conn_id());
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        let transact_result = self
+            .try_catalog_transact_with_context(ctx, &stage.ops, &mut stage.prepared)
+            .await;
+
+        match transact_result {
+            Ok(false) => {
+                let delay = self.read_protection_conflict_delay();
+                Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(CreateMaterializedViewStage::Commit(stage)))
+                })))
+            }
+            Ok(true) => {
+                // Only emit optimizer notices to the user now that the
+                // catalog transaction has succeeded. If the transaction had
+                // failed, emitting notices would confuse the user with
+                // information about an item that wasn't actually created.
+                // Optimizer-only dependencies are not covered by SQL plan validity.
+                stage.raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice
+                        .dependencies()
+                        .iter()
+                        .all(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
+                });
+                self.emit_raw_optimizer_notices_to_user(ctx, &stage.raw_df_meta.optimizer_notices);
+                Ok(StageResult::Response(
+                    ExecuteResponse::CreatedMaterializedView,
+                ))
+            }
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if stage.if_not_exists => {
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: stage.item_name,
+                        ty: "materialized view",
+                    });
+                Ok(StageResult::Response(
+                    ExecuteResponse::CreatedMaterializedView,
+                ))
+            }
+            Err(AdapterError::CatalogSnapshotChanged) => {
+                self.release_ddl_lock(ctx.session().conn_id());
+                Err(AdapterError::CatalogSnapshotChanged)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
