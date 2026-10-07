@@ -27,11 +27,13 @@ refreshes through the already-synchronized conflict prefix. It does not establis
 workload liveness. Do not reuse candidates across arbitrary metadata changes or
 retry stale bounds.
 
-Cadence decision pending with Aljoscha: coalesce advancement-only replica
-aggregates at the configured publication interval, then tune that interval using
-the existing workloads if necessary. This may retain extra history. New protection
-must still commit synchronously, with heartbeat and grace unchanged. Do not change
-cadence or retry policy before resolving that tradeoff.
+The approved cadence correction coalesces advancement-only replica aggregates at
+the existing publication interval. New or stronger protection still commits before
+use, delayed releases retain committed protection, and heartbeat renewal remains
+independent. Keep heartbeat/grace and retry policy unchanged. Verify with the
+current interval in existing failing workloads. A larger interval needs a measured
+contention/retention decision, not a fixture-only slowdown. Keep this correction
+separate from the conflict-work trims.
 
 The shared adapter client also loses protection after renewal repeatedly fails
 for longer than the unchanged-heartbeat grace. Earlier query timeouts precede

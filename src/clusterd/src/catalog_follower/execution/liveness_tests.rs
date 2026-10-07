@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Installation admission at the durable protection liveness boundary.
+//! Installation and publication at the durable protection liveness boundary.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_repr::Timestamp;
 use mz_txn_wal::operator::TxnsContext;
+use timely::progress::Antichain;
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -197,6 +199,87 @@ async fn exercise_liveness() {
     let pending = driver.pending_installations(&effects);
     assert!(pending > 0);
 
+    // Keep the advancement timer outside this test's process deadline. Only
+    // local clocks are controlled, not catalog protection or Persist progress.
+    let deferred = Instant::now() + Duration::from_secs(3600);
+    driver.publication_completed_at = deferred;
+    let mut holds = driver
+        .acquire(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            &BTreeSet::from([fixture.source]),
+            &BTreeSet::new(),
+            &BTreeMap::from([(fixture.source, Timestamp::new(15_000))]),
+        )
+        .await
+        .unwrap();
+    let requirement = (incarnation, fixture.source);
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(15_000)
+    );
+    holds
+        .get_mut(&fixture.source)
+        .unwrap()
+        .try_downgrade(Antichain::from_elem(Timestamp::new(16_000)))
+        .unwrap();
+    driver.publication_completed_at = deferred;
+    let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
+    driver
+        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        catalog.state().client_incarnations()[&incarnation].heartbeat,
+        heartbeat
+    );
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(15_000)
+    );
+    driver.publication_completed_at = Instant::now()
+        - catalog
+            .system_config()
+            .catalog_read_protection_publish_interval();
+    driver
+        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(16_000)
+    );
+    driver.publication_completed_at = deferred;
+    let stronger = driver
+        .acquire(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            &BTreeSet::from([fixture.source]),
+            &BTreeSet::new(),
+            &BTreeMap::from([(fixture.source, Timestamp::new(15_000))]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(15_000)
+    );
+    drop(stronger);
+    drop(holds);
+    driver.publication_completed_at = deferred;
+    driver
+        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(15_000)
+    );
+
     // Only the local publication clock is aged. Catalog grants, read holds,
     // Persist frontiers, and worker responses all follow their normal APIs.
     driver.published_at = Instant::now() - client_protection_unchanged_grace();
@@ -250,6 +333,12 @@ async fn exercise_liveness() {
         .await
         .unwrap();
     assert!(catalog.state().client_incarnations()[&incarnation].heartbeat > heartbeat);
+    assert!(
+        !catalog
+            .state()
+            .client_read_requirements()
+            .contains_key(&requirement)
+    );
     // A peer advances metadata after the follower's snapshot. Admission must
     // absorb that prefix and retry its grant, without another outer install tick.
     fixture.writer.sync_to_current_updates().await.unwrap();

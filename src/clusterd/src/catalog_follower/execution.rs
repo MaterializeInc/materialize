@@ -240,7 +240,9 @@ pub(super) struct ReplicaEnactment {
     pending_imports: BTreeMap<(GlobalId, uuid::Uuid), BTreeMap<GlobalId, ReadHold>>,
     storage_state: storage::StorageState,
     reclaimer: ClientProtectionReclaimer,
+    // Renewal counts from before commit, advancement cadence from completion.
     published_at: Instant,
+    publication_completed_at: Instant,
     publication_seconds: mz_ore::metrics::Histogram,
 }
 
@@ -286,6 +288,7 @@ impl ReplicaEnactment {
             storage_state: storage::StorageState::default(),
             reclaimer: ClientProtectionReclaimer::default(),
             published_at: publication_started,
+            publication_completed_at: Instant::now(),
             publication_seconds: registry.register(mz_ore::metric! {
                 name: "mz_catalog_follower_publication_seconds",
                 help: "Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.",
@@ -853,6 +856,7 @@ impl ReplicaEnactment {
         self.protection.finish_publication(result.is_ok());
         result?;
         self.published_at = started;
+        self.publication_completed_at = Instant::now();
         Ok(())
     }
 
@@ -1040,9 +1044,18 @@ impl ReplicaEnactment {
         let _timer = self.publication_seconds.start_timer();
         let incarnation = self.protection.incarnation();
         let mut refreshed = false;
-        while let Some(requirements) = self
-            .protection
-            .prepare_publication_if_needed(self.published_at.elapsed())
+        // Maintenance only advances or releases committed grants. Coalescing it
+        // retains protection until publication. Acquisitions commit independently
+        // before use, and renewal must not wait for the advancement interval.
+        let publish_requirements = self.renewal_due()
+            || self.publication_completed_at.elapsed()
+                >= catalog
+                    .system_config()
+                    .catalog_read_protection_publish_interval();
+        while publish_requirements
+            && let Some(requirements) = self
+                .protection
+                .prepare_publication_if_needed(self.published_at.elapsed())
         {
             match self
                 .commit_grants(catalog, effects, cluster, build, requirements)
