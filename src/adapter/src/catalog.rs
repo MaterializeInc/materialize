@@ -3672,6 +3672,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_try_cast_wraps_every_stage_of_every_cast() {
         use mz_expr::UnaryFunc;
+        use mz_expr::func::TryCast;
         use mz_expr::visit::{Visit, VisitChildren};
         use mz_ore::collections::CollectionExt;
         use mz_repr::SqlScalarBaseType as B;
@@ -3827,9 +3828,21 @@ mod tests {
                     exercised.insert((*from, *to));
                     match lenient {
                         Ok(lenient) => {
+                            // Spelled out rather than built with
+                            // `UnaryFunc::try_cast`, which the planner itself
+                            // uses: an oracle built from the code under test
+                            // would pass an always-wrap mutant.
                             let wrapped: Vec<UnaryFunc> = strict_funcs
                                 .iter()
-                                .map(|f| UnaryFunc::try_cast(f.clone()))
+                                .map(|f| {
+                                    if f.could_error() {
+                                        UnaryFunc::TryCast(TryCast {
+                                            inner: Box::new(f.clone()),
+                                        })
+                                    } else {
+                                        f.clone()
+                                    }
+                                })
                                 .collect();
                             assert_eq!(
                                 unary_calls(&lenient),
@@ -3953,15 +3966,6 @@ mod tests {
             // to be `Fn`, hence the `Cell`.
             let values = Cell::new(0usize);
             for from in &types {
-                // NOTE: `"char"` is in the string type category, so `plan_cast`
-                // routes it into the text-source templates, but its datums are
-                // `UInt8`, so those casts panic in `CAST` and `TRY_CAST` alike,
-                // including as the element cast of a container. That is a
-                // `CAST` bug, not an oracle violation, so it is kept out of
-                // this test.
-                if from.contains(&|ty| *ty == SqlScalarType::PgLegacyChar) {
-                    continue;
-                }
                 for to in &types {
                     let Some(strict) = plan(CastFailureMode::Error, from, to) else {
                         continue;

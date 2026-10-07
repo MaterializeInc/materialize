@@ -83,6 +83,18 @@ impl<E: Eval> LazyUnaryFunc for TryCast<E> {
         let a = a.eval(datums, temp_storage)?;
         match self.inner.eval(&[a], temp_storage, &FIRST_COLUMN) {
             Ok(datum) => Ok(datum),
+            // An internal error means the planner handed `inner` a datum of
+            // the wrong kind. No cast reports it for bad user data, so it is
+            // a planner bug, and swallowing it would hide that from CI. Soft
+            // assertions are off in production, where the row becomes NULL
+            // like any other failure and nothing is logged.
+            Err(EvalError::Internal(message)) => {
+                mz_ore::soft_panic_no_log!(
+                    "TRY_CAST swallowed an internal error from {}: {message}",
+                    self.inner
+                );
+                Ok(Datum::Null)
+            }
             Err(_) => Ok(Datum::Null),
         }
     }
@@ -240,6 +252,21 @@ mod tests {
             "fails at stage two"
         );
         assert_eq!(eval(&chain("5")), Ok(Datum::Int32(5)));
+    }
+
+    /// A datum of the wrong kind reaches the inner cast only through a
+    /// planner bug, which the wrapper reports under soft assertions and hides
+    /// as NULL otherwise.
+    #[mz_ore::test]
+    fn internal_error_is_a_soft_panic() {
+        let expr = MirScalarExpr::literal_ok(Datum::Int64(7), ReprScalarType::Int64)
+            .call_unary(try_cast(CastStringToInt32));
+        let outcome = std::panic::catch_unwind(|| eval(&expr));
+        if mz_ore::assert::soft_assertions_enabled() {
+            assert!(outcome.is_err(), "soft assertion should have fired");
+        } else {
+            assert_eq!(outcome.expect("no panic"), Ok(Datum::Null));
+        }
     }
 
     #[mz_ore::test]

@@ -2155,7 +2155,7 @@ feature_flags!(
     {
         name: enable_try_cast,
         desc: "TRY_CAST(<expr> AS <type>) syntax",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {

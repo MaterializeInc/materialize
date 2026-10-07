@@ -8,7 +8,7 @@
   - signature: TRY_CAST (cast_expr) -> T?
     description: Value as type `T`, or _NULL_ if the conversion fails.
     url: /sql/functions/cast#try_cast
-    version-added: v26.43
+    version-added: v26.45
 
   - signature: 'coalesce(x: T...) -> T?'
     description: First non-_NULL_ arg, or _NULL_ if all are _NULL_.
