@@ -21,14 +21,15 @@ import (
 )
 
 type config struct {
-	DSNs                []string `json:"dsns"`
-	Concurrency         int      `json:"concurrency"`
-	Protocol            string   `json:"protocol"`
-	WarmupSeconds       float64  `json:"warmup_seconds"`
-	DurationSeconds     float64  `json:"duration_seconds"`
-	QueryTimeoutSeconds float64  `json:"query_timeout_seconds"`
-	Query               string   `json:"query"`
-	ExpectedRows        int      `json:"expected_rows"`
+	DSNs                            []string `json:"dsns"`
+	Concurrency                     int      `json:"concurrency"`
+	Protocol                        string   `json:"protocol"`
+	WarmupSeconds                   float64  `json:"warmup_seconds"`
+	DurationSeconds                 float64  `json:"duration_seconds"`
+	QueryTimeoutSeconds             float64  `json:"query_timeout_seconds"`
+	Query                           string   `json:"query"`
+	ExpectedRows                    int      `json:"expected_rows"`
+	RequireStatementLoggingDisabled bool     `json:"require_statement_logging_disabled"`
 }
 
 type histogram [64 * 16]uint64
@@ -72,20 +73,21 @@ type clientStats struct {
 }
 
 type result struct {
-	StartedAt      string      `json:"started_at"`
-	FinishedAt     string      `json:"finished_at"`
-	Concurrency    int         `json:"concurrency"`
-	Clusters       int         `json:"clusters"`
-	Protocol       string      `json:"protocol"`
-	Queries        uint64      `json:"queries"`
-	Errors         int         `json:"errors"`
-	ElapsedSeconds float64     `json:"elapsed_seconds"`
-	QPS            float64     `json:"qps"`
-	MeanLatencyMS  float64     `json:"mean_latency_ms"`
-	P50LatencyMS   float64     `json:"p50_latency_ms"`
-	P95LatencyMS   float64     `json:"p95_latency_ms"`
-	P99LatencyMS   float64     `json:"p99_latency_ms"`
-	Driver         driverStats `json:"driver"`
+	StartedAt                  string      `json:"started_at"`
+	FinishedAt                 string      `json:"finished_at"`
+	Concurrency                int         `json:"concurrency"`
+	Clusters                   int         `json:"clusters"`
+	Protocol                   string      `json:"protocol"`
+	Queries                    uint64      `json:"queries"`
+	Errors                     int         `json:"errors"`
+	ElapsedSeconds             float64     `json:"elapsed_seconds"`
+	QPS                        float64     `json:"qps"`
+	MeanLatencyMS              float64     `json:"mean_latency_ms"`
+	P50LatencyMS               float64     `json:"p50_latency_ms"`
+	P95LatencyMS               float64     `json:"p95_latency_ms"`
+	P99LatencyMS               float64     `json:"p99_latency_ms"`
+	Driver                     driverStats `json:"driver"`
+	StatementLoggingSampleRate *float64    `json:"statement_logging_sample_rate,omitempty"`
 }
 
 type queryFunc func(context.Context) (*sql.Rows, error)
@@ -159,6 +161,13 @@ func benchmarkWithDriver(c config, driverName string) (result, error) {
 				db.SetMaxIdleConns(1)
 				startup, stop := context.WithTimeout(ctx, time.Duration(c.QueryTimeoutSeconds*float64(time.Second)))
 				err = db.PingContext(startup)
+				if err == nil && c.RequireStatementLoggingDisabled {
+					var rate float64
+					err = db.QueryRowContext(startup, "SHOW statement_logging_sample_rate").Scan(&rate)
+					if err == nil && rate != 0 {
+						err = fmt.Errorf("statement logging must be disabled, effective sample rate is %g", rate)
+					}
+				}
 				if err == nil {
 					if c.Protocol == "prepared" {
 						var stmt *sql.Stmt
@@ -235,6 +244,10 @@ func benchmarkWithDriver(c config, driverName string) (result, error) {
 	lag := <-lagResult
 	driverEnd := snapshot()
 	r := result{Concurrency: c.Concurrency, Clusters: minInt(len(c.DSNs), c.Concurrency), Protocol: c.Protocol}
+	if c.RequireStatementLoggingDisabled {
+		rate := 0.0
+		r.StatementLoggingSampleRate = &rate
+	}
 	finish := end
 	var h histogram
 	var latency time.Duration
