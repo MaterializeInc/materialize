@@ -39,7 +39,6 @@ Local invalidation replans the original statement after releasing its DDL lock
 and waking waiters. The existing fixture now exercises repeated-conflict
 cancellation. APPLY REPLACEMENT retains preparation in its existing cancellable
 watch context and invalidates cache entries only after a definitive commit.
-These slices still need CI verification.
 SQL CREATE ROLE and COMMENT use a shared retained catalog-commit stage. Startup
 role creation retains its separate owner. The existing parallel password fixture
 must verify the demonstrated role stall rather than infer success from cheaper
@@ -48,9 +47,12 @@ Explicit DDL COMMIT retains extracted operations and completion effects across
 retries, with final variable/response completion on success, error or cancellation.
 Protocol cleanup precedes continuation creation. The original transaction revision
 takes precedence over statement-level validity checks. This slice needs CI.
-Next finish remaining ordinary DDL and direct preparation acquisition. Preserve
-cancellation and commit-once completion. Do not trade CAS spinning for repeated
-optimization.
+Written-plan preparation retains its candidate, immutable selections, current
+optimized replacement and earlier holds across single-attempt acquisition retries.
+The existing SQL continuations yield and revalidate revision/incarnation on resume.
+Only fallback to different imports repeats optimization. This slice needs CI
+verification. Finish remaining demonstrated ordinary DDL stalls, preserving
+cancellation and commit-once completion without repeating preparation work.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
 not per candidate. IDs, validation and audit effects remain candidate-owned.
 This removes repeated hashing, but aggregate candidate timings do not isolate

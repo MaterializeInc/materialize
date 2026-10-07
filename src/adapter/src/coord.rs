@@ -823,7 +823,7 @@ pub struct DdlCommitStage {
     validity: PlanValidity,
     planning_revision: u64,
     ops: Vec<crate::catalog::Op>,
-    prepared: Option<ddl::PreparedCatalogTransaction>,
+    prepared: Option<ddl::CatalogTransactionState>,
     side_effects: Vec<crate::session::DdlSideEffect>,
 }
 
@@ -841,7 +841,7 @@ pub struct CatalogCommitStage {
     validity: PlanValidity,
     planning_revision: u64,
     ops: Vec<crate::catalog::Op>,
-    prepared: Option<ddl::PreparedCatalogTransaction>,
+    prepared: Option<ddl::CatalogTransactionState>,
     response: ExecuteResponse,
 }
 
@@ -852,7 +852,7 @@ pub struct DropObjectsStage {
     // explicit dependencies still exist after an intervening local DDL.
     planning_revision: u64,
     ops: Vec<crate::catalog::Op>,
-    prepared: Option<ddl::PreparedCatalogTransaction>,
+    prepared: Option<ddl::CatalogTransactionState>,
     object_type: mz_sql::catalog::ObjectType,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
@@ -6867,7 +6867,7 @@ pub struct AlterMaterializedViewReadyContext {
     otel_ctx: OpenTelemetryContext,
     plan: plan::AlterMaterializedViewApplyReplacementPlan,
     plan_validity: PlanValidity,
-    prepared: Option<ddl::PreparedCatalogTransaction>,
+    prepared: Option<ddl::CatalogTransactionState>,
 }
 
 impl AlterMaterializedViewReadyContext {

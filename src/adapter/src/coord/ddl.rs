@@ -64,10 +64,11 @@ type CommittedCatalogTransaction = (
     crate::ReadHolds,
 );
 
-/// Prepared definitions and live input holds, but no unfinished publication.
+/// Retained DDL preparation and input holds, but no unfinished publication.
 /// Reuse requires the same planning revision and protection incarnation. Each
 /// commit attempt rebuilds creator protection against the current catalog.
-pub(super) struct PreparedCatalogTransaction {
+pub(super) struct CatalogTransactionState {
+    preparation: CatalogPreparation,
     ops: Vec<Op>,
     _protection: Vec<crate::ReadHolds>,
     revision: u64,
@@ -81,15 +82,43 @@ pub(super) struct PreparedCatalogTransaction {
     )>,
 }
 
-impl std::fmt::Debug for PreparedCatalogTransaction {
+// Preparation owns candidate plans and granted tokens, never an unfinished
+// catalog publication. Only Complete may enter the commit path.
+enum CatalogPreparation {
+    Rewrites(Option<Box<WrittenPlanRewrites>>),
+    ReplicaMetrics,
+    Complete,
+}
+
+struct WrittenPlanRewrites {
+    candidate: Arc<catalog::CatalogState>,
+    build: String,
+    revisions: BTreeMap<GlobalId, uuid::Uuid>,
+    plans: BTreeMap<GlobalId, mz_catalog::expr_cache::GlobalExpressions>,
+    replacements: BTreeMap<GlobalId, mz_catalog::expr_cache::GlobalExpressions>,
+    protection: Vec<crate::ReadHolds>,
+    current: Option<WrittenPlanRewrite>,
+}
+
+struct WrittenPlanRewrite {
+    id: GlobalId,
+    cluster: ClusterId,
+    required: Option<mz_repr::Timestamp>,
+    indexes: BTreeSet<GlobalId>,
+    config: crate::optimize::OptimizerConfig,
+    replacement: Option<mz_catalog::expr_cache::GlobalExpressions>,
+    request: Option<super::read_protection::ReadProtectionRequest>,
+}
+
+impl std::fmt::Debug for CatalogTransactionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreparedCatalogTransaction")
+        f.debug_struct("CatalogTransactionState")
             .field("revision", &self.revision)
             .finish_non_exhaustive()
     }
 }
 
-impl PreparedCatalogTransaction {
+impl CatalogTransactionState {
     pub(super) fn planning_revision(&self) -> u64 {
         self.revision
     }
@@ -313,7 +342,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         ops: &[Op],
-        prepared: &mut Option<PreparedCatalogTransaction>,
+        prepared: &mut Option<CatalogTransactionState>,
     ) -> Result<bool, AdapterError> {
         let start = Instant::now();
         let conn_id = ctx.session().conn_id().clone();
@@ -333,7 +362,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         ops: &[Op],
-        prepared: &mut Option<PreparedCatalogTransaction>,
+        prepared: &mut Option<CatalogTransactionState>,
         side_effects: &mut Vec<crate::session::DdlSideEffect>,
     ) -> Result<bool, AdapterError> {
         let start = Instant::now();
@@ -368,21 +397,32 @@ impl Coordinator {
         &mut self,
         conn_id: &ConnectionId,
         ops: &[Op],
-        prepared: &mut Option<PreparedCatalogTransaction>,
+        prepared: &mut Option<CatalogTransactionState>,
     ) -> Result<Option<CommittedCatalogTransaction>, AdapterError> {
         if !self.active_conns.contains_key(conn_id) {
             return Err(AdapterError::Canceled);
         }
         let revision = self.catalog().transient_revision();
         let preparation = if prepared.is_none() {
-            Box::pin(self.prepare_catalog_transaction(Some(conn_id), ops.to_vec()))
+            Box::pin(self.begin_catalog_transaction(Some(conn_id), ops.to_vec()))
                 .await
                 .map(|value| *prepared = Some(value))
         } else {
             Ok(())
         };
-        let result = match preparation {
+        let preparation = match preparation {
             Ok(()) => {
+                Box::pin(self.resume_catalog_preparation(
+                    Some(conn_id),
+                    prepared.as_mut().expect("initialized above"),
+                ))
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        let result = match preparation {
+            Ok(false) => return Ok(None),
+            Ok(true) => {
                 Box::pin(self.commit_prepared_catalog_transaction(
                     Some(conn_id),
                     prepared.as_mut().expect("prepared above"),
@@ -746,15 +786,12 @@ impl Coordinator {
 
     /// Prepare own-build replacements against the post-DDL catalog. These selections
     /// change recovery and EXPLAIN state, not the running dataflows.
-    async fn prepare_written_plan_rewrites(
+    async fn begin_written_plan_rewrites(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: &mut Vec<Op>,
         write_ts: mz_repr::Timestamp,
-    ) -> Result<(Vec<crate::ReadHolds>, Vec<String>), AdapterError> {
-        use crate::optimize::{OptimizerConfig, dataflows::ComputeInstanceSnapshot};
-        use mz_repr::optimize::OverrideFrom;
-
+    ) -> Result<Option<Box<WrittenPlanRewrites>>, AdapterError> {
         if !self.catalog().state().catalog_read_protection_enabled()
             || !ops.iter().any(|op| match op {
                 Op::DropObjects(objects) => objects.iter().any(|object| {
@@ -775,9 +812,8 @@ impl Coordinator {
                 _ => false,
             })
         {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(None);
         }
-        let planning_revision = self.catalog().transient_revision();
         // Selections are validated after their plans have been repaired. A new
         // object's first candidate can itself import something removed by this DDL.
         let candidate_ops = ops
@@ -823,7 +859,7 @@ impl Coordinator {
         }
         revisions.retain(|id, _| candidate.try_get_entry_by_global_id(id).is_some());
         if revisions.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(None);
         }
         let plans = self
             .catalog()
@@ -840,168 +876,233 @@ impl Coordinator {
                 "selected plan is missing",
             ));
         }
+        Ok(Some(Box::new(WrittenPlanRewrites {
+            candidate,
+            build,
+            revisions,
+            plans,
+            replacements: BTreeMap::new(),
+            protection: Vec::new(),
+            current: None,
+        })))
+    }
+
+    async fn resume_written_plan_rewrites(
+        &mut self,
+        ops: &mut Vec<Op>,
+        planning_revision: u64,
+        rewrites: &mut WrittenPlanRewrites,
+    ) -> Result<bool, AdapterError> {
+        use crate::optimize::{OptimizerConfig, dataflows::ComputeInstanceSnapshot};
+        use mz_repr::optimize::OverrideFrom;
+
+        let candidate = Arc::clone(&rewrites.candidate);
+        let build = &rewrites.build;
+        let revisions = &rewrites.revisions;
+        let replacements = &mut rewrites.replacements;
+        let protection = &mut rewrites.protection;
         let client = self
             .query_client
             .clone()
             .expect("protected writer has a query client");
-        let mut replacements = BTreeMap::new();
-        let mut protection = Vec::new();
-        for (id, mut plan) in plans {
-            let entry = candidate.get_entry_by_global_id(&id);
-            if let CatalogItem::MaterializedView(mv) = entry.item()
-                && mv.global_id_writes() != id
-            {
-                ops.push(Op::SetWrittenPlan {
-                    id,
-                    build_version: build.clone(),
-                    expected_revision: Some(revisions[&id]),
-                    revision: None,
-                    imports: BTreeSet::new(),
-                    replica_owner: None,
-                });
-                continue;
-            }
-            let version = match entry.item() {
-                CatalogItem::MaterializedView(mv) => {
-                    mz_catalog::expr_cache::latest_item_version(&mv.collections)
-                }
-                _ => mz_repr::RelationVersion::root(),
-            };
-            let version_changed = plan.item_version != version;
-            plan.item_version = version;
-            if plan
-                .collection_imports()
-                .all(|input| candidate.try_get_entry_by_global_id(input).is_some())
-            {
-                let previous = plan.dataflow_metainfos.optimizer_notices.len();
-                plan.dataflow_metainfos.optimizer_notices.retain(|notice| {
-                    notice.dependencies.iter().all(|input| {
-                        candidate
-                            .try_get_entry_by_global_id(input)
-                            .is_some_and(|current| {
-                                // Replacement can retain a GlobalId under another item.
-                                // The writer has both catalog states and retracts the
-                                // old item's notices while committing the replacement.
-                                self.catalog()
-                                    .try_get_entry_by_global_id(input)
-                                    .is_none_or(|previous| previous.id() == current.id())
-                            })
-                    })
-                });
-                if version_changed || plan.dataflow_metainfos.optimizer_notices.len() != previous {
-                    replacements.insert(id, plan);
-                }
-                continue;
-            }
-            let (cluster, mut required) = match entry.item() {
-                CatalogItem::Index(index) => {
-                    let bound = candidate.collection_compaction_bounds().get(&id);
-                    if bound.is_none() && self.catalog().try_get_entry_by_global_id(&id).is_some() {
-                        return Err(AdapterError::internal(
-                            "rewrite index plan",
-                            format!("index {id} has no admitted compaction bound"),
-                        ));
-                    }
-                    // A new index can lose an optimizer-only import before its
-                    // creation commits. Its replacement plan is admitted at birth.
-                    (
-                        index.cluster_id,
-                        bound.and_then(|bound| bound.as_option().copied()),
-                    )
-                }
-                CatalogItem::MaterializedView(mv) => (
-                    mv.cluster_id,
-                    candidate
-                        .maintained_read_requirements()
-                        .get(&id)
-                        .and_then(|r| r.frontier),
-                ),
-                CatalogItem::MetricSink(sink) => (sink.cluster_id, None),
-                _ => continue,
-            };
-            let mut indexes = if let Some(required) = required {
-                let target = match entry.item() {
-                    CatalogItem::MaterializedView(mv) => mv.target_replica,
-                    _ => None,
-                };
-                client.maintained_indexes_at(&candidate, cluster, target, required)
+        loop {
+            let mut current = if let Some(current) = rewrites.current.take() {
+                current
             } else {
-                let use_catalog_candidates = matches!(entry.item(), CatalogItem::Index(_));
-                let observed = client.observed_instance_snapshot(self.catalog(), cluster);
-                candidate
-                    .get_entries()
-                    .filter_map(|(_, entry)| match entry.item() {
-                        CatalogItem::Index(index) if index.cluster_id == cluster => {
-                            Some(index.global_id())
+                let Some((id, mut plan)) = rewrites.plans.pop_first() else {
+                    return Ok(true);
+                };
+                let entry = candidate.get_entry_by_global_id(&id);
+                if let CatalogItem::MaterializedView(mv) = entry.item()
+                    && mv.global_id_writes() != id
+                {
+                    ops.push(Op::SetWrittenPlan {
+                        id,
+                        build_version: build.clone(),
+                        expected_revision: Some(revisions[&id]),
+                        revision: None,
+                        imports: BTreeSet::new(),
+                        replica_owner: None,
+                    });
+                    continue;
+                }
+                let version = match entry.item() {
+                    CatalogItem::MaterializedView(mv) => {
+                        mz_catalog::expr_cache::latest_item_version(&mv.collections)
+                    }
+                    _ => mz_repr::RelationVersion::root(),
+                };
+                let version_changed = plan.item_version != version;
+                plan.item_version = version;
+                if plan
+                    .collection_imports()
+                    .all(|input| candidate.try_get_entry_by_global_id(input).is_some())
+                {
+                    let previous = plan.dataflow_metainfos.optimizer_notices.len();
+                    plan.dataflow_metainfos.optimizer_notices.retain(|notice| {
+                        notice.dependencies.iter().all(|input| {
+                            candidate
+                                .try_get_entry_by_global_id(input)
+                                .is_some_and(|current| {
+                                    // Replacement can retain a GlobalId under another item.
+                                    // The writer has both catalog states and retracts the
+                                    // old item's notices while committing the replacement.
+                                    self.catalog()
+                                        .try_get_entry_by_global_id(input)
+                                        .is_none_or(|previous| previous.id() == current.id())
+                                })
+                        })
+                    });
+                    if version_changed
+                        || plan.dataflow_metainfos.optimizer_notices.len() != previous
+                    {
+                        replacements.insert(id, plan);
+                    }
+                    continue;
+                }
+                let (cluster, required) = match entry.item() {
+                    CatalogItem::Index(index) => {
+                        let bound = candidate.collection_compaction_bounds().get(&id);
+                        if bound.is_none()
+                            && self.catalog().try_get_entry_by_global_id(&id).is_some()
+                        {
+                            return Err(AdapterError::internal(
+                                "rewrite index plan",
+                                format!("index {id} has no admitted compaction bound"),
+                            ));
                         }
+                        // A new index can lose an optimizer-only import before its
+                        // creation commits. Its replacement plan is admitted at birth.
+                        (
+                            index.cluster_id,
+                            bound.and_then(|bound| bound.as_option().copied()),
+                        )
+                    }
+                    CatalogItem::MaterializedView(mv) => (
+                        mv.cluster_id,
+                        candidate
+                            .maintained_read_requirements()
+                            .get(&id)
+                            .and_then(|r| r.frontier),
+                    ),
+                    CatalogItem::MetricSink(sink) => (sink.cluster_id, None),
+                    _ => continue,
+                };
+                let indexes = if let Some(required) = required {
+                    let target = match entry.item() {
+                        CatalogItem::MaterializedView(mv) => mv.target_replica,
                         _ => None,
-                    })
-                    .filter(|id| use_catalog_candidates || observed.contains_collection(id))
-                    .collect()
+                    };
+                    client.maintained_indexes_at(&candidate, cluster, target, required)
+                } else {
+                    let use_catalog_candidates = matches!(entry.item(), CatalogItem::Index(_));
+                    let observed = client.observed_instance_snapshot(self.catalog(), cluster);
+                    candidate
+                        .get_entries()
+                        .filter_map(|(_, entry)| match entry.item() {
+                            CatalogItem::Index(index) if index.cluster_id == cluster => {
+                                Some(index.global_id())
+                            }
+                            _ => None,
+                        })
+                        .filter(|id| use_catalog_candidates || observed.contains_collection(id))
+                        .collect()
+                };
+                let mut config = OptimizerConfig::from(candidate.system_config())
+                    .override_from(&candidate.get_cluster(cluster).config.features())
+                    .override_from(&candidate.cluster_scoped_optimizer_overrides(cluster));
+                if matches!(entry.item(), CatalogItem::Index(_)) {
+                    // A set of rewritten indexes must not select themselves or each
+                    // other cyclically. Reuse the optimizer's reconstruction ordering.
+                    config.replan = Some(id);
+                }
+                WrittenPlanRewrite {
+                    id,
+                    cluster,
+                    required,
+                    indexes,
+                    config,
+                    replacement: None,
+                    request: None,
+                }
             };
-            let mut config = OptimizerConfig::from(candidate.system_config())
-                .override_from(&candidate.get_cluster(cluster).config.features())
-                .override_from(&candidate.cluster_scoped_optimizer_overrides(cluster));
-            if matches!(entry.item(), CatalogItem::Index(_)) {
-                // A set of rewritten indexes must not select themselves or each
-                // other cyclically. Reuse the optimizer's reconstruction ordering.
-                config.replan = Some(id);
-            }
+            let id = current.id;
+            let cluster = current.cluster;
+            let entry = candidate.get_entry_by_global_id(&id);
             loop {
-                let snapshot = ComputeInstanceSnapshot::new_from_parts(cluster, indexes.clone());
-                let replacement = match entry.item() {
-                    CatalogItem::Index(index) => self.build_index_dataflow_plan(
-                        Arc::clone(&candidate),
-                        entry.name(),
-                        index,
-                        snapshot,
-                        config.clone(),
-                    )?,
-                    CatalogItem::MaterializedView(mv) => self
-                        .build_materialized_view_dataflow_plan(
+                let mut required = current.required;
+                let indexes = &mut current.indexes;
+                if current.replacement.is_none() {
+                    let snapshot =
+                        ComputeInstanceSnapshot::new_from_parts(cluster, indexes.clone());
+                    let replacement = match entry.item() {
+                        CatalogItem::Index(index) => self.build_index_dataflow_plan(
                             Arc::clone(&candidate),
                             entry.name(),
-                            mv,
+                            index,
                             snapshot,
-                            config.clone(),
+                            current.config.clone(),
                         )?,
-                    CatalogItem::MetricSink(sink) => self.build_metric_sink_dataflow_plan(
-                        Arc::clone(&candidate),
-                        entry.name(),
-                        sink,
-                        snapshot,
-                        config.clone(),
-                    )?,
-                    _ => unreachable!("filtered maintained object"),
-                };
+                        CatalogItem::MaterializedView(mv) => self
+                            .build_materialized_view_dataflow_plan(
+                                Arc::clone(&candidate),
+                                entry.name(),
+                                mv,
+                                snapshot,
+                                current.config.clone(),
+                            )?,
+                        CatalogItem::MetricSink(sink) => self.build_metric_sink_dataflow_plan(
+                            Arc::clone(&candidate),
+                            entry.name(),
+                            sink,
+                            snapshot,
+                            current.config.clone(),
+                        )?,
+                        _ => unreachable!("filtered maintained object"),
+                    };
+                    current.replacement = Some(replacement);
+                }
                 if let Some(required_ts) = required {
-                    let mut imports = crate::optimize::dataflows::dataflow_import_id_bundle(
-                        &replacement.physical_plan,
-                        cluster,
-                    );
-                    // Match the dependency metadata stored with the selection.
-                    imports.extend(&crate::optimize::dataflows::dataflow_import_id_bundle(
-                        &replacement.global_mir,
-                        cluster,
-                    ));
-                    // Collections born in this transaction cannot be opened through
-                    // the live catalog. Their birth permissions and the consumer's
-                    // requirement commit together. Only existing inputs need a
-                    // client grant across preparation and commit.
-                    imports
-                        .storage_ids
-                        .retain(|id| self.catalog().try_get_entry_by_global_id(id).is_some());
-                    if imports.is_empty() {
-                        replacements.insert(id, replacement);
-                        break;
-                    }
-                    let (holds, _) = self
-                        .acquire_client_read_protection(
+                    if current.request.is_none() {
+                        let replacement = current.replacement.as_ref().expect("optimized above");
+                        let mut imports = crate::optimize::dataflows::dataflow_import_id_bundle(
+                            &replacement.physical_plan,
+                            cluster,
+                        );
+                        // Match the dependency metadata stored with the selection.
+                        imports.extend(&crate::optimize::dataflows::dataflow_import_id_bundle(
+                            &replacement.global_mir,
+                            cluster,
+                        ));
+                        // Collections born in this transaction cannot be opened through
+                        // the live catalog. Their birth permissions and the consumer's
+                        // requirement commit together. Only existing inputs need a
+                        // client grant across preparation and commit.
+                        imports
+                            .storage_ids
+                            .retain(|id| self.catalog().try_get_entry_by_global_id(id).is_some());
+                        if imports.is_empty() {
+                            replacements
+                                .insert(id, current.replacement.take().expect("optimized above"));
+                            break;
+                        }
+                        current.request = Some(super::read_protection::ReadProtectionRequest::new(
                             client.protection.incarnation(),
                             imports,
-                            |_| Ok(Some(required_ts)),
-                        )
-                        .await?;
+                            Some(required_ts),
+                        ));
+                    }
+                    let request = current.request.as_mut().expect("request initialized above");
+                    let grant = self.try_client_read_protection(request, || false).await?;
+                    // Even a successful acquisition can refresh definitions. Never
+                    // use a candidate planned against a different structural prefix.
+                    if self.catalog().transient_revision() != planning_revision {
+                        return Err(AdapterError::DDLTransactionRace);
+                    }
+                    let Some((holds, _)) = grant else {
+                        rewrites.current = Some(current);
+                        return Ok(false);
+                    };
                     let since = holds.least_valid_read();
                     let mut readable = since.as_option().is_some_and(|since| *since <= required_ts);
                     if !readable {
@@ -1063,44 +1164,57 @@ impl Coordinator {
                         if indexes.len() == previous {
                             return Err(AdapterError::DDLTransactionRace);
                         }
+                        current.required = required;
+                        current.replacement = None;
+                        current.request = None;
                         continue;
                     }
                     protection.push(holds);
                 }
-                replacements.insert(id, replacement);
+                replacements.insert(id, current.replacement.take().expect("optimized above"));
                 break;
             }
         }
-        if self.catalog().transient_revision() != planning_revision {
-            return Err(AdapterError::DDLTransactionRace);
-        }
-        let rewritten_objects = replacements
+    }
+
+    async fn finish_written_plan_rewrites(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ops: &mut Vec<Op>,
+        rewrites: WrittenPlanRewrites,
+    ) -> Result<(Vec<crate::ReadHolds>, Vec<String>), AdapterError> {
+        let rewritten_objects = rewrites
+            .replacements
             .keys()
             .map(|id| {
-                candidate
-                    .resolve_full_name(candidate.get_entry_by_global_id(id).name(), conn_id)
+                rewrites
+                    .candidate
+                    .resolve_full_name(
+                        rewrites.candidate.get_entry_by_global_id(id).name(),
+                        conn_id,
+                    )
                     .to_string()
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        if !replacements.is_empty() {
+        if !rewrites.replacements.is_empty() {
             ops.retain(|op| match op {
                 Op::SetWrittenPlan {
                     id, build_version, ..
-                } => build_version != &build || !replacements.contains_key(id),
+                } => build_version != &rewrites.build || !rewrites.replacements.contains_key(id),
                 _ => true,
             });
-            ops.extend(self.catalog().write_plans(replacements).await?);
+            ops.extend(self.catalog().write_plans(rewrites.replacements).await?);
         }
-        Ok((protection, rewritten_objects))
+        Ok((rewrites.protection, rewritten_objects))
     }
 
-    async fn prepare_catalog_transaction(
+    async fn begin_catalog_transaction(
         &mut self,
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
-    ) -> Result<PreparedCatalogTransaction, AdapterError> {
+    ) -> Result<CatalogTransactionState, AdapterError> {
         // A failed CAS can reveal a creation that cannot install yet. Check
         // on every attempt, after foreign implications as well as initially.
         if !self.pending_compute_installations.is_empty()
@@ -1212,30 +1326,119 @@ impl Coordinator {
                         .unwrap_or_default();
                     (observer, baseline)
                 });
-        let (_written_plan_protection, rewritten_objects) =
-            Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
+        let revision = self.catalog().transient_revision();
+        let rewrites =
+            Box::pin(self.begin_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
                 .wall_time()
                 .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
                 .await?;
 
-        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts))
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
-            .await?;
-
-        Ok(PreparedCatalogTransaction {
+        Ok(CatalogTransactionState {
+            preparation: CatalogPreparation::Rewrites(rewrites),
             ops,
-            _protection: _written_plan_protection,
-            revision: self.catalog().transient_revision(),
+            _protection: Vec::new(),
+            revision,
             incarnation: self
                 .query_client
                 .as_ref()
                 .map(|client| client.protection.incarnation()),
             initial_write_ts: Some(oracle_write_ts),
-            rewritten_objects,
+            rewritten_objects: Vec::new(),
             webhook_sources_to_restart,
             observer: prepared_observer,
         })
+    }
+
+    fn validate_catalog_preparation(
+        &self,
+        prepared: &CatalogTransactionState,
+    ) -> Result<(), AdapterError> {
+        if self.catalog().transient_revision() != prepared.revision {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+        // Incarnation validity is needed when retaining rewrite work or grants.
+        // Unprotected and metadata-only initialization keep their own admission.
+        if prepared._protection.is_empty()
+            && !matches!(prepared.preparation, CatalogPreparation::Rewrites(Some(_)))
+        {
+            return Ok(());
+        }
+        if let Some(incarnation) = prepared.incarnation {
+            let client = self.query_client.as_ref().ok_or(AdapterError::ReadOnly)?;
+            if client.protection.incarnation() != incarnation {
+                return Err(AdapterError::CatalogSnapshotChanged);
+            }
+            if !self
+                .catalog()
+                .state()
+                .client_incarnations()
+                .contains_key(&incarnation)
+            {
+                client.protection.mark_closed();
+                return Err(AdapterError::internal(
+                    "catalog preparation",
+                    "client read protection incarnation is closed",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn resume_catalog_preparation(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        prepared: &mut CatalogTransactionState,
+    ) -> Result<bool, AdapterError> {
+        if matches!(prepared.preparation, CatalogPreparation::Complete) {
+            return Ok(true);
+        }
+        self.validate_catalog_preparation(prepared)?;
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        if let CatalogPreparation::Rewrites(rewrites) = &mut prepared.preparation {
+            if let Some(rewrites) = rewrites
+                && !Box::pin(self.resume_written_plan_rewrites(
+                    &mut prepared.ops,
+                    prepared.revision,
+                    rewrites,
+                ))
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
+                .await?
+            {
+                return Ok(false);
+            }
+            self.validate_catalog_preparation(prepared)?;
+            let CatalogPreparation::Rewrites(rewrites) = std::mem::replace(
+                &mut prepared.preparation,
+                CatalogPreparation::ReplicaMetrics,
+            ) else {
+                unreachable!("rewrites phase checked above")
+            };
+            if let Some(rewrites) = rewrites {
+                let (holds, names) = self
+                    .finish_written_plan_rewrites(conn_id, &mut prepared.ops, *rewrites)
+                    .wall_time()
+                    .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
+                    .await?;
+                prepared._protection = holds;
+                prepared.rewritten_objects = names;
+            }
+        }
+        Box::pin(
+            self.prepare_replica_metric_sinks(
+                conn_id,
+                &mut prepared.ops,
+                prepared
+                    .initial_write_ts
+                    .expect("preparation precedes commit"),
+            ),
+        )
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
+        .await?;
+        self.validate_catalog_preparation(prepared)?;
+        prepared.preparation = CatalogPreparation::Complete;
+        Ok(true)
     }
 
     async fn catalog_transact_attempt(
@@ -1244,7 +1447,11 @@ impl Coordinator {
         ops: Vec<Op>,
         retry_inline: bool,
     ) -> Result<CommittedCatalogTransaction, AdapterError> {
-        let mut prepared = Box::pin(self.prepare_catalog_transaction(conn_id, ops)).await?;
+        let mut prepared = Box::pin(self.begin_catalog_transaction(conn_id, ops)).await?;
+        // Non-staged owners retain their inline scheduling contract.
+        while !Box::pin(self.resume_catalog_preparation(conn_id, &mut prepared)).await? {
+            tokio::time::sleep(self.read_protection_conflict_delay()).await;
+        }
         Box::pin(self.commit_prepared_catalog_transaction(conn_id, &mut prepared, retry_inline))
             .await
     }
@@ -1252,9 +1459,10 @@ impl Coordinator {
     async fn commit_prepared_catalog_transaction(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        prepared: &mut PreparedCatalogTransaction,
+        prepared: &mut CatalogTransactionState,
         retry_inline: bool,
     ) -> Result<CommittedCatalogTransaction, AdapterError> {
+        assert!(matches!(prepared.preparation, CatalogPreparation::Complete));
         if self.catalog().transient_revision() != prepared.revision {
             return Err(AdapterError::CatalogSnapshotChanged);
         }
@@ -1289,9 +1497,8 @@ impl Coordinator {
         if self.read_only_controllers && !internal_metadata {
             return Err(AdapterError::ReadOnly);
         }
-        if prepared.initial_write_ts.is_none() {
-            self.validate_resource_limits(&prepared.ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
-        }
+        // Preparation can yield even before the first commit attempt.
+        self.validate_resource_limits(&prepared.ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let mut oracle_write_ts = match prepared.initial_write_ts.take() {
             Some(ts) => ts,

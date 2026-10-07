@@ -60,6 +60,13 @@ replan releases its DDL guard and wakes queued statements before reacquiring it.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+Written-plan preparation may also yield while acquiring protection. Retain the
+candidate, selected plans, current optimized replacement and earlier input holds
+across metadata contention. Resume the same fixed-timestamp acquisition against
+fresh permissions. Only an actual change of usable imports requires optimizing
+that replacement again. Validate the planning revision and incarnation before
+reuse, and keep preparation separate from permission to commit or execute.
+
 Explicit DDL COMMIT extracts the session transaction before its first attempt.
 Its continuation must own the extracted operations and completion effects, not
 run transaction cleanup again on retry. Structural invalidation fails that
