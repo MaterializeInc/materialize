@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mz_adapter::test_util::observe_prepared_rewrites;
+use mz_catalog::durable::objects::{ClientIncarnation, DurableType, MaintainedReadRequirement};
 use mz_catalog::durable::{CatalogError, DurableCatalogError, persist_backed_catalog_join_active};
 use mz_catalog::expr_cache::ExpressionCacheHandle;
 use mz_environmentd::test_util::TestHarness;
 use mz_postgres_util::{PostgresError, batch_execute, query_one, sql};
-use mz_repr::Timestamp;
 use tokio_postgres::error::SqlState;
 
 #[derive(Clone, Copy)]
@@ -228,28 +228,22 @@ async fn run_inner(conflict: Conflict) {
             Err(error) => panic!("peer conflict snapshot: {error}"),
         };
         let snapshot = txn.current_snapshot();
-        let mv_proto = &snapshot
-            .items
-            .values()
-            .find(|item| item.name == "rewrite_mv")
-            .unwrap()
-            .global_id;
         let required = snapshot
             .maintained_read_requirements
-            .iter()
-            .find(|(key, _)| &key.id == mv_proto)
-            .and_then(|(_, value)| value.frontier)
-            .map(Timestamp::from)
+            .into_iter()
+            .map(|(key, value)| MaintainedReadRequirement::from_key_value(key, value))
+            .find(|requirement| requirement.id == mv)
+            .and_then(|requirement| requirement.frontier)
             .expect("MV must have a live source requirement");
         let incarnation = prepared
             .incarnation
             .expect("actual query client incarnation");
         let heartbeat = snapshot
             .client_incarnations
-            .iter()
-            .find(|(key, _)| key.id == incarnation)
+            .into_iter()
+            .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
+            .find(|client| client.id == incarnation)
             .expect("prepared client must still be live")
-            .1
             .heartbeat;
         assert!(
             prepared
@@ -365,8 +359,9 @@ async fn run_inner(conflict: Conflict) {
                     assert!(
                         !txn.current_snapshot()
                             .client_incarnations
-                            .keys()
-                            .any(|key| Some(key.id) == prepared.incarnation)
+                            .into_iter()
+                            .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
+                            .any(|client| Some(client.id) == prepared.incarnation)
                     );
                 } else {
                     assert!(
