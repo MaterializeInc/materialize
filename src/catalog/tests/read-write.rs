@@ -1299,6 +1299,46 @@ async fn test_persist_snapshot_isolation_during_peer_updates() {
     assert_eq!(read_db(&current), db);
     assert_eq!(before.databases.len(), current.databases.len());
 
+    // Committed replay and dry-run export must carry the same name membership
+    // as their rows, including names freed by retractions.
+    for (snapshot, occupied, available) in [
+        (before, "churn_db", db.name.as_str()),
+        (current, db.name.as_str(), "churn_db"),
+    ] {
+        let mut dry_run = mz_catalog::durable::DryRunTransaction::from_snapshot(
+            snapshot,
+            0.into(),
+            true,
+            false,
+            0,
+        )
+        .unwrap();
+        assert!(
+            dry_run
+                .transaction_mut()
+                .insert_user_database(occupied, RoleId::User(1), Vec::new(), &HashSet::new(),)
+                .is_err()
+        );
+        dry_run
+            .transaction_mut()
+            .insert_user_database(available, RoleId::User(1), Vec::new(), &HashSet::new())
+            .unwrap();
+        let mut reopened = mz_catalog::durable::DryRunTransaction::from_snapshot(
+            dry_run.current_snapshot(),
+            0.into(),
+            true,
+            false,
+            0,
+        )
+        .unwrap();
+        assert!(
+            reopened
+                .transaction_mut()
+                .insert_user_database(available, RoleId::User(1), Vec::new(), &HashSet::new(),)
+                .is_err()
+        );
+    }
+
     Box::new(writer).expire().await;
     Box::new(reader).expire().await;
 }

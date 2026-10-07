@@ -1714,12 +1714,126 @@ impl ReadProtectionIndex {
     }
 }
 
-/// A typed snapshot of committed catalog state.
+/// A candidate bucket, not a uniqueness verdict. Item type conflicts are checked
+/// by the transaction predicate within the schema/session/name bucket.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum NameScope {
+    Global(String),
+    Schema(Option<DatabaseId>, String),
+    Item(SchemaId, Option<Uuid>, String),
+    Replica(ClusterId, u64, String),
+    Declaration(ClusterId, String),
+}
+
+pub(crate) trait NamedCatalogValue<K> {
+    fn name_scope(&self, key: &K) -> NameScope;
+}
+
+macro_rules! named_catalog_value {
+    ($key:ty, $value:ty, $scope:expr) => {
+        impl NamedCatalogValue<$key> for $value {
+            fn name_scope(&self, key: &$key) -> NameScope {
+                ($scope)(key, self)
+            }
+        }
+    };
+}
+
+named_catalog_value!(
+    DatabaseKey,
+    DatabaseValue,
+    |_: &DatabaseKey, v: &DatabaseValue| NameScope::Global(v.name.clone())
+);
+named_catalog_value!(RoleKey, RoleValue, |_: &RoleKey, v: &RoleValue| {
+    NameScope::Global(v.name.clone())
+});
+named_catalog_value!(
+    ClusterKey,
+    ClusterValue,
+    |_: &ClusterKey, v: &ClusterValue| NameScope::Global(v.name.clone())
+);
+named_catalog_value!(
+    NetworkPolicyKey,
+    NetworkPolicyValue,
+    |_: &NetworkPolicyKey, v: &NetworkPolicyValue| NameScope::Global(v.name.clone())
+);
+named_catalog_value!(SchemaKey, SchemaValue, |_: &SchemaKey, v: &SchemaValue| {
+    NameScope::Schema(v.database_id, v.name.clone())
+});
+named_catalog_value!(ItemKey, ItemValue, |_: &ItemKey, v: &ItemValue| {
+    NameScope::Item(v.schema_id, v.ephemeral_owner_session, v.name.clone())
+});
+named_catalog_value!(
+    ClusterReplicaKey,
+    ClusterReplicaValue,
+    |k: &ClusterReplicaKey, v: &ClusterReplicaValue| NameScope::Replica(
+        v.cluster_id,
+        k.deployment_generation,
+        v.name.clone()
+    )
+);
+named_catalog_value!(
+    ClusterReplicaDeclarationKey,
+    ClusterReplicaDeclarationValue,
+    |_: &ClusterReplicaDeclarationKey, v: &ClusterReplicaDeclarationValue| NameScope::Declaration(
+        v.cluster_id,
+        v.name.clone()
+    )
+);
+
+/// Structurally shared candidate membership at a complete committed prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NameIndex<K: Ord> {
+    pub(crate) candidates: imbl::OrdMap<NameScope, imbl::OrdSet<K>>,
+}
+
+impl<K: Ord> Default for NameIndex<K> {
+    fn default() -> Self {
+        Self {
+            candidates: imbl::OrdMap::new(),
+        }
+    }
+}
+
+impl<K: Ord + Clone> NameIndex<K> {
+    pub(crate) fn update(&mut self, scope: NameScope, key: K, diff: i64) {
+        let mut keys = self.candidates.get(&scope).cloned().unwrap_or_default();
+        // Typed tables and transaction overlays retract before inserting a replacement.
+        match diff {
+            1 => assert!(keys.insert(key).is_none()),
+            -1 => assert!(keys.remove(&key).is_some()),
+            _ => panic!("invalid name-index diff: {diff}"),
+        }
+        if keys.is_empty() {
+            self.candidates.remove(&scope);
+        } else {
+            self.candidates.insert(scope, keys);
+        }
+    }
+}
+
+/// Derived name lookups. These are not persisted and must track the snapshot tables.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NameIndexes {
+    pub(crate) databases: NameIndex<DatabaseKey>,
+    pub(crate) schemas: NameIndex<SchemaKey>,
+    pub(crate) items: NameIndex<ItemKey>,
+    pub(crate) roles: NameIndex<RoleKey>,
+    pub(crate) clusters: NameIndex<ClusterKey>,
+    pub(crate) network_policies: NameIndex<NetworkPolicyKey>,
+    pub(crate) cluster_replicas: NameIndex<ClusterReplicaKey>,
+    pub(crate) cluster_replica_declarations: NameIndex<ClusterReplicaDeclarationKey>,
+}
+
+/// A typed snapshot of catalog state.
 ///
 /// Tables share unchanged records across transaction candidates. Persist encoding
 /// remains at the committed-update boundary, rather than transaction opening.
+/// Transaction imports require tables and derived indexes to describe the same
+/// state. Manual name or scope edits require [`Self::rebuild_name_indexes`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
+    pub name_indexes: NameIndexes,
     pub read_protection_index: ReadProtectionIndex,
     pub databases: imbl::OrdMap<DatabaseKey, DatabaseValue>,
     pub schemas: imbl::OrdMap<SchemaKey, SchemaValue>,
@@ -1764,6 +1878,33 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn empty() -> Snapshot {
         Snapshot::default()
+    }
+
+    /// Rebuilds name lookups after manually editing named tables.
+    ///
+    /// This enumerates those tables. Committed snapshots and transaction exports
+    /// maintain their lookups incrementally and do not need this operation.
+    /// Other derived indexes must still match any edits to their input fields.
+    pub fn rebuild_name_indexes(&mut self) {
+        fn rebuild<K: Ord + Clone, V: NamedCatalogValue<K>>(
+            table: &imbl::OrdMap<K, V>,
+        ) -> NameIndex<K> {
+            let mut index = NameIndex::default();
+            for (key, value) in table {
+                index.update(value.name_scope(key), key.clone(), 1);
+            }
+            index
+        }
+        self.name_indexes = NameIndexes {
+            databases: rebuild(&self.databases),
+            schemas: rebuild(&self.schemas),
+            items: rebuild(&self.items),
+            roles: rebuild(&self.roles),
+            clusters: rebuild(&self.clusters),
+            network_policies: rebuild(&self.network_policies),
+            cluster_replicas: rebuild(&self.cluster_replicas),
+            cluster_replica_declarations: rebuild(&self.cluster_replica_declarations),
+        };
     }
 }
 

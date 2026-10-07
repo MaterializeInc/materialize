@@ -104,6 +104,7 @@ where
 impl Debug for StableSnapshot<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Snapshot {
+            name_indexes: _,
             read_protection_index: _,
             databases,
             schemas,

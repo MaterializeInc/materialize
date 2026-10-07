@@ -407,6 +407,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Creates a non-committable dry-run transaction from the given [`Snapshot`].
     ///
     /// The snapshot may include changes accumulated by earlier incremental dry runs.
+    /// Its derived indexes must match its tables. Manual name or scope edits require
+    /// [`Snapshot::rebuild_name_indexes`] before import.
     fn transaction_from_snapshot(
         &mut self,
         snapshot: Snapshot,

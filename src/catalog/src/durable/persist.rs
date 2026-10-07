@@ -1013,17 +1013,6 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         differential_dataflow::consolidation::consolidate_updates(&mut self.snapshot);
     }
 
-    /// Execute and return the results of `f` on the current catalog trace.
-    ///
-    /// Will return an error if the catalog has been fenced out.
-    async fn with_trace<R>(
-        &mut self,
-        f: impl FnOnce(&Vec<(T, Timestamp, Diff)>) -> Result<R, CatalogError>,
-    ) -> Result<R, CatalogError> {
-        self.sync_to_current_upper().await?;
-        f(&self.snapshot)
-    }
-
     /// Open a read handle to the catalog.
     async fn read_handle(&self) -> ReadHandle<SourceData, (), Timestamp, StorageDiff> {
         self.persist_client
@@ -2117,6 +2106,28 @@ impl CatalogStateInner {
                 assert_eq!(map.remove(&key), Some(value), "catalog retraction mismatch");
             }
         }
+        fn apply_named<K, V, KP, VP>(
+            map: &mut imbl::OrdMap<K, V>,
+            index: &mut crate::durable::objects::NameIndex<K>,
+            key: &KP,
+            value: &VP,
+            diff: Diff,
+        ) where
+            K: Ord + Clone + RustType<KP>,
+            V: Ord + Clone + Debug + RustType<VP> + crate::durable::objects::NamedCatalogValue<K>,
+            KP: Clone,
+            VP: Clone,
+        {
+            let key = K::from_proto(key.clone()).expect("invalid persisted key");
+            let value = V::from_proto(value.clone()).expect("invalid persisted value");
+            index.update(value.name_scope(&key), key.clone(), diff.into_inner());
+            if diff == Diff::ONE {
+                assert_eq!(map.insert(key, value), None, "duplicate catalog key");
+            } else {
+                assert_eq!(diff, Diff::MINUS_ONE);
+                assert_eq!(map.remove(&key), Some(value), "catalog retraction mismatch");
+            }
+        }
         let snapshot = &mut self.snapshot;
         let kind = &update.kind;
         let diff = update.diff;
@@ -2125,13 +2136,31 @@ impl CatalogStateInner {
                 // Ignore for snapshots.
             }
             StateUpdateKind::Cluster(key, value) => {
-                apply(&mut snapshot.clusters, key, value, diff);
+                apply_named(
+                    &mut snapshot.clusters,
+                    &mut snapshot.name_indexes.clusters,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::ClusterReplica(key, value) => {
-                apply(&mut snapshot.cluster_replicas, key, value, diff);
+                apply_named(
+                    &mut snapshot.cluster_replicas,
+                    &mut snapshot.name_indexes.cluster_replicas,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
-                apply(&mut snapshot.cluster_replica_declarations, key, value, diff);
+                apply_named(
+                    &mut snapshot.cluster_replica_declarations,
+                    &mut snapshot.name_indexes.cluster_replica_declarations,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::ClusterRuntime(key, value) => {
                 apply(&mut snapshot.cluster_runtimes, key, value, diff);
@@ -2143,7 +2172,13 @@ impl CatalogStateInner {
                 apply(&mut snapshot.configs, key, value, diff);
             }
             StateUpdateKind::Database(key, value) => {
-                apply(&mut snapshot.databases, key, value, diff);
+                apply_named(
+                    &mut snapshot.databases,
+                    &mut snapshot.name_indexes.databases,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::DefaultPrivilege(key, value) => {
                 apply(&mut snapshot.default_privileges, key, value, diff);
@@ -2158,16 +2193,40 @@ impl CatalogStateInner {
                 apply(&mut snapshot.introspection_sources, key, value, diff);
             }
             StateUpdateKind::Item(key, value) => {
-                apply(&mut snapshot.items, key, value, diff);
+                apply_named(
+                    &mut snapshot.items,
+                    &mut snapshot.name_indexes.items,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::NetworkPolicy(key, value) => {
-                apply(&mut snapshot.network_policies, key, value, diff);
+                apply_named(
+                    &mut snapshot.network_policies,
+                    &mut snapshot.name_indexes.network_policies,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::Role(key, value) => {
-                apply(&mut snapshot.roles, key, value, diff);
+                apply_named(
+                    &mut snapshot.roles,
+                    &mut snapshot.name_indexes.roles,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::Schema(key, value) => {
-                apply(&mut snapshot.schemas, key, value, diff);
+                apply_named(
+                    &mut snapshot.schemas,
+                    &mut snapshot.name_indexes.schemas,
+                    key,
+                    value,
+                    diff,
+                );
             }
             StateUpdateKind::Setting(key, value) => {
                 apply(&mut snapshot.settings, key, value, diff);

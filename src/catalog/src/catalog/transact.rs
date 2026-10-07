@@ -1277,12 +1277,16 @@ impl Catalog {
                         && owner.deployment_generation == preliminary_state.deployment_generation()
                         && !owner.name.is_empty()
                         && preliminary_state.try_get_entry_by_global_id(&id).is_none()
-                        && preliminary_state.clusters_by_id.values().any(|cluster| {
-                            cluster.replica(owner.replica_id).is_some()
-                                && imports
-                                    .iter()
-                                    .all(|input| cluster.log_indexes.values().any(|id| id == input))
-                        })
+                        && preliminary_state
+                            .replica_membership
+                            .get(&(owner.deployment_generation, owner.replica_id))
+                            .and_then(|cluster| preliminary_state.clusters_by_id.get(cluster))
+                            .is_some_and(|cluster| {
+                                cluster.replica(owner.replica_id).is_some()
+                                    && imports.iter().all(|input| {
+                                        cluster.log_indexes.values().any(|id| id == input)
+                                    })
+                            })
                 } else {
                     preliminary_state.try_get_entry_by_global_id(&id).is_some()
                         && imports.iter().all(|input| {

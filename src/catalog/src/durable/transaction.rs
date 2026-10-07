@@ -69,6 +69,7 @@ use crate::durable::objects::{
     SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
     UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
 };
+use crate::durable::objects::{NameIndex, NameIndexes, NameScope, NamedCatalogValue};
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
@@ -176,6 +177,8 @@ impl<'a> DryRunTransaction<'a> {
 
 impl DryRunTransaction<'static> {
     /// Constructs non-committable state from an owned snapshot and its opening context.
+    /// The snapshot's derived indexes must match its tables. After manual name or
+    /// scope edits, call [`Snapshot::rebuild_name_indexes`] before importing it.
     pub fn from_snapshot(
         snapshot: Snapshot,
         upper: mz_repr::Timestamp,
@@ -218,6 +221,7 @@ impl<'a> Transaction<'a> {
 
     fn from_snapshot(
         Snapshot {
+            name_indexes,
             read_protection_index,
             databases,
             schemas,
@@ -283,12 +287,14 @@ impl<'a> Transaction<'a> {
                 databases,
                 database_unique_fn,
                 database_unique_fn,
-            )?,
+            )?
+            .with_name_index(name_indexes.databases),
             schemas: TableTransaction::new_with_uniqueness_fn(
                 schemas,
                 schema_unique_fn,
                 schema_unique_fn,
-            )?,
+            )?
+            .with_name_index(name_indexes.schemas),
             // Temporary items from different sessions may share a name in the
             // temporary schema (whose durable schema id is a sentinel shared
             // by every session), so name uniqueness is additionally scoped by
@@ -315,31 +321,37 @@ impl<'a> Transaction<'a> {
                         // `item_type` is slow, only compute it once name and schema match.
                         && prev.item_type() == next.item_type()
                 },
-            )?,
+            )?
+            .with_name_index(name_indexes.items),
             comments: TableTransaction::new(comments)?,
-            roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
+            roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?
+                .with_name_index(name_indexes.roles),
             role_auth: TableTransaction::new(role_auth)?,
             clusters: TableTransaction::new_with_uniqueness_fn(
                 clusters,
                 cluster_unique_fn,
                 cluster_unique_fn,
-            )?,
+            )?
+            .with_name_index(name_indexes.clusters),
             network_policies: TableTransaction::new_with_uniqueness_fn(
                 network_policies,
                 network_policy_unique_fn,
                 network_policy_unique_fn,
-            )?,
+            )?
+            .with_name_index(name_indexes.network_policies),
             cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
                 cluster_replica_unique_fn,
                 cluster_replica_unique_fn,
             )?
+            .with_name_index(name_indexes.cluster_replicas)
             .with_uniqueness_partition(|a, b| a.deployment_generation == b.deployment_generation),
             cluster_replica_declarations: TableTransaction::new_with_uniqueness_fn(
                 cluster_replica_declarations,
                 declaration_unique_fn,
                 declaration_unique_fn,
-            )?,
+            )?
+            .with_name_index(name_indexes.cluster_replica_declarations),
             cluster_runtimes: TableTransaction::new(cluster_runtimes)?,
             introspection_sources: TableTransaction::new(introspection_sources)?,
             id_allocator: TableTransaction::new(id_allocator)?,
@@ -1370,6 +1382,18 @@ impl<'a> Transaction<'a> {
     /// accumulated `CatalogState`.
     pub fn current_snapshot(&self) -> Snapshot {
         Snapshot {
+            name_indexes: NameIndexes {
+                databases: self.databases.current_name_index(),
+                schemas: self.schemas.current_name_index(),
+                items: self.items.current_name_index(),
+                roles: self.roles.current_name_index(),
+                clusters: self.clusters.current_name_index(),
+                network_policies: self.network_policies.current_name_index(),
+                cluster_replicas: self.cluster_replicas.current_name_index(),
+                cluster_replica_declarations: self
+                    .cluster_replica_declarations
+                    .current_name_index(),
+            },
             read_protection_index: self.current_read_protection_index(),
             databases: self.databases.current_items(),
             schemas: self.schemas.current_items(),
@@ -4444,7 +4468,8 @@ struct TransactionUpdate<V> {
     diff: Diff,
 }
 
-/// Utility trait to check for plan validity.
+/// Name grouping for the independent full-table test oracle.
+#[cfg(test)]
 trait UniqueName {
     /// Does the item have a unique name? If yes, we can check for name equality in validity
     /// checking.
@@ -4453,6 +4478,7 @@ trait UniqueName {
     fn unique_name(&self) -> &str;
 }
 
+#[cfg(test)]
 mod unique_name {
     use crate::durable::objects::*;
 
@@ -4550,6 +4576,7 @@ struct UniquenessCheck<K, V> {
 #[derive(Debug)]
 struct TableTransaction<K: Ord, V> {
     initial: imbl::OrdMap<K, V>,
+    name_index: Option<(NameIndex<K>, fn(&K, &V) -> NameScope)>,
     // The desired updates to keys after commit.
     // Invariant: Value is sorted by `ts`.
     pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
@@ -4560,7 +4587,7 @@ struct TableTransaction<K: Ord, V> {
 impl<K, V> TableTransaction<K, V>
 where
     K: Ord + Eq + Clone + Debug,
-    V: Ord + Clone + Debug + UniqueName,
+    V: Ord + Clone + Debug,
 {
     fn changed_keys(&self) -> impl Iterator<Item = &K> {
         self.pending
@@ -4572,6 +4599,7 @@ where
     fn new(initial: imbl::OrdMap<K, V>) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             initial,
+            name_index: None,
             pending: BTreeMap::new(),
             uniqueness_check: None,
         })
@@ -4586,6 +4614,7 @@ where
     ) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             initial,
+            name_index: None,
             pending: BTreeMap::new(),
             uniqueness_check: Some(UniquenessCheck {
                 same_partition: |_, _| true,
@@ -4604,6 +4633,65 @@ where
         self
     }
 
+    /// The supplied index must describe exactly `initial`. Only production
+    /// constraints whose conflicts imply equal scopes may use this path.
+    fn with_name_index(mut self, index: NameIndex<K>) -> Self
+    where
+        V: NamedCatalogValue<K>,
+    {
+        self.name_index = Some((index, |key, value| value.name_scope(key)));
+        self
+    }
+
+    fn current_name_index(&self) -> NameIndex<K> {
+        let (mut index, scope) = self.name_index.clone().expect("named collection");
+        for key in self.changed_keys() {
+            if let Some(value) = self.initial.get(key) {
+                index.update(scope(key, value), key.clone(), -1);
+            }
+            if let Some(value) = self.get(key) {
+                index.update(scope(key, value), key.clone(), 1);
+            }
+        }
+        index
+    }
+
+    /// Visits matching committed candidates and transaction changes. Include the
+    /// primary key even outside the bucket to preserve duplicate-key errors.
+    /// Ordering matches `for_values`, including its error precedence on insert.
+    fn for_candidates(&self, key: &K, value: &V, mut f: impl FnMut(&K, &V)) {
+        if self.uniqueness_check.is_none() {
+            if let Some(value) = self.get(key) {
+                f(key, value);
+            }
+            return;
+        }
+        let Some((index, scope)) = &self.name_index else {
+            self.for_values(f);
+            return;
+        };
+        for key in self.pending.keys() {
+            if let Some(value) = self.get(key) {
+                f(key, value);
+            }
+        }
+        let bucket = scope(key, value);
+        let mut keys: BTreeSet<&K> = index
+            .candidates
+            .get(&bucket)
+            .into_iter()
+            .flat_map(|keys| keys.iter())
+            .collect();
+        keys.insert(key);
+        for key in keys {
+            if !self.pending.contains_key(key) {
+                if let Some(value) = self.initial.get(key) {
+                    f(key, value);
+                }
+            }
+        }
+    }
+
     /// Consumes and returns the pending changes and their diffs. `Diff` is
     /// guaranteed to be 1 or -1.
     fn pending<KP, VP>(self) -> Vec<(KP, VP, Diff)>
@@ -4611,7 +4699,13 @@ where
         K: RustType<KP>,
         V: RustType<VP>,
     {
-        soft_assert_no_log!(self.verify().is_ok());
+        soft_assert_no_log!(
+            self.pending
+                .values()
+                .all(|pending| pending.is_sorted_by(|a, b| a.ts <= b.ts)),
+            "pending should be sorted by timestamp: {:?}",
+            self.pending
+        );
         // Pending describes the desired final state for some keys. K,V pairs should be
         // retracted if they already exist and were deleted or are being updated.
         self.pending
@@ -4632,7 +4726,11 @@ where
     ///
     /// Runtime is O(n^2), where n is the number of items in `self`, if
     /// [`UniqueName::HAS_UNIQUE_NAME`] is false for `V`. Prefer using [`Self::verify_keys`].
-    fn verify(&self) -> Result<(), DurableCatalogError> {
+    #[cfg(test)]
+    fn verify(&self) -> Result<(), DurableCatalogError>
+    where
+        V: UniqueName,
+    {
         if let Some(check) = &self.uniqueness_check {
             // Compare each value to each other value and ensure they are unique.
             let items = self.items();
@@ -4671,8 +4769,8 @@ where
 
     /// Verifies that no items in `self` violate `self.uniqueness_check` with `keys`.
     ///
-    /// Runtime is O(n * k), where n is the number of items in `self` and k is the number of
-    /// items in `keys`.
+    /// Indexed collections visit only the matching committed buckets and pending
+    /// changes per key. Arbitrary predicates retain the full-table fallback.
     fn verify_keys<'a>(
         &self,
         keys: impl IntoIterator<Item = &'a K>,
@@ -4681,20 +4779,23 @@ where
         K: 'a,
     {
         if let Some(check) = &self.uniqueness_check {
-            let entries: Vec<_> = keys
-                .into_iter()
-                .filter_map(|key| self.get(key).map(|value| (key, value)))
-                .collect();
-            // Compare each value in `entries` to each value in `self` and ensure they are unique.
-            for (ki, vi) in self.items() {
-                for (kj, vj) in &entries {
-                    if ki != *kj && (check.same_partition)(ki, kj) && (check.violation)(vi, vj) {
+            for key in keys {
+                if let Some(value) = self.get(key) {
+                    let mut violation = false;
+                    self.for_candidates(key, value, |other_key, other_value| {
+                        if key != other_key
+                            && (check.same_partition)(other_key, key)
+                            && (check.violation)(other_value, value)
+                        {
+                            violation = true;
+                        }
+                    });
+                    if violation {
                         return Err(DurableCatalogError::UniquenessViolation);
                     }
                 }
             }
         }
-        soft_assert_no_log!(self.verify().is_ok());
         Ok(())
     }
 
@@ -4814,7 +4915,7 @@ where
     fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
         let mut violation = None;
         let uniqueness_check = self.uniqueness_check.as_ref();
-        self.for_values(|for_k, for_v| {
+        self.for_candidates(&k, &v, |for_k, for_v| {
             if &k == for_k {
                 violation = Some(DurableCatalogError::DuplicateKey);
             }
@@ -4832,7 +4933,6 @@ where
             ts,
             diff: Diff::ONE,
         });
-        soft_assert_no_log!(self.verify().is_ok());
         Ok(())
     }
 
@@ -5083,7 +5183,6 @@ where
                 });
             }
         });
-        soft_assert_no_log!(self.verify().is_ok());
         deleted
     }
 
@@ -5149,14 +5248,17 @@ mod tests {
                 arrangement_compression: false,
             },
         };
-        let mut table =
-            TableTransaction::<ClusterReplicaKey, ClusterReplicaValue>::new_with_uniqueness_fn(
-                imbl::OrdMap::from([(key(1, 0), value("r1")), (key(1, 1), value("r1"))]),
-                |a, b| a.cluster_id == b.cluster_id && a.name == b.name,
-                |a, b| a.cluster_id == b.cluster_id && a.name == b.name,
-            )
-            .unwrap()
-            .with_uniqueness_partition(|a, b| a.deployment_generation == b.deployment_generation);
+        let mut txn =
+            Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+        txn.cluster_replicas
+            .insert(key(1, 0), value("r1"), 0)
+            .unwrap();
+        txn.cluster_replicas
+            .insert(key(1, 1), value("r1"), 0)
+            .unwrap();
+        let mut txn =
+            Transaction::from_snapshot(txn.current_snapshot(), 0.into(), false, false, 0).unwrap();
+        let table = &mut txn.cluster_replicas;
         assert_ok!(table.verify());
         assert!(matches!(
             table.insert(key(2, 0), value("r1"), 0),
@@ -5174,12 +5276,167 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn indexed_item_scopes_and_snapshot_overlays() {
+        let key = |id| ItemKey {
+            id: CatalogItemId::User(id),
+        };
+        let value = |schema, session, sql: &str| ItemValue {
+            schema_id: SchemaId::User(schema),
+            name: "shared".into(),
+            ephemeral_owner_session: session,
+            create_sql: sql.into(),
+            owner_id: RoleId::User(1),
+            privileges: Vec::new(),
+            oid: 1,
+            global_id: GlobalId::User(1),
+            extra_versions: BTreeMap::new(),
+        };
+        let secret = value(1, None, "CREATE SECRET shared");
+        let ty = value(1, None, "CREATE TYPE shared");
+        let table = value(1, None, "CREATE TABLE shared");
+        let mut txn =
+            Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+        txn.items.insert(key(1), secret.clone(), 0).unwrap();
+        // Types and secrets may share a name, unlike types and tables.
+        txn.items.insert(key(2), ty.clone(), 0).unwrap();
+        txn.items
+            .insert(key(3), value(2, None, "CREATE TABLE shared"), 0)
+            .unwrap();
+        txn.items
+            .insert(
+                key(4),
+                value(1, Some(Uuid::new_v4()), "CREATE TABLE shared"),
+                0,
+            )
+            .unwrap();
+        let before = txn.current_snapshot();
+        let mut txn =
+            Transaction::from_snapshot(before.clone(), 0.into(), false, false, 0).unwrap();
+        assert!(matches!(
+            txn.items.insert(key(5), table.clone(), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        txn.items.set(key(1), None, 0).unwrap();
+        assert!(matches!(
+            txn.items.insert(key(5), table.clone(), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        txn.items.set(key(2), None, 0).unwrap();
+        txn.items.insert(key(5), table.clone(), 0).unwrap();
+        let after = txn.current_snapshot();
+        let mut reopened =
+            Transaction::from_snapshot(after.clone(), 0.into(), false, false, 0).unwrap();
+        assert!(matches!(
+            reopened.items.insert(key(6), table.clone(), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        reopened.items.set(key(5), None, 0).unwrap();
+        reopened.items.insert(key(6), secret, 0).unwrap();
+        reopened.items.insert(key(7), ty, 0).unwrap();
+        // Snapshot derivation must not mutate a shared base or leave retracted keys.
+        assert_eq!(before.items.len(), 4);
+        assert_eq!(
+            after.name_indexes.items.candidates[&table.name_scope(&key(5))],
+            [key(5)].into_iter().collect::<imbl::OrdSet<_>>()
+        );
+
+        let mut edited = after.clone();
+        edited.items.get_mut(&key(5)).unwrap().name = "manual_name".into();
+        edited.rebuild_name_indexes();
+        let mut imported =
+            DryRunTransaction::from_snapshot(edited, 0.into(), false, false, 0).unwrap();
+        let mut duplicate = table.clone();
+        duplicate.name = "manual_name".into();
+        assert!(matches!(
+            imported
+                .transaction_mut()
+                .items
+                .insert(key(8), duplicate, 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+    }
+
+    #[mz_ore::test]
+    fn unconstrained_insert_checks_only_primary_key() {
+        let initial = (0..128).map(|key| (key, "value".to_owned())).collect();
+        let mut table = TableTransaction::new(initial).unwrap();
+        let mut visited = 0;
+        table.for_candidates(&5, &"value".to_owned(), |_, _| visited += 1);
+        assert_eq!(visited, 1);
+        assert!(matches!(
+            table.insert(5, "replacement".to_owned(), 0),
+            Err(DurableCatalogError::DuplicateKey)
+        ));
+        table.set(5, None, 0).unwrap();
+        table.insert(5, "replacement".to_owned(), 1).unwrap();
+        assert_eq!(table.get(&5).map(String::as_str), Some("replacement"));
+    }
+
+    #[mz_ore::test]
+    fn indexed_candidates_are_bounded_by_scope_and_changes() {
+        let mut txn =
+            Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+        for id in 1..=128 {
+            txn.schemas
+                .insert(
+                    SchemaKey {
+                        id: SchemaId::User(id),
+                    },
+                    SchemaValue {
+                        database_id: Some(DatabaseId::User(id)),
+                        name: "shared".into(),
+                        owner_id: RoleId::User(1),
+                        privileges: Vec::new(),
+                        oid: 1,
+                    },
+                    0,
+                )
+                .unwrap();
+        }
+        let mut txn =
+            Transaction::from_snapshot(txn.current_snapshot(), 0.into(), false, false, 0).unwrap();
+        let key = SchemaKey {
+            id: SchemaId::User(1),
+        };
+        let value = txn.schemas.get(&key).unwrap().clone();
+        let mut visited = 0;
+        txn.schemas
+            .for_candidates(&key, &value, |_, _| visited += 1);
+        assert_eq!(visited, 1);
+        let mut renamed = value.clone();
+        renamed.name = "other".into();
+        assert!(matches!(
+            txn.schemas.insert(key, renamed, 0),
+            Err(DurableCatalogError::DuplicateKey)
+        ));
+        assert!(matches!(
+            txn.schemas.insert(key, value.clone(), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        let other = SchemaKey {
+            id: SchemaId::User(129),
+        };
+        assert!(matches!(
+            txn.schemas.insert(other, value.clone(), 0),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
+        txn.schemas.set(key, None, 0).unwrap();
+        txn.schemas.insert(other, value.clone(), 0).unwrap();
+        let mut visited = 0;
+        txn.schemas
+            .for_candidates(&key, &value, |_, _| visited += 1);
+        assert_eq!(visited, 1);
+    }
+
+    #[mz_ore::test]
     fn test_table_transaction_simple() {
         fn uniqueness_violation(a: &String, b: &String) -> bool {
             a == b
         }
         let mut table = TableTransaction::new_with_uniqueness_fn(
-            imbl::OrdMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
+            [(1i64.to_le_bytes().to_vec(), "a".to_string())]
+                .into_iter()
+                .collect(),
             uniqueness_violation,
             uniqueness_violation,
         )
@@ -5212,10 +5469,12 @@ mod tests {
             panic!("uniqueness scan ran for an update that kept the same unique key");
         }
         let mut table = TableTransaction::new_with_uniqueness_fn(
-            imbl::OrdMap::from([
+            [
                 (1i64.to_le_bytes().to_vec(), "a1".to_string()),
                 (2i64.to_le_bytes().to_vec(), "b1".to_string()),
-            ]),
+            ]
+            .into_iter()
+            .collect(),
             panic_uniqueness_violation,
             // We treat the first character as the unique key.
             first_char_same,
@@ -5234,10 +5493,12 @@ mod tests {
             a.chars().next() == b.chars().next()
         }
         let mut table = TableTransaction::new_with_uniqueness_fn(
-            imbl::OrdMap::from([
+            [
                 (1i64.to_le_bytes().to_vec(), "a1".to_string()),
                 (2i64.to_le_bytes().to_vec(), "b1".to_string()),
-            ]),
+            ]
+            .into_iter()
+            .collect(),
             real_uniqueness_violation,
             first_char_same,
         )
