@@ -68,7 +68,8 @@ pub struct Optimizer {
     view_id: GlobalId,
     /// The resulting column names.
     column_names: Vec<ColumnName>,
-    /// The declared schema, if any. It replaces the inferred one.
+    /// The declared schema, if any. It replaces the inferred one, keeping only
+    /// the keys that [`confirm_declared_keys`] confirms.
     declared_desc: Option<RelationDesc>,
     /// Output columns that are asserted to be not null in the `CREATE VIEW`
     /// statement.
@@ -238,7 +239,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let mut df_meta = plan.df_meta;
 
         let rel_desc = match &self.declared_desc {
-            Some(desc) => {
+            Some(declared) => {
+                let (desc, _unconfirmed) = confirm_declared_keys(declared, &plan.typ.keys);
                 soft_assert_or_log!(
                     desc.typ()
                         .column_types
@@ -251,7 +253,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
                     "declared types {desc:?} do not match the query's types {:?}",
                     plan.typ,
                 );
-                desc.clone()
+                desc
             }
             None => {
                 let mut rel_typ = plan.typ;
@@ -364,5 +366,67 @@ impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
+    }
+}
+
+/// Splits the keys of a declared schema into the ones the running version
+/// confirms and the ones it does not.
+///
+/// A declared key is confirmed if it contains one of the `inferred` keys. The
+/// returned desc is `declared` with only the confirmed keys, which is the
+/// materialized view's `RelationDesc`. The second component lists the
+/// unconfirmed keys in declaration order.
+pub fn confirm_declared_keys(
+    declared: &RelationDesc,
+    inferred: &[Vec<usize>],
+) -> (RelationDesc, Vec<Vec<usize>>) {
+    let (confirmed, unconfirmed): (Vec<_>, Vec<_>) =
+        declared.typ().keys.iter().cloned().partition(|key| {
+            inferred
+                .iter()
+                .any(|inferred_key| inferred_key.iter().all(|c| key.contains(c)))
+        });
+    let desc = confirmed
+        .into_iter()
+        .fold(declared.clone().without_keys(), |desc, key| {
+            desc.with_key(key)
+        });
+    (desc, unconfirmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{RelationDesc, SqlScalarType};
+
+    use super::confirm_declared_keys;
+
+    #[mz_ore::test]
+    fn confirm_declared_keys_keeps_supersets_of_inferred_keys() {
+        let declared = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Int64.nullable(false))
+            .with_column("b", SqlScalarType::Int64.nullable(false))
+            .with_column("c", SqlScalarType::Int64.nullable(false))
+            .with_key(vec![0, 1])
+            .with_key(vec![2])
+            .finish();
+
+        // The key `(a, b)` contains the inferred key `(a)`, `(c)` contains none.
+        let (desc, unconfirmed) = confirm_declared_keys(&declared, &[vec![0]]);
+        assert_eq!(desc.typ().keys, vec![vec![0, 1]]);
+        assert_eq!(unconfirmed, vec![vec![2]]);
+        assert_eq!(desc.clone().without_keys(), declared.clone().without_keys());
+
+        let (desc, unconfirmed) = confirm_declared_keys(&declared, &[vec![2], vec![0, 1]]);
+        assert_eq!(desc, declared);
+        assert!(unconfirmed.is_empty());
+
+        // A declared key that is a strict subset of an inferred key is unconfirmed.
+        let (desc, unconfirmed) = confirm_declared_keys(&declared, &[vec![1, 2]]);
+        assert!(desc.typ().keys.is_empty());
+        assert_eq!(unconfirmed, vec![vec![0, 1], vec![2]]);
+
+        let (desc, unconfirmed) = confirm_declared_keys(&declared, &[]);
+        assert!(desc.typ().keys.is_empty());
+        assert_eq!(unconfirmed, vec![vec![0, 1], vec![2]]);
     }
 }
