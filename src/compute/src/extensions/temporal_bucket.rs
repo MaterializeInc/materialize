@@ -19,7 +19,7 @@ use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk, ComputeSpill};
 use mz_timely_util::columnar::columnar_exchange_data;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
@@ -348,7 +348,7 @@ where
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
     chunker: ColumnChunker<(D, T, R)>,
-    inner: AccountedChunkBatcher<D, T, R>,
+    inner: AccountedChunkBatcher<D, T, R, ComputeSpill>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
@@ -397,7 +397,7 @@ where
     }
 
     /// Reveal the contents of the merge batcher, returning a vector of chunks.
-    fn done(mut self) -> Vec<ColumnChunk<D, T, R>> {
+    fn done(mut self) -> Vec<ColumnChunk<D, T, R, ComputeSpill>> {
         self.flush();
         let (chain, _description) = self.inner.seal(Antichain::new());
         chain
