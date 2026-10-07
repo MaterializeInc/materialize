@@ -77,7 +77,7 @@ CREATE MATERIALIZED VIEW order_totals (
     total numeric(38, 2) NOT NULL,
     PRIMARY KEY (customer_id)
 ) IN CLUSTER c AS
-    SELECT customer_id, any_value(region), sum(amount)
+    SELECT customer_id, any_value(region), sum(amount)::numeric(38, 2)
     FROM orders GROUP BY customer_id;
 ```
 
@@ -109,10 +109,14 @@ The number of declared columns must equal the query's arity.
 Columns map by position, and declared names replace the query's names, as the bare-name form does today.
 
 **Types.**
-The query output is cast to the declared types with assignment casts (`CastContext::Assignment`), the same rule `INSERT INTO t SELECT ...` applies.
+The query output is cast to the declared types with implicit casts (`CastContext::Implicit`), the casts Materialize inserts without being asked, for example `int4` to `int8` or `numeric` to `float8`.
 The cast is planned into the HIR expression with the existing `query::cast_relation`, so it is part of the dataflow and appears in `EXPLAIN`.
-A column that cannot be assignment-cast is a planning error naming the column and both types.
-A cast that fails at runtime (e.g. overflow on `int8` to `int2`) produces an error in the materialized view, like any other evaluation error.
+A column that cannot be implicitly cast is a planning error naming the column and both types, and the user writes the cast in the query.
+Implicit casts widen, so the narrowing casts that fail at runtime, `int8` to `int2` or `float8` to `numeric`, and the rounding cast from `numeric` to `numeric(p, s)` all have to be written in the query.
+Two implicit casts can still fail or lose precision: `text` to `varchar(n)` or `char(n)` errors on values longer than `n`, and `int8` or `numeric` to `float8` rounds.
+A cast that fails at runtime produces an error in the materialized view, like any other evaluation error.
+Assignment casts, which `INSERT INTO t SELECT ...` applies, would accept the narrowing casts silently.
+A type declared once is easy to forget when the query changes, so a narrowing cast should be visible where the query is written, see [Assignment casts](#assignment-casts).
 
 **Nullability.**
 A column without `NOT NULL` is nullable, as in `CREATE TABLE`.
@@ -164,7 +168,7 @@ This includes column-level `UNIQUE`, which has no `NULLS NOT DISTINCT` spelling 
 `PRIMARY KEY` implies `NOT NULL` on its columns, and declaring a primary key column `NULL` is an error.
 `RelationDesc` stores key columns sorted, so the declared column order of a key is not preserved, as for tables.
 
-Note that assignment casts can drop keys from the inferred set when the cast function does not report `preserves_uniqueness`.
+Note that casts can drop keys from the inferred set when the cast function does not report `preserves_uniqueness`.
 The user then sees the key check error and can adjust the query or the declared type.
 
 **Types that cannot be spelled.**
@@ -178,17 +182,21 @@ With a declared schema, a replacement is validated against the target's declared
 The difference is that both sides are now under the user's control, so a mismatch is something the user wrote, not something the optimizer decided.
 
 A replacement without a column list for a target *with* a declared schema inherits the target's schema.
-Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with assignment casts, `NOT NULL` becomes an assertion, keys go through the creation-time check, and the feature flag applies.
+Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with implicit casts, `NOT NULL` becomes an assertion, keys go through the creation-time check, and the feature flag applies.
+Because casts are implicit, a replacement whose query produces `int8` for an inherited `int2` column fails to plan instead of narrowing silently.
+Changing a declared type is a schema change, which replacements do not support (see [Out of Scope](#out-of-scope)).
 The replacement's `create_sql` then states its schema.
 Re-planning it on boot does not depend on the target, custom types in the definitions are recorded as dependencies, and `MaterializedView::apply_replacement` keeps taking the column list from the replacement's statement.
 
-Requiring the query's types to match the target's exactly, without casts, would keep accidental casts out of a drop-in replacement.
+Requiring the query's types to match the target's exactly, without casts, would also keep widening casts out of a drop-in replacement.
 It needs to know at planning time whether the definitions were inherited, which the stored statement cannot say, and checking exact types when re-planning would make an upgrade that changes a query's inferred type fail on boot.
 
 A replacement with a bare-name list for a target with a declared schema is rejected, because renaming conflicts with inheriting the names.
 
 A replacement *with* column definitions for a target *without* one is allowed if the declared desc equals the target's current desc.
 This is the migration path from an implicit to a declared schema for an existing materialized view.
+`EXPLAIN ... WITH (schema)` on the target prints the definitions to paste.
+Purification could fill them in instead, but a replacement without a column list for an implicit target then opts into a declared schema without the user asking, which is the decision [Phase 2](#phase-2-freezing-inferred-schemas) defers.
 
 ### Implementation sketch
 
@@ -213,8 +221,9 @@ This is the migration path from an implicit to a declared schema for an existing
 5. **Sequencer** (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs`).
    Run the key check against the keys of the local MIR plan's type, in the optimize stage so that `EXPLAIN CREATE` rejects what `CREATE` rejects.
    A re-plan (`EXPLAIN REPLAN`) drops unconfirmed keys instead, as on boot.
-   Reject a replacement without a declared schema for a target with one.
+   Validate a replacement's declared schema against its target's.
    Schema inheritance for replacements lives in purification (`src/sql/src/pure.rs`), which can read the target from the catalog and add to the statement's resolved ids.
+   The sequencer still rejects a replacement without a declared schema for a target with one, which only a statement that skipped purification can reach.
 6. **Feature flag** `enable_materialized_view_column_definitions`, off in production and on in the test and CI configuration.
 7. **mz-deploy.** Its typecheck catalog uses the declared desc when present.
    Unit tests run a materialized view as a temporary view, which cannot declare a schema, so a declared materialized view is lowered to casts to the declared types.
@@ -234,13 +243,13 @@ The option is not behind the feature flag, because it is useful for inspecting i
 ### Feasibility
 
 The change is small to medium and mostly in the SQL layer.
-Every runtime mechanism it needs already exists: assignment casts for `INSERT`, column-definition parsing for `CREATE TABLE`, non-null assertions for `ASSERT NOT NULL`, key validation for upsert sinks, and desc comparison for replacements.
+Every runtime mechanism it needs already exists: relation casts for `INSERT`, column-definition parsing for `CREATE TABLE`, non-null assertions for `ASSERT NOT NULL`, key validation for upsert sinks, and desc comparison for replacements.
 The main risks are:
 
 * **Parser ambiguity** between the two column-list forms.
   Two-token lookahead resolves it, and roundtrip tests cover it.
-* **Cast semantics surprising users**, e.g. assignment casts to `varchar(n)` or `numeric(p, s)`.
-  This is the same behavior as `INSERT`, see open questions.
+* **Implicit casts being too strict**, e.g. `sum(amount)` declared as `numeric(38, 2)` needs a cast in the query.
+  The planning error names the column and both types.
 * **Key checks failing for reasonable queries**, at creation or after an upgrade, because MIR key inference is incomplete (e.g. through casts or `UNION ALL` of disjoint inputs).
   In particular, `Map` carries a key over to a new column only if exactly one of its expressions preserves uniqueness, and `cast_relation` puts all casts into one `Map`, so declaring two columns with widening casts loses every key through them.
   Users can drop the key from the declaration. Runtime enforcement could be added later for those cases.
@@ -309,7 +318,16 @@ Unlike keys, a declared `NOT NULL` is enforced on every row, so freezing it does
 
 Checking uniqueness in the dataflow means maintaining a count per key, i.e. an arrangement the size of the materialized view.
 It turns declared keys into enforced constraints that could be frozen like `NOT NULL`, but adds a large and surprising cost.
+An index on exactly the key columns already holds that arrangement, so the check could ride on it instead of building a second one.
+The index runs in its own dataflow, possibly on another cluster, and dependents that read the materialized view from persist rely on the key whether or not the index exists, so a violation it finds could be reported but not prevented.
 It can be added later as an opt-in, also for keys the optimizer cannot infer.
+
+### Assignment casts
+
+Casting with assignment casts, as `INSERT INTO t SELECT ...` does, accepts every cast that implicit casts accept plus the narrowing ones: `int8` to `int2`, `float8` to `numeric`, `numeric` to `numeric(p, s)`.
+It saves writing casts in the query, most often for `numeric` scale.
+A narrowing cast that fails at runtime errors the materialized view, and with an inherited schema the cast is not written anywhere in the replacement, so the user does not see it unless they read `EXPLAIN`.
+Moving from implicit to assignment casts later accepts strictly more statements, so it stays possible without breaking existing ones.
 
 ### Sink-style `KEY (...)` instead of `PRIMARY KEY` / `UNIQUE`
 
@@ -323,21 +341,31 @@ A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we rejec
 
 `WITH (SCHEMA (...))` or similar would avoid touching the column list, but it splits naming (column list) from typing (option) and departs from the `CREATE TABLE` grammar users and tools already know.
 
+### Skipping the `NOT NULL` assertion on inferred columns
+
+The sink could skip the assertion for columns the optimizer infers to be non-nullable, as performance already depends on the optimizer elsewhere.
+Correctness would then depend on nullability inference being right: a null that reaches a non-nullable column panics the persist encoder (`DatumEncoder::push`) instead of producing a `MustNotBeNull` error.
+Implicit materialized views carry that risk today, and declared schemas are meant to remove it.
+The assertion inspects the asserted datums of each row the sink writes, which the sink encodes anyway, and we have not measured its cost.
+
+## Interaction with pinned LIR
+
+[Pinned LIR](./20260826_pinned_lir.md) stores a materialized view's plan instead of re-optimizing it on boot.
+A declared schema gives the pinned plan a fixed output contract: names, types and nullability no longer change when the optimizer does, so a pinned plan stays type-compatible with the catalog desc across versions.
+Keys are less settled: this design re-checks declared keys against the running version's analysis of the query, while a pinned plan was produced by an older version.
+Whether a pinned plan should also pin the keys confirmed when it was planned, and how a changed input key invalidates them, belongs to the pinned LIR design.
+
 ## Open questions
 
-* Assignment casts, or implicit casts only?
-  Implicit-only is stricter and avoids silent truncation-style surprises, but forces users to write casts in the query for common cases such as `numeric` scale.
-  The prototype uses assignment casts.
-* Should replacement schema inheritance reject casts?
+* Should replacement schema inheritance reject widening casts?
   The prototype allows them, see [Replacements](#replacements).
-* Should `NOT NULL` skip the runtime assertion when the optimizer infers non-nullability?
-  The assertion is a per-row datum scan in the sink, and skipping it would make performance, though not correctness, depend on the optimizer.
-  The prototype never skips it.
 * Should a `NOT NULL` violation error the materialized view, or route the row to a dead-letter queue?
   An error blocks reads at the affected times. A dead-letter queue keeps the materialized view readable, but drops data silently unless someone watches the queue.
   The prototype errors.
-* Should `mz_materialized_views` expose whether the schema is declared?
-  The prototype does not.
+* How should the catalog expose whether a schema is declared?
+  It is useful to us for adoption and to users for tracking a migration to declared schemas.
+  An `mz_internal` relation fits while the feature is behind a flag, and a column of `mz_materialized_views` once it is stable.
+  The prototype does not expose it.
 * Should a dropped key say why it was dropped?
   Recording at creation how a key was derived (only structural steps, through which uniqueness-preserving functions, from which input keys) would let a later version tell an analysis gap apart from a changed function or a missing input key.
 * Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
