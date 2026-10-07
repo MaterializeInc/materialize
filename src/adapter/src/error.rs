@@ -330,6 +330,8 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
+    /// A replacement does not declare a schema, but its target does.
+    ReplacementSchemaNotDeclared,
     /// Attempt to apply a replacement to a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
@@ -788,6 +790,11 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::ReplacementSchemaNotDeclared => Some(
+                "Declare the target's columns with their types. EXPLAIN ... WITH (schema) prints \
+                them for the target."
+                    .to_string(),
+            ),
             AdapterError::SubscribeFellBehind { .. } => Some(
                 "The client is not reading results fast enough. Use a client that reads output \
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
@@ -1095,6 +1102,7 @@ impl AdapterError {
             AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ReplacementSchemaNotDeclared => SqlState::INVALID_TABLE_DEFINITION,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
             }
@@ -1601,6 +1609,12 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ReplacementSchemaMismatch(_) => {
                 write!(f, "replacement schema differs from target schema")
+            }
+            AdapterError::ReplacementSchemaNotDeclared => {
+                write!(
+                    f,
+                    "replacement must declare its schema because its target does"
+                )
             }
             AdapterError::ImpossibleTimestampConstraints { .. } => {
                 write!(f, "could not find a valid timestamp for the query")

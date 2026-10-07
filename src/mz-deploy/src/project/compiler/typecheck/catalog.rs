@@ -572,10 +572,16 @@ fn build_local_item(
             )
         }
         Plan::CreateMaterializedView(plan) => {
-            let desc = RelationDesc::new(
-                plan.materialized_view.expr.top_level_typ(),
-                plan.materialized_view.column_names.clone(),
-            );
+            let desc = plan
+                .materialized_view
+                .declared_desc
+                .clone()
+                .unwrap_or_else(|| {
+                    RelationDesc::new(
+                        plan.materialized_view.expr.top_level_typ(),
+                        plan.materialized_view.column_names.clone(),
+                    )
+                });
             (
                 plan.name,
                 CatalogItemType::MaterializedView,

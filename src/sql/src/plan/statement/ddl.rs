@@ -73,7 +73,7 @@ use mz_sql_parser::ast::{
     DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
     FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewColumns, MaterializedViewOption,
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
     NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
     NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
@@ -2879,7 +2879,7 @@ pub fn plan_create_materialized_view(
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
     let query::PlannedRootQuery {
-        expr,
+        mut expr,
         mut desc,
         finishing,
         scope: _,
@@ -2895,12 +2895,46 @@ pub fn plan_create_materialized_view(
         ));
     }
 
-    plan_utils::maybe_rename_columns_exact(
-        scx.catalog,
-        format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
-        &mut desc,
-        &stmt.columns,
-    )?;
+    let mut declared_desc = None;
+    match &stmt.columns {
+        MaterializedViewColumns::Names(names) => {
+            plan_utils::maybe_rename_columns_exact(
+                scx.catalog,
+                format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
+                &mut desc,
+                names,
+            )?;
+        }
+        MaterializedViewColumns::Definitions {
+            columns,
+            constraints,
+        } => {
+            scx.require_feature_flag(&vars::ENABLE_MATERIALIZED_VIEW_COLUMN_DEFINITIONS)?;
+            let declared = plan_materialized_view_declared_desc(scx, columns, constraints)?;
+            if declared.arity() != expr.arity() {
+                sql_bail!(
+                    "materialized view {} declares {} columns, but its query produces {}",
+                    scx.catalog.resolve_full_name(&name),
+                    declared.arity(),
+                    expr.arity(),
+                );
+            }
+            // Install assignment casts to the declared types, as `INSERT` does.
+            let qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
+            let target_types = declared.typ().column_types.iter().map(|c| &c.scalar_type);
+            expr = query::cast_relation(&qcx, CastContext::Assignment, expr, target_types)
+                .map_err(|e| {
+                    sql_err!(
+                        "column {} is of type {} but expression is of type {}",
+                        declared.get_name(e.column).quoted(),
+                        qcx.humanize_sql_scalar_type(&e.target_type, false),
+                        qcx.humanize_sql_scalar_type(&e.source_type, false),
+                    )
+                })?;
+            desc = declared.clone();
+            declared_desc = Some(declared);
+        }
+    }
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     let MaterializedViewOptionExtracted {
@@ -3064,6 +3098,26 @@ pub fn plan_create_materialized_view(
         let dup = &column_names[*dup];
         sql_bail!("duplicate column {} in non-null assertions", dup.quoted());
     }
+    if let Some(declared) = &declared_desc {
+        if !non_null_assertions.is_empty() {
+            sql_bail!(
+                "ASSERT NOT NULL cannot be combined with column definitions; \
+                 declare the columns NOT NULL instead"
+            );
+        }
+        // The persist sink panics on a NULL in a non-nullable column, so every
+        // declared `NOT NULL` column is checked at runtime. Skipping columns
+        // the optimizer proves non-nullable would tie the check to the
+        // optimizer version.
+        non_null_assertions = declared
+            .typ()
+            .column_types
+            .iter()
+            .enumerate()
+            .filter(|(_, typ)| !typ.nullable)
+            .map(|(i, _)| i)
+            .collect();
+    }
 
     if let Some(dup) = column_names.iter().duplicates().next() {
         sql_bail!("column {} specified more than once", dup.quoted());
@@ -3197,6 +3251,7 @@ pub fn plan_create_materialized_view(
             expr,
             dependencies: DependencyIds(dependencies),
             column_names,
+            declared_desc,
             replacement_target,
             cluster_id,
             target_replica,
@@ -3210,6 +3265,69 @@ pub fn plan_create_materialized_view(
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
+}
+
+/// Plans the schema a `CREATE MATERIALIZED VIEW` statement declares with column
+/// definitions.
+fn plan_materialized_view_declared_desc(
+    scx: &StatementContext,
+    columns: &[ColumnDef<Aug>],
+    constraints: &[TableConstraint<Aug>],
+) -> Result<RelationDesc, PlanError> {
+    let names: Vec<_> = columns
+        .iter()
+        .map(|c| normalize::column_name(c.name.clone()))
+        .collect();
+    if let Some(dup) = names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.quoted());
+    }
+
+    let mut column_types = Vec::with_capacity(columns.len());
+    for (i, c) in columns.iter().enumerate() {
+        if c.collation.is_some() {
+            bail_unsupported!("COLLATE in materialized view column definitions");
+        }
+        let ty = query::scalar_type_from_sql(scx, &c.data_type)?;
+        let mut nullable = None;
+        for option in &c.options {
+            match &option.option {
+                ColumnOption::Null | ColumnOption::NotNull => {
+                    let is_null = matches!(option.option, ColumnOption::Null);
+                    if nullable.is_some_and(|n| n != is_null) {
+                        sql_bail!(
+                            "conflicting NULL/NOT NULL declarations for column {}",
+                            names[i].quoted()
+                        );
+                    }
+                    nullable = Some(is_null);
+                }
+                ColumnOption::Unique { .. } => {
+                    bail_unsupported!("PRIMARY KEY and UNIQUE on materialized views")
+                }
+                other => bail_unsupported!(format!(
+                    "materialized view column definition with option: {}",
+                    other.to_ast_string_simple()
+                )),
+            }
+        }
+        column_types.push(ty.nullable(nullable.unwrap_or(true)));
+    }
+
+    for constraint in constraints {
+        match constraint {
+            TableConstraint::Unique { .. } => {
+                bail_unsupported!("PRIMARY KEY and UNIQUE on materialized views")
+            }
+            TableConstraint::ForeignKey { .. } => {
+                bail_unsupported!("FOREIGN KEY constraints on materialized views")
+            }
+            TableConstraint::Check { .. } => {
+                bail_unsupported!("CHECK constraints on materialized views")
+            }
+        }
+    }
+
+    Ok(RelationDesc::new(SqlRelationType::new(column_types), names))
 }
 
 generate_extracted_config!(

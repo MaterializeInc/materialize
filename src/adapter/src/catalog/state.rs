@@ -1637,12 +1637,17 @@ impl CatalogState {
                         (Arc::new(raw_expr), Arc::new(optimized_expr))
                     }
                 };
-                let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
-
-                for &i in &materialized_view.non_null_assertions {
-                    typ.column_types[i].nullable = false;
-                }
-                let desc = RelationDesc::new(typ, materialized_view.column_names);
+                let declared_schema = materialized_view.declared_desc.is_some();
+                let desc = match materialized_view.declared_desc {
+                    Some(desc) => desc,
+                    None => {
+                        let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
+                        for &i in &materialized_view.non_null_assertions {
+                            typ.column_types[i].nullable = false;
+                        }
+                        RelationDesc::new(typ, materialized_view.column_names)
+                    }
+                };
                 let desc = VersionedRelationDesc::new(desc);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
@@ -1660,6 +1665,7 @@ impl CatalogState {
                     raw_expr,
                     locally_optimized_expr: optimized_expr,
                     desc,
+                    declared_schema,
                     resolved_ids,
                     dependencies,
                     replacement_target: materialized_view.replacement_target,

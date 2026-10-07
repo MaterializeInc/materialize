@@ -3801,6 +3801,7 @@ impl Coordinator {
                                     global_id,
                                     internal_view_id,
                                     mv.desc.latest().iter_names().cloned().collect(),
+                                    mv.declared_schema.then(|| mv.desc.latest()),
                                     mv.non_null_assertions.clone(),
                                     mv.refresh_schedule.clone(),
                                     debug_name,
