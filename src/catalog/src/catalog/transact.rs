@@ -5641,7 +5641,7 @@ mod tests {
                 },
             ];
             for (index_permission, floor) in [(birth, permission), (visibility, visibility)] {
-                let (advanced, advanced_snapshot) = catalog.transact_incremental_dry_run(
+                let (mut advanced, advanced_snapshot) = catalog.transact_incremental_dry_run(
                     &indexed,
                     vec![Op::SetReadProtection {
                         requirements: vec![],
@@ -5650,7 +5650,7 @@ mod tests {
                         }],
                     }], None, Some(indexed_snapshot.clone()), birth,
                 ).await.expect("advance imported index permission");
-                let (mut admitted, _) = catalog.transact_incremental_dry_run(
+                let (admitted, _) = catalog.transact_incremental_dry_run(
                     &advanced, automatic_ops.clone(), None, Some(advanced_snapshot), birth,
                 ).await.expect("admit the retained selection at current permission");
                 let mv = admitted.get_entry(&automatic_id).materialized_view()
@@ -5668,7 +5668,7 @@ mod tests {
                 );
                 assert_eq!(admitted.written_plan(automatic_gid, "test-build"), Some(revision));
                 let stored_sql = mv.create_sql.clone();
-                let restored = admitted.with_enable_for_item_parsing(|state| state.parse_item(
+                let restored = advanced.with_enable_for_item_parsing(|state| state.parse_item(
                     automatic_gid, &stored_sql, &BTreeMap::new(), None, false, None,
                     &mut LocalExpressionCache::Closed, None,
                 )).expect("stored birth roundtrips");
