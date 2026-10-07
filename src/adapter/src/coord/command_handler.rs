@@ -469,13 +469,9 @@ impl Coordinator {
                     statement_logging_id,
                     tx,
                 } => {
-                    let mut ctx_extra = ExecuteContextGuard::new(
-                        statement_logging_id,
-                        self.internal_cmd_tx.clone(),
-                    );
                     match self
                         .implement_subscribe(
-                            &mut ctx_extra,
+                            statement_logging_id,
                             df_desc,
                             dependency_ids,
                             cluster_id,
@@ -497,12 +493,6 @@ impl Coordinator {
                             });
                         }
                         Err(e) => {
-                            // On success the guard's contents moved into the
-                            // `Subscribing` response. On error the frontend
-                            // logs the error end, so we defuse rather than
-                            // let the guard's `Drop` emit a spurious
-                            // `Aborted`.
-                            let _ = ctx_extra.defuse();
                             let _ = tx.send(Err(e));
                         }
                     }
