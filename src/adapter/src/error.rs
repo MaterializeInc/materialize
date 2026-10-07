@@ -811,8 +811,8 @@ impl AdapterError {
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::ReplacementSchemaNotDeclared => Some(
-                "Declare the target's columns with their types. EXPLAIN ... WITH (schema) prints \
-                them for the target."
+                "Omit the column list to use the target's column definitions, or declare the \
+                columns with their types."
                     .to_string(),
             ),
             AdapterError::SubscribeFellBehind { .. } => Some(
