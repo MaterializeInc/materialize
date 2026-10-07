@@ -3618,7 +3618,13 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Re-planning a persisted sink (pcx is None) must not fail,
+                // because the keys of its input can shrink between versions,
+                // for example when a materialized view drops a declared key
+                // that the running version does not confirm. `CREATE SINK`
+                // and `ALTER SINK` plan with a pcx, so the key was valid when
+                // it was stored, and is treated as not enforced from then on.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),
