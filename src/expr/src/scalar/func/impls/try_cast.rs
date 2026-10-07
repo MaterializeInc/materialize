@@ -261,7 +261,7 @@ mod tests {
     fn internal_error_is_a_soft_panic() {
         let expr = MirScalarExpr::literal_ok(Datum::Int64(7), ReprScalarType::Int64)
             .call_unary(try_cast(CastStringToInt32));
-        let outcome = std::panic::catch_unwind(|| eval(&expr));
+        let outcome = mz_ore::panic::catch_unwind(|| eval(&expr));
         if mz_ore::assert::soft_assertions_enabled() {
             assert!(outcome.is_err(), "soft assertion should have fired");
         } else {
