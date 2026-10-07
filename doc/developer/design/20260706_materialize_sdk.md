@@ -781,8 +781,11 @@ produce.
 5. Retention margin check: can a sink role read the catalog state it needs (the
    object's readable frontier and the cluster's indexes) without extra grants?
 6. `mzq`: a transport under this SDK, or a separate path?
-7. Object swaps: how often do blue/green deploys swap a subscribed view, and is
-   `refollow` the behavior deploy tooling wants?
+7. Object swaps: when a blue/green deploy swaps a view a sink reads, should the
+   sink follow the new view (`refollow`), re-snapshot the target, or stop for an
+   operator? The new view's history starts at its creation, so `refollow` works
+   only if that history covers the sink's checkpoint. Can deploy tooling
+   guarantee that, for example with `RETAIN HISTORY` on staged views?
 8. Egress cost: data leaves through `environmentd`. What does a sink with a large
    snapshot cost a customer, and does the docs story need a sizing page?
 9. Stateless workers before durable subscriptions: is there demand that cannot
