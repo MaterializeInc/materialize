@@ -41,11 +41,12 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
 use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
+use regex::Regex;
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
 use tracing::{Instrument, debug, info, info_span, warn};
 
-use crate::cfg::{SHARD_METRICS, ShardMetricsExport};
+use crate::cfg::{PER_SHARD_METRICS_ENABLE_REGEX, SHARD_METRICS, ShardMetricsExport};
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
@@ -154,6 +155,11 @@ impl Metrics {
             invalid_mode: registry.register(metric!(
                 name: "mz_persist_shard_metrics_mode_invalid",
                 help: "count of metrics scrapes that found persist_shard_metrics unrecognized and so exported the default",
+            )),
+            allow: (String::new(), None),
+            invalid_regex: registry.register(metric!(
+                name: "mz_persist_per_shard_metrics_regex_invalid",
+                help: "count of metrics scrapes that found persist_per_shard_metrics_enable_regex invalid and so kept no per-shard series",
             )),
         };
         registry.register_postprocessor(move |families| per_shard_filter.filter(families));
@@ -1319,17 +1325,25 @@ pub struct ShardsMetrics {
     shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
 }
 
-/// Removes the per-shard families from gathered families if
-/// [`SHARD_METRICS`] says not to export them.
+/// Removes the per-shard series this process should not export from gathered
+/// families, as configured by [`SHARD_METRICS`] and
+/// [`PER_SHARD_METRICS_ENABLE_REGEX`].
 ///
 /// It matches the names in `PER_SHARD_FAMILIES`, not a name prefix, because
 /// `mz_persist_shard_count`, `mz_persist_stale_shard_count` and the
 /// `mz_persist_shard_*_percentile` / `_topk` aggregates share the prefix.
+///
+/// NOTE: Postprocessors run after collection, so the `invalid_*` counters land
+/// in the scrape after the one that bumped them.
 struct PerShardMetricsFilter {
     configs: Arc<ConfigSet>,
     /// The last seen value of `SHARD_METRICS` and what it parsed to.
     mode: (String, ShardMetricsExport),
     invalid_mode: IntCounter,
+    /// The last seen value of `PER_SHARD_METRICS_ENABLE_REGEX`, and its
+    /// compiled form if it is non-empty and valid.
+    allow: (String, Option<Regex>),
+    invalid_regex: IntCounter,
 }
 
 impl PerShardMetricsFilter {
@@ -1337,7 +1351,50 @@ impl PerShardMetricsFilter {
         if self.mode().per_shard() {
             return;
         }
-        families.retain(|f| !PER_SHARD_FAMILIES.iter().any(|p| p.name == f.name()));
+        let allow = self.allow_regex();
+        families.retain_mut(|f| {
+            if !PER_SHARD_FAMILIES.iter().any(|p| p.name == f.name()) {
+                return true;
+            }
+            let Some(allow) = allow else {
+                return false;
+            };
+            f.mut_metric().retain(|m| {
+                m.get_label()
+                    .iter()
+                    .any(|l| matches!(l.name(), "shard" | "name") && allow.is_match(l.value()))
+            });
+            !f.get_metric().is_empty()
+        });
+    }
+
+    /// Returns the regex of series to keep, or `None` to keep none.
+    ///
+    /// Recompiles only when the config value changes, so an invalid value is
+    /// logged once, but it is counted on every scrape. It fails closed: an
+    /// invalid regex keeps nothing rather than everything, which would bring
+    /// back the full per-shard cardinality.
+    fn allow_regex(&mut self) -> Option<&Regex> {
+        let value = PER_SHARD_METRICS_ENABLE_REGEX.get(&self.configs);
+        if value != self.allow.0 {
+            let compiled = if value.is_empty() {
+                None
+            } else {
+                Regex::new(&value)
+                    .inspect_err(|err| {
+                        warn!(
+                            "invalid {}, keeping no per-shard series: {err}",
+                            PER_SHARD_METRICS_ENABLE_REGEX.name()
+                        )
+                    })
+                    .ok()
+            };
+            self.allow = (value, compiled);
+        }
+        if !self.allow.0.is_empty() && self.allow.1.is_none() {
+            self.invalid_regex.inc();
+        }
+        self.allow.1.as_ref()
     }
 
     /// The export mode, or the default if the config value is unrecognized.
@@ -1359,8 +1416,6 @@ impl PerShardMetricsFilter {
             self.mode = (value, parsed);
         }
         if self.mode.1.as_str() != self.mode.0 {
-            // NOTE: Postprocessors run after collection, so this lands in the
-            // next scrape, not this one.
             self.invalid_mode.inc();
         }
         self.mode.1
@@ -3967,6 +4022,159 @@ mod tests {
             both_bytes > 100 * many_bytes,
             "{both_bytes} vs {many_bytes}"
         );
+    }
+
+    fn set_enable_regex(cfg: &PersistConfig, regex: &str) {
+        let mut updates = ConfigUpdates::default();
+        updates.add(&PER_SHARD_METRICS_ENABLE_REGEX, regex);
+        cfg.apply_from(&updates);
+    }
+
+    /// The per-shard series in `families`, keyed by family name and labels.
+    fn per_shard_series(
+        families: &[MetricFamily],
+    ) -> BTreeMap<(String, Vec<(String, String)>), prometheus::proto::Metric> {
+        families
+            .iter()
+            .filter(|f| PER_SHARD_FAMILIES.iter().any(|p| p.name == f.name()))
+            .flat_map(|f| {
+                f.get_metric().iter().map(|m| {
+                    let labels = m
+                        .get_label()
+                        .iter()
+                        .map(|l| (l.name().to_string(), l.value().to_string()))
+                        .collect();
+                    ((f.name().to_string(), labels), m.clone())
+                })
+            })
+            .collect()
+    }
+
+    /// The `name` labels of the shards with per-shard series in `families`.
+    fn exported_shard_names(families: &[MetricFamily]) -> BTreeSet<String> {
+        per_shard_series(families)
+            .into_keys()
+            .map(|(_, labels)| {
+                labels
+                    .into_iter()
+                    .find(|(k, _)| k == "name")
+                    .expect("per-shard series have a name label")
+                    .1
+            })
+            .collect()
+    }
+
+    #[mz_ore::test]
+    fn enable_regex_keeps_matching_shards_unchanged() {
+        let (cfg, registry, shards) = metrics_with_shards(5);
+        let both = registry.gather();
+        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+        let summary = registry.gather();
+        assert!(exported_shard_names(&summary).is_empty());
+
+        // By shard id: exactly that shard's series come back, byte for byte
+        // as they are in `both`, so dashboards need no change.
+        let shard_id = shards[2].shard_id.to_string();
+        set_enable_regex(&cfg, &shard_id);
+        let enabled = registry.gather();
+        let expected: BTreeMap<_, _> = per_shard_series(&both)
+            .into_iter()
+            .filter(|((_, labels), _)| labels.contains(&("shard".into(), shard_id.clone())))
+            .collect();
+        assert_eq!(expected.len(), PER_SHARD_FAMILIES.len());
+        assert_eq!(per_shard_series(&enabled), expected);
+        assert_eq!(family_names(&enabled), {
+            let mut names = family_names(&summary);
+            names.extend(PER_SHARD_FAMILIES.iter().map(|f| f.name.to_string()));
+            names
+        });
+
+        // By `name` label, and several at once.
+        set_enable_regex(&cfg, "^s2$");
+        assert_eq!(
+            exported_shard_names(&registry.gather()),
+            BTreeSet::from(["s2".to_string()])
+        );
+        set_enable_regex(&cfg, "^s(1|4)$");
+        assert_eq!(
+            exported_shard_names(&registry.gather()),
+            BTreeSet::from(["s1".to_string(), "s4".to_string()])
+        );
+
+        // Empty keeps none again.
+        set_enable_regex(&cfg, "");
+        assert_eq!(family_names(&registry.gather()), family_names(&summary));
+
+        // It applies in `none` too, and not while per-shard series are on.
+        set_enable_regex(&cfg, "^s2$");
+        set_shard_metrics(&cfg, ShardMetricsExport::None);
+        let gathered = registry.gather();
+        assert_eq!(
+            exported_shard_names(&gathered),
+            BTreeSet::from(["s2".to_string()])
+        );
+        assert!(gathered.iter().all(|f| !f.name().ends_with("_percentile")));
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
+        assert_eq!(exported_shard_names(&registry.gather()).len(), 5);
+    }
+
+    #[mz_ore::test]
+    fn unanchored_enable_regex_over_matches() {
+        let cfg = PersistConfig::new_for_tests();
+        let registry = MetricsRegistry::new();
+        let metrics = Metrics::new(&cfg, &registry);
+        let shard = |name: &str| metrics.shards.shard(&ShardId::new(), name);
+        // `r` is not a hex digit, so these names can't collide with the
+        // random shard ids the second half matches against.
+        let _named: Vec<_> = (1..=10).map(|i| shard(&format!("src{i}"))).collect();
+        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+
+        // Unanchored, so a pattern meant for one shard keeps every name it
+        // is a substring of.
+        set_enable_regex(&cfg, "src1");
+        assert_eq!(
+            exported_shard_names(&registry.gather()),
+            BTreeSet::from(["src1".to_string(), "src10".to_string()])
+        );
+
+        // It is tried against `shard` and `name`, so a pattern scoped to one
+        // shard's id also keeps any shard whose name contains that fragment.
+        // The naming here is contrived, but a pattern loose enough to hit
+        // both labels is what brings the shed cardinality back.
+        let target = shard("by-id");
+        let fragment = target.shard_id.to_string()[3..9].to_string();
+        let decoy = shard(&format!("t-{fragment}-t"));
+        assert!(!decoy.shard_id.to_string().contains(&fragment));
+        set_enable_regex(&cfg, &fragment);
+        let kept = exported_shard_names(&registry.gather());
+        assert!(kept.contains(&target.name), "{kept:?}");
+        assert!(kept.contains(&decoy.name), "{kept:?}");
+    }
+
+    #[mz_ore::test]
+    fn invalid_enable_regex_fails_closed() {
+        let (cfg, registry, _shards) = metrics_with_shards(3);
+        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+        let summary = family_names(&registry.gather());
+        let invalid = |families: &[MetricFamily]| {
+            scalar(families, "mz_persist_per_shard_metrics_regex_invalid")
+        };
+
+        set_enable_regex(&cfg, "(");
+        let gathered = registry.gather();
+        assert_eq!(family_names(&gathered), summary);
+        // Counted on every scrape while it stays invalid, one scrape late.
+        assert_eq!(invalid(&gathered), 0.0);
+        assert_eq!(invalid(&registry.gather()), 1.0);
+
+        set_enable_regex(&cfg, "^s1$");
+        let gathered = registry.gather();
+        assert_eq!(
+            exported_shard_names(&gathered),
+            BTreeSet::from(["s1".to_string()])
+        );
+        assert_eq!(invalid(&gathered), 2.0);
+        assert_eq!(invalid(&registry.gather()), 2.0);
     }
 
     fn gauge_count(families: &[MetricFamily], name: &str) -> usize {

@@ -316,6 +316,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
         .add(&SHARD_METRICS)
+        .add(&PER_SHARD_METRICS_ENABLE_REGEX)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -813,6 +814,21 @@ impl ShardMetricsExport {
         matches!(self, Self::Summary | Self::Both)
     }
 }
+
+/// Per-shard series to keep exporting while [`SHARD_METRICS`] leaves the
+/// per-shard families out.
+///
+/// A series is kept if its `shard` or `name` label matches this regex. The
+/// match is unanchored, so `s1` also matches `s10`: use `^...$` for an exact
+/// match. Empty keeps none, as does an invalid regex.
+pub const PER_SHARD_METRICS_ENABLE_REGEX: Config<&'static str> = Config::new(
+    "persist_per_shard_metrics_enable_regex",
+    "",
+    "While `persist_shard_metrics` is 'summary' or 'none', keep exporting the per-shard series \
+    whose `shard` or `name` label matches this regex (unanchored). Empty or invalid keeps \
+    none.",
+    ParameterScope::Environment,
+);
 
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
