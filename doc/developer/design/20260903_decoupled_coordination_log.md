@@ -55,6 +55,10 @@ verification. Introspection SUBSCRIBE timestamp admission and initial MV admissi
 also have demonstrated inline acquisition stalls. Their retained stages now yield
 single-attempt grants, keeping optimization and purification holds intact. Verify
 these paths before attributing later failures to the earlier ordinary-DDL stall.
+CREATE INDEX also retains its written selection and notices through a staged
+catalog commit, rebuilding creator protection per attempt. Verify its dispatcher
+yield independently of renewal success: repeated bounded renewal failures remain
+under investigation. The frontier INSERT's year-3000 read wait is separate.
 The source-table EXPLAIN timeout remains unlocalized between certification and
 grant acquisition. Keep its protection and deadline unchanged.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,

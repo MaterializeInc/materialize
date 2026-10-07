@@ -27,8 +27,9 @@ use tracing::Span;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
-    Coordinator, CreateIndexExplain, CreateIndexFinish, CreateIndexOptimize, CreateIndexStage,
-    ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
+    Coordinator, CreateIndexCommit, CreateIndexExplain, CreateIndexFinish, CreateIndexOptimize,
+    CreateIndexStage, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult,
+    Staged,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -44,6 +45,7 @@ impl Staged for CreateIndexStage {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
             Self::Finish(stage) => &mut stage.validity,
+            Self::Commit(stage) => &mut stage.validity,
             Self::Explain(stage) => &mut stage.validity,
         }
     }
@@ -55,7 +57,8 @@ impl Staged for CreateIndexStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateIndexStage::Optimize(stage) => coord.create_index_optimize(stage).await,
-            CreateIndexStage::Finish(stage) => coord.create_index_finish(ctx, stage).await,
+            CreateIndexStage::Finish(stage) => coord.create_index_finish(stage).await,
+            CreateIndexStage::Commit(stage) => coord.create_index_commit(ctx, stage).await,
             CreateIndexStage::Explain(stage) => {
                 coord.create_index_explain(ctx.session(), stage).await
             }
@@ -445,11 +448,11 @@ impl Coordinator {
 
     #[instrument]
     async fn create_index_finish(
-        &mut self,
-        ctx: &mut ExecuteContext,
+        &self,
         stage: CreateIndexFinish,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let CreateIndexFinish {
+            validity,
             item_id,
             global_id,
             plan:
@@ -469,7 +472,6 @@ impl Coordinator {
             global_mir_plan,
             global_lir_plan,
             optimizer_features,
-            ..
         } = stage;
 
         let on_entry = self.catalog().get_entry_by_global_id(&on);
@@ -498,13 +500,14 @@ impl Coordinator {
         // We keep `raw_df_meta` live so that on success we can emit its raw
         // notices to the user session (rendered against the user's
         // session-aware humanizer).
-        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
         let on_desc = on_entry
             .relation_desc()
             .expect("can only create indexes on items with a valid description");
         let df_meta = self.render_create_item_notices(&name, global_id, &on_desc, &raw_df_meta);
 
         // Write the plan before committing the object and its selection together.
+        let planning_revision = self.catalog().transient_revision();
         let selection = self
             .catalog()
             .prepare_item_plan(
@@ -518,35 +521,69 @@ impl Coordinator {
             .await?;
         ops.extend(selection);
 
+        Ok(StageResult::Immediate(Box::new(CreateIndexStage::Commit(
+            CreateIndexCommit {
+                validity,
+                planning_revision,
+                ops,
+                prepared: None,
+                raw_df_meta,
+                item_name: name.item,
+                if_not_exists,
+            },
+        ))))
+    }
+
+    #[instrument]
+    async fn create_index_commit(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        mut stage: CreateIndexCommit,
+    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        if self.catalog().transient_revision() != stage.planning_revision {
+            self.release_ddl_lock(ctx.session().conn_id());
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
         let transact_result = self
-            .catalog_transact_with_context(None, Some(ctx), ops)
+            .try_catalog_transact_with_context(ctx, &stage.ops, &mut stage.prepared)
             .await;
 
         match transact_result {
-            Ok(_) => {
+            Ok(false) => {
+                let delay = self.read_protection_conflict_delay();
+                Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(CreateIndexStage::Commit(stage)))
+                })))
+            }
+            Ok(true) => {
                 // Only emit optimizer notices to the user now that the
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
                 // Optimizer-only dependencies are not covered by SQL plan validity.
-                raw_df_meta.optimizer_notices.retain(|notice| {
+                stage.raw_df_meta.optimizer_notices.retain(|notice| {
                     notice
                         .dependencies()
                         .iter()
                         .all(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
                 });
-                self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
+                self.emit_raw_optimizer_notices_to_user(ctx, &stage.raw_df_meta.optimizer_notices);
                 Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
             }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
+            })) if stage.if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
-                        name: name.item,
+                        name: stage.item_name,
                         ty: "index",
                     });
                 Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
+            }
+            Err(AdapterError::CatalogSnapshotChanged) => {
+                self.release_ddl_lock(ctx.session().conn_id());
+                Err(AdapterError::CatalogSnapshotChanged)
             }
             Err(err) => Err(err),
         }

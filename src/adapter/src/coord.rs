@@ -863,6 +863,7 @@ pub struct DropObjectsStage {
 pub enum CreateIndexStage {
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
+    Commit(CreateIndexCommit),
     Explain(CreateIndexExplain),
 }
 
@@ -886,6 +887,17 @@ pub struct CreateIndexFinish {
     global_mir_plan: optimize::index::GlobalMirPlan,
     global_lir_plan: optimize::index::GlobalLirPlan,
     optimizer_features: OptimizerFeatures,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexCommit {
+    validity: PlanValidity,
+    planning_revision: u64,
+    ops: Vec<crate::catalog::Op>,
+    prepared: Option<ddl::CatalogTransactionState>,
+    raw_df_meta: DataflowMetainfo,
+    item_name: String,
+    if_not_exists: bool,
 }
 
 #[derive(Debug)]
