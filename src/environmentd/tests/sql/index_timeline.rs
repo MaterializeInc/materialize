@@ -14,24 +14,15 @@ use mz_catalog::durable::objects::{
     ClientIncarnation, ClientReadRequirement, CollectionCompactionBound, DurableType, Item,
 };
 use mz_catalog::durable::persist_backed_catalog_join_active;
+use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
 use mz_environmentd::test_util::TestHarness;
 use mz_postgres_util::{batch_execute, sql};
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn index_creation_protects_timeline_before_installation() {
+async fn creation_protects_timelines_before_installation() {
     let test_case = async {
         let server = TestHarness::default().start().await;
         let client = server.connect().await.unwrap();
-        for statement in [
-            sql!("CREATE TABLE timeline_input (a int)"),
-            sql!("CREATE CLUSTER timeline_cluster REPLICAS (), MANAGED = false"),
-            sql!("CREATE INDEX timeline_idx IN CLUSTER timeline_cluster ON timeline_input (a)"),
-        ] {
-            batch_execute(&client, statement).await.unwrap();
-        }
-
-        // No replica can install this index. Do not SELECT or EXPLAIN the input:
-        // read acquisition could supply the very protection creation must own.
         let persist = server
             .persist_clients
             .open(server.persist_location.clone())
@@ -49,6 +40,24 @@ async fn index_creation_protects_timeline_before_installation() {
         .await
         .unwrap();
         peer.sync_to_current_updates().await.unwrap();
+        for statement in [
+            sql!("CREATE TABLE timeline_input (a int)"),
+            sql!("CREATE CLUSTER timeline_cluster REPLICAS (), MANAGED = false"),
+            sql!("CREATE INDEX timeline_idx IN CLUSTER timeline_cluster ON timeline_input (a)"),
+            sql!(
+                "CREATE MATERIALIZED VIEW timeline_mv IN CLUSTER timeline_cluster
+                 AS SELECT * FROM timeline_input"
+            ),
+            sql!(
+                "CREATE MATERIALIZED VIEW timeline_refresh IN CLUSTER timeline_cluster
+                 WITH (REFRESH EVERY '10 hours') AS SELECT * FROM timeline_input"
+            ),
+        ] {
+            batch_execute(&client, statement).await.unwrap();
+        }
+        // No replica can install these collections. Do not SELECT or EXPLAIN:
+        // read acquisition could supply the very protection creation must own.
+        let updates = peer.sync_to_current_updates().await.unwrap();
         let snapshot = peer.snapshot().await.unwrap();
         let item_id = |name| {
             snapshot
@@ -86,6 +95,25 @@ async fn index_creation_protects_timeline_before_installation() {
             .unwrap();
         let creator_id = creator.id;
         let initial_heartbeat = creator.heartbeat;
+        let collections = [index, item_id("timeline_mv"), item_id("timeline_refresh")];
+        for id in collections {
+            let birth = updates
+                .iter()
+                .find(|update| {
+                    update.diff == StateDiff::Addition
+                        && matches!(&update.kind, StateUpdateKind::Item(item) if item.global_id == id)
+                })
+                .expect("the observer must see collection creation");
+            assert!(
+                updates.iter().any(|update| {
+                    update.ts == birth.ts
+                        && update.diff == StateDiff::Addition
+                        && matches!(&update.kind, StateUpdateKind::ClientReadRequirement(grant)
+                            if grant.id == id && grant.incarnation == creator_id)
+                }),
+                "creation must commit the output grant atomically, not acquire it later: {id}"
+            );
+        }
 
         // Drive timeline advancement with a blind write rather than waiting for
         // an unchanged client's periodic heartbeat.
@@ -100,6 +128,14 @@ async fn index_creation_protects_timeline_before_installation() {
                 .into_iter()
                 .map(|(key, value)| ClientReadRequirement::from_key_value(key, value))
                 .collect();
+            for id in collections {
+                assert!(
+                    requirements
+                        .iter()
+                        .any(|grant| { grant.incarnation == creator_id && grant.id == id }),
+                    "metadata publication must retain the creator's output grant: {id}"
+                );
+            }
             let grant = requirements
                 .iter()
                 .find(|grant| grant.incarnation == creator_id && grant.id == index)
@@ -136,5 +172,5 @@ async fn index_creation_protects_timeline_before_installation() {
     };
     tokio::time::timeout(Duration::from_secs(180), test_case)
         .await
-        .expect("index creation protection test timed out");
+        .expect("creation protection test timed out");
 }

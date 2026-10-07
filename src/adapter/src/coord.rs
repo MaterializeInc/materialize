@@ -2952,7 +2952,7 @@ impl Coordinator {
                 // the serving window throughout bootstrap, including plan reuse.
                 let state = self.catalog().state().clone();
                 let publication = self
-                    .prepare_index_timeline_publication(Arc::clone(client), &state, indexes)
+                    .prepare_admission_timeline_publication(Arc::clone(client), &state, indexes)
                     .await?;
                 let result = self
                     .bootstrap_catalog_transact(vec![publication.op()], &mut builtin_table_updates)
@@ -3087,7 +3087,11 @@ impl Coordinator {
                         }
                     };
                     let publication = self
-                        .prepare_index_timeline_publication(Arc::clone(client), &candidate, indexes)
+                        .prepare_admission_timeline_publication(
+                            Arc::clone(client),
+                            &candidate,
+                            indexes,
+                        )
                         .await?;
                     selections.push(publication.op());
                     Some(publication)
@@ -3416,7 +3420,7 @@ impl Coordinator {
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
-        self.adopt_index_timeline_holds(index_timeline_holds);
+        self.adopt_admission_timeline_holds(index_timeline_holds);
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(

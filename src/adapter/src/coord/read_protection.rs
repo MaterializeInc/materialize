@@ -130,7 +130,7 @@ fn limit_conflict_delay(delay: Duration, age: Duration) -> Duration {
 /// A pending publication that protects a serving timeline window at admission.
 /// Finish only after a definitive transaction outcome. Cancellation must leave
 /// the publication barrier in place, just like any unresolved catalog write.
-pub(super) struct IndexTimelinePublication {
+pub(super) struct AdmissionTimelinePublication {
     client: Arc<QueryClient>,
     bundle: CollectionIdBundle,
     requested: BTreeMap<GlobalId, Timestamp>,
@@ -138,7 +138,7 @@ pub(super) struct IndexTimelinePublication {
     requirements: BTreeMap<GlobalId, Timestamp>,
 }
 
-impl IndexTimelinePublication {
+impl AdmissionTimelinePublication {
     pub(super) fn op(&self) -> Op {
         Op::PublishClientReadRequirements {
             incarnation: self.client.protection.incarnation(),
@@ -287,22 +287,29 @@ impl Coordinator {
         }
     }
 
-    /// Prepares client protection for indexes in a candidate or committed catalog.
+    /// Prepares client protection for index and MV outputs in a candidate or committed catalog.
     /// The catalog still owns admission and bound validation. These requirements
     /// preserve the serving adapter's oracle window, independently of installation.
-    pub(super) async fn prepare_index_timeline_publication(
+    pub(super) async fn prepare_admission_timeline_publication(
         &mut self,
         client: Arc<QueryClient>,
         candidate: &CatalogState,
-        indexes: BTreeSet<GlobalId>,
-    ) -> Result<IndexTimelinePublication, AdapterError> {
+        collections: BTreeSet<GlobalId>,
+    ) -> Result<AdmissionTimelinePublication, AdapterError> {
         let mut by_timeline = BTreeMap::new();
-        for id in indexes {
+        for id in collections {
             let Some(entry) = candidate.try_get_entry_by_global_id(&id) else {
                 continue;
             };
-            let CatalogItem::Index(index) = entry.item() else {
-                continue;
+            let (cluster, inputs) = match entry.item() {
+                CatalogItem::Index(index) => (
+                    Some(index.cluster_id),
+                    candidate.logical_collection_inputs([index.on]),
+                ),
+                // The maintained requirement protects MV inputs. This grant
+                // protects the persisted output itself.
+                CatalogItem::MaterializedView(_) => (None, BTreeSet::new()),
+                _ => continue,
             };
             let Some(floor) = candidate
                 .collection_compaction_bounds()
@@ -312,7 +319,6 @@ impl Coordinator {
             else {
                 continue;
             };
-            let inputs = candidate.logical_collection_inputs([index.on]);
             if inputs.iter().any(|id| {
                 matches!(
                     candidate.get_entry_by_global_id(id).item(),
@@ -323,34 +329,36 @@ impl Coordinator {
             }
             let context = Catalog::validate_timeline_context_in(candidate, [id])?;
             if let TimelineContext::TimelineDependent(timeline) = context {
-                by_timeline.entry(timeline).or_insert_with(Vec::new).push((
-                    id,
-                    index.cluster_id,
-                    floor,
-                    inputs,
-                ));
+                by_timeline
+                    .entry(timeline)
+                    .or_insert_with(Vec::new)
+                    .push((id, cluster, floor, inputs));
             }
         }
         let mut bundle = CollectionIdBundle::default();
         let mut requested = BTreeMap::new();
         let mut inputs = BTreeMap::new();
-        for (timeline, indexes) in by_timeline {
+        for (timeline, collections) in by_timeline {
             let read_ts = self
                 .ensure_timeline_state(&timeline)
                 .await
                 .oracle
                 .read_ts()
                 .await;
-            for (id, cluster, floor, leaves) in indexes {
-                bundle.compute_ids.entry(cluster).or_default().insert(id);
+            for (id, cluster, floor, leaves) in collections {
+                if let Some(cluster) = cluster {
+                    bundle.compute_ids.entry(cluster).or_default().insert(id);
+                    inputs.insert(id, leaves);
+                } else {
+                    bundle.storage_ids.insert(id);
+                }
                 requested.insert(id, floor.max(read_ts));
-                inputs.insert(id, leaves);
             }
         }
         let requested = candidate
             .expand_client_read_requirements(client.protection.incarnation(), requested)?;
         let requirements = client.protection.prepare_publication(requested.clone());
-        Ok(IndexTimelinePublication {
+        Ok(AdmissionTimelinePublication {
             client,
             bundle,
             requested,
@@ -361,7 +369,7 @@ impl Coordinator {
 
     /// Transfers admission tokens into windows established by committed catalog
     /// implications. Failed asynchronous acquisition must not discard birth grants.
-    pub(super) fn adopt_index_timeline_holds(&mut self, holds: ReadHolds) {
+    pub(super) fn adopt_admission_timeline_holds(&mut self, holds: ReadHolds) {
         let protected = holds.id_bundle();
         for state in self.global_timelines.values_mut() {
             let pending = state.pending_read_holds.intersection(&protected);

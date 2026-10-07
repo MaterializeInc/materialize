@@ -435,11 +435,13 @@ transaction timestamp, without requiring an installed trace. Neither a bare
 catalog entry nor an assumed `MIN` establishes a valid frontier.
 
 The creating adapter commits its timeline requirement in the same transaction as
-index admission and adopts the grant into local tokens before another publication.
-Timeline maintenance does not wait for installation. Bootstrap acquires these
-windows for existing indexes before reconstruction, retaining them through the
+index or MV output admission and adopts the grant into local tokens before another
+publication. Timeline maintenance does not wait for installation. Bootstrap acquires
+these windows for existing indexes before reconstruction, retaining them through the
 ordinary policy handoff. This prevents a scheduled MV's future upper from advancing
-an index past the serving oracle window while that client remains protected.
+an output or index past the serving oracle window while that client remains
+protected. Protecting an MV's inputs alone does not protect its output from this
+advancement.
 
 SELECT and nonexecuting EXPLAIN share read-hold acquisition and preserve their
 transaction effects. EXPLAIN does not wait for hypothetical execution, including

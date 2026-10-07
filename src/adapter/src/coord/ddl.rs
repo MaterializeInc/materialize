@@ -219,7 +219,7 @@ impl Coordinator {
         // then failed to apply commands/updates to the controller. Easiest
         // thing to do is panic and let restart/bootstrap handle it.
         apply_implications_res.expect("cannot fail to apply catalog update implications");
-        self.adopt_index_timeline_holds(admission_holds);
+        self.adopt_admission_timeline_holds(admission_holds);
 
         // NOTE: `check_consistency` only runs with soft assertions enabled, so
         // this phase reads about zero in production. We time it because a local
@@ -486,7 +486,7 @@ impl Coordinator {
         // then failed to apply implications. Easiest thing to do is panic and
         // let restart/bootstrap handle it.
         combined_apply_res.expect("cannot fail to apply catalog implications");
-        self.adopt_index_timeline_holds(admission_holds);
+        self.adopt_admission_timeline_holds(admission_holds);
 
         // See the note in `catalog_transact_with_side_effects` on why this is
         // timed outside the macro and reads about zero in production.
@@ -1511,7 +1511,7 @@ impl Coordinator {
         if self.controller.replica_owned_compute()
             && let Some(client) = self.query_client.clone()
         {
-            let indexes: BTreeSet<_> =
+            let collections: BTreeSet<_> =
                 ops.iter()
                     .filter_map(|op| match op {
                         Op::CreateItem {
@@ -1522,6 +1522,10 @@ impl Coordinator {
                             to_item: CatalogItem::Index(index),
                             ..
                         } => Some(index.global_id()),
+                        Op::CreateItem {
+                            item: CatalogItem::MaterializedView(mv),
+                            ..
+                        } => Some(mv.global_id_writes()),
                         Op::SetWrittenPlan { id, .. }
                             if self.catalog().try_get_entry_by_global_id(id).is_some_and(
                                 |entry| matches!(entry.item(), CatalogItem::Index(_)),
@@ -1539,7 +1543,7 @@ impl Coordinator {
                             .contains_key(id)
                     })
                     .collect();
-            if !indexes.is_empty() {
+            if !collections.is_empty() {
                 let conn =
                     conn_id.map(|id| self.active_conns.get(id).expect("connection must exist"));
                 let (candidate, _) = self
@@ -1554,9 +1558,9 @@ impl Coordinator {
                     .await?;
                 // Common admission computes the floor. Protect the creating
                 // client's timeline in that same commit, before any publisher
-                // can advance a newly admitted index toward a future MV upper.
+                // can advance a new MV output or index toward a future refresh.
                 let publication = self
-                    .prepare_index_timeline_publication(client, &candidate, indexes)
+                    .prepare_admission_timeline_publication(client, &candidate, collections)
                     .await?;
                 ops.push(publication.op());
                 timeline_publication = Some(publication);

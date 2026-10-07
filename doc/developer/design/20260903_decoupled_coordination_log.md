@@ -23,7 +23,10 @@ intervals. Measured write and subscribe handoffs overlap these intervals.
 Pause further staged-retry expansion. Ordinary CREATE MV now computes its birth
 in common catalog admission with definition, selected plan and logical/actual-input
 protection, without preliminary grants. Final commit retries retain the immutable
-selection and reconsider current compaction permission. Verify the integrated path.
+selection and reconsider current compaction permission. Cargo boundary coverage
+passes in CI138222, but both parallel workloads still lose client incarnations.
+The measured ordinary MV uses one successful content commit rather than two.
+Its three identified failures cover final admission, not its full SQL lifetime.
 REFRESH retains its existing admission and grants, protecting chosen timestamps
 through planning without changing warmup or retention. The common boundary is
 not a general admission solver for dependent batches of new MVs and indexes.
@@ -77,11 +80,20 @@ catalog commit, rebuilding creator protection per attempt. Verify its dispatcher
 yield independently of renewal success. Most measured bounded renewal failures
 reject a projection refreshed before backoff rather than at the next attempt.
 Serving protection attempts now catch up at their start, preserving terminal
-writer-fence handling. Verify renewal progress independently of fewer CREATE MV
-publications. Private prewarming's separate catalog and inline bootstrap are unchanged.
+writer-fence handling. CI138222 exposed a non-graceful deployment-fence exit at
+that refresh. The existing termination policy fixes it, verified by both native
+promotion jobs in CI138229. Verify renewal progress independently of fewer CREATE
+MV publications. Private prewarming's separate catalog and inline bootstrap are
+unchanged.
 The frontier INSERT's year-3000 read wait is separate.
 The source-table EXPLAIN timeout remains unlocalized between certification and
 grant acquisition. Keep its protection and deadline unchanged.
+CI138222 SLT1 stalls at the scheduled-MV read in `materialized_views.slt:1310`.
+Static review found that an MV output can compact toward its future refresh upper
+before asynchronous timeline acquisition. New MV outputs now use the existing
+atomic creator-protection path alongside indexes, without an extra content commit.
+Verify the extended creation boundary test and unchanged SLT through CI. This
+closes the identified admission gap, not the unproven attribution of that stall.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
 not per candidate. IDs, validation and audit effects remain candidate-owned.
 This removes repeated hashing, but aggregate candidate timings do not isolate
