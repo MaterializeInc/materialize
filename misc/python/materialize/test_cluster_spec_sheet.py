@@ -68,7 +68,8 @@ def test_connection_routing_and_escaping():
         assert "sslmode='require'" in dsn
         assert "statement_logging_sample_rate='0'" in dsn
         assert "password='quote\\'and\\\\slash'" in dsn
-    assert config["expected_rows"] == 10
+    assert config["query"] == "SELECT * FROM qps_gen_view WHERE x = 5"
+    assert config["expected_rows"] == 1
     assert config["require_statement_logging_disabled"] is True
 
 
