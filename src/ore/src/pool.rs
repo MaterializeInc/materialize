@@ -555,7 +555,8 @@ struct Spill {
 pub const SPILL_IN_FLIGHT_MAX: usize = 64;
 
 /// The most extent bytes one spill-thread pass demotes to the file store
-/// before the thread returns to its eviction queue.
+/// while the eviction queue is empty. With queued evictions a pass demotes
+/// one extent, so a spill thread alternates one eviction with one demotion.
 ///
 /// Demotions are device writes. On a device slower than the rate at which
 /// evictions fill the compressed tier, an unbounded pass never gets the tier
@@ -1462,15 +1463,23 @@ impl PoolInner {
         // page release. The youngest band is reached only when the deeper
         // bands cannot satisfy the budget, keeping young data's
         // die-before-write chance longest.
+        //
+        // The pass evicts at most the overage it saw on entry. Inserts that
+        // land during the pass are left to the pass their own enforcement
+        // request reruns (see `enforce_pending`), so one call does not chase
+        // every other thread's inserts.
+        let mut quota = self
+            .evictable_bytes()
+            .saturating_sub(self.budget_bytes.load(Ordering::Relaxed));
         for band in (0..DEPTH_BANDS).rev() {
-            if self.evictable_bytes() <= self.budget_bytes.load(Ordering::Relaxed) {
+            if quota == 0 || self.evictable_bytes() <= self.budget_bytes.load(Ordering::Relaxed) {
                 return;
             }
-            self.enforce_budget_band(band);
+            self.enforce_budget_band(band, &mut quota);
         }
     }
 
-    fn enforce_budget_band(&self, band: usize) {
+    fn enforce_budget_band(&self, band: usize, quota: &mut u64) {
         // The queue holds resident chunks only (entries for evicted chunks
         // are dropped on visit and never re-added), so a full pass is
         // proportional to the resident set. Visit each queued chunk at most
@@ -1479,7 +1488,10 @@ impl PoolInner {
         // guaranteed to evict every chunk it saw. The bound keeps contended
         // and in-flight entries from spinning this loop forever.
         let mut remaining = self.queue(band).len().saturating_mul(2);
-        while remaining > 0 && self.evictable_bytes() > self.budget_bytes.load(Ordering::Relaxed) {
+        while remaining > 0
+            && *quota > 0
+            && self.evictable_bytes() > self.budget_bytes.load(Ordering::Relaxed)
+        {
             remaining -= 1;
             let popped = self.queue(band).pop_front();
             let Some(weak) = popped else {
@@ -1510,11 +1522,13 @@ impl PoolInner {
                     state.touched = false;
                     true
                 } else if self.spill_handoff(&meta, &mut state) {
+                    *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
                     // Stays queued while in flight; once the spill commits to
                     // `Evicted`, the next visit drops the entry.
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
+                    *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
                     inline = true;
                     state.residency != Residency::Evicted
                 }
@@ -2328,7 +2342,7 @@ impl PoolInner {
     /// moves to the back of the queue, and a store that can place no class
     /// or has writes disabled ends the pass. An inline file-mode pass with
     /// spill threads present stops at the [`backstop_threshold`], and a
-    /// background file-mode pass stops after [`BACKGROUND_DEMOTION_BYTES`].
+    /// background file-mode pass stops per [`BACKGROUND_DEMOTION_BYTES`].
     fn enforce_compressed_cap(&self, pass: Pass) {
         let cap = self.compressed_cap();
         let over = match (&self.store, pass) {
@@ -2357,9 +2371,14 @@ impl PoolInner {
         // probes the store at most once per class.
         let mut refused_classes = 0u64;
         let mut remaining = self.extent_queue().len();
+        let demotion_limit = match pass {
+            Pass::Background if !self.spill_queue().is_empty() => 1,
+            Pass::Background => BACKGROUND_DEMOTION_BYTES,
+            Pass::Inline => u64::MAX,
+        };
         let mut demoted_bytes = 0u64;
         while remaining > 0 && above(self) {
-            if pass == Pass::Background && demoted_bytes >= BACKGROUND_DEMOTION_BYTES {
+            if demoted_bytes >= demotion_limit {
                 break;
             }
             remaining -= 1;
