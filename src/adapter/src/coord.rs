@@ -4862,9 +4862,15 @@ impl Coordinator {
                 .catalog()
                 .system_config()
                 .catalog_read_protection_publish_interval();
-            let publication_timer = tokio::time::sleep(publication_delay);
+            let publication_timer = tokio::time::sleep(mz_catalog::retry::sample_duration(
+                Duration::ZERO,
+                publication_delay,
+            ));
             tokio::pin!(publication_timer);
-            let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
+            let subscription_timer = tokio::time::sleep(mz_catalog::retry::sample_duration(
+                Duration::ZERO,
+                CATALOG_SUBSCRIPTION_INTERVAL,
+            ));
             tokio::pin!(subscription_timer);
             let client_heartbeat_delay =
                 crate::query_client::read_protection::client_protection_heartbeat_interval();
@@ -4899,7 +4905,10 @@ impl Coordinator {
                     .catalog_read_protection_publish_interval();
                 if delay != publication_delay {
                     publication_delay = delay;
-                    publication_timer.set(tokio::time::sleep(delay));
+                    publication_timer.set(tokio::time::sleep(mz_catalog::retry::sample_duration(
+                        Duration::ZERO,
+                        delay,
+                    )));
                 }
                 // Before adding a branch to this select loop, please ensure that the branch is
                 // cancellation safe and add a comment explaining why. You can refer here for more
@@ -4954,7 +4963,9 @@ impl Coordinator {
                         ).await {
                             warn!(%error, "unable to follow catalog read protection");
                         }
-                        subscription_timer.set(tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL));
+                        subscription_timer.set(tokio::time::sleep(mz_catalog::retry::periodic_delay(
+                            CATALOG_SUBSCRIPTION_INTERVAL,
+                        )));
                     }
 
                     // Polling a pinned Sleep is cancellation-safe. Bootstrap restores execution holds
@@ -4974,7 +4985,9 @@ impl Coordinator {
                         ).await {
                             warn!(%error, "unable to publish catalog read protection");
                         }
-                        publication_timer.set(tokio::time::sleep(publication_delay));
+                        publication_timer.set(tokio::time::sleep(mz_catalog::retry::periodic_delay(
+                            publication_delay,
+                        )));
                     }
                     // Polling the pinned Sleep is cancellation-safe. Snapshot
                     // observations, not permissions or controller installation.

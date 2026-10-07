@@ -19,6 +19,13 @@ pub fn sample_duration(minimum: Duration, maximum: Duration) -> Duration {
     sample_with(&mut rand::rng(), minimum, maximum)
 }
 
+/// Staggers periodic maintenance uniformly within 50% of its configured mean.
+/// Renewal and safety deadlines must be scheduled independently.
+pub fn periodic_delay(interval: Duration) -> Duration {
+    let half = interval / 2;
+    sample_duration(interval - half, interval + half)
+}
+
 fn sample_with(rng: &mut impl rand::Rng, minimum: Duration, maximum: Duration) -> Duration {
     rng.random_range(minimum..=maximum)
 }
@@ -46,5 +53,17 @@ mod tests {
             sample_duration(Duration::ZERO, Duration::ZERO),
             Duration::ZERO
         );
+    }
+
+    #[mz_ore::test]
+    fn maintenance_delay_bounds() {
+        let interval = Duration::from_secs(1);
+        for _ in 0..100 {
+            assert!(
+                (Duration::from_millis(500)..=Duration::from_millis(1500))
+                    .contains(&periodic_delay(interval))
+            );
+        }
+        assert_eq!(periodic_delay(Duration::ZERO), Duration::ZERO);
     }
 }

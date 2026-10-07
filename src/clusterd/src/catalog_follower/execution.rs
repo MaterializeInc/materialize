@@ -72,9 +72,7 @@ impl PublicationClock {
     }
 
     pub fn completed(&mut self) {
-        let half = self.interval / 2;
-        self.due = Instant::now()
-            + mz_catalog::retry::sample_duration(self.interval - half, self.interval + half);
+        self.due = Instant::now() + mz_catalog::retry::periodic_delay(self.interval);
     }
 }
 
