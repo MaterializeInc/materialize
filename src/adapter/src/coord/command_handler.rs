@@ -44,7 +44,8 @@ use mz_sql::plan::{
     StatementClassification, TransactionType,
 };
 use mz_sql::pure::{
-    materialized_view_option_contains_temporal, purify_create_materialized_view_options,
+    materialized_view_option_contains_temporal, purify_create_materialized_view_columns,
+    purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
 use mz_sql::session::user::User;
@@ -1691,6 +1692,11 @@ impl Coordinator {
 
                 let catalog = self.catalog().for_session(ctx.session());
 
+                if let Err(e) =
+                    purify_create_materialized_view_columns(&catalog, &mut cmvs, &mut resolved_ids)
+                {
+                    return ctx.retire(Err(e.into()));
+                }
                 purify_create_materialized_view_options(
                     catalog,
                     mz_now,
@@ -1738,6 +1744,11 @@ impl Coordinator {
 
                 let catalog = self.catalog().for_session(ctx.session());
 
+                if let Err(e) =
+                    purify_create_materialized_view_columns(&catalog, &mut cmvs, &mut resolved_ids)
+                {
+                    return ctx.retire(Err(e.into()));
+                }
                 purify_create_materialized_view_options(
                     catalog,
                     mz_now,
