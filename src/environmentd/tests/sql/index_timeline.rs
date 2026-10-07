@@ -54,7 +54,6 @@ async fn index_creation_protects_timeline_before_installation() {
                 .find(|item| item.name == name)
                 .unwrap()
                 .global_id
-                .clone()
         };
         let index = item_id("timeline_idx");
         let input = item_id("timeline_input");
