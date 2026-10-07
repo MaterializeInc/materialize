@@ -626,7 +626,7 @@ impl Coordinator {
         let bounds = state
             .collection_compaction_bounds()
             .iter()
-            .filter(|(id, _)| !storage.contains_key(id))
+            .filter(|(id, _)| !storage.contains_key(*id))
             .map(|(&id, bound)| (id, bound.clone()))
             .collect::<Vec<_>>();
         for (id, bound) in bounds {
