@@ -22,7 +22,7 @@ use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
-use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, Id, MfpPlan};
@@ -935,7 +935,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// that we can seek to the supplied row.
     pub fn as_collection_core(
         &self,
-        mfp_plan: MfpPlan<LirScalarExpr>,
+        mut mfp_plan: MfpPlan<LirScalarExpr>,
         key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
     ) -> (
@@ -969,18 +969,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             };
         }
 
-        // Apply demand-based column pruning. We round-trip through MIR
-        // so temporal bounds are folded back as mz_now() predicates —
-        // this way demand() sees all column references (including those
-        // in temporal bounds), and permute_fn applies uniformly.
-        let (mfp_plan, max_demand) = {
-            let mut mir_mfp = mfp_plan_lir_to_mir(mfp_plan).into_map_filter_project();
-            let max_demand = mir_mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
-            mir_mfp.permute_fn(|c| c, max_demand);
-            mir_mfp.optimize();
-            let plan = mfp_mir_to_lir_plan(mir_mfp);
-            (plan, max_demand)
-        };
+        let max_demand = mfp_plan.demand().last().map(|x| *x + 1).unwrap_or(0);
+        mfp_plan.permute_fn(|c| c, max_demand);
 
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
