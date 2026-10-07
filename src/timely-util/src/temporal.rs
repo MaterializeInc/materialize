@@ -69,9 +69,13 @@ impl<T: PartialOrd> BucketRange<T> {
 /// chain property.
 ///
 /// A bucket chain is well-formed if all buckets are within two bits of each other, with an imaginary
-/// bucket of -2 bits at the start. A chain does not need to be well-formed at all times, and supports
-/// peeling and finding even if not well-formed. However, `peel` might need to split more buckets to
-/// extract the desired data.
+/// bucket of `min_bits - 2` bits at the start. A chain does not need to be well-formed at all times,
+/// and supports peeling and finding even if not well-formed. However, `peel` might need to split more
+/// buckets to extract the desired data.
+///
+/// No bucket is narrower than `2^min_bits`. Coarser buckets save the splits that would separate
+/// times a consumer does not need separated, for example times closer together than the interval
+/// at which the frontier advances.
 ///
 /// The `restore` method can be used to restore the chain property. It needs to be called repeatedly
 /// with a positive amount of fuel while the remaining fuel after the call is non-positive. This
@@ -80,17 +84,41 @@ impl<T: PartialOrd> BucketRange<T> {
 #[derive(Debug)]
 pub struct BucketChain<S: Bucket> {
     content: BTreeMap<S::Timestamp, (u32, S)>,
+    min_bits: u32,
 }
 
 impl<S: Bucket> BucketChain<S> {
     /// Construct a new bucket chain. Spans the whole time domain.
     #[inline]
     pub fn new(storage: S) -> Self {
+        Self::with_min_bits(storage, 0)
+    }
+
+    /// Construct a new bucket chain whose buckets are at least `2^min_bits` wide. Spans the whole
+    /// time domain.
+    ///
+    /// Panics if `min_bits` exceeds the number of bits in the timestamp.
+    #[inline]
+    pub fn with_min_bits(storage: S, min_bits: u32) -> Self {
         let bits = S::Timestamp::DOMAIN.try_into().expect("Must fit");
+        assert!(
+            min_bits <= bits,
+            "min_bits {min_bits} exceeds the timestamp's {bits} bits"
+        );
         Self {
             // The initial bucket starts at the minimum timestamp and spans the whole domain.
             content: BTreeMap::from([(Timestamp::minimum(), (bits, storage))]),
+            min_bits,
         }
+    }
+
+    /// The lowest time the chain holds a bucket for, or `None` if the chain is empty.
+    ///
+    /// Peeling a minimum-width bucket whole can leave this above the peel frontier. Times below
+    /// it have no bucket, and the caller must not store them.
+    #[inline]
+    pub fn lower(&self) -> Option<&S::Timestamp> {
+        self.content.keys().next()
     }
 
     /// Find the time range for the bucket that contains data for time `timestamp`.
@@ -133,6 +161,9 @@ impl<S: Bucket> BucketChain<S> {
 
     /// Peel off all data up to `frontier`, where the returned buckets contain all
     /// data strictly less than the frontier.
+    ///
+    /// A minimum-width bucket that straddles `frontier` is peeled whole, so the returned buckets
+    /// can also contain data at or beyond `frontier`. See [`Self::lower`].
     #[inline]
     pub fn peel(&mut self, frontier: AntichainRef<S::Timestamp>) -> Vec<S> {
         let mut peeled = vec![];
@@ -143,10 +174,10 @@ impl<S: Bucket> BucketChain<S> {
             let (offset, (bits, storage)) = self.content.pop_first().expect("must exist");
             let upper = offset.advance_by_power_of_two(bits);
 
-            // Split the bucket if it spans the frontier.
-            if upper.is_none() && !frontier.is_empty()
-                || upper.is_some() && frontier.less_than(&upper.unwrap())
-            {
+            // Split the bucket if it spans the frontier and is wider than the minimum.
+            let spans_frontier = upper.is_none() && !frontier.is_empty()
+                || upper.is_some() && frontier.less_than(&upper.unwrap());
+            if spans_frontier && bits > self.min_bits {
                 // We need to split the bucket, no matter how much fuel we have.
                 self.split_and_insert(&mut 0, bits, offset, storage);
             } else {
@@ -160,11 +191,12 @@ impl<S: Bucket> BucketChain<S> {
     /// Restore the chain property by splitting buckets as necessary.
     ///
     /// The chain is well-formed if all buckets are within two bits of each other, with an imaginary
-    /// bucket of -2 bits just before the smallest bucket.
+    /// bucket of `min_bits - 2` bits just before the smallest bucket.
     #[inline]
     pub fn restore(&mut self, fuel: &mut i64) {
+        let initial_bits = isize::cast_from(self.min_bits) - 2;
         // Fast path: the chain is already well-formed. Avoids rebuilding the map below.
-        let mut last_bits = -2_isize;
+        let mut last_bits = initial_bits;
         let well_formed = self.content.values().all(|(bits, _)| {
             let ok = isize::cast_from(*bits) <= last_bits + 2;
             last_bits = isize::cast_from(*bits);
@@ -177,7 +209,7 @@ impl<S: Bucket> BucketChain<S> {
         // We could write this in terms of a cursor API, but it's not stable yet. Instead, we
         // allocate a new map and move elements over.
         let mut new = BTreeMap::default();
-        let mut last_bits = -2;
+        let mut last_bits = initial_bits;
         while *fuel > 0
             && let Some((time, (bits, storage))) = self.content.pop_first()
         {
@@ -356,6 +388,93 @@ mod tests {
                     .eq(offset..offset + step)
             );
             offset += step;
+            let mut fuel = 1000;
+            chain.restore(&mut fuel);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_min_bits_peels_straddling_bucket_whole() {
+        let mut chain = BucketChain::with_min_bits(
+            TestStorage::<u8> {
+                inner: (0..=255).collect(),
+            },
+            4,
+        );
+        let mut fuel = -1;
+        while fuel <= 0 {
+            fuel = 100;
+            chain.restore(&mut fuel);
+        }
+        assert!(
+            chain.content.values().all(|(bits, _)| *bits >= 4),
+            "restore split below the minimum width: {:?}",
+            chain.content
+        );
+
+        // The first bucket is `[0, 16)` and straddles the frontier, so it is peeled whole.
+        let peeled = chain.peel(AntichainRef::new(&[1]));
+        assert!(collect_and_sort(peeled).into_iter().eq(0..16));
+        assert_eq!(chain.lower(), Some(&16));
+        assert!(chain.range_of(&15).is_none());
+
+        // A frontier inside a wider bucket splits it down to the minimum width, then peels the
+        // straddling minimum-width bucket whole.
+        let peeled = chain.peel(AntichainRef::new(&[70]));
+        assert!(collect_and_sort(peeled).into_iter().eq(16..80));
+        assert_eq!(chain.lower(), Some(&80));
+        assert!(
+            chain.content.values().all(|(bits, _)| *bits >= 4),
+            "peel split below the minimum width: {:?}",
+            chain.content
+        );
+
+        let peeled = chain.peel(AntichainRef::new(&[]));
+        assert!(collect_and_sort(peeled).into_iter().eq(80..=255));
+        assert!(chain.is_empty());
+    }
+
+    /// A chain with a minimum width yields the same data as the frontier advances, up to one
+    /// minimum-width bucket early.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn test_min_bits_reveals_at_most_one_bucket_early() {
+        let min_bits = 10;
+        let limit = 1_000_000;
+        let now = 1739276664_u64;
+
+        let mut chain =
+            BucketChain::with_min_bits(TestStorage::<u64> { inner: Vec::new() }, min_bits);
+        let peeled = chain.peel(AntichainRef::new(&[now]));
+        assert!(collect_and_sort(peeled).is_empty());
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+
+        // Peeling at `now` revealed the minimum-width bucket containing `now`, so only later
+        // times have a bucket.
+        let start = *chain.lower().expect("must exist");
+        assert!(start > now && start <= now + (1 << min_bits));
+        for i in start..now + limit {
+            chain.find_mut(&i).expect("must exist").inner.push(i);
+        }
+
+        let mut revealed = start;
+        let mut frontier = now;
+        while revealed < now + limit {
+            frontier += 1000;
+            let peeled = collect_and_sort(chain.peel(AntichainRef::new(&[frontier])));
+            for time in &peeled {
+                assert_eq!(*time, revealed, "revealed out of order or with gaps");
+                revealed += 1;
+            }
+            assert!(
+                revealed >= frontier.min(now + limit),
+                "data below the frontier withheld"
+            );
+            assert!(
+                revealed <= frontier + (1 << min_bits),
+                "revealed more than one minimum-width bucket early"
+            );
             let mut fuel = 1000;
             chain.restore(&mut fuel);
         }

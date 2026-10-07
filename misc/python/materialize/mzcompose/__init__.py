@@ -181,6 +181,9 @@ def get_minimal_system_parameters(
         # intervals, so the ceiling stays ahead of the data.
         config["storage_persist_sink_description_lookahead"] = "5s"
 
+    if version >= MzVersion.parse_mz("v26.46.0-dev"):
+        config["compute_temporal_bucketing_min_width"] = "1s"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 

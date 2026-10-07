@@ -16,6 +16,8 @@ use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
+use mz_compute_types::dyncfgs::{TEMPORAL_BUCKETING_MIN_WIDTH, TEMPORAL_BUCKETING_SUMMARY};
+use mz_dyncfg::ConfigSet;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -33,6 +35,31 @@ use timely::progress::{Antichain, PathSummary, Timestamp};
 
 use crate::typedefs::MzData;
 
+/// Temporal bucketing parameters, read from a dataflow's configuration.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TemporalBucketingParams {
+    /// Data within this distance of the input frontier passes through without being stored.
+    pub summary: mz_repr::Timestamp,
+    /// Buckets are at least `2^min_bits` wide. See [`BucketChain::with_min_bits`].
+    pub min_bits: u32,
+}
+
+impl TemporalBucketingParams {
+    /// Reads the parameters from `config`.
+    pub fn from_config(config: &ConfigSet) -> Self {
+        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+            .get(config)
+            .try_into()
+            .expect("must fit");
+        let min_width: mz_repr::Timestamp = TEMPORAL_BUCKETING_MIN_WIDTH
+            .get(config)
+            .try_into()
+            .expect("must fit");
+        let min_bits = u64::from(min_width).checked_ilog2().unwrap_or(0);
+        Self { summary, min_bits }
+    }
+}
+
 /// Sort outstanding updates into a [`BucketChain`], and reveal data not in advance of the input
 /// frontier. Retains a capability at the last input frontier to retain the right to produce data
 /// at times between the last input frontier and the current input frontier.
@@ -41,9 +68,12 @@ pub trait TemporalBucketing<'scope, T: Timestamp>: Sized {
     /// not in advance of the frontier. Data that is within `threshold` distance of the input
     /// frontier or the `as_of` is passed through without being stored in the chain.
     ///
+    /// Buckets are at least `2^min_bits` wide, so data can be revealed up to one such width
+    /// ahead of the frontier.
+    ///
     /// The output container matches the input's, so a caller keeps whichever
     /// representation it had.
-    fn bucket(self, as_of: Antichain<T>, threshold: T::Summary) -> Self;
+    fn bucket(self, as_of: Antichain<T>, threshold: T::Summary, min_bits: u32) -> Self;
 }
 
 /// Implementation for streams in scopes where timestamps define a total order.
@@ -57,7 +87,7 @@ where
     for<'a> <(D, T, mz_repr::Diff) as Columnar>::Container:
         Push<columnar::Ref<'a, (D, T, mz_repr::Diff)>>,
 {
-    fn bucket(self, as_of: Antichain<T>, threshold: T::Summary) -> Self {
+    fn bucket(self, as_of: Antichain<T>, threshold: T::Summary, min_bits: u32) -> Self {
         let scope = self.scope();
         let logger = scope
             .worker()
@@ -70,7 +100,10 @@ where
             columnar_exchange_data::<D, T, mz_repr::Diff>,
         );
         self.unary_frontier::<CB<D, T>, _, _, _>(pact, "Temporal delay", |cap, info| {
-            let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
+            let mut chain = BucketChain::with_min_bits(
+                MergeBatcherWrapper::new(logger, info.global_id),
+                min_bits,
+            );
             let activator = scope.activator_for(info.address);
 
             // Cap tracking the lower bound of potentially outstanding data.
@@ -98,6 +131,8 @@ where
                     }
                 }
 
+                let chain_lower = chain.lower().cloned();
+
                 input.for_each_time(|time, data| {
                     let mut session = output.session_with_builder(&time);
                     for data in data {
@@ -111,7 +146,7 @@ where
                         for index in 0..borrowed.len() {
                             let update = borrowed.get(index);
                             time_buf.copy_from(update.1);
-                            if upper.less_equal(&time_buf) {
+                            if retain(&upper, chain_lower.as_ref(), &time_buf) {
                                 permutation.push(index);
                             } else {
                                 session.give(update);
@@ -208,7 +243,7 @@ where
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
     for<'a> <(D, T, mz_repr::Diff) as Columnar>::Container: Push<&'a (D, T, mz_repr::Diff)>,
 {
-    fn bucket(self, as_of: Antichain<T>, threshold: T::Summary) -> Self {
+    fn bucket(self, as_of: Antichain<T>, threshold: T::Summary, min_bits: u32) -> Self {
         let scope = self.scope();
         let logger = scope
             .worker()
@@ -220,7 +255,10 @@ where
             pact,
             "Temporal delay",
             |cap, info| {
-                let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
+                let mut chain = BucketChain::with_min_bits(
+                    MergeBatcherWrapper::new(logger, info.global_id),
+                    min_bits,
+                );
                 let activator = scope.activator_for(info.address);
 
                 // Cap tracking the lower bound of potentially outstanding data.
@@ -243,12 +281,15 @@ where
                         }
                     }
 
+                    let chain_lower = chain.lower().cloned();
+
                     input.for_each_time(|time, data| {
                         let mut session = output.session_with_builder(&time);
                         for data in data {
                             // Skip data that is about to be revealed.
-                            let pass_through =
-                                data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
+                            let pass_through = data.extract_if(.., |(_, t, _)| {
+                                !retain(&upper, chain_lower.as_ref(), t)
+                            });
                             session.give_iterator(pass_through);
 
                             // Sort data by time, then drain it into a buffer that contains data
@@ -326,6 +367,15 @@ where
             },
         )
     }
+}
+
+/// Whether the chain must hold an update at `time`, rather than pass it through.
+///
+/// A time below `chain_lower` belonged to a minimum-width bucket that was revealed whole while
+/// straddling `upper`, so no bucket holds it any more. Passing it through reveals it early, as
+/// the rest of that bucket was, under the input's capability.
+fn retain<T: Timestamp>(upper: &Antichain<T>, chain_lower: Option<&T>, time: &T) -> bool {
+    upper.less_equal(time) && chain_lower.is_some_and(|lower| lower.less_equal(time))
 }
 
 /// A wrapper around [`AccountedChunkBatcher`] that implements the bucketing API.

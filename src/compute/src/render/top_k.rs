@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::extensions::temporal_bucket::TemporalBucketingParams;
 use columnar::{Columnar, Index};
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
@@ -24,7 +25,7 @@ use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_TEMPORAL_BUCKETING;
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
@@ -116,11 +117,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             ArrangementStrategy::TemporalBucketing
         ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
         {
-            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                .get(&self.config_set)
-                .try_into()
-                .expect("must fit");
-            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
+            T::maybe_apply_temporal_bucketing(
+                ok_input.inner,
+                self.as_of_frontier.clone(),
+                TemporalBucketingParams::from_config(&self.config_set),
+            )
         } else {
             ok_input
         };
