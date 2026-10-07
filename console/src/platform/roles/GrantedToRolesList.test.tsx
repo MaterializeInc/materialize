@@ -49,7 +49,7 @@ describe("GrantedToRolesList", () => {
       ),
     );
 
-    renderComponent(<GrantedToRolesList roleName="test_role" />);
+    await renderComponent(<GrantedToRolesList roleName="test_role" />);
 
     await waitFor(() => {
       expect(screen.getByTestId("loading-spinner")).toBeVisible();
@@ -73,7 +73,7 @@ describe("GrantedToRolesList", () => {
       }),
     );
 
-    renderComponent(<GrantedToRolesList roleName="test_role" />);
+    await renderComponent(<GrantedToRolesList roleName="test_role" />);
 
     await waitFor(() => {
       expect(
@@ -98,7 +98,7 @@ describe("GrantedToRolesList", () => {
       }),
     );
 
-    renderComponent(<GrantedToRolesList roleName="test_role" />);
+    await renderComponent(<GrantedToRolesList roleName="test_role" />);
 
     expect(
       await screen.findByText("No roles inherit from this role."),
@@ -136,7 +136,7 @@ describe("GrantedToRolesList", () => {
       }),
     );
 
-    renderComponent(<GrantedToRolesList roleName="test_role" />);
+    await renderComponent(<GrantedToRolesList roleName="test_role" />);
 
     expect(await screen.findByText("child_role_1")).toBeVisible();
     expect(await screen.findByText("child_role_2")).toBeVisible();

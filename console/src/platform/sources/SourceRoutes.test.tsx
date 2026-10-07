@@ -92,7 +92,7 @@ describe("SourceRoutes", () => {
   describe("SourcesList", () => {
     it("shows a spinner initially", async () => {
       server.use(emptySourceListHandler);
-      renderComponent(<SourceRoutes />, {
+      await renderComponent(<SourceRoutes />, {
         initializeState: ({ set }) =>
           setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
       });
@@ -116,7 +116,7 @@ describe("SourceRoutes", () => {
           },
         }),
       );
-      renderComponent(<SourceRoutes />, {
+      await renderComponent(<SourceRoutes />, {
         initializeState: ({ set }) =>
           setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
       });
@@ -127,7 +127,7 @@ describe("SourceRoutes", () => {
 
     it("shows the empty state when there are no results", async () => {
       server.use(emptySourceListHandler);
-      renderComponent(<SourceRoutes />, {
+      await renderComponent(<SourceRoutes />, {
         initializeState: ({ set }) =>
           setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
       });
@@ -146,7 +146,7 @@ describe("SourceRoutes", () => {
           }),
         }),
       );
-      renderComponent(<SourceRoutes />, {
+      await renderComponent(<SourceRoutes />, {
         initializeState: ({ set }) =>
           setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
       });

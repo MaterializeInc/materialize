@@ -125,7 +125,7 @@ const SwitchStackModalContent = () => {
         justifyContent="center"
         fontWeight={500}
         icon={
-          <>
+          <Box as="span" display="contents">
             {easterEggEnabled && (
               <Image
                 src={laserEyes}
@@ -134,7 +134,7 @@ const SwitchStackModalContent = () => {
               />
             )}
             <MaterializeLogo markOnly aria-label="Switch stack" />
-          </>
+          </Box>
         }
         onClick={onOpen}
         px={2}

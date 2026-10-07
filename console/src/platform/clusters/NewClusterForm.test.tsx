@@ -88,7 +88,7 @@ describe("NewClusterForm", () => {
     );
     server.use(validClustersResponse);
     const user = userEvent.setup();
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -140,7 +140,7 @@ describe("NewClusterForm", () => {
     );
 
     const user = userEvent.setup();
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -158,7 +158,7 @@ describe("NewClusterForm", () => {
 
   it("shows an error for missing cluster names", async () => {
     const user = userEvent.setup();
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -188,7 +188,7 @@ describe("NewClusterForm", () => {
 
     const user = userEvent.setup();
 
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,

@@ -264,7 +264,7 @@ describe("SourceDetailRoutes", () => {
     it("shows source information", async () => {
       const { path, source } = setupSourceOverviewPage();
 
-      renderSourceDetails([path]);
+      await renderSourceDetails([path]);
 
       const mainContent = await screen.findByTestId(
         "main-content",
@@ -301,7 +301,7 @@ describe("SourceDetailRoutes", () => {
         },
       });
 
-      renderSourceDetails([path]);
+      await renderSourceDetails([path]);
 
       const mainContent = await screen.findByTestId(
         "main-content",
@@ -346,7 +346,7 @@ describe("SourceDetailRoutes", () => {
 
       server.use(useSourcesErrorsHandler);
 
-      renderSourceDetails([path]);
+      await renderSourceDetails([path]);
       expect(
         await screen.findByText(SOURCES_FETCH_ERROR_MESSAGE),
       ).toBeVisible();
@@ -355,7 +355,7 @@ describe("SourceDetailRoutes", () => {
     it("renders an empty state when there are no source errors", async () => {
       const { path } = setupSourceErrorsPage();
 
-      renderSourceDetails([path]);
+      await renderSourceDetails([path]);
       expect(
         await screen.findByText("No errors during this time period."),
       ).toBeVisible();
@@ -384,7 +384,7 @@ describe("SourceDetailRoutes", () => {
 
       server.use(validUseSourcesErrorsHandler);
 
-      renderSourceDetails([path]);
+      await renderSourceDetails([path]);
       expect(await screen.findByText("error_1")).toBeVisible();
       expect(await screen.findByText("1")).toBeVisible();
       expect(
@@ -399,7 +399,7 @@ describe("SourceDetailRoutes", () => {
     it("sends an unknown tab back to the source overview", async () => {
       const { source } = setupSourceErrorsPage();
 
-      renderSourceDetails([
+      await renderSourceDetails([
         `/${source.databaseName}/schemas/${source.schemaName}/sources/${source.name}/${source.id}/zzz`,
       ]);
 

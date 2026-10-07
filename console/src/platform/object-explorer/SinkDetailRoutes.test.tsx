@@ -181,14 +181,14 @@ describe("SinkDetailRoutes", () => {
 
       server.use(useSinkErrorsHandler);
 
-      renderSinkDetails([initialRoute]);
+      await renderSinkDetails([initialRoute]);
       expect(await screen.findByText(SINKS_FETCH_ERROR_MESSAGE)).toBeVisible();
     });
 
     it("renders an empty state when there are no sink errors", async () => {
       const { initialRoute } = setupSinkDetailPage();
 
-      renderSinkDetails([initialRoute]);
+      await renderSinkDetails([initialRoute]);
 
       expect(
         await screen.findByText("No errors during this time period."),
@@ -218,7 +218,7 @@ describe("SinkDetailRoutes", () => {
 
       server.use(validUseSinkErrorsHandler);
 
-      renderSinkDetails([initialRoute]);
+      await renderSinkDetails([initialRoute]);
 
       expect(await screen.findByText("error_1")).toBeVisible();
       expect(await screen.findByText("1")).toBeVisible();
@@ -234,7 +234,7 @@ describe("SinkDetailRoutes", () => {
     it("shows sink details", async () => {
       const { sink } = setupSinkDetailPage();
 
-      renderSinkDetails([
+      await renderSinkDetails([
         `/materialize/schemas/public/sinks/kafka_sink/${sink.id}`,
       ]);
 
@@ -248,7 +248,7 @@ describe("SinkDetailRoutes", () => {
     it("sends an unknown tab back to the sink overview", async () => {
       const { sink } = setupSinkDetailPage();
 
-      renderSinkDetails([
+      await renderSinkDetails([
         `/materialize/schemas/public/sinks/kafka_sink/${sink.id}/zzz`,
       ]);
 

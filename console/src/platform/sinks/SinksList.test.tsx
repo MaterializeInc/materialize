@@ -87,7 +87,7 @@ describe("SinksList", () => {
         ),
       );
 
-      renderComponent(<SinksList />);
+      await renderComponent(<SinksList />);
 
       expect(await screen.findByText("Sinks")).toBeVisible();
       await waitFor(() => {
@@ -108,7 +108,7 @@ describe("SinksList", () => {
           },
         }),
       );
-      renderComponent(<SinksList />);
+      await renderComponent(<SinksList />);
 
       expect(await screen.findByText("Sinks")).toBeVisible();
       // Use a waitFor to work around a sporadic flake with Suspense rendering
@@ -121,7 +121,7 @@ describe("SinksList", () => {
 
     it("shows the empty state when there are no results", async () => {
       server.use(emptySinksResponse);
-      renderComponent(<SinksList />);
+      await renderComponent(<SinksList />);
 
       expect(await screen.findByText("No available sinks")).toBeVisible();
     });
@@ -137,7 +137,7 @@ describe("SinksList", () => {
           }),
         }),
       );
-      renderComponent(<SinksList />);
+      await renderComponent(<SinksList />);
 
       expect(
         await screen.findByText(`${sink.databaseName}.${sink.schemaName}`),

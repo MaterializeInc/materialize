@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import React from "react";
 
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
@@ -163,7 +163,7 @@ const environmentV2635 = {
 describe("LargestMaintainedQueries", () => {
   it("shows an error state when the largest replica query fails", async () => {
     server.use(failedLargestReplicaHandler, successfulLargestQueriesHandler);
-    renderComponent(
+    await renderComponent(
       <LargestMaintainedQueries clusterId="u1" clusterName="quickstart" />,
     );
 
@@ -176,16 +176,16 @@ describe("LargestMaintainedQueries", () => {
 
   it("shows nothing when there are no replicas", async () => {
     server.use(emptyLargestReplicaHandler);
-    renderComponent(
+    await renderComponent(
       <LargestMaintainedQueries clusterId="u1" clusterName="quickstart" />,
     );
 
-    expect(document.body.textContent).toEqual("");
+    await waitFor(() => expect(document.body.textContent).toEqual(""));
   });
 
   it("shows an error state when the maintained query data fails to load", async () => {
     server.use(successfulLargestReplicaHandler, failedLargestQueriesHandler);
-    renderComponent(
+    await renderComponent(
       <LargestMaintainedQueries clusterId="u1" clusterName="quickstart" />,
     );
 
@@ -202,7 +202,7 @@ describe("LargestMaintainedQueries", () => {
       successfulLargestQueriesHandler,
       buildValidMaterializationLagHandler({ objectIds: ["u188", "u190"] }),
     );
-    renderComponent(
+    await renderComponent(
       <LargestMaintainedQueries clusterId="u1" clusterName="quickstart" />,
     );
     expect(await screen.findByText("materialize.public")).toBeVisible();
@@ -278,7 +278,7 @@ describe("LargestMaintainedQueries", () => {
       }),
       buildValidMaterializationLagHandler({ objectIds: ["u188", "u999"] }),
     );
-    renderComponent(
+    await renderComponent(
       <LargestMaintainedQueries clusterId="u1" clusterName="quickstart" />,
       {
         initializeState: ({ set: initializeSet }) =>

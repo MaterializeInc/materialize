@@ -57,7 +57,7 @@ describe("NewPostgresSourceForm", () => {
 
   it("validates Postgres successfully", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="postgres" />);
+    await renderComponent(<FormComponent databaseType="postgres" />);
     expect(await screen.findByText("General")).toBeVisible();
 
     const sourceNameInput = screen.getByLabelText(/Name/);
@@ -72,7 +72,7 @@ describe("NewPostgresSourceForm", () => {
 
   it("validates MySQL successfully", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="mysql" />);
+    await renderComponent(<FormComponent databaseType="mysql" />);
     expect(await screen.findByText("General")).toBeVisible();
 
     const sourceNameInput = screen.getByLabelText(/Name/);
@@ -87,7 +87,7 @@ describe("NewPostgresSourceForm", () => {
 
   it("presents a table name array for Postgres", async () => {
     const user = userEvent.setup();
-    renderComponent(<TableComponent databaseType="postgres" />);
+    await renderComponent(<TableComponent databaseType="postgres" />);
     expect(await screen.findByText("Add table")).toBeVisible();
 
     const schemaNameInput = screen.queryByPlaceholderText("schema name");
@@ -118,7 +118,7 @@ describe("NewPostgresSourceForm", () => {
 
   it("presents a table name array for MySQL", async () => {
     const user = userEvent.setup();
-    renderComponent(<TableComponent databaseType="mysql" />);
+    await renderComponent(<TableComponent databaseType="mysql" />);
     expect(await screen.findByText("Add table")).toBeVisible();
 
     const schemaNameInput = screen.queryByPlaceholderText("schema name");

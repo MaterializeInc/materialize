@@ -15,7 +15,7 @@ import React from "react";
  */
 const useDelayedLoading = (loading: boolean, delayMs = 500) => {
   const [showLoading, setShowLoading] = React.useState(false);
-  const timeoutRef = React.useRef<NodeJS.Timeout>();
+  const timeoutRef = React.useRef<NodeJS.Timeout>(undefined);
 
   React.useEffect(() => {
     if (!showLoading && loading) {

@@ -64,7 +64,7 @@ describe("UsersListPage", () => {
       ),
     );
 
-    renderComponent(<UsersListPage />, {
+    await renderComponent(<UsersListPage />, {
       initializeState: ({ set }) => {
         set(allRoles, mockSubscribeState({ data: defaultRoles }));
       },
@@ -89,7 +89,7 @@ describe("UsersListPage", () => {
       }),
     );
 
-    renderComponent(<UsersListPage />, {
+    await renderComponent(<UsersListPage />, {
       initializeState: ({ set }) => {
         set(allRoles, mockSubscribeState({ data: defaultRoles }));
       },
@@ -115,7 +115,7 @@ describe("UsersListPage", () => {
       }),
     );
 
-    renderComponent(<UsersListPage />, {
+    await renderComponent(<UsersListPage />, {
       initializeState: ({ set }) => {
         set(allRoles, mockSubscribeState({ data: defaultRoles }));
       },
@@ -135,7 +135,7 @@ describe("UsersListPage", () => {
       }),
     );
 
-    renderComponent(<UsersListPage />, {
+    await renderComponent(<UsersListPage />, {
       initializeState: ({ set }) => {
         set(allRoles, mockSubscribeState({ data: defaultRoles }));
       },

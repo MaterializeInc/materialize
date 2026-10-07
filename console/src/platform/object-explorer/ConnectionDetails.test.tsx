@@ -71,7 +71,7 @@ describe("ConnectionDetailsContainer", () => {
         },
       ),
     );
-    renderComponent(
+    await renderComponent(
       <ConnectionDetails
         databaseName={MOCK_CONNECTION.databaseName}
         schemaName={MOCK_CONNECTION.schemaName}
@@ -102,7 +102,7 @@ describe("ConnectionDetailsContainer", () => {
         },
       }),
     );
-    renderComponent(
+    await renderComponent(
       <ConnectionDetails
         databaseName={MOCK_CONNECTION.databaseName}
         schemaName={MOCK_CONNECTION.schemaName}
@@ -190,7 +190,7 @@ describe("ConnectionDetailsContainer", () => {
       }),
     );
 
-    renderComponent(
+    await renderComponent(
       <ConnectionDetails
         databaseName={MOCK_CONNECTION.databaseName}
         schemaName={MOCK_CONNECTION.schemaName}

@@ -101,10 +101,13 @@ describe("ClusterMetrics", () => {
         },
       }),
     );
-    renderComponent(<ClusterMetrics clusterId="u1" clusterName="default" />, {
-      initializeState: ({ set }) =>
-        setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
-    });
+    await renderComponent(
+      <ClusterMetrics clusterId="u1" clusterName="default" />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
+      },
+    );
     expect(
       await screen.findByText("An error occurred loading cluster metrics."),
     ).toBeVisible();
@@ -112,7 +115,7 @@ describe("ClusterMetrics", () => {
 
   it("displays cluster metrics", async () => {
     server.use(validClusterMetricsHandler);
-    renderComponent(
+    await renderComponent(
       <RenderWithPathname>
         <ClusterMetrics clusterId="u1" clusterName="default" />
       </RenderWithPathname>,
@@ -155,7 +158,7 @@ describe("ClusterMetrics", () => {
 
   it("does not display disk metrics if cluster has no disk", async () => {
     server.use(validClusterMetricsHandler);
-    renderComponent(
+    await renderComponent(
       <RenderWithPathname>
         <ClusterMetrics clusterId="u1" clusterName="default" />
       </RenderWithPathname>,
@@ -192,16 +195,19 @@ describe("ClusterMetrics", () => {
         }),
       }),
     );
-    renderComponent(<ClusterMetrics clusterId="u1" clusterName="default" />, {
-      initializeState: ({ set }) => {
-        setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
-        set(allClusters, {
-          data: [buildCluster({ id: "u1", name: "default", disk: false })],
-          error: undefined,
-          snapshotComplete: true,
-        });
+    await renderComponent(
+      <ClusterMetrics clusterId="u1" clusterName="default" />,
+      {
+        initializeState: ({ set }) => {
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
+          set(allClusters, {
+            data: [buildCluster({ id: "u1", name: "default", disk: false })],
+            error: undefined,
+            snapshotComplete: true,
+          });
+        },
       },
-    });
+    );
     expect(await screen.findByText("Cluster is warming up")).toBeVisible();
     expect(screen.getByText("Metrics will be available shortly")).toBeVisible();
   });
@@ -211,16 +217,19 @@ describe("ClusterMetrics", () => {
   // heap, nor report heapBytes, which has no such fallback and stays 0.
   it("labels the gauge as memory when clusterd reports no heap limit", async () => {
     server.use(noHeapLimitHandler);
-    renderComponent(<ClusterMetrics clusterId="u1" clusterName="default" />, {
-      initializeState: ({ set }) => {
-        setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
-        set(allClusters, {
-          data: [buildCluster({ id: "u1", name: "default", disk: false })],
-          error: undefined,
-          snapshotComplete: true,
-        });
+    await renderComponent(
+      <ClusterMetrics clusterId="u1" clusterName="default" />,
+      {
+        initializeState: ({ set }) => {
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
+          set(allClusters, {
+            data: [buildCluster({ id: "u1", name: "default", disk: false })],
+            error: undefined,
+            snapshotComplete: true,
+          });
+        },
       },
-    });
+    );
 
     expect(await screen.findByText("Memory Utilization")).toBeVisible();
     expect(screen.queryByText("Heap Utilization")).not.toBeInTheDocument();
@@ -229,16 +238,19 @@ describe("ClusterMetrics", () => {
 
   it("labels the gauge as heap where a heap limit is reported", async () => {
     server.use(validClusterMetricsHandler);
-    renderComponent(<ClusterMetrics clusterId="u1" clusterName="default" />, {
-      initializeState: ({ set }) => {
-        setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
-        set(allClusters, {
-          data: [buildCluster({ id: "u1", name: "default", disk: false })],
-          error: undefined,
-          snapshotComplete: true,
-        });
+    await renderComponent(
+      <ClusterMetrics clusterId="u1" clusterName="default" />,
+      {
+        initializeState: ({ set }) => {
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment);
+          set(allClusters, {
+            data: [buildCluster({ id: "u1", name: "default", disk: false })],
+            error: undefined,
+            snapshotComplete: true,
+          });
+        },
       },
-    });
+    );
 
     expect(await screen.findByText("Heap Utilization")).toBeVisible();
     expect(screen.queryByText("Memory Utilization")).not.toBeInTheDocument();

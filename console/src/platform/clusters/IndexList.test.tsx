@@ -139,7 +139,7 @@ const errorArrangmentMemoryHandler = buildSqlQueryHandlerV2({
 });
 
 function renderIndexList() {
-  renderComponent(
+  return renderComponent(
     <Routes>
       <Route path=":clusterId">
         <Route index path="*" element={<IndexList />} />
@@ -160,7 +160,7 @@ describe("IndexList", () => {
 
   it("shows the empty state when there are no results", async () => {
     server.use(emptyIndexesListHandler);
-    renderIndexList();
+    await renderIndexList();
 
     expect(
       await screen.findByText("This cluster has no indexes"),
@@ -169,7 +169,7 @@ describe("IndexList", () => {
 
   it("renders the indexes list without memory usage initially", async () => {
     server.use(validIndexesListHandler);
-    renderIndexList();
+    await renderIndexList();
 
     expect((await screen.findAllByText("materialize.public")).length).toBe(2);
     expect(await screen.findByText("test_index")).toBeVisible();
@@ -179,7 +179,7 @@ describe("IndexList", () => {
 
   it("renders memory usage once it's available", async () => {
     server.use(validIndexesListHandler, validArrangmentMemoryHandler);
-    renderIndexList();
+    await renderIndexList();
 
     expect(await screen.findByText("test_index")).toBeVisible();
     expect(await screen.findByText("1.62 GB (10.1%)")).toBeVisible();
@@ -187,7 +187,7 @@ describe("IndexList", () => {
 
   it("shows '-' as memory usage if unavailable", async () => {
     server.use(validIndexesListHandler, errorArrangmentMemoryHandler);
-    renderIndexList();
+    await renderIndexList();
 
     expect(await screen.findByText("test_index")).toBeVisible();
     const memoryUsage = await screen.findByTestId("memory-usage");

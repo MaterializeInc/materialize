@@ -82,7 +82,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("default form validates successfully", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("General")).toBeVisible();
 
     await fillRequiredFormFields(user);
@@ -93,7 +93,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("CSR field is hidden when a registry isn't required", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("General")).toBeVisible();
 
     await fillRequiredFormFields(user);
@@ -107,7 +107,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("CSR field is required", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("General")).toBeVisible();
 
     await fillRequiredFormFields(user);

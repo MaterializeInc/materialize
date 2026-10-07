@@ -25,7 +25,7 @@ import {
   arrangmentMemoryColumns,
   clusterReplicasColumns,
 } from "~/test/queries";
-import { renderComponent } from "~/test/utils";
+import { MSW_HANDLER_LOADING_WAIT_TIME, renderComponent } from "~/test/utils";
 
 import { detailPageSetupHelpers } from "./clustersTestUtils";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
@@ -143,7 +143,7 @@ const errorArrangmentMemoryHandler = buildSqlQueryHandlerV2({
 });
 
 function renderMaterializedViewList() {
-  renderComponent(
+  return renderComponent(
     <Routes>
       <Route path=":clusterId">
         <Route index path="*" element={<MaterializedViewsList />} />
@@ -168,21 +168,31 @@ describe("MaterializedViews", () => {
   });
 
   it("shows a spinner initially", async () => {
-    renderMaterializedViewList();
+    server.use(
+      buildUseSqlQueryHandler(
+        {
+          type: "SELECT" as const,
+          rows: [],
+          columns: MaterializedViewsListColumns,
+        },
+        { waitTimeMs: MSW_HANDLER_LOADING_WAIT_TIME },
+      ),
+    );
+    await renderMaterializedViewList();
 
     expect(await screen.findByTestId("loading-spinner")).toBeVisible();
   });
 
   it("shows an error state if results fail to load", async () => {
     server.use(errorMaterializeViewListHandler);
-    renderMaterializedViewList();
+    await renderMaterializedViewList();
 
     expect(await screen.findByText(CLUSTERS_FETCH_ERROR_MESSAGE)).toBeVisible();
   });
 
   it("shows the empty state when there are no results", async () => {
     server.use(emptyMaterializeViewListHandler);
-    renderMaterializedViewList();
+    await renderMaterializedViewList();
 
     expect(
       await screen.findByText("This cluster has no materialized views"),
@@ -190,7 +200,7 @@ describe("MaterializedViews", () => {
   });
 
   it("renders the materialized views list", async () => {
-    renderMaterializedViewList();
+    await renderMaterializedViewList();
 
     expect(await screen.findByText("materialize.public")).toBeVisible();
     expect(await screen.findByText("test_materialized_view")).toBeVisible();
@@ -198,7 +208,7 @@ describe("MaterializedViews", () => {
 
   it("renders memory usage once it's available", async () => {
     server.use(validArrangmentMemoryHandler);
-    renderMaterializedViewList();
+    await renderMaterializedViewList();
 
     expect(await screen.findByText("test_materialized_view")).toBeVisible();
     expect(await screen.findByText("1.62 GB (10.1%)")).toBeVisible();
@@ -206,7 +216,7 @@ describe("MaterializedViews", () => {
 
   it("shows '-' as memory usage if unavailable", async () => {
     server.use(errorArrangmentMemoryHandler);
-    renderMaterializedViewList();
+    await renderMaterializedViewList();
 
     expect(await screen.findByText("test_materialized_view")).toBeVisible();
     const memoryUsage = await screen.findByTestId("memory-usage");

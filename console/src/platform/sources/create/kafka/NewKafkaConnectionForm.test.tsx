@@ -106,7 +106,7 @@ describe("NewKafkaConnectionForm", () => {
   });
 
   it("presents a list of existing connections", async () => {
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("Select a connection")).toBeVisible();
     const connectionSelection = screen.getByTestId("connection-selection");
     expect(connectionSelection).toBeVisible();
@@ -116,7 +116,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("displays the connection form when the 'New' option is clicked", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     await loadNewForm(user);
     expect(await screen.findByText("Configure brokers")).toBeVisible();
     expect(await screen.findByText("Authentication method")).toBeVisible();
@@ -124,7 +124,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("can fill out the basic form without authentication", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     await loadNewForm(user);
     await fillRequiredFormFields(user);
     const noneRadio = screen.getByLabelText("Authentication Mode: none");
@@ -134,7 +134,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("can fill out the basic form with SASL authentication", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     await loadNewForm(user);
     await fillRequiredFormFields(user);
     const saslRadio = screen.getByLabelText("Authentication Mode: sasl");
@@ -152,7 +152,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("can fill out the basic form with SSL authentication", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     await loadNewForm(user);
     await fillRequiredFormFields(user);
     const saslRadio = screen.getByLabelText("Authentication Mode: ssl");
@@ -168,7 +168,7 @@ describe("NewKafkaConnectionForm", () => {
 
   it("enforces broker uniqueness", async () => {
     const user = userEvent.setup();
-    renderComponent(<BrokerComponent />);
+    await renderComponent(<BrokerComponent />);
     expect(await screen.findByText("Configure brokers")).toBeVisible();
     const addButton = screen.getByText("Add broker");
     expect(addButton).toBeDisabled();

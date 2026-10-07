@@ -123,7 +123,7 @@ describe("NewDatabaseConnectionForm", () => {
   });
 
   it("presents a list of existing connections", async () => {
-    renderComponent(<FormComponent databaseType="postgres" />);
+    await renderComponent(<FormComponent databaseType="postgres" />);
     expect(await screen.findByText("Select a connection")).toBeVisible();
     const connectionSelection = screen.getByTestId("connection-selection");
     expect(connectionSelection).toBeVisible();
@@ -133,7 +133,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("displays the connection form when the 'New' option is clicked", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="postgres" />);
+    await renderComponent(<FormComponent databaseType="postgres" />);
     await loadNewForm(user);
     expect(await screen.findByText("Connection details")).toBeVisible();
     expect(await screen.findByText("Authentication")).toBeVisible();
@@ -141,7 +141,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("can fill out the basic form for Postgres", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="postgres" />);
+    await renderComponent(<FormComponent databaseType="postgres" />);
     await loadNewForm(user);
     await fillPostgresRequiredFields(user);
     const sslToggle = screen.getByLabelText("SSL Authentication");
@@ -152,7 +152,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("can fill out the basic form for MySQL", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="mysql" />);
+    await renderComponent(<FormComponent databaseType="mysql" />);
     await loadNewForm(user);
     await fillMySqlRequiredFields(user);
     const sslToggle = screen.getByLabelText("SSL Authentication");
@@ -163,7 +163,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("SSL authentication fields can be populated", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="postgres" />);
+    await renderComponent(<FormComponent databaseType="postgres" />);
     await loadNewForm(user);
     await fillPostgresRequiredFields(user);
 
@@ -197,7 +197,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("displays the appropriate fields for PostgresSQL", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="postgres" />);
+    await renderComponent(<FormComponent databaseType="postgres" />);
     await loadNewForm(user);
     const databaseInput = screen.queryByLabelText(/Database/);
     expect(databaseInput).toBeInTheDocument();
@@ -212,7 +212,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("displays the appropriate fields for MySQL", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="mysql" />);
+    await renderComponent(<FormComponent databaseType="mysql" />);
     await loadNewForm(user);
     const databaseInput = screen.queryByLabelText("Database");
     expect(databaseInput).not.toBeInTheDocument();
@@ -227,7 +227,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("can fill out the basic form for SQL Server", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="sql-server" />);
+    await renderComponent(<FormComponent databaseType="sql-server" />);
     await loadNewForm(user);
     await fillSqlServerRequiredFields(user);
     const sslToggle = screen.getByLabelText("SSL Authentication");
@@ -238,7 +238,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("displays the appropriate fields for SQL Server", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="sql-server" />);
+    await renderComponent(<FormComponent databaseType="sql-server" />);
     await loadNewForm(user);
     const databaseInput = screen.queryByLabelText(/Database/);
     expect(databaseInput).toBeInTheDocument();
@@ -253,7 +253,7 @@ describe("NewDatabaseConnectionForm", () => {
 
   it("SQL Server SSL authentication fields can be populated", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent databaseType="sql-server" />);
+    await renderComponent(<FormComponent databaseType="sql-server" />);
     await loadNewForm(user);
     await fillSqlServerRequiredFields(user);
 

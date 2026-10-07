@@ -30,7 +30,7 @@ import {
 import BlockedState from "./BlockedState";
 
 const renderBlockedState = (initializeState: InitializeStateFn) => {
-  renderComponent(<BlockedState />, { initializeState });
+  return renderComponent(<BlockedState />, { initializeState });
 };
 
 const buildOrganization = (overrides: Partial<Organization> = {}) => {
@@ -68,7 +68,7 @@ describe("BlockedState", () => {
         payload: buildOrganization(),
       }),
     );
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {
@@ -95,7 +95,7 @@ describe("BlockedState", () => {
         }),
       }),
     );
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {
@@ -108,7 +108,7 @@ describe("BlockedState", () => {
   });
 
   it("displays a network policy blocked state for IPv4 users", async () => {
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {
@@ -130,7 +130,7 @@ describe("BlockedState", () => {
   });
 
   it("displays a network policy blocked state for IPv6 users", async () => {
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {
@@ -152,7 +152,7 @@ describe("BlockedState", () => {
   });
 
   it("displays a network policy blocked state without an IP address when one cannot be parsed from a message", async () => {
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {
@@ -186,7 +186,7 @@ describe("BlockedState", () => {
         } as ITeamUserPermission,
       ],
     });
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {
@@ -212,7 +212,7 @@ describe("BlockedState", () => {
       permissions: [],
     });
 
-    renderBlockedState(({ set }) =>
+    await renderBlockedState(({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", {
         ...healthyEnvironment,
         status: {

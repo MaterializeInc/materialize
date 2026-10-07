@@ -213,8 +213,10 @@ describe("store/environments", () => {
     it("correctly reports healthy environments", async () => {
       server.use(buildEnabledRegionReponse(), successfulHealthCheckResponse);
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: Wrapper,
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: Wrapper,
+        });
       });
       // wait for health check to run
       let environments: EnvironmentsWithHealth | undefined;
@@ -250,8 +252,10 @@ describe("store/environments", () => {
     it("correctly reports environments that are pending enablement as creating", async () => {
       server.use(buildPendingRegionResponse("enablement-pending"));
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: Wrapper,
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: Wrapper,
+        });
       });
       // wait for health check to run
       let environments: EnvironmentsWithHealth | undefined;
@@ -274,8 +278,10 @@ describe("store/environments", () => {
     it("correctly reports environments that are pending deletion as disabled", async () => {
       server.use(buildPendingRegionResponse("deletion-pending"));
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: await createProviderWrapper({ store }),
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: await createProviderWrapper({ store }),
+        });
       });
       // wait for health check to run
       let environments: EnvironmentsWithHealth | undefined;
@@ -298,8 +304,10 @@ describe("store/environments", () => {
     it("correctly reports soft deleted environments as disabled", async () => {
       server.use(buildPendingRegionResponse("soft-deleted"));
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: Wrapper,
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: Wrapper,
+        });
       });
       // wait for health check to run
       let environments: EnvironmentsWithHealth | undefined;
@@ -321,8 +329,10 @@ describe("store/environments", () => {
 
     it("correctly reports disabled environments", async () => {
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: Wrapper,
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: Wrapper,
+        });
       });
       // wait for health check to run
       let environments: EnvironmentsWithHealth | undefined;
@@ -345,8 +355,10 @@ describe("store/environments", () => {
     it("correctly reports region errors", async () => {
       server.use(buildServerErrorRegionResponse());
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: await createProviderWrapper({ store }),
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: await createProviderWrapper({ store }),
+        });
       });
       // wait for health check to run
       let environments: EnvironmentsWithHealth | undefined;
@@ -375,8 +387,10 @@ describe("store/environments", () => {
         }),
       );
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
-        wrapper: await createProviderWrapper({ store }),
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+          wrapper: await createProviderWrapper({ store }),
+        });
       });
       // wait for health check to run
       await act(() => new Promise((resolve) => setTimeout(resolve, 1)));
@@ -426,8 +440,10 @@ describe("store/environments", () => {
     it("failed region api requests don't disable the environment", async () => {
       server.use(buildEnabledRegionReponse(), successfulHealthCheckResponse);
       const store = getStore();
-      renderHook(() => usePollEnvironmentHealth({ intervalMs: 100 }), {
-        wrapper: await createProviderWrapper({ store }),
+      await act(async () => {
+        renderHook(() => usePollEnvironmentHealth({ intervalMs: 100 }), {
+          wrapper: await createProviderWrapper({ store }),
+        });
       });
       // set focused, otherwise we won't poll
       act(() => store.set(isFocusedState, true));

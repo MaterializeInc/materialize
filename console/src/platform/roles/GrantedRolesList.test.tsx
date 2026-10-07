@@ -48,7 +48,7 @@ describe("GrantedRolesList", () => {
       ),
     );
 
-    renderComponent(<GrantedRolesList roleName="test_role" />);
+    await renderComponent(<GrantedRolesList roleName="test_role" />);
 
     await waitFor(() => {
       expect(screen.getByTestId("loading-spinner")).toBeVisible();
@@ -71,7 +71,7 @@ describe("GrantedRolesList", () => {
       }),
     );
 
-    renderComponent(<GrantedRolesList roleName="test_role" />);
+    await renderComponent(<GrantedRolesList roleName="test_role" />);
 
     await waitFor(() => {
       expect(
@@ -95,7 +95,7 @@ describe("GrantedRolesList", () => {
       }),
     );
 
-    renderComponent(<GrantedRolesList roleName="test_role" />);
+    await renderComponent(<GrantedRolesList roleName="test_role" />);
 
     expect(
       await screen.findByText(
@@ -134,7 +134,7 @@ describe("GrantedRolesList", () => {
       }),
     );
 
-    renderComponent(<GrantedRolesList roleName="test_role" />);
+    await renderComponent(<GrantedRolesList roleName="test_role" />);
 
     expect(await screen.findByText("parent_role_1")).toBeVisible();
     expect(await screen.findByText("parent_role_2")).toBeVisible();

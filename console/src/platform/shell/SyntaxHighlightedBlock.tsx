@@ -76,10 +76,10 @@ function getHighlighted(
   ext: LanguageSupport,
   highlightStyle: HighlightStyle,
   themeSettings: ThemeSettings,
-): JSX.Element[] {
+): React.JSX.Element[] {
   const tree = ext.language.parser.parse(value);
-  const lines: JSX.Element[] = [];
-  let currentTokens: JSX.Element[] = [];
+  const lines: React.JSX.Element[] = [];
+  let currentTokens: React.JSX.Element[] = [];
 
   const addToken = (text: string, classes: string) => {
     currentTokens.push(
@@ -135,8 +135,10 @@ const SyntaxHighlightedBlock = ({
     const numLines = value.split("\n").length;
     return <Box lineHeight={lineHeight} height={`${numLines}lh`} />;
   }, [value]);
-  const [highlighted, setHighlighted] = useState<JSX.Element[] | null>(null);
-  const ext = useRef<LanguageSupport>();
+  const [highlighted, setHighlighted] = useState<React.JSX.Element[] | null>(
+    null,
+  );
+  const ext = useRef<LanguageSupport>(undefined);
 
   useEffect(() => {
     async function initExtension() {

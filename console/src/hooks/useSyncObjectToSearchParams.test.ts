@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { renderHook, waitFor } from "@testing-library/react";
-import { act } from "react-dom/test-utils";
+import { act, renderHook, waitFor } from "@testing-library/react";
 
 import { RouterWrapper } from "~/test/utils";
 

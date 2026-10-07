@@ -704,7 +704,7 @@ const NewWebhookSourceForm = ({
   const { results: clusters, failedToLoad: clustersFailedToLoad } =
     useConnectorClusters();
 
-  const alertRef = useRef();
+  const alertRef = useRef<HTMLDivElement>(null);
 
   const loadingError = schemasFailedToLoad || clustersFailedToLoad;
 

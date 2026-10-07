@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -34,10 +34,12 @@ import { objectExplorerQueryKeys } from "./queries";
 
 const renderComponent = async () => {
   const Wrapper = await createProviderWrapper({});
-  return render(
-    <Wrapper>
-      <ObjectExplorerDetailRoutes />
-    </Wrapper>,
+  return act(async () =>
+    render(
+      <Wrapper>
+        <ObjectExplorerDetailRoutes />
+      </Wrapper>,
+    ),
   );
 };
 
@@ -319,6 +321,17 @@ describe("ObjectExplorerDetailRoutes", () => {
     });
 
     it("shows a spinner initially", async () => {
+      server.use(
+        buildSqlQueryHandlerV2(
+          {
+            queryKey: objectExplorerQueryKeys.databaseDetails({
+              name: "materialize",
+            }),
+            results: [],
+          },
+          { waitTimeMs: MSW_HANDLER_LOADING_WAIT_TIME },
+        ),
+      );
       await renderComponent();
       expect(await screen.findByTestId("loading-spinner")).toBeVisible();
     });

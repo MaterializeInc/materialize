@@ -27,7 +27,7 @@ export function useHandleEmittedEvent(
   allowedSources?: string[],
 ) {
   const emitter = React.useContext(EventEmitterContext);
-  const allowedSourcesRef = React.useRef<string[] | undefined>();
+  const allowedSourcesRef = React.useRef<string[] | undefined>(undefined);
 
   React.useEffect(() => {
     // Use a ref so allowedSources can change without recreating handlers

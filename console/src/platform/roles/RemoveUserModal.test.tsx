@@ -37,7 +37,7 @@ describe("RemoveUserModal", () => {
   });
 
   it("renders the confirmation message with role and member names", async () => {
-    renderComponent(<RemoveUserModal {...defaultProps} />);
+    await renderComponent(<RemoveUserModal {...defaultProps} />);
 
     await waitFor(() => expect(screen.getByText("Remove Role")).toBeVisible());
     expect(
@@ -49,7 +49,7 @@ describe("RemoveUserModal", () => {
 
   it("calls onClose when Cancel button is clicked", async () => {
     const user = userEvent.setup();
-    renderComponent(<RemoveUserModal {...defaultProps} />);
+    await renderComponent(<RemoveUserModal {...defaultProps} />);
 
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(mockOnClose).toHaveBeenCalled();
@@ -69,7 +69,7 @@ describe("RemoveUserModal", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<RemoveUserModal {...defaultProps} />);
+    await renderComponent(<RemoveUserModal {...defaultProps} />);
 
     await user.click(
       await screen.findByRole("button", { name: "Remove role" }),
@@ -92,7 +92,7 @@ describe("RemoveUserModal", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<RemoveUserModal {...defaultProps} />);
+    await renderComponent(<RemoveUserModal {...defaultProps} />);
 
     await user.click(
       await screen.findByRole("button", { name: "Remove role" }),

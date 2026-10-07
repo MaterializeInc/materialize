@@ -49,7 +49,7 @@ describe("UsersList", () => {
       ),
     );
 
-    renderComponent(<UsersList roleName="test_role" />);
+    await renderComponent(<UsersList roleName="test_role" />);
 
     await waitFor(() => {
       expect(screen.getByTestId("loading-spinner")).toBeVisible();
@@ -73,7 +73,7 @@ describe("UsersList", () => {
       }),
     );
 
-    renderComponent(<UsersList roleName="test_role" />);
+    await renderComponent(<UsersList roleName="test_role" />);
 
     await waitFor(() => {
       expect(
@@ -98,7 +98,7 @@ describe("UsersList", () => {
       }),
     );
 
-    renderComponent(<UsersList roleName="test_role" />);
+    await renderComponent(<UsersList roleName="test_role" />);
 
     expect(
       await screen.findByText("No users assigned to this role."),
@@ -136,7 +136,7 @@ describe("UsersList", () => {
       }),
     );
 
-    renderComponent(<UsersList roleName="test_role" />);
+    await renderComponent(<UsersList roleName="test_role" />);
 
     expect(await screen.findByText("user1@example.com")).toBeVisible();
     expect(await screen.findByText("user2@example.com")).toBeVisible();

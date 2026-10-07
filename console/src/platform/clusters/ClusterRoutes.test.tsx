@@ -75,7 +75,7 @@ describe("ClusterRoutes", () => {
       allClusters,
       mockSubscribeState<Cluster>({ data: [], snapshotComplete: false }),
     );
-    renderComponent(<ClusterRoutes />);
+    await renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText("Clusters")).toBeVisible();
     await waitFor(() => {
@@ -86,7 +86,7 @@ describe("ClusterRoutes", () => {
   it("shows the empty state when there are no results", async () => {
     const store = getStore();
     store.set(allClusters, mockSubscribeState<Cluster>({ data: [] }));
-    renderComponent(<ClusterRoutes />);
+    await renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText("No available clusters")).toBeVisible();
   });
@@ -104,7 +104,7 @@ describe("ClusterRoutes", () => {
         },
       }),
     );
-    renderComponent(<ClusterRoutes />);
+    await renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText(CLUSTERS_FETCH_ERROR_MESSAGE)).toBeVisible();
   });
@@ -120,7 +120,7 @@ describe("ClusterRoutes", () => {
         ],
       }),
     );
-    renderComponent(<ClusterRoutes />);
+    await renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText("Clusters")).toBeVisible();
 
@@ -132,7 +132,7 @@ describe("ClusterRoutes", () => {
   });
 
   it("redirects back to the list for invalid clusters", async () => {
-    renderComponent(
+    await renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
       </RenderWithPathname>,
@@ -148,7 +148,7 @@ describe("ClusterRoutes", () => {
   });
 
   it("shows cluster details", async () => {
-    renderComponent(<ClusterRoutes />, {
+    await renderComponent(<ClusterRoutes />, {
       initialRouterEntries: ["/u1/default"],
     });
 
@@ -156,7 +156,7 @@ describe("ClusterRoutes", () => {
   });
 
   it("updates the path when the name has changed", async () => {
-    renderComponent(
+    await renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
       </RenderWithPathname>,
@@ -170,7 +170,7 @@ describe("ClusterRoutes", () => {
   });
 
   it("updates the path when the id has changed", async () => {
-    renderComponent(
+    await renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
       </RenderWithPathname>,
@@ -196,7 +196,7 @@ describe("ClusterRoutes", () => {
         },
       }),
     );
-    renderComponent(<ClusterRoutes />, {
+    await renderComponent(<ClusterRoutes />, {
       initialRouterEntries: ["/u1/default"],
     });
 
