@@ -1663,7 +1663,7 @@ impl CatalogState {
                     .unfinalized_shards
                     .insert(unfinalized_shard.shard);
                 assert!(
-                    newly_inserted,
+                    newly_inserted.is_none(),
                     "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",
                 );
             }
@@ -1672,7 +1672,7 @@ impl CatalogState {
                     .unfinalized_shards
                     .remove(&unfinalized_shard.shard);
                 assert!(
-                    removed,
+                    removed.is_some(),
                     "retraction does not match existing value: {unfinalized_shard:?}"
                 );
             }

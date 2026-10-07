@@ -246,16 +246,19 @@ pub enum Response {
 /// This data should be kept consistent with the state modified using
 /// [`StorageTxn`].
 ///
+/// Collections are structurally shared so updating a catalog candidate copies
+/// only the affected paths, without cloning the complete storage inventory.
+///
 /// n.b. the "txn WAL shard" is also metadata that's persisted, but if we
 /// included it in this struct it would never be read.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub collection_metadata: BTreeMap<GlobalId, ShardId>,
-    pub unfinalized_shards: BTreeSet<ShardId>,
+    pub collection_metadata: imbl::OrdMap<GlobalId, ShardId>,
+    pub unfinalized_shards: imbl::OrdSet<ShardId>,
     /// IDs with no SQL object but a live client requirement. Derived from catalog
     /// membership and client requirements, not separately persisted.
-    pub retained_collections: BTreeSet<GlobalId>,
+    pub retained_collections: imbl::OrdSet<GlobalId>,
     /// Committed permission to compact each collection through this frontier.
     /// In protected environments, writable registration requires a bound for every
     /// live and retained ID before opening persist handles. Callers supply complete
@@ -269,7 +272,7 @@ pub struct StorageMetadata {
     /// compaction with envd epoch fencing. The environment mode is selected when
     /// constructing StorageCollections, never inferred from missing bounds.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    pub compaction_bounds: imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
 }
 
 impl StorageMetadata {
@@ -989,6 +992,50 @@ impl WallclockLagHistogramPeriod {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn storage_metadata_snapshot_and_serialization() {
+        let id = GlobalId::User(1);
+        let alias = GlobalId::User(2);
+        let shard = ShardId::new();
+        let bound = Antichain::from_elem(Timestamp::from(5));
+        let metadata = std::sync::Arc::new(StorageMetadata {
+            collection_metadata: [(alias, shard), (id, shard)].into_iter().collect(),
+            unfinalized_shards: [shard].into_iter().collect(),
+            retained_collections: [alias, id].into_iter().collect(),
+            compaction_bounds: [(alias, bound.clone()), (id, bound.clone())]
+                .into_iter()
+                .collect(),
+        });
+        let expected = serde_json::json!({
+            "collection_metadata": {id.to_string(): shard, alias.to_string(): shard},
+            "unfinalized_shards": [shard],
+            "retained_collections": [id, alias],
+            "compaction_bounds": {id.to_string(): bound, alias.to_string(): bound},
+        });
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), expected);
+
+        let mut candidate = std::sync::Arc::clone(&metadata);
+        let changed = std::sync::Arc::make_mut(&mut candidate);
+        changed.collection_metadata.remove(&id);
+        changed.unfinalized_shards.remove(&shard);
+        changed.retained_collections.remove(&id);
+        changed
+            .compaction_bounds
+            .insert(id, Antichain::from_elem(Timestamp::from(10)));
+
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), expected);
+        assert_eq!(candidate.get_collection_shard(alias).unwrap(), shard);
+        assert!(!candidate.collection_metadata.contains_key(&id));
+        assert!(candidate.unfinalized_shards.is_empty());
+        assert!(!candidate.retained_collections.contains(&id));
+        assert!(candidate.retained_collections.contains(&alias));
+        assert_eq!(candidate.compaction_bounds[&alias], bound);
+        assert_eq!(
+            candidate.compaction_bounds[&id],
+            Antichain::from_elem(Timestamp::from(10))
+        );
+    }
 
     #[mz_ore::test]
     fn lag_writes_by_zero() {

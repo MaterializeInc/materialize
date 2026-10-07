@@ -1378,7 +1378,11 @@ impl StorageCollectionsImpl {
                 .collect();
             let mut finalizable = self.finalizable_shards.lock();
             finalizable.retain(|shard| !referenced.contains(shard));
-            for shard in storage_metadata.unfinalized_shards.difference(&referenced) {
+            for shard in storage_metadata
+                .unfinalized_shards
+                .iter()
+                .filter(|shard| !referenced.contains(*shard))
+            {
                 finalizable.insert(*shard);
             }
         }
@@ -4091,7 +4095,7 @@ mod tests {
         let id = GlobalId::User(1);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -4137,7 +4141,7 @@ mod tests {
             .unwrap()
             .expect("initial schema");
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(old, shard)]),
+            collection_metadata: [(old, shard)].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -4199,7 +4203,7 @@ mod tests {
         let id = GlobalId::User(1);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
             ..Default::default()
         };
         let register = |controller: StorageCollectionsImpl, metadata: StorageMetadata| async move {
@@ -4251,7 +4255,7 @@ mod tests {
         let id = GlobalId::User(1);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
             ..Default::default()
         };
         assert!(matches!(
@@ -4279,8 +4283,8 @@ mod tests {
         let alias = GlobalId::User(2);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard), (alias, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(10))]),
+            collection_metadata: [(id, shard), (alias, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(10))].into_iter().collect(),
             ..Default::default()
         };
         assert!(matches!(
@@ -4324,8 +4328,8 @@ mod tests {
         let shard = ShardId::new();
         write_retained_history(&persist, shard).await;
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(5))].into_iter().collect(),
             ..Default::default()
         };
         for controller in [&first, &second] {
@@ -4390,8 +4394,8 @@ mod tests {
         let b = GlobalId::User(2);
         let shard = ShardId::new();
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(a, shard), (b, shard)]),
-            compaction_bounds: BTreeMap::from([(a, frontier(5)), (b, frontier(10))]),
+            collection_metadata: [(a, shard), (b, shard)].into_iter().collect(),
+            compaction_bounds: [(a, frontier(5)), (b, frontier(10))].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -4465,8 +4469,8 @@ mod tests {
         let dependent = GlobalId::User(2);
         let shard = ShardId::new();
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(input, shard)]),
-            compaction_bounds: BTreeMap::from([(input, frontier(5))]),
+            collection_metadata: [(input, shard)].into_iter().collect(),
+            compaction_bounds: [(input, frontier(5))].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -4581,8 +4585,12 @@ mod tests {
         let missing = GlobalId::User(4);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard), (unchanged, ShardId::new())]),
-            compaction_bounds: BTreeMap::from([(id, frontier(5)), (unchanged, frontier(5))]),
+            collection_metadata: [(id, shard), (unchanged, ShardId::new())]
+                .into_iter()
+                .collect(),
+            compaction_bounds: [(id, frontier(5)), (unchanged, frontier(5))]
+                .into_iter()
+                .collect(),
             ..Default::default()
         };
         controller
@@ -4699,8 +4707,10 @@ mod tests {
         let dependent = GlobalId::User(2);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(input, shard), (dependent, shard)]),
-            compaction_bounds: BTreeMap::from([(input, frontier(5)), (dependent, frontier(5))]),
+            collection_metadata: [(input, shard), (dependent, shard)].into_iter().collect(),
+            compaction_bounds: [(input, frontier(5)), (dependent, frontier(5))]
+                .into_iter()
+                .collect(),
             ..Default::default()
         };
         let mut description = CollectionDescription::for_other(RelationDesc::empty(), None);
@@ -4751,8 +4761,8 @@ mod tests {
         let id = GlobalId::User(1);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(5))].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -4860,8 +4870,8 @@ mod tests {
                 .unwrap()
                 .expect("initial schema");
             let mut metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(id, shard)]),
-                compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+                collection_metadata: [(id, shard)].into_iter().collect(),
+                compaction_bounds: [(id, frontier(5))].into_iter().collect(),
                 ..Default::default()
             };
             let description = if handoff {
@@ -5055,8 +5065,8 @@ mod tests {
         let shard = ShardId::new();
         write_retained_history(&persist, shard).await;
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(10))]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(10))].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -5096,10 +5106,10 @@ mod tests {
         let shard = ShardId::new();
         write_retained_history(&persist, shard).await;
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(10))]),
-            retained_collections: BTreeSet::from([id]),
-            unfinalized_shards: BTreeSet::from([shard]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(10))].into_iter().collect(),
+            retained_collections: [id].into_iter().collect(),
+            unfinalized_shards: [shard].into_iter().collect(),
         };
         let registry = MetricsRegistry::new();
         let cache = Arc::clone(&controller.persist);
@@ -5128,8 +5138,12 @@ mod tests {
         )
         .await;
         let mut txn = TestTxn {
-            metadata: metadata.collection_metadata.clone(),
-            unfinalized: metadata.unfinalized_shards.clone(),
+            metadata: metadata
+                .collection_metadata
+                .iter()
+                .map(|(id, shard)| (*id, *shard))
+                .collect(),
+            unfinalized: metadata.unfinalized_shards.iter().copied().collect(),
             txns_shard: Some(txns_shard),
         };
         recovered
@@ -5159,9 +5173,9 @@ mod tests {
             let shard = ShardId::new();
             write_retained_history(&persist, shard).await;
             let mut metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(a, shard), (b, shard)]),
-                compaction_bounds: BTreeMap::from([(a, frontier(5)), (b, frontier(10))]),
-                retained_collections: BTreeSet::from([a, b]),
+                collection_metadata: [(a, shard), (b, shard)].into_iter().collect(),
+                compaction_bounds: [(a, frontier(5)), (b, frontier(10))].into_iter().collect(),
+                retained_collections: [a, b].into_iter().collect(),
                 ..Default::default()
             };
             let mut creates = Vec::new();
@@ -5256,8 +5270,8 @@ mod tests {
             .unwrap()
             .expect("initial schema");
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(versions[0], shard)]),
-            compaction_bounds: BTreeMap::from([(versions[0], frontier(5))]),
+            collection_metadata: [(versions[0], shard)].into_iter().collect(),
+            compaction_bounds: [(versions[0], frontier(5))].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -5296,12 +5310,10 @@ mod tests {
         await_persist_since(&persist, shard, frontier(5)).await;
 
         // SQL drops all versions, but a client's durable reference retains v1.
-        metadata
-            .collection_metadata
-            .retain(|id, _| *id == versions[0]);
-        metadata
-            .compaction_bounds
-            .retain(|id, _| *id == versions[0]);
+        for id in &versions[1..] {
+            metadata.collection_metadata.remove(id);
+            metadata.compaction_bounds.remove(id);
+        }
         metadata.retained_collections.insert(versions[0]);
         controller.drop_collections_unvalidated(&metadata, versions.to_vec());
         assert_eq!(controller.compaction_bound(versions[2]).unwrap(), None);
@@ -5312,7 +5324,7 @@ mod tests {
         let lease = execution_lease(&persist, shard).await;
         controller.drop_collections_unvalidated(
             &StorageMetadata {
-                unfinalized_shards: BTreeSet::from([shard]),
+                unfinalized_shards: [shard].into_iter().collect(),
                 ..Default::default()
             },
             vec![versions[0]],
@@ -5341,9 +5353,9 @@ mod tests {
         let shard = ShardId::new();
         write_retained_history(&persist, shard).await;
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(10))]),
-            retained_collections: BTreeSet::from([id]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(10))].into_iter().collect(),
+            retained_collections: [id].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -5354,7 +5366,7 @@ mod tests {
         let mut lease = execution_lease(&persist, shard).await;
         controller.drop_collections_unvalidated(
             &StorageMetadata {
-                unfinalized_shards: BTreeSet::from([shard]),
+                unfinalized_shards: [shard].into_iter().collect(),
                 ..Default::default()
             },
             vec![id],
@@ -5392,8 +5404,8 @@ mod tests {
             let id = GlobalId::User(1);
             let shard = ShardId::new();
             let mut metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(id, shard)]),
-                compaction_bounds: BTreeMap::from([(id, frontier(20))]),
+                collection_metadata: [(id, shard)].into_iter().collect(),
+                compaction_bounds: [(id, frontier(20))].into_iter().collect(),
                 ..Default::default()
             };
             leader
@@ -5495,8 +5507,8 @@ mod tests {
         let id = GlobalId::User(1);
         let shard = ShardId::new();
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(20))]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(20))].into_iter().collect(),
             ..Default::default()
         };
         let collections = vec![(
@@ -5547,8 +5559,8 @@ mod tests {
             let id = GlobalId::User(1);
             let shard = ShardId::new();
             let metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(id, shard)]),
-                compaction_bounds: BTreeMap::from([(id, frontier(10))]),
+                collection_metadata: [(id, shard)].into_iter().collect(),
+                compaction_bounds: [(id, frontier(10))].into_iter().collect(),
                 ..Default::default()
             };
             await_persist_since(&persist, shard, frontier(0)).await;
@@ -5588,8 +5600,8 @@ mod tests {
             .unwrap()
             .expect("initial schema");
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(old, shard)]),
-            compaction_bounds: BTreeMap::from([(old, frontier(20))]),
+            collection_metadata: [(old, shard)].into_iter().collect(),
+            compaction_bounds: [(old, frontier(20))].into_iter().collect(),
             ..Default::default()
         };
         let collections = vec![(old, CollectionDescription::for_table(RelationDesc::empty()))];
@@ -5679,8 +5691,8 @@ mod tests {
             let id = GlobalId::User(1);
             let shard = ShardId::new();
             let metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(id, shard)]),
-                compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+                collection_metadata: [(id, shard)].into_iter().collect(),
+                compaction_bounds: [(id, frontier(5))].into_iter().collect(),
                 ..Default::default()
             };
             let recovering = recovered_since.is_some();
@@ -5740,7 +5752,7 @@ mod tests {
             // Catalog birth committed, but no collection or persist handle was
             // installed before the crash. Recovery registers at a later timestamp.
             let metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(id, shard)]),
+                collection_metadata: [(id, shard)].into_iter().collect(),
                 compaction_bounds: bound.clone().map(|b| (id, b)).into_iter().collect(),
                 ..Default::default()
             };
@@ -5776,8 +5788,8 @@ mod tests {
         let alias = GlobalId::User(2);
         let shard = ShardId::new();
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(id, shard)]),
-            compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+            collection_metadata: [(id, shard)].into_iter().collect(),
+            compaction_bounds: [(id, frontier(5))].into_iter().collect(),
             ..Default::default()
         };
         let mut since = persist
@@ -5863,8 +5875,8 @@ mod tests {
             .unwrap()
             .expect("initial schema");
         let mut metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(old, shard)]),
-            compaction_bounds: BTreeMap::from([(old, frontier(5))]),
+            collection_metadata: [(old, shard)].into_iter().collect(),
+            compaction_bounds: [(old, frontier(5))].into_iter().collect(),
             ..Default::default()
         };
         controller
@@ -5978,8 +5990,8 @@ mod tests {
             let alias = GlobalId::User(1);
             let shard = ShardId::new();
             let mut metadata = StorageMetadata {
-                collection_metadata: BTreeMap::from([(primary, shard)]),
-                compaction_bounds: BTreeMap::from([(primary, frontier(5))]),
+                collection_metadata: [(primary, shard)].into_iter().collect(),
+                compaction_bounds: [(primary, frontier(5))].into_iter().collect(),
                 ..Default::default()
             };
             controller
@@ -6036,8 +6048,10 @@ mod tests {
         let primary = GlobalId::User(2);
         let shard = ShardId::new();
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(old, shard), (primary, shard)]),
-            compaction_bounds: BTreeMap::from([(old, frontier(5)), (primary, frontier(10))]),
+            collection_metadata: [(old, shard), (primary, shard)].into_iter().collect(),
+            compaction_bounds: [(old, frontier(5)), (primary, frontier(10))]
+                .into_iter()
+                .collect(),
             ..Default::default()
         };
         let mut old_desc = CollectionDescription::for_table(RelationDesc::empty());

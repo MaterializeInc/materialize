@@ -4504,16 +4504,20 @@ mod tests {
         previous.sink.as_of = frontier(0);
         let data_source = DataSource::Sink { desc: previous };
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([
+            collection_metadata: [
                 (input, ShardId::new()),
                 (sink, ShardId::new()),
                 (old_input, ShardId::new()),
-            ]),
-            compaction_bounds: BTreeMap::from([
+            ]
+            .into_iter()
+            .collect(),
+            compaction_bounds: [
                 (input, frontier(5)),
                 (sink, frontier(0)),
                 (old_input, frontier(0)),
-            ]),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
@@ -4636,8 +4640,12 @@ mod tests {
         let instance = description.instance_id;
         let data_source = DataSource::Sink { desc: description };
         let metadata = StorageMetadata {
-            collection_metadata: BTreeMap::from([(input, ShardId::new()), (sink, ShardId::new())]),
-            compaction_bounds: BTreeMap::from([(input, frontier(5)), (sink, frontier(5))]),
+            collection_metadata: [(input, ShardId::new()), (sink, ShardId::new())]
+                .into_iter()
+                .collect(),
+            compaction_bounds: [(input, frontier(5)), (sink, frontier(5))]
+                .into_iter()
+                .collect(),
             ..Default::default()
         };
         let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);

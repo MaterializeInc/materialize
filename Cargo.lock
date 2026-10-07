@@ -8873,6 +8873,7 @@ dependencies = [
  "chrono",
  "differential-dataflow",
  "futures",
+ "imbl",
  "itertools 0.15.0",
  "mz-aws-glue-schema-registry",
  "mz-build-info",

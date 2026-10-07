@@ -4049,7 +4049,7 @@ mod tests {
             assert_eq!(state.collection_compaction_bounds().len(), 2);
             assert_eq!(
                 state.storage_metadata().compaction_bounds,
-                BTreeMap::from([(storage, Antichain::from_elem(Timestamp::from(10)))])
+                imbl::OrdMap::from_iter([(storage, Antichain::from_elem(Timestamp::from(10)))])
             );
             assert_eq!(
                 std::mem::take(&mut state.read_protection_changes),
