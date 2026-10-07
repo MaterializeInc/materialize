@@ -251,3 +251,6 @@ impl GlobalLirPlan {
         (self.df_desc, self.df_meta)
     }
 }
+
+#[cfg(test)]
+mod tests;

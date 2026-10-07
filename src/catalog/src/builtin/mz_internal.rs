@@ -1274,15 +1274,14 @@ SELECT
 FROM mz_internal.mz_cluster_replica_status_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
@@ -2210,15 +2209,14 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
             s.details
         FROM mz_internal.mz_source_status_history s
         WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     ))
     ),
     -- For getting the latest events, we first determine the latest per-replica
@@ -2509,15 +2507,14 @@ uniform_status_history AS
         s.details
     FROM mz_internal.mz_sink_status_history s
     WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     ))
 ),
 -- For getting the latest events, we first determine the latest per-replica
@@ -2890,15 +2887,14 @@ SELECT
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
@@ -5215,15 +5211,14 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinView> =
 SELECT replica_id, object_id, count
 FROM mz_internal.mz_compute_error_counts_by_deployment
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )",
         access: vec![PUBLIC_SELECT],
         ontology: None,
@@ -5265,19 +5260,20 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinView> = LazyLock::new(|| 
     column_comments: BTreeMap::new(),
     // Public observations follow shared catalog authority, not the querying
     // process's deployment. Legacy execution has no deployment qualifier.
+    // One catalog input lets its authority predicate reach the source. Retained
+    // metrics must not replay unrelated catalog updates through logical backpressure.
     sql: "
 SELECT replica_id, object_id, time_ns
 FROM mz_internal.mz_compute_hydration_times_raw
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -5376,15 +5372,14 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinView> = LazyLock
 SELECT replica_id, object_id, size
 FROM mz_internal.mz_object_arrangement_sizes_raw
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )",
         access: vec![PUBLIC_SELECT],
         ontology: None,
@@ -5851,15 +5846,14 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyL
 SELECT replica_id, object_id, physical_plan_node_id, hydrated
 FROM mz_internal.mz_compute_operator_hydration_statuses_raw
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
@@ -9446,15 +9440,14 @@ WHERE length(id) > 0
   AND deployment_generation IS NOT DISTINCT FROM CASE
       WHEN replica_id IS NULL THEN NULL
       ELSE (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
       )
   END",
         access: vec![PUBLIC_SELECT],
@@ -9555,15 +9548,14 @@ SELECT
     SUM(bytes_committed)::uint8 AS bytes_committed
 FROM mz_internal.mz_sink_statistics_raw
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT (data->>'deploy_generation')::uint8
+        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
+                        THEN (data->>'deploy_generation')::uint8 END)
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
-              WHERE native_config.data->>'kind' = 'Config'
-                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND native_config.data->'value'->'value' <> '0'::jsonb
-          )
+           OR (data->>'kind' = 'Config'
+               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+               AND data->'value'->'value' <> '0'::jsonb)
+        HAVING bool_or(data->>'kind' = 'Config')
     )
 GROUP BY id, replica_id",
     access: vec![PUBLIC_SELECT],
