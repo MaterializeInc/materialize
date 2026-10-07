@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useToast } from "@chakra-ui/toast";
+import { useToast } from "@chakra-ui/react";
 import * as Sentry from "@sentry/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAtom } from "jotai";
