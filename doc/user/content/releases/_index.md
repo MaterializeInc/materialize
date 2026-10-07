@@ -40,14 +40,12 @@ A default install configures no receiver, so alerts notify nobody until you add 
 
 <red>*Materialize Self-Managed only*</red>
 
-Materialize depends on object storage, a metadata database, and your cloud provider's infrastructure. Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the monitoring stack shows their health beside Materialize's own, so you can tell quickly whether a problem is in Materialize or in something it depends on:
+Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), you can tell quickly whether a problem is in Materialize or in the object storage and metadata database it depends on:
 
-- **Materialize Persist (Storage)**: Materialize's view of the object storage that holds its data.
-- **Materialize Consensus (Metadata)**: Materialize's view of the metadata database, including whether it is reachable and how long commits take.
-- **Infrastructure Cloud Provider**: Metrics pulled from AWS CloudWatch, Google Cloud Monitoring, or Azure Monitor, such as node status checks, compute quota usage, and the metadata database's storage. See [Cloud provider metrics ⧉](https://materializeinc.github.io/materialize-monitoring/metrics/collecting/cloud-provider-metrics/).
-- **Metadata database alerts**: `consensus-unreachable` fires when Materialize has not reached the metadata database for five minutes, or your cloud provider reports it down, and `consensus-failures` fires on sustained errors.
+- **Dashboards**: **Materialize Persist (Storage)** and **Materialize Consensus (Metadata)** show both dependencies as Materialize experiences them. **Infrastructure Cloud Provider** adds what your cloud provider reports about them, once you turn on [cloud provider metrics ⧉](https://materializeinc.github.io/materialize-monitoring/metrics/collecting/cloud-provider-metrics/).
+- **Alerts**: `consensus-unreachable`, `consensus-failures`, and `blob-failures` fire when Materialize's calls to the metadata database or object storage keep failing.
 
-For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
+For more information, see the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
 
 ## v26.44.1
 *Released to Materialize Cloud: 2026-09-30* <br>
