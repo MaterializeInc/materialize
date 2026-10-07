@@ -598,7 +598,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=60]
+          args: [--scenario=KafkaSources, --actions=60, --seed=1791388671, --trace-source-progress]
 
   - id: checks-no-restart-no-upgrade
     topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]

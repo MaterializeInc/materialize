@@ -35,12 +35,15 @@ current interval in existing failing workloads. A larger interval needs a measur
 contention/retention decision, not a fixture-only slowdown. Keep this correction
 separate from the conflict-work trims.
 
-The restart fixture uses the approved 5s/25s timing consistently from startup.
-It records pre-crash incarnations and waits for their actual reclamation before
-asserting advancement, sharing the existing 120-second advancement budget.
-Preserve SIGKILL, indexed recovery reads, committed bounds and physical retention.
-This fixture correction does not establish that cadence fixes catalog contention.
-Production and parallel-workload timing remain unchanged.
+Investigate increasing native warm catch-up cost in the existing Short Zippy
+workflow. The retained-metrics hydration index reconstructs at its initial
+committed bound across deployments. Its imports include the shared catalog shard.
+Historical frontier catch-up is demonstrated,
+but physical replay volume and the limiting input are not. The 30-day metrics
+retention policy justifies that bound. It also retains protection-publication
+history in the shared catalog shard. Measure history composition and input
+progress before attributing the slowdown or changing state layout. Preserve
+committed history and readiness. Changes to this coupling need design steering.
 
 The shared adapter client also loses protection after renewal repeatedly fails
 for longer than the unchanged-heartbeat grace. Earlier query timeouts precede

@@ -190,6 +190,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--trace-source-progress",
+        action="store_true",
+        help="Log source progress and hydration scheduling during deployment catch-up",
+    )
+
+    parser.add_argument(
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
 
@@ -234,6 +240,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.up("materialized")
+
+        if args.trace_source_progress:
+            c.sql(
+                "ALTER SYSTEM SET log_filter = "
+                "'info,mz_compute::render=debug,"
+                "mz_compute_client::sequential_hydration=debug';",
+                port=6877,
+                user="mz_system",
+            )
 
         c.sql(
             "ALTER SYSTEM SET max_replicas_per_cluster = 10;",
