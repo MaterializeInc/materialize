@@ -87,6 +87,145 @@ DELETE FROM t WHERE a IS NULL
 statement ok
 DROP MATERIALIZED VIEW mv_not_null
 
+# Keys must follow from the keys the optimizer can prove.
+statement ok
+CREATE MATERIALIZED VIEW mv_pk (a int4 PRIMARY KEY, n int8 NOT NULL) AS SELECT a, count(*) FROM t WHERE a IS NOT NULL GROUP BY a
+
+statement ok
+CREATE MATERIALIZED VIEW mv_superkey (a int4, n int8, UNIQUE NULLS NOT DISTINCT (a, n)) AS SELECT a, count(*) FROM t GROUP BY a
+
+statement ok
+CREATE MATERIALIZED VIEW mv_nnd (a int4, n int8, UNIQUE NULLS NOT DISTINCT (a)) AS SELECT a, count(*) FROM t GROUP BY a
+
+statement error cannot prove that \(n\) is a key of the materialized view
+CREATE MATERIALIZED VIEW mv_bad_key (a int4, n int8 NOT NULL PRIMARY KEY) AS SELECT a, count(*) FROM t GROUP BY a
+
+statement error cannot prove that \(a\) is a key of the materialized view
+CREATE MATERIALIZED VIEW mv_bad_key (a int4 PRIMARY KEY) AS SELECT a FROM t
+
+statement error cannot prove that \(a\) is a key of the materialized view
+EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW mv_bad_key (a int4 PRIMARY KEY) AS SELECT a FROM t
+
+statement error UNIQUE constraint on nullable column "a" is not supported
+CREATE MATERIALIZED VIEW mv_bad_key (a int4 UNIQUE) AS SELECT a FROM t GROUP BY a
+
+statement error multiple primary keys for a materialized view are not allowed
+CREATE MATERIALIZED VIEW mv_bad_key (a int4 PRIMARY KEY, PRIMARY KEY (a)) AS SELECT a FROM t GROUP BY a
+
+statement error unknown column in constraint: b
+CREATE MATERIALIZED VIEW mv_bad_key (a int4, PRIMARY KEY (b)) AS SELECT a FROM t GROUP BY a
+
+# Keys confirmed at creation are not reported as unconfirmed.
+query I
+SELECT count(*) FROM mz_internal.mz_materialized_view_unconfirmed_keys
+----
+0
+
+# Re-planning drops a declared key that the running configuration cannot
+# confirm, while creation rejects it. With cast elimination, the casts from
+# `varchar` to `text` disappear and the key survives. Without, the two casts
+# are in one `Map`, which keeps no key through them.
+statement ok
+CREATE TABLE tv (a varchar NOT NULL, b varchar NOT NULL)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_cast (a text NOT NULL, b text NOT NULL, PRIMARY KEY (a, b)) AS SELECT DISTINCT a, b FROM tv
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cast_elimination = false
+----
+COMPLETE 0
+
+statement error cannot prove that \(a, b\) is a key of the materialized view
+CREATE MATERIALIZED VIEW mv_cast_2 (a text NOT NULL, b text NOT NULL, PRIMARY KEY (a, b)) AS SELECT DISTINCT a, b FROM tv
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR REPLAN MATERIALIZED VIEW mv_cast
+----
+materialize.public.mv_cast:
+  Project (#2, #3)
+    Map (varchar_to_text(#0{a}), varchar_to_text(#1{b}))
+      Distinct project=[#0{a}, #1{b}]
+        ReadStorage materialize.public.tv
+
+Source materialize.public.tv
+
+Schema of materialize.public.mv_cast:
+  a text NOT NULL,
+  b text NOT NULL
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_cast_elimination
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR REPLAN MATERIALIZED VIEW mv_cast
+----
+materialize.public.mv_cast:
+  Distinct project=[#0{a}, #1{b}]
+    ReadStorage materialize.public.tv
+
+Source materialize.public.tv
+
+Schema of materialize.public.mv_cast:
+  a text NOT NULL,
+  b text NOT NULL,
+  UNIQUE (a, b)
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW mv_cast
+
+# Declared keys and nullability are visible to dependent objects.
+statement ok
+CREATE MATERIALIZED VIEW mv_pk_reader AS SELECT * FROM mv_pk
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_pk_reader
+----
+materialize.public.mv_pk_reader:
+  ReadStorage materialize.public.mv_pk
+
+Source materialize.public.mv_pk
+
+Schema of materialize.public.mv_pk_reader:
+  a integer NOT NULL,
+  n bigint NOT NULL,
+  UNIQUE (a)
+
+Target cluster: quickstart
+
+EOF
+
+# Keys over nullable columns are printed as UNIQUE NULLS NOT DISTINCT.
+statement ok
+CREATE MATERIALIZED VIEW mv_nnd_reader AS SELECT * FROM mv_nnd
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_nnd_reader
+----
+materialize.public.mv_nnd_reader:
+  ReadStorage materialize.public.mv_nnd
+
+Source materialize.public.mv_nnd
+
+Schema of materialize.public.mv_nnd_reader:
+  a integer,
+  n bigint,
+  UNIQUE NULLS NOT DISTINCT (a)
+
+Target cluster: quickstart
+
+EOF
+
 # Planning errors.
 statement error materialized view materialize.public.mv_err declares 1 columns, but its query produces 2
 CREATE MATERIALIZED VIEW mv_err (a int4) AS SELECT a, b FROM t
@@ -100,11 +239,8 @@ CREATE MATERIALIZED VIEW mv_err (a int4, a text) AS SELECT a, b FROM t
 statement error conflicting NULL/NOT NULL declarations for column "a"
 CREATE MATERIALIZED VIEW mv_err (a int4 NULL NOT NULL) AS SELECT a FROM t
 
-statement error PRIMARY KEY and UNIQUE on materialized views not yet supported
-CREATE MATERIALIZED VIEW mv_err (a int4 PRIMARY KEY) AS SELECT a FROM t GROUP BY a
-
-statement error PRIMARY KEY and UNIQUE on materialized views not yet supported
-CREATE MATERIALIZED VIEW mv_err (a int4, UNIQUE NULLS NOT DISTINCT (a)) AS SELECT a FROM t GROUP BY a
+statement error conflicting NULL/NOT NULL declarations for column "a"
+CREATE MATERIALIZED VIEW mv_err (a int4 NULL, PRIMARY KEY (a)) AS SELECT a FROM t GROUP BY a
 
 statement error ASSERT NOT NULL cannot be combined with column definitions
 CREATE MATERIALIZED VIEW mv_err (a int4) WITH (ASSERT NOT NULL a) AS SELECT a FROM t

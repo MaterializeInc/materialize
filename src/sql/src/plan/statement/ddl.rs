@@ -3269,6 +3269,11 @@ pub fn plan_create_materialized_view(
 
 /// Plans the schema a `CREATE MATERIALIZED VIEW` statement declares with column
 /// definitions.
+///
+/// Keys of a `RelationDesc` treat `NULL` like any other value, which is the
+/// semantics of `UNIQUE NULLS NOT DISTINCT`. A plain `UNIQUE` constraint on
+/// nullable columns is weaker, so it is an error instead of being dropped as
+/// `CREATE TABLE` does, because a declared key must not silently disappear.
 fn plan_materialized_view_declared_desc(
     scx: &StatementContext,
     columns: &[ColumnDef<Aug>],
@@ -3282,7 +3287,16 @@ fn plan_materialized_view_declared_desc(
         sql_bail!("column {} specified more than once", dup.quoted());
     }
 
+    struct DeclaredKey {
+        columns: Vec<usize>,
+        is_primary: bool,
+        nulls_distinct: bool,
+    }
+
     let mut column_types = Vec::with_capacity(columns.len());
+    // Whether each column is declared `NULL`, `NOT NULL`, or neither.
+    let mut declared_nullability = Vec::with_capacity(columns.len());
+    let mut keys = Vec::new();
     for (i, c) in columns.iter().enumerate() {
         if c.collation.is_some() {
             bail_unsupported!("COLLATE in materialized view column definitions");
@@ -3301,9 +3315,11 @@ fn plan_materialized_view_declared_desc(
                     }
                     nullable = Some(is_null);
                 }
-                ColumnOption::Unique { .. } => {
-                    bail_unsupported!("PRIMARY KEY and UNIQUE on materialized views")
-                }
+                ColumnOption::Unique { is_primary } => keys.push(DeclaredKey {
+                    columns: vec![i],
+                    is_primary: *is_primary,
+                    nulls_distinct: true,
+                }),
                 other => bail_unsupported!(format!(
                     "materialized view column definition with option: {}",
                     other.to_ast_string_simple()
@@ -3311,12 +3327,33 @@ fn plan_materialized_view_declared_desc(
             }
         }
         column_types.push(ty.nullable(nullable.unwrap_or(true)));
+        declared_nullability.push(nullable);
     }
 
     for constraint in constraints {
         match constraint {
-            TableConstraint::Unique { .. } => {
-                bail_unsupported!("PRIMARY KEY and UNIQUE on materialized views")
+            TableConstraint::Unique {
+                name: _,
+                columns,
+                is_primary,
+                nulls_not_distinct,
+            } => {
+                let mut key = Vec::with_capacity(columns.len());
+                for column in columns {
+                    let column = normalize::column_name(column.clone());
+                    let Some(i) = names.iter().position(|name| *name == column) else {
+                        sql_bail!("unknown column in constraint: {}", column);
+                    };
+                    if key.contains(&i) {
+                        sql_bail!("column {} appears twice in constraint", column.quoted());
+                    }
+                    key.push(i);
+                }
+                keys.push(DeclaredKey {
+                    columns: key,
+                    is_primary: *is_primary,
+                    nulls_distinct: !*nulls_not_distinct,
+                });
             }
             TableConstraint::ForeignKey { .. } => {
                 bail_unsupported!("FOREIGN KEY constraints on materialized views")
@@ -3327,7 +3364,37 @@ fn plan_materialized_view_declared_desc(
         }
     }
 
-    Ok(RelationDesc::new(SqlRelationType::new(column_types), names))
+    if keys.iter().filter(|k| k.is_primary).count() > 1 {
+        sql_bail!("multiple primary keys for a materialized view are not allowed");
+    }
+    // A primary key implies `NOT NULL` on its columns. Only then can we check
+    // the nullability of `UNIQUE` columns.
+    for key in keys.iter().filter(|k| k.is_primary) {
+        for &i in &key.columns {
+            if declared_nullability[i] == Some(true) {
+                sql_bail!(
+                    "conflicting NULL/NOT NULL declarations for column {}",
+                    names[i].quoted()
+                );
+            }
+            column_types[i].nullable = false;
+        }
+    }
+    for key in keys.iter().filter(|k| k.nulls_distinct) {
+        if let Some(&i) = key.columns.iter().find(|&&i| column_types[i].nullable) {
+            sql_bail!(
+                "UNIQUE constraint on nullable column {} is not supported; \
+                 declare the column NOT NULL or use UNIQUE NULLS NOT DISTINCT",
+                names[i].quoted()
+            );
+        }
+    }
+    // The primary key goes first, as for tables.
+    keys.sort_by_key(|k| !k.is_primary);
+    let keys = keys.into_iter().map(|k| k.columns).collect();
+
+    let typ = SqlRelationType::new(column_types).with_keys(keys);
+    Ok(RelationDesc::new(typ, names))
 }
 
 generate_extracted_config!(
@@ -3551,7 +3618,13 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Re-planning a persisted sink (pcx is None) must not fail,
+                // because the keys of its input can shrink between versions,
+                // for example when a materialized view drops a declared key
+                // that the running version does not confirm. `CREATE SINK`
+                // and `ALTER SINK` plan with a pcx, so the key was valid when
+                // it was stored, and is treated as not enforced from then on.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),

@@ -1976,7 +1976,8 @@ pub struct MaterializedView {
     /// When set, it is the materialized view's `RelationDesc`, independent of
     /// what the optimizer infers for `expr`. `expr` already casts to the
     /// declared types, and `non_null_assertions` covers the declared `NOT NULL`
-    /// columns.
+    /// columns. Declared keys still have to be checked against the optimized
+    /// plan before the materialized view is created.
     pub declared_desc: Option<RelationDesc>,
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
