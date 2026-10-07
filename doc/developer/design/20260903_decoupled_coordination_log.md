@@ -28,11 +28,13 @@ Independent static review found no blocking integration issue. Compilation and
 runtime verification remain CI-owned.
 The imported drop-only prewarming workflow is removed because it asserts legacy
 restarts. Native retirement and SQL DROP membership contracts remain unchanged.
-CI137934 at `094725b6` passed Cargo, Clippy, all five SLT shards, native outage
-and warm promotion. Both parallel shards still time out. Publication and retention
-fixtures fail because upstream's summary-only test policy omits their required
-per-shard metrics. Both fixtures now explicitly request those series, retaining
-all assertions. Verify that correction and the temporary handoff tracing in CI.
+CI137934 passed Cargo, Clippy, all five SLT shards, native outage and warm
+promotion. The publication and retention fixtures explicitly request per-shard
+metrics and pass in CI137946, retaining all assertions. CI137961 again passes
+native outage, warm promotion and publication. Its Cargo failures expose startup
+replica-status notices in protocol assertions. Opt-in fixture setup now observes
+all declared replica processes online before opening those assertion connections,
+without changing notices or goldens. Verify this fixture correction in CI.
 The oracle-only rejection is removed, so timestamp-conflict replies now describe
 actual txns conflicts. Both focused committer tests passed in CI137885.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
@@ -47,11 +49,16 @@ thousands of native responses are dispatched. Matching subscribe batches wait
 these attempts. Client commands get a bounded batch each message-bearing round,
 after the selected messages, without removing maintenance priority. Timer-only
 rounds admit no extra client work that could consume their re-armed delays.
-Verify that admission correction in the existing parallel workflows. Keep the
-temporary handoff events through this comparison, then remove them.
-Long inline catalog/publication work also delays dispatch. Dispatch gaps ending
-with publication-race warnings implicate maintenance, but do not isolate every
-await inside those gaps. Fair admission does not eliminate slow branch bodies.
+CI137961 confirms client receipts interleaving with internal responses and the
+early DELETE/UPDATE counterparts committing. Parallel1 still fails: its longest
+write submit-to-receipt interval is 30.469s and subscribe handoff reaches 40.788s.
+The Kafka UPDATE accumulates retries and times out. Gaps now include no internal
+dispatch either. A successful bound publication near one gap's end takes only
+0.299s, so it does not explain the preceding 28s. Keep scheduling unchanged.
+Temporary start/completion timing separates heartbeat, subscription and
+publication awaits in the existing parallel-only debug filter. Identify the
+expensive await and its contention/retry cost before choosing a remedy. Remove
+these diagnostics and handoff events once that question is answered.
 Preserve freshness, future-time checks, catalog completion before acknowledgement,
 refolding at every new target and existing deadlines. Lower-priority read/timeline
 branches retain their ordering. No broader scheduler redesign is included.

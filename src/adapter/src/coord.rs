@@ -4762,6 +4762,23 @@ impl Coordinator {
             let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
             tokio::pin!(frontier_timer);
 
+            async fn trace_maintenance<T>(
+                phase: &'static str,
+                operation: impl std::future::Future<Output = T>,
+            ) -> T {
+                let start = Instant::now();
+                tracing::debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase, "coordinator maintenance await started"
+                );
+                let result = operation.await;
+                tracing::debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase, elapsed = ?start.elapsed(), "coordinator maintenance await completed"
+                );
+                result
+            }
+
             loop {
                 let delay = self
                     .catalog()
@@ -4785,10 +4802,14 @@ impl Coordinator {
                     _ = client_heartbeat_timer.as_mut() => {
                         if self.query_client.as_ref().is_some_and(|client| {
                             client.last_publication().elapsed() >= client_heartbeat_delay
-                        }) && let Err(error) = self.publish_client_read_protection().await {
+                        }) && let Err(error) = trace_maintenance(
+                            "heartbeat_publish_client", self.publish_client_read_protection()
+                        ).await {
                             warn!(%error, "unable to publish query client protection");
                         }
-                        if let Err(error) = self.reclaim_client_read_protection().await {
+                        if let Err(error) = trace_maintenance(
+                            "heartbeat_reclaim", self.reclaim_client_read_protection()
+                        ).await {
                             warn!(%error, "unable to reclaim query client protection");
                         }
                         client_heartbeat_timer.set(tokio::time::sleep(client_heartbeat_delay));
@@ -4801,15 +4822,23 @@ impl Coordinator {
                             || self.controller.replica_owned_compute()
                             || !self.pending_compute_installations.is_empty() => {
                         if self.controller.replica_owned_compute() {
-                            if let Err(error) = self.refresh_catalog(None).await {
+                            if let Err(error) = trace_maintenance(
+                                "subscription_refresh", self.refresh_catalog(None)
+                            ).await {
                                 warn!(%error, "unable to follow committed native catalog state");
                             }
-                            if let Err(error) = self.reconcile_declared_replicas().await {
+                            if let Err(error) = trace_maintenance(
+                                "subscription_reconcile", self.reconcile_declared_replicas()
+                            ).await {
                                 warn!(%error, "unable to realize declared replicas");
                             }
                         }
-                        self.install_pending_compute_collections().await;
-                        if let Err(error) = self.sync_compute_read_protection().await {
+                        trace_maintenance(
+                            "subscription_install", self.install_pending_compute_collections()
+                        ).await;
+                        if let Err(error) = trace_maintenance(
+                            "subscription_protection", self.sync_compute_read_protection()
+                        ).await {
                             warn!(%error, "unable to follow catalog read protection");
                         }
                         subscription_timer.set(tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL));
@@ -4822,10 +4851,14 @@ impl Coordinator {
                         if self.query_client.is_some()
                             || (self.catalog().state().catalog_read_protection_enabled()
                                 && !self.controller.read_only()) => {
-                        if let Err(error) = self.publish_client_read_protection().await {
+                        if let Err(error) = trace_maintenance(
+                            "publication_client", self.publish_client_read_protection()
+                        ).await {
                             warn!(%error, "unable to publish query client protection");
                         }
-                        if let Err(error) = self.publish_read_protection().await {
+                        if let Err(error) = trace_maintenance(
+                            "publication_bounds", self.publish_read_protection()
+                        ).await {
                             warn!(%error, "unable to publish catalog read protection");
                         }
                         publication_timer.set(tokio::time::sleep(publication_delay));
