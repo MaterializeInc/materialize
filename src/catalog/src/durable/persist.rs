@@ -489,7 +489,20 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             // Every entry point, including bootstrap, upgrades and debug edits,
             // must allocate after preceding reads. A rebased upper is a lower
             // bound, not a substitute for that oracle allocation.
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_allocate",
+                "durable catalog phase start",
+            );
             let allocated = oracle.oracle.write_ts().await.timestamp;
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_allocate",
+                elapsed = ?phase_started.elapsed(),
+                outcome = "ok",
+                "durable catalog phase complete",
+            );
             (max(commit_ts, max(self.upper, allocated)), Some(allocated))
         } else {
             (commit_ts, None)
@@ -520,7 +533,21 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             updates.inc_by(update_count);
             bytes.inc_by(byte_count);
         }
-        self.sync(next_upper).await?;
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "post_commit_sync",
+            "durable catalog phase start",
+        );
+        let result = self.sync(next_upper).await;
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "post_commit_sync",
+            elapsed = ?phase_started.elapsed(),
+            outcome = if result.is_ok() { "ok" } else { "error" },
+            "durable catalog phase complete",
+        );
+        result?;
         Ok(next_upper)
     }
 
@@ -558,18 +585,64 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 // snapshot. Refresh before classifying it as a new jump. Return
                 // any advancement to the caller's normal conflict validation.
                 let expected_upper = self.upper;
-                self.sync_to_current_upper().await?;
+                let phase_started = Instant::now();
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "timestamp_check_sync",
+                    "durable catalog phase start",
+                );
+                let result = self.sync_to_current_upper().await;
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "timestamp_check_sync",
+                    elapsed = ?phase_started.elapsed(),
+                    outcome = if result.is_ok() { "ok" } else { "error" },
+                    "durable catalog phase complete",
+                );
+                result?;
                 if self.upper != expected_upper {
+                    debug!(
+                        target: "mz_adapter::frontend_read_then_write",
+                        phase = "timestamp_check",
+                        outcome = "upper_mismatch",
+                        "durable catalog timestamp check",
+                    );
                     return Err(CompareAndAppendError::UpperMismatch {
                         expected_upper,
                         actual_upper: self.upper,
                     });
                 }
+                let phase_started = Instant::now();
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "oracle_peek",
+                    "durable catalog phase start",
+                );
                 let inherited = self.upper.max(oracle.oracle.peek_write_ts().await);
-                oracle.check_timestamp(commit_ts, inherited)?;
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "oracle_peek",
+                    elapsed = ?phase_started.elapsed(),
+                    outcome = "ok",
+                    "durable catalog phase complete",
+                );
+                let result = oracle.check_timestamp(commit_ts, inherited);
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "timestamp_check",
+                    outcome = if result.is_ok() { "ok" } else { "error" },
+                    "durable catalog timestamp check",
+                );
+                result?;
             }
         }
         let next_upper = commit_ts.step_forward();
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "persist_cas",
+            "durable catalog phase start",
+        );
         let res = self
             .write_handle
             .compare_and_append(
@@ -577,13 +650,38 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 Antichain::from_elem(self.upper),
                 Antichain::from_elem(next_upper),
             )
-            .await
-            .expect("invalid usage");
+            .await;
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "persist_cas",
+            elapsed = ?phase_started.elapsed(),
+            outcome = match &res {
+                Ok(Ok(_)) => "ok",
+                Ok(Err(_)) => "upper_mismatch",
+                Err(_) => "error",
+            },
+            "durable catalog phase complete",
+        );
+        let res = res.expect("invalid usage");
 
         if let Err(e @ UpperMismatch { .. }) = res {
             // Most likely we were fenced out.
             // Sync to the current upper to detect that.
-            self.sync_to_current_upper().await?;
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "cas_mismatch_sync",
+                "durable catalog phase start",
+            );
+            let result = self.sync_to_current_upper().await;
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "cas_mismatch_sync",
+                elapsed = ?phase_started.elapsed(),
+                outcome = if result.is_ok() { "ok" } else { "error" },
+                "durable catalog phase complete",
+            );
+            result?;
             return Err(e.into());
         }
 
@@ -592,7 +690,20 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         {
             // Durability precedes completion, which precedes acknowledgement.
             // Do this before any local sync that can fail after publication.
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_complete",
+                "durable catalog phase start",
+            );
             oracle.oracle.apply_write(commit_ts).await;
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_complete",
+                elapsed = ?phase_started.elapsed(),
+                outcome = "ok",
+                "durable catalog phase complete",
+            );
         }
 
         // Lag the shard's upper by 1 to keep it readable.
@@ -603,10 +714,27 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
         let opaque = self.since_handle.opaque().clone();
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "since_downgrade",
+            "durable catalog phase start",
+        );
         let downgrade = self
             .since_handle
             .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
             .await;
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "since_downgrade",
+            elapsed = ?phase_started.elapsed(),
+            outcome = match &downgrade {
+                Some(Ok(_)) => "ok",
+                Some(Err(_)) => "error",
+                None => "no_op",
+            },
+            "durable catalog phase complete",
+        );
         if let Some(Err(e)) = downgrade {
             soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}");
         }
@@ -2602,17 +2730,44 @@ impl DurableCatalogState for PersistCatalogState {
             // Empty upper progress does not invalidate the transaction.
             let mut commit_ts = max(commit_ts, catalog.upper);
 
+            let mut attempt = 0u64;
             let next_upper = match catalog.mode {
                 Mode::Writable => loop {
                     let updates_applied_before = catalog.updates_applied;
-                    match catalog.compare_and_append(updates.clone(), commit_ts).await {
+                    attempt += 1;
+                    let phase_started = Instant::now();
+                    debug!(
+                        target: "mz_adapter::frontend_read_then_write",
+                        phase = "commit_attempt", attempt,
+                        "durable catalog phase start",
+                    );
+                    let result = catalog.compare_and_append(updates.clone(), commit_ts).await;
+                    debug!(
+                        target: "mz_adapter::frontend_read_then_write",
+                        phase = "commit_attempt", attempt,
+                        elapsed = ?phase_started.elapsed(),
+                        outcome = match &result {
+                            Ok(_) => "ok",
+                            Err(CompareAndAppendError::Durable(_)) => "error",
+                            Err(CompareAndAppendError::UpperMismatch { .. }) => "upper_mismatch",
+                        },
+                        "durable catalog phase complete",
+                    );
+                    match result {
                         Ok(next_upper) => break next_upper,
                         Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
                         Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
                             // The mismatch synchronized the handle. Retry only if it applied no
                             // content.
-                            catalog
-                                .classify_upper_mismatch(updates_applied_before, actual_upper)?;
+                            let result = catalog
+                                .classify_upper_mismatch(updates_applied_before, actual_upper);
+                            debug!(
+                                target: "mz_adapter::frontend_read_then_write",
+                                phase = "commit_mismatch", attempt,
+                                outcome = if result.is_ok() { "retry" } else { "error" },
+                                "durable catalog mismatch classified",
+                            );
+                            result?;
                             commit_ts = max(commit_ts, catalog.upper);
                         }
                     }

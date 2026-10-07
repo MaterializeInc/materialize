@@ -2347,6 +2347,23 @@ pub struct Coordinator {
     user_id_pool: IdPool,
 }
 
+async fn trace_maintenance<T>(
+    phase: &'static str,
+    operation: impl std::future::Future<Output = T>,
+) -> T {
+    let start = Instant::now();
+    tracing::debug!(
+        target: "mz_adapter::frontend_read_then_write",
+        phase, "coordinator maintenance await started"
+    );
+    let result = operation.await;
+    tracing::debug!(
+        target: "mz_adapter::frontend_read_then_write",
+        phase, elapsed = ?start.elapsed(), "coordinator maintenance await completed"
+    );
+    result
+}
+
 impl Coordinator {
     /// Persists the scoped system-parameter working copy and reconciles it into
     /// the per-scope resolution boundaries.
@@ -4761,23 +4778,6 @@ impl Coordinator {
             // is independent of permission publication and installation waits.
             let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
             tokio::pin!(frontier_timer);
-
-            async fn trace_maintenance<T>(
-                phase: &'static str,
-                operation: impl std::future::Future<Output = T>,
-            ) -> T {
-                let start = Instant::now();
-                tracing::debug!(
-                    target: "mz_adapter::frontend_read_then_write",
-                    phase, "coordinator maintenance await started"
-                );
-                let result = operation.await;
-                tracing::debug!(
-                    target: "mz_adapter::frontend_read_then_write",
-                    phase, elapsed = ?start.elapsed(), "coordinator maintenance await completed"
-                );
-                result
-            }
 
             loop {
                 let delay = self

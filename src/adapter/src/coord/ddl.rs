@@ -216,10 +216,11 @@ impl Coordinator {
 
         // Apply catalog implications concurrently with the table updates.
         let (combined_apply_res, ()) = futures::future::join(
-            apply_catalog_implications_fut.instrument(info_span!(
-                "coord::catalog_transact_with_context::side_effects_fut"
-            )),
-            table_updates
+            super::trace_maintenance("catalog_apply_implications", apply_catalog_implications_fut)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_context::side_effects_fut"
+                )),
+            super::trace_maintenance("catalog_builtin_wait", table_updates)
                 .wall_time()
                 .observe(table_updates_wait)
                 .instrument(info_span!(
@@ -429,10 +430,13 @@ impl Coordinator {
         &mut self,
         upper: Option<mz_repr::Timestamp>,
     ) -> Result<(), AdapterError> {
-        let (builtin, updates) = match upper {
-            Some(upper) => self.catalog_mut().sync_updates_through(upper).await?,
-            None => self.catalog_mut().sync_to_current_updates().await?,
-        };
+        let (builtin, updates) = super::trace_maintenance("catalog_refresh_sync", async {
+            match upper {
+                Some(upper) => self.catalog_mut().sync_updates_through(upper).await,
+                None => self.catalog_mut().sync_to_current_updates().await,
+            }
+        })
+        .await?;
         let builtin = self
             .catalog()
             .state()
@@ -441,9 +445,12 @@ impl Coordinator {
         // empty group commit can let peer publications win every catalog retry,
         // starving this coordinator's heartbeat when table writes are delayed.
         let notify = (!builtin.is_empty()).then(|| self.builtin_table_update().execute(builtin));
-        match mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
-            Box::pin(self.apply_catalog_implications(None, updates)),
-        ))
+        match super::trace_maintenance(
+            "catalog_refresh_implications",
+            mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(Box::pin(
+                self.apply_catalog_implications(None, updates),
+            ))),
+        )
         .await
         {
             Ok(Ok(())) => {}
@@ -456,7 +463,7 @@ impl Coordinator {
             }
         }
         if let Some(notify) = notify {
-            notify.await;
+            super::trace_maintenance("catalog_refresh_builtin_wait", notify).await;
         }
         Ok(())
     }
@@ -483,6 +490,7 @@ impl Coordinator {
         let reclaims_client = ops
             .iter()
             .any(|op| matches!(op, catalog::Op::ReclaimClientIncarnation { .. }));
+        let mut attempt = 0u64;
         loop {
             // A failed CAS can reveal a creation that cannot install yet. Check
             // on every attempt, after foreign implications as well as initially.
@@ -490,7 +498,15 @@ impl Coordinator {
                 return Err(AdapterError::DDLTransactionRace);
             }
             let revision = self.catalog().transient_revision();
-            match self.catalog_transact_attempt(conn_id, ops.clone()).await {
+            attempt += 1;
+            let result = super::trace_maintenance("catalog_outer_attempt", async {
+                self.catalog_transact_attempt(conn_id, ops.clone()).await
+            })
+            .await;
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                attempt, failed = result.is_err(), retry_after_planning_change,
+                "catalog outer attempt completed");
+            match result {
                 Err(AdapterError::Catalog(error))
                     if matches!(
                         &error.kind,
@@ -499,7 +515,11 @@ impl Coordinator {
                         )
                     ) =>
                 {
-                    self.refresh_catalog(None).await?;
+                    super::trace_maintenance(
+                        "catalog_outer_conflict_refresh",
+                        self.refresh_catalog(None),
+                    )
+                    .await?;
                     if !retry_after_planning_change
                         && self.catalog().transient_revision() != revision
                     {
@@ -938,11 +958,11 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let mut oracle_write_ts = self
-            .get_catalog_write_ts()
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["write_ts"]))
-            .await;
+        let mut oracle_write_ts =
+            super::trace_maintenance("catalog_write_ts", self.get_catalog_write_ts())
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["write_ts"]))
+                .await;
 
         // Candidate planning and commit must resolve the same temporary namespace.
         if let Some(conn_id) = conn_id {
@@ -986,6 +1006,7 @@ impl Coordinator {
         // not the expensive preparation that preceded it. Structural changes
         // return to the outer loop's planning-conflict policy.
         let prepared_revision = self.catalog().transient_revision();
+        let mut commit_attempt = 0u64;
         let result = loop {
             if !rewritten_objects.is_empty()
                 && let Some((observer, baseline)) = &prepared_observer
@@ -1015,6 +1036,7 @@ impl Coordinator {
                         .unwrap_or_default(),
                 });
             }
+            commit_attempt += 1;
             let result = {
                 let Coordinator {
                     catalog,
@@ -1025,17 +1047,22 @@ impl Coordinator {
                 let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
                 // Time validation and durable work per attempt. Preparation and
                 // conflict refresh have separate phases, not hidden retry cost.
-                Arc::make_mut(catalog)
-                    .transact(
-                        Some(&mut controller.storage_collections),
-                        oracle_write_ts,
-                        conn,
-                        ops.clone(),
-                    )
-                    .wall_time()
-                    .observe(phase_seconds.with_label_values(&["transact"]))
-                    .await
+                super::trace_maintenance("catalog_transact", async {
+                    Arc::make_mut(catalog)
+                        .transact(
+                            Some(&mut controller.storage_collections),
+                            oracle_write_ts,
+                            conn,
+                            ops.clone(),
+                        )
+                        .await
+                })
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["transact"]))
+                .await
             };
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                commit_attempt, failed = result.is_err(), "catalog commit attempt completed");
             match result {
                 Err(error)
                     if matches!(&error,
@@ -1044,10 +1071,13 @@ impl Coordinator {
                             mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
                         ))) =>
                 {
-                    self.refresh_catalog(None)
-                        .wall_time()
-                        .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
-                        .await?;
+                    super::trace_maintenance(
+                        "catalog_inner_conflict_refresh",
+                        self.refresh_catalog(None),
+                    )
+                    .wall_time()
+                    .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
+                    .await?;
                     // Compaction proposals sample other clients' requirements.
                     // A metadata-only grant can invalidate that sample without
                     // changing the planning revision. Let the publisher resample
@@ -1076,11 +1106,13 @@ impl Coordinator {
                             "client read protection incarnation is closed",
                         ));
                     }
-                    oracle_write_ts = self
-                        .get_catalog_write_ts()
-                        .wall_time()
-                        .observe(phase_seconds.with_label_values(&["write_ts"]))
-                        .await;
+                    oracle_write_ts = super::trace_maintenance(
+                        "catalog_retry_write_ts",
+                        self.get_catalog_write_ts(),
+                    )
+                    .wall_time()
+                    .observe(phase_seconds.with_label_values(&["write_ts"]))
+                    .await;
                 }
                 result => break result?,
             }

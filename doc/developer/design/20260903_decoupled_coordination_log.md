@@ -26,6 +26,8 @@ The moved background PeekClient constructor no longer takes the removed flag.
 The renamed two-instance txn-WAL workflow remains paired with its nightly entry.
 Independent static review found no blocking integration issue. Compilation and
 runtime verification remain CI-owned.
+Keep the upstream base pinned for now. Newer upstream merge conflicts are deferred
+by Aljoscha, not a reason to interrupt runtime verification or chase another rebase.
 The imported drop-only prewarming workflow is removed because it asserts legacy
 restarts. Native retirement and SQL DROP membership contracts remain unchanged.
 CI137934 passed Cargo, Clippy, all five SLT shards, native outage and warm
@@ -34,7 +36,10 @@ metrics and pass in CI137946, retaining all assertions. CI137961 again passes
 native outage, warm promotion and publication. Its Cargo failures expose startup
 replica-status notices in protocol assertions. Opt-in fixture setup now observes
 all declared replica processes online before opening those assertion connections,
-without changing notices or goldens. Verify this fixture correction in CI.
+without changing notices or goldens. CI137969 verifies the correction with all
+4,250 Cargo tests passing. Both Clippy jobs, all SLT and Testdrive shards, native
+outage, warm promotion, publication and retention pass. Parallel2 passes, while
+Parallel1 times out and its maintenance phase timings are under investigation.
 The oracle-only rejection is removed, so timestamp-conflict replies now describe
 actual txns conflicts. Both focused committer tests passed in CI137885.
 Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
@@ -55,10 +60,13 @@ write submit-to-receipt interval is 30.469s and subscribe handoff reaches 40.788
 The Kafka UPDATE accumulates retries and times out. Gaps now include no internal
 dispatch either. A successful bound publication near one gap's end takes only
 0.299s, so it does not explain the preceding 28s. Keep scheduling unchanged.
-Temporary start/completion timing separates heartbeat, subscription and
-publication awaits in the existing parallel-only debug filter. Identify the
-expensive await and its contention/retry cost before choosing a remedy. Remove
-these diagnostics and handoff events once that question is answered.
+CI137969 locates 96.1% of completed maintenance time in client read-protection
+publication, including a 264.610s call. Bounds publication peaks at 5.427s.
+An independently measured 178.893s ordinary handler also delays dispatch, so not
+every stall has one owner. Nested diagnostic timing now separates transaction
+attempts, refresh, catalog locking/validation, oracle/CAS and completion. Measure
+the expensive sub-await and retry cost before choosing a remedy. Nested durations
+overlap. Remove these diagnostics and handoff events once that question is answered.
 Preserve freshness, future-time checks, catalog completion before acknowledgement,
 refolding at every new target and existing deadlines. Lower-priority read/timeline
 branches retain their ordering. No broader scheduler redesign is included.

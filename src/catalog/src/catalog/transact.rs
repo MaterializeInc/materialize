@@ -13,7 +13,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::SYSTEM_CONN_ID;
 use crate::builtin::BuiltinLog;
@@ -80,7 +80,7 @@ use mz_storage_client::controller::StorageTxn;
 use mz_storage_client::storage_collections::{StorageCollections, prepare_collection_state};
 use mz_storage_types::sources::envelope::SourceEnvelope;
 use serde::{Deserialize, Serialize};
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::catalog::CatalogError;
@@ -850,8 +850,35 @@ impl Catalog {
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "storage_handle",
+            "catalog phase start",
+        );
         let mut storage = self.storage().await;
-        let mut tx = match storage.transaction().await {
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "storage_handle",
+            elapsed = ?phase_started.elapsed(),
+            outcome = "ok",
+            "catalog phase complete",
+        );
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "transaction_open",
+            "catalog phase start",
+        );
+        let result = storage.transaction().await;
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "transaction_open",
+            elapsed = ?phase_started.elapsed(),
+            outcome = if result.is_ok() { "ok" } else { "error" },
+            "catalog phase complete",
+        );
+        let mut tx = match result {
             Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                 return Err(error.into());
             }
@@ -860,6 +887,12 @@ impl Catalog {
         // Empty progress may have overtaken the timestamp chosen before opening the transaction.
         let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate",
+            "catalog phase start",
+        );
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             &self.diagnostic_config.persist_client,
@@ -874,12 +907,34 @@ impl Catalog {
             &mut tx,
             &self.state,
         )
-        .await?;
+        .await;
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate",
+            elapsed = ?phase_started.elapsed(),
+            outcome = if new_state.is_ok() { "ok" } else { "error" },
+            "catalog phase complete",
+        );
+        let new_state = new_state?;
 
         // A definite CAS loss leaves the candidate unpublished. The caller must
         // refresh its projection and revalidate before retrying. Other failures
         // can follow a successful append, so they still require recovery.
-        let upper = match tx.commit_with_upper(commit_ts).await {
+        let phase_started = Instant::now();
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "durable_commit",
+            "catalog phase start",
+        );
+        let result = tx.commit_with_upper(commit_ts).await;
+        debug!(
+            target: "mz_adapter::frontend_read_then_write",
+            phase = "durable_commit",
+            elapsed = ?phase_started.elapsed(),
+            outcome = if result.is_ok() { "ok" } else { "error" },
+            "catalog phase complete",
+        );
+        let upper = match result {
             Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                 return Err(error.into());
             }
