@@ -353,6 +353,7 @@ pub enum Message {
     Command(OpenTelemetryContext, Command),
     QueryDataflowResponse(crate::query_client::compute::DataflowResponse),
     QueryWatchSetReady(WatchSetId, Result<(), AdapterError>),
+    ClientReadProtectionReady(Box<read_protection::PendingReadProtection>),
     ControllerReady {
         controller: ControllerReadiness,
     },
@@ -549,6 +550,7 @@ impl Message {
             } => "controller_ready(internal)",
             Message::QueryDataflowResponse(_) => "query_dataflow_response",
             Message::QueryWatchSetReady(..) => "query_watch_set_ready",
+            Message::ClientReadProtectionReady(..) => "client_read_protection_ready",
             Message::ExecuteCatalogReady { .. } => "execute_catalog_ready",
             Message::ExecuteReplan(_) => "execute_replan",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",

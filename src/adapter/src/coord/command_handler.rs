@@ -424,10 +424,8 @@ impl Coordinator {
                     read_ts,
                     tx,
                 } => {
-                    let result = self
-                        .acquire_client_read_protection(incarnation, bundle, |_| Ok(read_ts))
+                    Box::pin(self.start_client_read_protection(incarnation, bundle, read_ts, tx))
                         .await;
-                    let _ = tx.send(result);
                 }
 
                 Command::GetOracle { timeline, tx } => {

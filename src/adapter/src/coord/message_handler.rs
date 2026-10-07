@@ -76,6 +76,9 @@ impl Coordinator {
             Message::QueryWatchSetReady(id, result) => {
                 self.message_watch_set_ready(id, result).await;
             }
+            Message::ClientReadProtectionReady(pending) => {
+                Box::pin(self.resume_client_read_protection(*pending)).await;
+            }
             Message::QueryDataflowResponse(response) => {
                 use crate::query_client::compute::DataflowResponse;
                 use mz_compute_client::protocol::response::{

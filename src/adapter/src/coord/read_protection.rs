@@ -26,11 +26,42 @@ use mz_storage_client::storage_collections::CollectionFrontiers;
 use timely::progress::Antichain;
 
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Op};
-use crate::coord::Coordinator;
-use crate::query_client::QueryClient;
+use crate::coord::{Coordinator, Message};
+use crate::query_client::{PreparedRead, QueryClient};
 use crate::{AdapterError, CollectionIdBundle, ReadHolds, TimelineContext};
 
 pub(super) const CATALOG_SUBSCRIPTION_INTERVAL: Duration = Duration::from_secs(1);
+
+type ReadProtectionResponse = Result<(ReadHolds, Antichain<Timestamp>), AdapterError>;
+
+/// An ungranted request, not a pending catalog publication. The caller owns its
+/// timeout and cancellation by retaining the response receiver. Repreparation
+/// may update the obtainable floor, but not the requested timestamp or first upper.
+#[derive(Debug)]
+pub struct PendingReadProtection {
+    incarnation: u64,
+    bundle: CollectionIdBundle,
+    read_ts: Option<Timestamp>,
+    upper: Option<Antichain<Timestamp>>,
+    tx: tokio::sync::oneshot::Sender<ReadProtectionResponse>,
+    otel_ctx: mz_ore::tracing::OpenTelemetryContext,
+}
+
+impl PendingReadProtection {
+    async fn retry_after(
+        mut self,
+        sender: tokio::sync::mpsc::UnboundedSender<Message>,
+        delay: Duration,
+    ) {
+        let retry = tokio::select! {
+            _ = self.tx.closed() => false,
+            _ = tokio::time::sleep(delay) => true,
+        };
+        if retry {
+            let _ = sender.send(Message::ClientReadProtectionReady(Box::new(self)));
+        }
+    }
+}
 
 pub(super) fn is_read_protection_conflict(error: &AdapterError) -> bool {
     matches!(error, AdapterError::DDLTransactionRace)
@@ -121,6 +152,96 @@ impl ReadProtectionPublication<'_> {
 }
 
 impl Coordinator {
+    pub(super) async fn start_client_read_protection(
+        &mut self,
+        incarnation: u64,
+        bundle: CollectionIdBundle,
+        read_ts: Option<Timestamp>,
+        tx: tokio::sync::oneshot::Sender<ReadProtectionResponse>,
+    ) {
+        self.resume_client_read_protection(PendingReadProtection {
+            incarnation,
+            bundle,
+            read_ts,
+            upper: None,
+            tx,
+            otel_ctx: mz_ore::tracing::OpenTelemetryContext::obtain(),
+        })
+        .await;
+    }
+
+    pub(super) async fn resume_client_read_protection(
+        &mut self,
+        mut pending: PendingReadProtection,
+    ) {
+        pending.otel_ctx.attach_as_parent();
+        if pending.tx.is_closed() {
+            return;
+        }
+        let result = async {
+            let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
+            if client.protection.incarnation() != pending.incarnation {
+                return Err(AdapterError::internal(
+                    "query read protection",
+                    "incarnation is no longer active",
+                ));
+            }
+            // Other requests and maintenance can change the catalog during the
+            // wait. Rebuild the requested scope before using even a cached grant.
+            let prepared = client
+                .prepare_read(self.client_read_catalog(), &pending.bundle, |_| {
+                    Ok(pending.read_ts)
+                })
+                .await?;
+            pending.upper.get_or_insert_with(|| prepared.upper.clone());
+            if pending.tx.is_closed() {
+                return Ok(None);
+            }
+            match self
+                .try_acquire_prepared_read(
+                    &client,
+                    &prepared,
+                    &mut ReadProtectionPublication::Runtime,
+                    true,
+                )
+                .await
+            {
+                Ok(holds) => Ok(Some(holds)),
+                Err(error) => {
+                    if is_read_protection_conflict(&error)
+                        || prepared
+                            .retry_publication(&client, self.client_read_catalog(), &error)
+                            .await?
+                            .is_some()
+                    {
+                        Ok(None)
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
+        }
+        .await;
+        match result {
+            Ok(Some(holds)) => {
+                let _ = pending
+                    .tx
+                    .send(Ok((holds, pending.upper.expect("prepared before grant"))));
+            }
+            Err(error) => {
+                let _ = pending.tx.send(Err(error));
+            }
+            Ok(None) => {
+                let delay = self.read_protection_conflict_delay();
+                let sender = self.internal_cmd_tx.clone();
+                mz_ore::task::spawn(
+                    || "retry_read_protection",
+                    pending.retry_after(sender, delay),
+                );
+            }
+        }
+    }
+
     pub(super) fn read_protection_conflict_delay(&self) -> Duration {
         let delay = mz_catalog::retry::sample_duration(
             Duration::from_millis(10),
@@ -562,70 +683,99 @@ impl Coordinator {
         // floor, but must not change the request or the upper that selected it.
         let upper = prepared.upper.clone();
         loop {
-            if let Some(holds) = client
-                .protection
-                .try_acquire(
-                    &prepared.bundle,
-                    &prepared.frontiers,
-                    &prepared.index_inputs,
-                )
-                .map_err(|error| AdapterError::Unstructured(error.into()))?
+            match self
+                .try_acquire_prepared_read(&client, &prepared, &mut publication, false)
+                .await
             {
-                return Ok((holds, upper));
-            }
-            let extra = publication
-                .catalog(self)
-                .state()
-                .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
-            let requirements = client.protection.prepare_publication(extra);
-            let op = Op::PublishClientReadRequirements {
-                incarnation,
-                requirements,
-            };
-            let result = match &mut publication {
-                ReadProtectionPublication::Runtime => self.transact_client_protection(op).await,
-                ReadProtectionPublication::Bootstrap(updates) => {
-                    self.bootstrap_catalog_transact(vec![op], updates).await
+                Ok(holds) => return Ok((holds, upper)),
+                Err(error) => {
+                    if let Some(fresh) = prepared
+                        .retry_publication(&client, publication.catalog(self), &error)
+                        .await?
+                    {
+                        prepared = fresh;
+                    } else {
+                        return Err(error);
+                    }
                 }
-            };
-            // Catalog transaction errors are definitive. Indeterminate commit errors
-            // terminate before this point rather than releasing a publication barrier.
-            client.protection.finish_publication(result.is_ok());
-            if !publication
-                .catalog(self)
-                .state()
-                .client_incarnations()
-                .contains_key(&incarnation)
-            {
-                client.protection.mark_closed();
             }
-            if let Err(error) = result {
-                if let Some(fresh) = prepared
-                    .retry_publication(&client, publication.catalog(self), &error)
-                    .await?
-                {
-                    prepared = fresh;
-                    continue;
-                }
-                return Err(error);
-            }
-            client.published();
-            let holds = client
-                .protection
-                .try_acquire(
-                    &prepared.bundle,
-                    &prepared.frontiers,
-                    &prepared.index_inputs,
-                )
-                .map_err(|error| AdapterError::Unstructured(error.into()))?
-                .ok_or_else(|| {
-                    AdapterError::internal(
-                        "query read protection",
-                        "published scope was not acquired",
-                    )
-                })?;
-            return Ok((holds, upper));
         }
+    }
+
+    /// No pending publication survives a definitive return. A caller requesting
+    /// one attempt owns resampling and resumption after a catalog conflict.
+    async fn try_acquire_prepared_read(
+        &mut self,
+        client: &Arc<QueryClient>,
+        prepared: &PreparedRead,
+        publication: &mut ReadProtectionPublication<'_>,
+        once: bool,
+    ) -> Result<ReadHolds, AdapterError> {
+        let incarnation = client.protection.incarnation();
+        if !publication
+            .catalog(self)
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+        {
+            client.protection.mark_closed();
+            return Err(AdapterError::internal(
+                "query read protection",
+                "incarnation is closed",
+            ));
+        }
+        if let Some(holds) = client
+            .protection
+            .try_acquire(
+                &prepared.bundle,
+                &prepared.frontiers,
+                &prepared.index_inputs,
+            )
+            .map_err(|error| AdapterError::Unstructured(error.into()))?
+        {
+            return Ok(holds);
+        }
+        let extra = publication
+            .catalog(self)
+            .state()
+            .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
+        let requirements = client.protection.prepare_publication(extra);
+        let op = Op::PublishClientReadRequirements {
+            incarnation,
+            requirements,
+        };
+        let result = match publication {
+            ReadProtectionPublication::Runtime => {
+                self.transact_client_protection_inner(op, once).await
+            }
+            ReadProtectionPublication::Bootstrap(updates) => {
+                self.bootstrap_catalog_transact(vec![op], updates).await
+            }
+        };
+        // Indeterminate outcomes terminate before this point. Only a definitive
+        // result can release the pending barrier or authorize the local grant.
+        client.protection.finish_publication(result.is_ok());
+        if !publication
+            .catalog(self)
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+        {
+            client.protection.mark_closed();
+        }
+        result?;
+        client.published();
+        client
+            .protection
+            .try_acquire(
+                &prepared.bundle,
+                &prepared.frontiers,
+                &prepared.index_inputs,
+            )
+            .map_err(|error| AdapterError::Unstructured(error.into()))?
+            .ok_or_else(|| {
+                AdapterError::internal("query read protection", "published scope was not acquired")
+            })
     }
 
     /// Attempts one publication of the client aggregate and heartbeat.
@@ -879,6 +1029,32 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn canceled_acquisition_does_not_enqueue_a_retry() {
+        let (tx, response) = tokio::sync::oneshot::channel();
+        let (commands, mut incoming) = tokio::sync::mpsc::unbounded_channel();
+        let pending = PendingReadProtection {
+            incarnation: 1,
+            bundle: CollectionIdBundle::default(),
+            read_ts: Some(Timestamp::from(7)),
+            upper: Some(Antichain::from_elem(Timestamp::from(11))),
+            tx,
+            otel_ctx: mz_ore::tracing::OpenTelemetryContext::obtain(),
+        };
+        let retry = pending.retry_after(commands, Duration::from_secs(60));
+        tokio::pin!(retry);
+        tokio::select! {
+            biased;
+            _ = &mut retry => panic!("retry did not wait"),
+            _ = std::future::ready(()) => (),
+        }
+        drop(response);
+        tokio::time::timeout(Duration::from_secs(1), &mut retry)
+            .await
+            .expect("closing the reply must cancel the wait");
+        assert!(incoming.try_recv().is_err(), "canceled retry was enqueued");
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn overlapping_protection_retries_leave_queued_work_ready() {
