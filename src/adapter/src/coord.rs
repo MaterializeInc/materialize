@@ -2603,28 +2603,45 @@ impl Coordinator {
                     builtin_table_updates.extend(result.builtin_table_updates);
                     return Ok(result.created_client_incarnations);
                 }
-                Err(error)
-                    if matches!(&error,
-                    AdapterError::Catalog(error) if matches!(&error.kind,
-                        mz_catalog::memory::error::ErrorKind::Durable(
-                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-                        ))) =>
-                {
-                    info!(%error, "refreshing bootstrap selections after catalog contention");
-                    let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
-                    builtin_table_updates.extend(
-                        self.catalog()
-                            .state()
-                            .resolve_builtin_table_updates(builtin),
-                    );
-                    if self.catalog().transient_revision() != revision {
-                        return Err(error);
-                    }
-                    Box::pin(self.apply_catalog_implications(None, updates)).await?;
+                Err(error) => {
+                    self.refresh_bootstrap_catalog_after_conflict(
+                        error,
+                        revision,
+                        builtin_table_updates,
+                    )
+                    .await?;
                 }
-                Err(error) => return Err(error),
             }
         }
+    }
+
+    /// Refreshes a stale bootstrap prefix without accepting a changed planning
+    /// context. Preview and commit both require this check before retrying.
+    async fn refresh_bootstrap_catalog_after_conflict(
+        &mut self,
+        error: AdapterError,
+        revision: u64,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+    ) -> Result<(), AdapterError> {
+        if !matches!(&error,
+        AdapterError::Catalog(error) if matches!(&error.kind,
+            mz_catalog::memory::error::ErrorKind::Durable(
+                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+            )))
+        {
+            return Err(error);
+        }
+        info!(%error, "refreshing bootstrap selections after catalog contention");
+        let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
+        builtin_table_updates.extend(
+            self.catalog()
+                .state()
+                .resolve_builtin_table_updates(builtin),
+        );
+        if self.catalog().transient_revision() != revision {
+            return Err(error);
+        }
+        Box::pin(self.apply_catalog_implications(None, updates)).await
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -2945,17 +2962,34 @@ impl Coordinator {
                             _ => None,
                         })
                         .collect();
-                    let write_ts = self.get_catalog_write_ts().await;
-                    let (candidate, _) = self
-                        .catalog()
-                        .transact_incremental_dry_run(
-                            self.catalog().state(),
-                            selections.clone(),
-                            None,
-                            None,
-                            write_ts,
-                        )
-                        .await?;
+                    // The preview opens a durable transaction too. A publisher
+                    // can invalidate its prefix without invalidating the held
+                    // plans, so rebuild the preview after the same checked
+                    // refresh used by the commit path.
+                    let (candidate, _) = loop {
+                        let write_ts = self.get_catalog_write_ts().await;
+                        let result = self
+                            .catalog()
+                            .transact_incremental_dry_run(
+                                self.catalog().state(),
+                                selections.clone(),
+                                None,
+                                None,
+                                write_ts,
+                            )
+                            .await;
+                        match result {
+                            Ok(candidate) => break candidate,
+                            Err(error) => {
+                                self.refresh_bootstrap_catalog_after_conflict(
+                                    error,
+                                    planning_revision,
+                                    &mut builtin_table_updates,
+                                )
+                                .await?;
+                            }
+                        }
+                    };
                     let publication = self
                         .prepare_index_timeline_publication(Arc::clone(client), &candidate, indexes)
                         .await?;
