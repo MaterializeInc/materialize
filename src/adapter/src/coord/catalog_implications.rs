@@ -172,11 +172,9 @@ impl Coordinator {
             self.reconcile_now.notify_one();
         }
 
-        // Query protection follows committed admission. Persisted indexes do
-        // not need an installed replica to maintain their timeline window.
-        if let Err(error) = Box::pin(self.acquire_pending_query_timeline_holds()).await {
-            tracing::warn!(%error, "unable to establish query timeline windows");
-        }
+        // Timeline maintenance acquires pending windows outside committed-diff
+        // enactment: acquisition may itself write the catalog. Transaction
+        // completion adopts the creator's birth grants before maintenance runs.
 
         self.metrics
             .apply_catalog_implications_seconds

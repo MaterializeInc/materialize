@@ -45,6 +45,12 @@ Two contracts on the implications phase:
 - It requires consolidated updates: at most one addition and one retraction per
   item. See the `apply_catalog_implications` doc comment.
 
+Read-protection acquisition can itself publish catalog metadata. Keep pending
+timeline acquisitions with timeline maintenance, not inside committed-diff
+enactment. Creator birth grants stay live through implications and transfer into
+timeline holds during transaction completion. A retryable acquisition must not
+turn a committed statement's completion into a reason to replay that statement.
+
 #### Legacy paths being migrated away from
 
 The migration into the implications framework is incremental and unfinished.

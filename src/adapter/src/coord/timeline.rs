@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use futures::Future;
@@ -68,14 +69,17 @@ impl TimelineContext {
 ///
 /// For each timeline we maintain a timestamp oracle, which is responsible for
 /// providing read (and sometimes write) timestamps, and read holds retaining its
-/// readable window. Protected indexes join that window once replicas report
-/// actual readability, independently of catalog installation.
+/// readable window. Persisted indexes join through committed admission without
+/// waiting for replica installation. Logging collections need observed readability.
 pub(crate) struct TimelineState {
     pub(crate) oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
     pub(crate) read_holds: ReadHolds,
-    /// Installed collections whose query-readable window is not yet protected.
+    /// Collections whose query-readable window is not yet protected.
     /// In particular, an index need not have a readable replica at installation.
     pub(crate) pending_read_holds: CollectionIdBundle,
+    /// A definitive publication conflict defers this maintenance owner, without
+    /// dropping its pending IDs or changing the validity of existing holds.
+    pub(crate) read_hold_retry_after: Option<Instant>,
 }
 
 impl TimelineState {
@@ -253,6 +257,7 @@ impl Coordinator {
                     oracle,
                     read_holds: ReadHolds::new(),
                     pending_read_holds: CollectionIdBundle::default(),
+                    read_hold_retry_after: None,
                 },
             );
         }

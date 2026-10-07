@@ -511,16 +511,25 @@ impl Coordinator {
                 std::mem::take(&mut state.read_holds)
             })
             .collect();
-        self.acquire_pending_query_timeline_holds().await?;
+        self.acquire_pending_query_timeline_holds_inner(true)
+            .await?;
         drop(bootstrap_holds);
         Ok(())
     }
 
-    /// Establishes client-owned oracle windows for installed, readable collections.
-    /// Called outside installation, and retried by ordinary timeline maintenance.
+    /// Establishes client-owned oracle windows from committed admission.
+    /// Makes one attempt per eligible timeline, with retries owned by ordinary
+    /// timeline maintenance rather than catalog implication processing.
     /// Unknown index frontiers remain pending without delaying healthy clusters.
     pub(super) async fn acquire_pending_query_timeline_holds(
         &mut self,
+    ) -> Result<(), AdapterError> {
+        self.acquire_pending_query_timeline_holds_inner(false).await
+    }
+
+    async fn acquire_pending_query_timeline_holds_inner(
+        &mut self,
+        retry_inline: bool,
     ) -> Result<(), AdapterError> {
         let Some(client) = self.query_client.clone() else {
             return Ok(());
@@ -541,6 +550,12 @@ impl Coordinator {
             .global_timelines
             .iter_mut()
             .filter(|(_, state)| !state.pending_read_holds.is_empty())
+            .filter(|(_, state)| {
+                retry_inline
+                    || state
+                        .read_hold_retry_after
+                        .is_none_or(|due| due <= Instant::now())
+            })
             .map(|(timeline, state)| {
                 (
                     timeline.clone(),
@@ -575,15 +590,33 @@ impl Coordinator {
                 // than publishing unused history below it. This is maintenance,
                 // not a cached timestamp for subsequent queries.
                 let read_ts = oracle.read_ts().await;
-                match self
-                    .acquire_client_read_protection(
+                let result = if retry_inline {
+                    self.acquire_client_read_protection(
                         client.protection.incarnation(),
                         ready.clone(),
                         |_| Ok(Some(read_ts)),
                     )
                     .await
-                {
-                    Ok((holds, _)) => {
+                    .map(|(holds, _)| holds)
+                } else {
+                    match client
+                        .prepare_read(self.client_read_catalog(), &ready, |_| Ok(Some(read_ts)))
+                        .await
+                    {
+                        Ok(prepared) => {
+                            self.try_acquire_prepared_read(
+                                &client,
+                                &prepared,
+                                &mut ReadProtectionPublication::Runtime,
+                                true,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                match result {
+                    Ok(holds) => {
                         // Publication can consume a peer drop. In-flight IDs were
                         // not in timeline state for its cleanup, so recheck them
                         // before installing a window or restoring pending work.
@@ -593,12 +626,19 @@ impl Coordinator {
                         let mut holds = holds.subset(&ready);
                         holds.downgrade(read_ts);
                         if let Some(state) = self.global_timelines.get_mut(&timeline) {
+                            state.read_hold_retry_after = None;
                             let missing = ready.difference(&state.read_holds.id_bundle());
                             state.read_holds.extend(holds.subset(&missing));
                         }
                         ids = ids.difference(&ready);
                     }
                     Err(error) => {
+                        if !retry_inline && is_read_protection_conflict(&error) {
+                            let due = Instant::now() + self.read_protection_conflict_delay();
+                            if let Some(state) = self.global_timelines.get_mut(&timeline) {
+                                state.read_hold_retry_after = Some(due);
+                            }
+                        }
                         first_error.get_or_insert(error);
                     }
                 }
