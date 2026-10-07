@@ -396,6 +396,13 @@ actual imports. Read acquisition uses that committed protection before fixing a
 transaction timestamp, without requiring an installed trace. Neither a bare
 catalog entry nor an assumed `MIN` establishes a valid frontier.
 
+The creating adapter commits its timeline requirement in the same transaction as
+index admission and adopts the grant into local tokens before another publication.
+Timeline maintenance does not wait for installation. Bootstrap acquires these
+windows for existing indexes before reconstruction, retaining them through the
+ordinary policy handoff. This prevents a scheduled MV's future upper from advancing
+an index past the serving oracle window while that client remains protected.
+
 SELECT and nonexecuting EXPLAIN share read-hold acquisition and preserve their
 transaction effects. EXPLAIN does not wait for hypothetical execution, including
 on zero-replica clusters. Actual execution separately checks import readability

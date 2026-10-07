@@ -9,7 +9,7 @@
 
 //! Publishes durable recovery requirements and compaction permission together.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,19 +19,52 @@ use mz_catalog::memory::objects::CatalogItem;
 #[cfg(test)]
 use mz_catalog::read_protection::publication::PublicationCandidates;
 use mz_catalog::read_protection::publication::publication_candidates;
-#[cfg(test)]
-use mz_repr::GlobalId;
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 #[cfg(test)]
 use mz_storage_client::storage_collections::CollectionFrontiers;
 use timely::progress::Antichain;
 
-use crate::AdapterError;
-use crate::catalog::{BuiltinTableUpdate, Op};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Op};
 use crate::coord::Coordinator;
 use crate::query_client::QueryClient;
+use crate::{AdapterError, CollectionIdBundle, ReadHolds, TimelineContext};
 
 pub(super) const CATALOG_SUBSCRIPTION_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A pending publication that protects a serving timeline window at admission.
+/// Finish only after a definitive transaction outcome. Cancellation must leave
+/// the publication barrier in place, just like any unresolved catalog write.
+pub(super) struct IndexTimelinePublication {
+    client: Arc<QueryClient>,
+    bundle: CollectionIdBundle,
+    requested: BTreeMap<GlobalId, Timestamp>,
+    inputs: BTreeMap<GlobalId, BTreeSet<GlobalId>>,
+    requirements: BTreeMap<GlobalId, Timestamp>,
+}
+
+impl IndexTimelinePublication {
+    pub(super) fn op(&self) -> Op {
+        Op::PublishClientReadRequirements {
+            incarnation: self.client.protection.incarnation(),
+            requirements: self.requirements.clone(),
+        }
+    }
+
+    pub(super) fn finish(self, committed: bool) -> ReadHolds {
+        self.client.protection.finish_publication(committed);
+        if !committed {
+            return ReadHolds::new();
+        }
+        self.client.published();
+        // Adopt every grant synchronously. Another publication aggregates active
+        // tokens and could otherwise release an acknowledged but unused grant.
+        self.client
+            .protection
+            .try_acquire(&self.bundle, &self.requested, &self.inputs)
+            .expect("committed timeline publication has a live local client")
+            .expect("committed timeline publication covers its requested tokens")
+    }
+}
 
 enum ReadProtectionPublication<'a> {
     Runtime,
@@ -48,6 +81,91 @@ impl ReadProtectionPublication<'_> {
 }
 
 impl Coordinator {
+    /// Prepares client protection for indexes in a candidate or committed catalog.
+    /// The catalog still owns admission and bound validation. These requirements
+    /// preserve the serving adapter's oracle window, independently of installation.
+    pub(super) async fn prepare_index_timeline_publication(
+        &mut self,
+        client: Arc<QueryClient>,
+        candidate: &CatalogState,
+        indexes: BTreeSet<GlobalId>,
+    ) -> Result<IndexTimelinePublication, AdapterError> {
+        let mut by_timeline = BTreeMap::new();
+        for id in indexes {
+            let Some(entry) = candidate.try_get_entry_by_global_id(&id) else {
+                continue;
+            };
+            let CatalogItem::Index(index) = entry.item() else {
+                continue;
+            };
+            let Some(floor) = candidate
+                .collection_compaction_bounds()
+                .get(&id)
+                .and_then(|bound| bound.as_option())
+                .copied()
+            else {
+                continue;
+            };
+            let inputs = candidate.logical_collection_inputs([index.on]);
+            if inputs.iter().any(|id| {
+                matches!(
+                    candidate.get_entry_by_global_id(id).item(),
+                    CatalogItem::Log(_)
+                )
+            }) {
+                continue;
+            }
+            if let TimelineContext::TimelineDependent(timeline) =
+                Catalog::validate_timeline_context_in(candidate, [id])?
+            {
+                by_timeline.entry(timeline).or_insert_with(Vec::new).push((
+                    id,
+                    index.cluster_id,
+                    floor,
+                    inputs,
+                ));
+            }
+        }
+        let mut bundle = CollectionIdBundle::default();
+        let mut requested = BTreeMap::new();
+        let mut inputs = BTreeMap::new();
+        for (timeline, indexes) in by_timeline {
+            let read_ts = self
+                .ensure_timeline_state(&timeline)
+                .await
+                .oracle
+                .read_ts()
+                .await;
+            for (id, cluster, floor, leaves) in indexes {
+                bundle.compute_ids.entry(cluster).or_default().insert(id);
+                requested.insert(id, floor.max(read_ts));
+                inputs.insert(id, leaves);
+            }
+        }
+        let requested = candidate
+            .expand_client_read_requirements(client.protection.incarnation(), requested)?;
+        let requirements = client.protection.prepare_publication(requested.clone());
+        Ok(IndexTimelinePublication {
+            client,
+            bundle,
+            requested,
+            inputs,
+            requirements,
+        })
+    }
+
+    /// Transfers admission tokens into windows established by committed catalog
+    /// implications. Failed asynchronous acquisition must not discard birth grants.
+    pub(super) fn adopt_index_timeline_holds(&mut self, holds: ReadHolds) {
+        let protected = holds.id_bundle();
+        for state in self.global_timelines.values_mut() {
+            let pending = state.pending_read_holds.intersection(&protected);
+            let missing = pending.difference(&state.read_holds.id_bundle());
+            state.read_holds.extend(holds.subset(&missing));
+            state.pending_read_holds = state.pending_read_holds.difference(&pending);
+        }
+    }
+
     fn client_read_catalog(&self) -> &crate::catalog::Catalog {
         self.client_protection_catalog
             .as_ref()
@@ -240,7 +358,17 @@ impl Coordinator {
             ids = ids.difference(&state.read_holds.id_bundle());
             let mut ready = ids.clone();
             for (cluster, ids) in &mut ready.compute_ids {
-                *ids = client.readable_indexes(*cluster, ids);
+                let readable = client.readable_indexes(*cluster, ids);
+                // Admission, not installation, authorizes persisted index holds.
+                // Replica-local logs still use their observed trace readiness.
+                ids.retain(|id| {
+                    self.client_read_catalog()
+                        .state()
+                        .collection_compaction_bounds()
+                        .get(id)
+                        .is_some_and(|bound| !bound.is_empty())
+                        || readable.contains(id)
+                });
             }
             if !ready.is_empty() {
                 // Protect the oracle window in the initial durable grant, rather

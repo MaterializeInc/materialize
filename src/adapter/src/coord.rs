@@ -2798,6 +2798,7 @@ impl Coordinator {
         let protected_plans = self.catalog().state().catalog_read_protection_enabled();
         let write_plans = protected_plans
             && (!self.read_only_controllers || self.controller.replica_owned_compute());
+        let mut index_timeline_holds = ReadHolds::new();
         // Keep construction separate from activation. Bootstrap read policies
         // still use their initialization holds until the late client handoff.
         let bootstrap_client = if write_plans {
@@ -2815,6 +2816,38 @@ impl Coordinator {
         } else {
             None
         };
+        if self.controller.replica_owned_compute()
+            && let Some(client) = &bootstrap_client
+        {
+            let indexes: BTreeSet<_> = entries
+                .iter()
+                .filter_map(|entry| match entry.item() {
+                    CatalogItem::Index(index)
+                        if self
+                            .catalog()
+                            .state()
+                            .collection_compaction_bounds()
+                            .contains_key(&index.global_id()) =>
+                    {
+                        Some(index.global_id())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !indexes.is_empty() {
+                // Reconstruction can outlive the previous adapter's lease. Own
+                // the serving window throughout bootstrap, including plan reuse.
+                let state = self.catalog().state().clone();
+                let publication = self
+                    .prepare_index_timeline_publication(Arc::clone(client), &state, indexes)
+                    .await?;
+                let result = self
+                    .bootstrap_catalog_transact(vec![publication.op()], &mut builtin_table_updates)
+                    .await;
+                index_timeline_holds.extend(publication.finish(result.is_ok()));
+                result?;
+            }
+        }
         let selections = Box::pin(self.bootstrap_replica_metric_sink_selections()).await?;
         if !selections.is_empty() {
             self.bootstrap_catalog_transact(selections, &mut builtin_table_updates)
@@ -2890,15 +2923,60 @@ impl Coordinator {
                     .expect("writable protected bootstrap");
                 // Selection and issuer liveness must be checked atomically. The
                 // aggregate includes every temporary plan-import hold.
-                let requirements = client.protection.prepare_publication(BTreeMap::new());
-                selections.push(crate::catalog::Op::PublishClientReadRequirements {
-                    incarnation: client.protection.incarnation(),
-                    requirements,
-                });
+                let publication = if self.controller.replica_owned_compute() {
+                    let indexes = selections
+                        .iter()
+                        .filter_map(|op| match op {
+                            crate::catalog::Op::SetWrittenPlan { id, .. }
+                                if !self
+                                    .catalog()
+                                    .state()
+                                    .collection_compaction_bounds()
+                                    .contains_key(id)
+                                    && self
+                                        .catalog()
+                                        .try_get_entry_by_global_id(id)
+                                        .is_some_and(|entry| {
+                                            matches!(entry.item(), CatalogItem::Index(_))
+                                        }) =>
+                            {
+                                Some(*id)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let write_ts = self.get_catalog_write_ts().await;
+                    let (candidate, _) = self
+                        .catalog()
+                        .transact_incremental_dry_run(
+                            self.catalog().state(),
+                            selections.clone(),
+                            None,
+                            None,
+                            write_ts,
+                        )
+                        .await?;
+                    let publication = self
+                        .prepare_index_timeline_publication(Arc::clone(client), &candidate, indexes)
+                        .await?;
+                    selections.push(publication.op());
+                    Some(publication)
+                } else {
+                    let requirements = client.protection.prepare_publication(BTreeMap::new());
+                    selections.push(crate::catalog::Op::PublishClientReadRequirements {
+                        incarnation: client.protection.incarnation(),
+                        requirements,
+                    });
+                    None
+                };
                 let result = self
                     .bootstrap_catalog_transact(selections, &mut builtin_table_updates)
                     .await;
-                client.protection.finish_publication(result.is_ok());
+                if let Some(publication) = publication {
+                    index_timeline_holds.extend(publication.finish(result.is_ok()));
+                } else {
+                    client.protection.finish_publication(result.is_ok());
+                }
                 if !self
                     .catalog()
                     .state()
@@ -3208,6 +3286,7 @@ impl Coordinator {
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
+        self.adopt_index_timeline_holds(index_timeline_holds);
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(

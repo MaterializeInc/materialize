@@ -57,6 +57,8 @@ use tracing::{debug, info};
 
 #[path = "sql/comment_id_collision.rs"]
 mod comment_id_collision;
+#[path = "sql/index_timeline.rs"]
+mod index_timeline;
 #[path = "sql/prepared_rewrites.rs"]
 mod prepared_rewrites;
 

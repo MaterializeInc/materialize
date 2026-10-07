@@ -38,20 +38,28 @@ separate from the conflict-work trims.
 Investigate increasing native warm catch-up cost in the existing Short Zippy
 workflow. The retained-metrics hydration index reconstructs at its initial
 committed bound across deployments. Its imports include the shared catalog shard.
-Historical frontier catch-up is demonstrated,
-but physical replay volume and the limiting input are not. The 30-day metrics
-retention policy justifies that bound. It also retains protection-publication
-history in the shared catalog shard. Measure history composition and input
-progress before attributing the slowdown or changing state layout. Preserve
-committed history and readiness. Changes to this coupling need design steering.
+The catalog limiter retains dense historical progress even while its input
+frontier is current. Verify the authority-query filter correction at the source
+boundary and in that workflow. Physical replay volume remains unmeasured, and
+hydration queuing is a separate cost. The 30-day metrics policy justifies the
+retained bound. Preserve committed history, state layout and readiness. Remove
+the temporary logging and fixed Zippy seed once their question is answered.
+
+Close the index timeline-protection race at catalog admission. Commit the
+creator's existing client requirement with a new index and retain its tokens
+through ordinary timeline maintenance, without waiting for installation.
+Reconstruction also needs early client protection through bootstrap. Common
+catalog admission still owns the bound, and actual execution still checks
+readability. Verify the zero-replica boundary and existing refresh-MV SLT. The
+observed `SELECT * FROM mvi2` hang is not yet causally attributed to this race.
 
 The shared adapter client also loses protection after renewal repeatedly fails
 for longer than the unchanged-heartbeat grace. Earlier query timeouts precede
 that loss. No intervening successful renewal or premature reclamation is shown,
 although the reclaiming peer and exact commit are unlogged. Fix publication
-progress, not grace or closure checks. The existing SLT EXPLAIN FILTER PUSHDOWN
-timeout remains unresolved. Do not infer its cause solely from nearby publication
-warnings or its later diagnostic-rewrite timeout.
+progress, not grace or closure checks. Keep the registered-peek DROP stall
+separate until its blocking await is identified. Earlier SLT timeout observations
+remain in the PR, not additional investigation campaigns.
 
 Keep the approved Persist-arbitrated OCC contract: subscribe-certified targets,
 freshness and future-time checks, refolding at every changed target, actual txns

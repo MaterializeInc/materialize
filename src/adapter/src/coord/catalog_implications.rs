@@ -172,9 +172,8 @@ impl Coordinator {
             self.reconcile_now.notify_one();
         }
 
-        // Query protection follows the completed installation batch. An
-        // unavailable replica leaves its window pending rather than holding up
-        // installation or substituting controller tokens for client grants.
+        // Query protection follows committed admission. Persisted indexes do
+        // not need an installed replica to maintain their timeline window.
         if let Err(error) = Box::pin(self.acquire_pending_query_timeline_holds()).await {
             tracing::warn!(%error, "unable to establish query timeline windows");
         }

@@ -114,7 +114,7 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let (table_updates, catalog_updates, _created_clients) = self
+        let (table_updates, catalog_updates, _created_clients, admission_holds) = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
 
@@ -128,6 +128,7 @@ impl Coordinator {
         // then failed to apply commands/updates to the controller. Easiest
         // thing to do is panic and let restart/bootstrap handle it.
         apply_implications_res.expect("cannot fail to apply catalog update implications");
+        self.adopt_index_timeline_holds(admission_holds);
 
         // NOTE: `check_consistency` only runs with soft assertions enabled, so
         // this phase reads about zero in production. We time it because a local
@@ -219,7 +220,7 @@ impl Coordinator {
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates, created_clients) =
+        let (table_updates, catalog_updates, created_clients, admission_holds) =
             self.catalog_transact_inner(conn_id, ops).await?;
 
         let table_updates_wait = self
@@ -249,6 +250,7 @@ impl Coordinator {
         // then failed to apply implications. Easiest thing to do is panic and
         // let restart/bootstrap handle it.
         combined_apply_res.expect("cannot fail to apply catalog implications");
+        self.adopt_index_timeline_holds(admission_holds);
 
         // See the note in `catalog_transact_with_side_effects` on why this is
         // timed outside the macro and reads about zero in production.
@@ -491,7 +493,15 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
-    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
+    ) -> Result<
+        (
+            BuiltinTableAppendNotify,
+            Vec<ParsedStateUpdate>,
+            Vec<u64>,
+            crate::ReadHolds,
+        ),
+        AdapterError,
+    > {
         // Client operations validate against current durable state. Prepared SQL
         // operations must return to their producer when planning changes.
         let retry_after_planning_change = ops.iter().all(|op| {
@@ -901,7 +911,15 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
-    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
+    ) -> Result<
+        (
+            BuiltinTableAppendNotify,
+            Vec<ParsedStateUpdate>,
+            Vec<u64>,
+            crate::ReadHolds,
+        ),
+        AdapterError,
+    > {
         let internal_metadata = conn_id.is_none()
             && self.controller.replica_owned_compute()
             && ops.iter().all(catalog::Op::is_deployment_metadata);
@@ -1015,6 +1033,62 @@ impl Coordinator {
             .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
             .await?;
 
+        let mut timeline_publication = None;
+        if self.controller.replica_owned_compute()
+            && let Some(client) = self.query_client.clone()
+        {
+            let indexes: BTreeSet<_> =
+                ops.iter()
+                    .filter_map(|op| match op {
+                        Op::CreateItem {
+                            item: CatalogItem::Index(index),
+                            ..
+                        }
+                        | Op::UpdateItem {
+                            to_item: CatalogItem::Index(index),
+                            ..
+                        } => Some(index.global_id()),
+                        Op::SetWrittenPlan { id, .. }
+                            if self.catalog().try_get_entry_by_global_id(id).is_some_and(
+                                |entry| matches!(entry.item(), CatalogItem::Index(_)),
+                            ) =>
+                        {
+                            Some(*id)
+                        }
+                        _ => None,
+                    })
+                    .filter(|id| {
+                        !self
+                            .catalog()
+                            .state()
+                            .collection_compaction_bounds()
+                            .contains_key(id)
+                    })
+                    .collect();
+            if !indexes.is_empty() {
+                let conn =
+                    conn_id.map(|id| self.active_conns.get(id).expect("connection must exist"));
+                let (candidate, _) = self
+                    .catalog()
+                    .transact_incremental_dry_run(
+                        self.catalog().state(),
+                        ops.clone(),
+                        conn,
+                        None,
+                        oracle_write_ts,
+                    )
+                    .await?;
+                // Common admission computes the floor. Protect the creating
+                // client's timeline in that same commit, before any publisher
+                // can advance a newly admitted index toward a future MV upper.
+                let publication = self
+                    .prepare_index_timeline_publication(client, &candidate, indexes)
+                    .await?;
+                ops.push(publication.op());
+                timeline_publication = Some(publication);
+            }
+        }
+
         // Metadata publication does not invalidate immutable plans or their
         // held inputs. Retry commit validation against the refreshed prefix,
         // not the expensive preparation that preceded it. Structural changes
@@ -1078,7 +1152,7 @@ impl Coordinator {
             match result {
                 Err(error) => {
                     let AdapterError::Catalog(catalog_error) = &error else {
-                        return Err(error);
+                        break Err(error);
                     };
                     let mz_catalog::memory::error::ErrorKind::Durable(
                         mz_catalog::durable::DurableCatalogError::CatalogOutOfSync {
@@ -1086,15 +1160,17 @@ impl Coordinator {
                         },
                     ) = &catalog_error.kind
                     else {
-                        return Err(error);
+                        break Err(error);
                     };
-                    trace_catalog_await!(
+                    if let Err(error) = trace_catalog_await!(
                         "catalog_inner_conflict_refresh",
                         self.refresh_catalog(Some(*upper))
                             .wall_time()
                             .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
                             .await
-                    )?;
+                    ) {
+                        break Err(error);
+                    }
                     // Compaction proposals sample other clients' requirements.
                     // A metadata-only grant can invalidate that sample without
                     // changing the planning revision. Let the publisher resample
@@ -1102,10 +1178,15 @@ impl Coordinator {
                     if ops.iter().any(|op| {
                         matches!(op, Op::SetReadProtection { bounds, .. } if !bounds.is_empty())
                     }) {
-                        return Err(AdapterError::DDLTransactionRace);
+                        break Err(AdapterError::DDLTransactionRace);
                     }
                     if self.catalog().transient_revision() != prepared_revision {
-                        return Err(error);
+                        break Err(error);
+                    }
+                    if timeline_publication.is_some() {
+                        // Fresh admission sampled its floor from this prefix.
+                        // Recompute it together with the creator's requirement.
+                        break Err(error);
                     }
                     if let Some(client) = &self.query_client
                         && !self
@@ -1118,7 +1199,7 @@ impl Coordinator {
                         // further peer change is caught by transaction-open/CAS
                         // validation before these prepared operations commit.
                         client.protection.mark_closed();
-                        return Err(AdapterError::internal(
+                        break Err(AdapterError::internal(
                             "prepared catalog transaction",
                             "client read protection incarnation is closed",
                         ));
@@ -1131,9 +1212,13 @@ impl Coordinator {
                             .await
                     );
                 }
-                result => break result?,
+                result => break result,
             }
         };
+        let admission_holds = timeline_publication
+            .map(|publication| publication.finish(result.is_ok()))
+            .unwrap_or_else(crate::ReadHolds::new);
+        let result = result?;
 
         let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection must exist"));
 
@@ -1218,6 +1303,7 @@ impl Coordinator {
             builtin_update_notify,
             catalog_updates,
             created_client_incarnations,
+            admission_holds,
         ))
     }
 

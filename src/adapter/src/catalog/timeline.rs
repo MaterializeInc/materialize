@@ -18,7 +18,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_storage_types::sources::Timeline;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::{AdapterError, CollectionIdBundle, TimelineContext};
 
 impl Catalog {
@@ -118,11 +118,26 @@ impl Catalog {
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let items_ids = ids
+        Self::validate_timeline_context_in(self.state(), ids)
+    }
+
+    /// Classifies dependencies in a candidate catalog using the same timeline
+    /// rules as committed definitions.
+    pub(crate) fn validate_timeline_context_in<I>(
+        state: &CatalogState,
+        ids: I,
+    ) -> Result<TimelineContext, AdapterError>
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
+        let items_ids = ids.into_iter().filter_map(|gid| {
+            state
+                .try_get_entry_by_global_id(&gid)
+                .map(|entry| entry.id())
+        });
+        let mut timeline_contexts: Vec<_> = Self::get_timeline_contexts(state, items_ids)
             .into_iter()
-            .filter_map(|gid| self.try_resolve_item_id(&gid));
-        let mut timeline_contexts: Vec<_> =
-            self.get_timeline_contexts(items_ids).into_iter().collect();
+            .collect();
         // If there's more than one timeline, we will not produce meaningful
         // data to a user. Take, for example, some realtime source and a debezium
         // consistency topic source. The realtime source uses something close to now
@@ -162,7 +177,7 @@ impl Catalog {
     }
 
     /// Return the [`TimelineContext`]s belonging to a list of [`CatalogItemId`]s, if any exist.
-    fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
+    fn get_timeline_contexts<I>(state: &CatalogState, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = CatalogItemId>,
     {
@@ -178,14 +193,14 @@ impl Catalog {
             if !seen.insert(id) {
                 continue;
             }
-            if let Some(entry) = self.try_get_entry(&id) {
+            if let Some(entry) = state.try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines
                             .insert(TimelineContext::TimelineDependent(source.timeline.clone()));
                     }
                     CatalogItem::Index(index) => {
-                        let on_id = self.resolve_item_id(&index.on);
+                        let on_id = state.get_entry_by_global_id(&index.on).id();
                         ids.push(on_id);
                     }
                     CatalogItem::View(View {
@@ -202,7 +217,7 @@ impl Catalog {
                         let item_ids = optimized_expr
                             .depends_on()
                             .into_iter()
-                            .map(|gid| self.resolve_item_id(&gid));
+                            .map(|gid| state.get_entry_by_global_id(&gid).id());
                         ids.extend(item_ids);
                     }
                     CatalogItem::MaterializedView(MaterializedView {
@@ -219,7 +234,7 @@ impl Catalog {
                         let item_ids = optimized_expr
                             .depends_on()
                             .into_iter()
-                            .map(|gid| self.resolve_item_id(&gid));
+                            .map(|gid| state.get_entry_by_global_id(&gid).id());
                         ids.extend(item_ids);
                     }
                     CatalogItem::Table(table) => {
