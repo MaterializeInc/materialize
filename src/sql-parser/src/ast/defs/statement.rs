@@ -1567,7 +1567,7 @@ impl_display_t!(CreateViewStatement);
 pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
-    pub columns: Vec<Ident>,
+    pub columns: MaterializedViewColumns<T>,
     pub replacement_for: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub in_cluster_replica: Option<Ident>,
@@ -1596,9 +1596,8 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         f.write_node(&self.name);
 
         if !self.columns.is_empty() {
-            f.write_str(" (");
-            f.write_node(&display::comma_separated(&self.columns));
-            f.write_str(")");
+            f.write_str(" ");
+            f.write_node(&self.columns);
         }
 
         if let Some(target) = &self.replacement_for {
@@ -1640,6 +1639,52 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// The optional column list of a `CREATE MATERIALIZED VIEW` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MaterializedViewColumns<T: AstInfo> {
+    /// `(name, ...)`, or no list at all if empty. Renames the query's columns,
+    /// the schema is inferred from the query.
+    Names(Vec<Ident>),
+    /// `(name type [option ...], ... [, constraint ...])`. Declares the schema.
+    Definitions {
+        columns: Vec<ColumnDef<T>>,
+        constraints: Vec<TableConstraint<T>>,
+    },
+}
+
+impl<T: AstInfo> MaterializedViewColumns<T> {
+    /// Whether the statement has no column list.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            MaterializedViewColumns::Names(names) => names.is_empty(),
+            MaterializedViewColumns::Definitions { .. } => false,
+        }
+    }
+}
+
+impl<T: AstInfo> AstDisplay for MaterializedViewColumns<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("(");
+        match self {
+            MaterializedViewColumns::Names(names) => {
+                f.write_node(&display::comma_separated(names));
+            }
+            MaterializedViewColumns::Definitions {
+                columns,
+                constraints,
+            } => {
+                f.write_node(&display::comma_separated(columns));
+                if !columns.is_empty() && !constraints.is_empty() {
+                    f.write_str(", ");
+                }
+                f.write_node(&display::comma_separated(constraints));
+            }
+        }
+        f.write_str(")");
+    }
+}
+impl_display_t!(MaterializedViewColumns);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

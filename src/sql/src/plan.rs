@@ -1971,6 +1971,13 @@ pub struct MaterializedView {
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    /// The schema declared with column definitions, if any.
+    ///
+    /// When set, it is the materialized view's `RelationDesc`, independent of
+    /// what the optimizer infers for `expr`. `expr` already casts to the
+    /// declared types, and `non_null_assertions` covers the declared `NOT NULL`
+    /// columns.
+    pub declared_desc: Option<RelationDesc>,
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,

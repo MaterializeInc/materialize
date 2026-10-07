@@ -115,6 +115,7 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_materialized_view_column_definitions": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",

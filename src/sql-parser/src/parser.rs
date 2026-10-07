@@ -4219,7 +4219,7 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.parse_item_name()?;
-        let columns = self.parse_parenthesized_column_list(Optional)?;
+        let columns = self.parse_materialized_view_columns()?;
         let replacement_for = if replacement {
             self.expect_keyword(FOR)?;
             Some(self.parse_raw_name()?)
@@ -4267,6 +4267,33 @@ impl<'a> Parser<'a> {
                 with_options,
             },
         ))
+    }
+
+    /// Parses the optional column list of `CREATE MATERIALIZED VIEW`, which is
+    /// either a list of column names or a list of column definitions.
+    fn parse_materialized_view_columns(
+        &mut self,
+    ) -> Result<MaterializedViewColumns<Raw>, ParserError> {
+        if self.peek_token() != Some(Token::LParen) {
+            return Ok(MaterializedViewColumns::Names(vec![]));
+        }
+        // A name followed by `,` or `)` starts a name list. `()` takes the
+        // name-list path, which rejects it.
+        let is_name_list = match (self.peek_nth_token(1), self.peek_nth_token(2)) {
+            (Some(Token::RParen), _) => true,
+            (Some(Token::Ident(_) | Token::Keyword(_)), Some(Token::Comma | Token::RParen)) => true,
+            _ => false,
+        };
+        if is_name_list {
+            let names = self.parse_parenthesized_column_list(Mandatory)?;
+            Ok(MaterializedViewColumns::Names(names))
+        } else {
+            let (columns, constraints) = self.parse_columns(Mandatory)?;
+            Ok(MaterializedViewColumns::Definitions {
+                columns,
+                constraints,
+            })
+        }
     }
 
     fn parse_materialized_view_option_name(

@@ -36,7 +36,10 @@ use crate::project::resolve::normalize::NormalizingVisitor;
 use crate::types::ColumnType;
 #[cfg(test)]
 use crate::types::Types;
-use mz_sql_parser::ast::{CreateViewStatement, IfExistsBehavior, ViewDefinition};
+use itertools::Itertools;
+use mz_sql_parser::ast::{
+    CreateViewStatement, IfExistsBehavior, MaterializedViewColumns, ViewDefinition,
+};
 use owo_colors::{OwoColorize, Stream, Style};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -793,14 +796,30 @@ fn create_target_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Result<
             temporary: true,
             definition: view.definition.clone(),
         },
-        Statement::CreateMaterializedView(mv) => CreateViewStatement {
-            if_exists: IfExistsBehavior::Error,
-            temporary: true,
-            definition: ViewDefinition {
-                name: mv.name,
-                columns: mv.columns,
-                query: mv.query,
+        Statement::CreateMaterializedView(mv) => match mv.columns {
+            MaterializedViewColumns::Names(names) => CreateViewStatement {
+                if_exists: IfExistsBehavior::Error,
+                temporary: true,
+                definition: ViewDefinition {
+                    name: mv.name,
+                    columns: names,
+                    query: mv.query,
+                },
             },
+            // A view cannot declare column types, so the declared types are
+            // applied with casts. Declared `NOT NULL` columns and keys are not
+            // checked.
+            MaterializedViewColumns::Definitions { columns, .. } => {
+                let names = columns.iter().map(|c| c.name.to_string()).join(", ");
+                let casts = columns
+                    .iter()
+                    .map(|c| format!("CAST({} AS {}) AS {}", c.name, c.data_type, c.name))
+                    .join(", ");
+                return Ok(format!(
+                    "CREATE TEMPORARY VIEW {} AS SELECT {} FROM ({}) AS q ({})",
+                    mv.name, casts, mv.query, names
+                ));
+            }
         },
         other => {
             return Err(format!(
@@ -895,6 +914,39 @@ mod tests {
         assert!(sql.contains("WITH MUTUALLY RECURSIVE data(id BIGINT, count INT)"));
         assert!(sql.contains("SELECT * FROM VALUES ((1, 10))"));
         assert!(sql.contains("SELECT * FROM data"));
+    }
+
+    #[mz_ore::test]
+    fn test_create_target_view_sql_declared_schema() {
+        use mz_ore::collections::CollectionExt;
+
+        let parsed = mz_sql_parser::parser::parse_statements(
+            "CREATE MATERIALIZED VIEW materialize.public.mv \
+             (a int8 NOT NULL, \"b c\" numeric(10, 1), PRIMARY KEY (a)) \
+             AS SELECT x, y FROM t",
+        )
+        .unwrap()
+        .into_element()
+        .ast;
+        let mz_sql_parser::ast::Statement::CreateMaterializedView(mv) = parsed else {
+            panic!("expected CREATE MATERIALIZED VIEW");
+        };
+        let stmt = Statement::CreateMaterializedView(mv);
+        let fqn = FullyQualifiedName::try_from(mz_sql_parser::ast::UnresolvedItemName(vec![
+            mz_sql_parser::ast::Ident::new_unchecked("materialize"),
+            mz_sql_parser::ast::Ident::new_unchecked("public"),
+            mz_sql_parser::ast::Ident::new_unchecked("mv"),
+        ]))
+        .unwrap();
+
+        let sql = create_target_view_sql(&stmt, &fqn).unwrap();
+
+        assert_eq!(
+            sql,
+            "CREATE TEMPORARY VIEW \"materialize.public.mv\" AS \
+             SELECT CAST(a AS int8) AS a, CAST(\"b c\" AS numeric(10, 1)) AS \"b c\" \
+             FROM (SELECT x, y FROM \"materialize.public.t\" AS t) AS q (a, \"b c\")"
+        );
     }
 
     #[mz_ore::test]

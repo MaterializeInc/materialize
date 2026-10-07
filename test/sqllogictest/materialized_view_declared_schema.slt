@@ -1,0 +1,163 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for materialized views with a schema declared through column
+# definitions.
+
+mode cockroach
+
+reset-server
+
+statement ok
+CREATE TABLE t (a int4, b text, c numeric)
+
+statement ok
+INSERT INTO t VALUES (1, 'x', 1.234), (2, 'y', 2.5)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_column_definitions = false
+----
+COMPLETE 0
+
+statement error CREATE MATERIALIZED VIEW with column definitions is not available
+CREATE MATERIALIZED VIEW mv (a int8) AS SELECT a FROM t
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_column_definitions = true
+----
+COMPLETE 0
+
+# Declared types, nullability and names replace the inferred ones. The query is
+# cast to the declared types with assignment casts.
+statement ok
+CREATE MATERIALIZED VIEW mv (x int8 NOT NULL, y text, z numeric(10, 1)) AS SELECT a, b, c FROM t
+
+query TTT rowsort
+SELECT name, nullable, type FROM (SHOW COLUMNS FROM mv)
+----
+x  false  bigint
+y  true  text
+z  true  numeric
+
+query ITR rowsort
+SELECT * FROM mv
+----
+1  x  1.2
+2  y  2.5
+
+query T
+SELECT create_sql LIKE '%("x" %int8% NOT NULL, "y" %text%, "z" %numeric%10%1%)%' FROM mz_materialized_views WHERE name = 'mv'
+----
+true
+
+# A column the query proves non-nullable stays nullable unless declared.
+statement ok
+CREATE MATERIALIZED VIEW mv_nullable (n int8) AS SELECT count(*) FROM t
+
+query TT rowsort
+SELECT name, nullable FROM (SHOW COLUMNS FROM mv_nullable)
+----
+n  true
+
+# Declared NOT NULL is checked at runtime.
+statement ok
+CREATE MATERIALIZED VIEW mv_not_null (a int4 NOT NULL) AS SELECT a FROM t
+
+query I rowsort
+SELECT * FROM mv_not_null
+----
+1
+2
+
+statement ok
+INSERT INTO t VALUES (NULL, 'z', 3)
+
+query error column "a" must not be null
+SELECT * FROM mv_not_null
+
+statement ok
+DELETE FROM t WHERE a IS NULL
+
+statement ok
+DROP MATERIALIZED VIEW mv_not_null
+
+# Planning errors.
+statement error materialized view materialize.public.mv_err declares 1 columns, but its query produces 2
+CREATE MATERIALIZED VIEW mv_err (a int4) AS SELECT a, b FROM t
+
+statement error column "a" is of type timestamp with time zone but expression is of type integer
+CREATE MATERIALIZED VIEW mv_err (a timestamptz) AS SELECT a FROM t
+
+statement error column "a" specified more than once
+CREATE MATERIALIZED VIEW mv_err (a int4, a text) AS SELECT a, b FROM t
+
+statement error conflicting NULL/NOT NULL declarations for column "a"
+CREATE MATERIALIZED VIEW mv_err (a int4 NULL NOT NULL) AS SELECT a FROM t
+
+statement error PRIMARY KEY and UNIQUE on materialized views not yet supported
+CREATE MATERIALIZED VIEW mv_err (a int4 PRIMARY KEY) AS SELECT a FROM t GROUP BY a
+
+statement error PRIMARY KEY and UNIQUE on materialized views not yet supported
+CREATE MATERIALIZED VIEW mv_err (a int4, UNIQUE NULLS NOT DISTINCT (a)) AS SELECT a FROM t GROUP BY a
+
+statement error ASSERT NOT NULL cannot be combined with column definitions
+CREATE MATERIALIZED VIEW mv_err (a int4) WITH (ASSERT NOT NULL a) AS SELECT a FROM t
+
+statement error materialized view column definition with option: DEFAULT 1 not yet supported
+CREATE MATERIALIZED VIEW mv_err (a int4 DEFAULT 1) AS SELECT a FROM t
+
+statement error CHECK constraints on materialized views not yet supported
+CREATE MATERIALIZED VIEW mv_err (a int4, CHECK (a > 0)) AS SELECT a FROM t
+
+# Name lists keep working.
+statement ok
+CREATE MATERIALIZED VIEW mv_names (p, q) AS SELECT a, b FROM t
+
+query TT rowsort
+SELECT name, type FROM (SHOW COLUMNS FROM mv_names)
+----
+p  integer
+q  text
+
+# Replacements are compared against the declared schema.
+statement error replacement must declare its schema because its target does
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a::int8 AS x, b AS y, c::numeric(10, 1) AS z FROM t
+
+statement error replacement schema differs from target schema
+CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8, y text, z numeric(10, 1)) FOR mv AS SELECT a, b, c FROM t
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8 NOT NULL, y text, z numeric(10, 1)) FOR mv AS SELECT a + 1, b, c FROM t
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query ITR rowsort
+SELECT * FROM mv
+----
+2  x  1.2
+3  y  2.5
+
+query T
+SELECT create_sql LIKE '%("x" %int8% NOT NULL, "y" %text%, "z" %numeric%10%1%)%' FROM mz_materialized_views WHERE name = 'mv'
+----
+true
+
+# An implicit target can be given a declared schema that matches its current
+# one.
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp (p int4, q text) FOR mv_names AS SELECT a, b FROM t
+
+statement ok
+ALTER MATERIALIZED VIEW mv_names APPLY REPLACEMENT rp
+
+query T
+SELECT create_sql LIKE '%("p" %int4%, "q" %text%)%' FROM mz_materialized_views WHERE name = 'mv_names'
+----
+true
