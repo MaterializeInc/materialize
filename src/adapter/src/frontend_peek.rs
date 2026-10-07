@@ -1083,6 +1083,7 @@ impl PeekClient {
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",
                     move || {
+                        fail::fail_point!("peek_before_optimize");
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
