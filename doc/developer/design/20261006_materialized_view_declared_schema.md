@@ -33,11 +33,11 @@ The drift leaks into everything that consumes the schema:
 ## Success Criteria
 
 * A user can state the full schema of a materialized view: column names, types, nullability, and keys.
-* A declared schema is independent of the optimizer.
-  Re-planning the same `create_sql` with a different optimizer yields the same `RelationDesc`.
+* Declared names, types and nullability are independent of the optimizer.
+  Re-planning the same `create_sql` with a different optimizer yields the same names, types and nullability.
 * A declared `NOT NULL` is enforced: a violation surfaces as an error, independent of the optimizer.
-* A declared key is an unenforced constraint, as in SQL systems that accept `NOT ENFORCED` keys.
-  Materialize rejects keys its analysis of the query does not support at creation, but it does not validate them against the data, so a wrong key gives wrong results.
+* A declared key is trusted only while the running version's analysis confirms it.
+  A key that a later version cannot confirm stops being trusted, and Materialize reports that to the user.
 * Replacements are validated against the declared schema, and can be written to fit a given schema.
 * No change to the durable catalog format, persist, or the compute protocol.
 
@@ -90,14 +90,15 @@ We keep the object type `MATERIALIZED VIEW` and do not introduce `CREATE MATERIA
 ### Semantics
 
 A materialized view with column definitions has a *declared schema*.
-Its `RelationDesc` is exactly the declared one: names, scalar types, nullability, and keys come from the column definitions, and nothing inferred by the optimizer is merged in.
+Its names, scalar types and nullability are exactly the declared ones, and nothing inferred by the optimizer is merged in.
+Its keys are the declared keys that the running version confirms, see [Keys](#keys).
 Without column definitions, behavior is unchanged.
 
-The declared schema has two tiers.
+The parts of a declared schema differ in what makes them hold.
 Names and scalar types are structural: the query is cast to them, so they hold by construction.
-Nullability and keys are semantic properties of the data, which the optimizer can only estimate by analysis, and that analysis can be incomplete or wrong in a given version.
-Declaring them fixes what the system assumes, but analysis never decides after creation whether they hold: `NOT NULL` is checked against the data at runtime, and keys are the user's assertion.
-This avoids the ambiguity of comparing a declared property against a later optimizer's analysis, where a disagreement could be a violation in the data or a miss in the analysis.
+Nullability and keys are semantic properties of the query's output, which are undecidable in general (the query language includes negation, aggregation and `WITH MUTUALLY RECURSIVE`), so the optimizer can only approximate them by analysis.
+A declared `NOT NULL` does not rely on analysis, because every row is checked at runtime, so it can be frozen like names and types.
+A declared key cannot be checked against the data without a uniqueness arrangement, so it relies on analysis, and analysis differs between versions.
 
 Opting in has a cost: a key or non-null fact the optimizer infers today but the user does not declare is gone.
 Dependent queries lose the optimizations it enabled (e.g. `Distinct` or `Reduce` elision), and an upsert sink `KEY (...)` on an undeclared key fails to plan.
@@ -123,17 +124,33 @@ Declaring `NOT NULL` is therefore the column-definition spelling of `ASSERT NOT 
 Using `WITH (ASSERT NOT NULL ...)` together with a declared schema, written out or inherited by a replacement, is rejected to avoid two ways to say the same thing in one statement.
 
 **Keys.**
-Keys in a `RelationDesc` are consumed by the optimizer of every dependent query (e.g. to elide `Distinct` and `Reduce`).
-An incorrect key produces wrong results, which is why `CREATE TABLE` keys are gated behind `unsafe_enable_table_keys`.
-Declared keys are unenforced and unvalidated against the data, so they are a promise by the user.
-To catch obvious mistakes, creation requires each declared `PRIMARY KEY` or `UNIQUE` key to contain some key the optimizer infers for the (cast) query, otherwise it fails with an error listing the inferred keys.
-This mirrors the existing upsert sink `KEY` validation.
-The check is a guard, not a guarantee: MIR key inference is an analysis of the optimizer version that runs it, and it can be wrong.
+Keys in a `RelationDesc` are consumed by the optimizer of every dependent query and by sinks, and an incorrect key produces wrong results:
+`ReduceElision` drops a `DISTINCT` or `GROUP BY` on a key, `RedundantJoin` and `SemijoinIdempotence` drop joins, and an upsert sink keyed on a false key silently keeps one row per key.
+This is why `CREATE TABLE` keys are gated behind `unsafe_enable_table_keys`.
 
-The check runs when the statement is first optimized, for `CREATE` and `EXPLAIN CREATE` alike, but not when `create_sql` is re-planned on boot or by `EXPLAIN REPLAN`.
-After creation, a key the check accepted is taken to be a property of the query and its inputs' schemas.
-A later optimizer that fails to infer the key does not reject the materialized view, and it could not tell a wrong key from a gap in its own analysis anyway.
-The flip side is that a key-inference bug at creation time is frozen into `create_sql`, where today a fixed optimizer would stop inferring the bad key on the next upgrade.
+A key that version i confirms does not stay valid in version i', even if key inference is correct in both versions.
+Inference is relative to the query's semantics and the inputs' declared keys in the version that runs it, and both change between versions:
+
+* Keys derived through scalar functions rely on those functions being injective (`preserves_uniqueness` on the function, carried through `Map` in `MirRelationExpr::keys_with_input_keys`).
+  The annotation covers many casts to text, and a change to such a function's output format can break injectivity.
+  It has also been wrong: `text_to_name` and `varchar(n)` truncation (#36653), `text` to `"char"` and `bytea` (#36663), and array casts ignoring lower bounds (#37393) each had to be corrected.
+* Planner fixes change what a query computes, for example the decorrelation fix for correlated CTEs (#37506).
+* Input keys change: builtin relation descs are code, and #36135 changed the key of `mz_dataflow_global_ids` from `(id)` to `(id, global_id)` after the wrong key let the optimizer drop a `DISTINCT`.
+  Keys of upstream views and materialized views are re-inferred per version and inherit the same issues.
+
+Keys derived structurally, from `Reduce` or `Distinct` grouping, `TopK` with limit 1, joins on keyed equivalences and filters on literals, do not depend on any function's behavior, but they still depend on the query's semantics and the input keys.
+Freezing a declared key into the `RelationDesc` would keep a key alive after the semantics or input keys that justified it changed, and after a fix to the analysis that confirmed it, which today's re-inferred keys pick up on the next upgrade.
+
+Declared keys are therefore *expected* keys, which every plan of the materialized view checks against the keys the running version infers for the (cast) query:
+
+* At creation, for `CREATE` and `EXPLAIN CREATE` alike, a declared `PRIMARY KEY` or `UNIQUE` key that does not contain an inferred key is an error that lists the inferred keys.
+  This mirrors the existing upsert sink `KEY` validation.
+* When `create_sql` is re-planned, on boot or by `EXPLAIN REPLAN`, the `RelationDesc` keeps the declared keys that the running version confirms and drops the rest.
+  The materialized view keeps running, and the dropped key is recorded in a new `mz_internal.mz_materialized_view_unconfirmed_keys` relation (materialized view, key columns, and the version that could not confirm it), so the user learns that the system no longer trusts it.
+
+A dropped key does not tell whether the key is false or the analysis got weaker.
+The system cannot decide that, and the design does not try to: it only refuses to trust what the running version cannot confirm, and says so.
+Dropping a key changes the materialized view's `RelationDesc` on boot, which today's inferred keys already do: `evolve_nullability_for_bootstrap` re-registers the shard schema with the re-planned desc.
 
 A `UNIQUE` constraint on nullable columns without `NULLS NOT DISTINCT` is an error.
 This includes column-level `UNIQUE`, which has no `NULLS NOT DISTINCT` spelling and therefore requires `NOT NULL`.
@@ -151,8 +168,8 @@ The named type becomes a dependency of the materialized view, as with tables.
 
 ### Replacements
 
-With a declared schema, a replacement is validated against the target's declared `RelationDesc` with the same `RelationDesc::diff` check as today.
-The difference is that both sides are now under the user's control, so a mismatch in nullability or keys is something the user wrote, not something the optimizer decided.
+With a declared schema, a replacement is validated against the target's declared schema: names, types and nullability with the same `RelationDesc::diff` check as today, and keys by comparing the declared keys rather than the confirmed ones.
+The difference is that both sides are now under the user's control, so a mismatch is something the user wrote, not something the optimizer decided.
 
 A replacement without a column list for a target *with* a declared schema inherits the target's schema.
 Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with assignment casts, `NOT NULL` becomes an assertion, keys go through the creation-time check, and the feature flag applies.
@@ -185,9 +202,11 @@ This is the migration path from an implicit to a declared schema for an existing
    Soft-assert that arity and scalar types agree with the local plan's type.
 4. **Catalog** (`CatalogState::parse_item`).
    Apply the same rule: `desc = declared_desc` if present, otherwise `infer_sql_type_for_catalog` plus assertions.
-   This is the single point that makes the schema optimizer-independent on boot.
+   For a declared desc, keep only the declared keys that the inferred type confirms, and record the others for `mz_materialized_view_unconfirmed_keys`.
+   This is the single point that makes names, types and nullability optimizer-independent on boot.
 5. **Sequencer** (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs`).
    Run the key check against the keys of the local MIR plan's type, in the optimize stage so that `EXPLAIN CREATE` rejects what `CREATE` rejects.
+   A re-plan (`EXPLAIN REPLAN`) drops unconfirmed keys instead, as on boot.
    Reject a replacement without a declared schema for a target with one.
    Schema inheritance for replacements lives in purification (`src/sql/src/pure.rs`), which can read the target from the catalog and add to the statement's resolved ids.
 6. **Feature flag** `enable_materialized_view_column_definitions`, off in production and on in the test and CI configuration.
@@ -197,7 +216,7 @@ This is the migration path from an implicit to a declared schema for an existing
 8. **Docs** for `CREATE MATERIALIZED VIEW`, and a note in the dbt adapter that contracts can be expressed directly.
 
 Nothing changes in the durable catalog format (the schema lives in `create_sql`), persist, or compute.
-`evolve_nullability_for_bootstrap` still runs for materialized views with declared schemas, but has no effect, because their desc no longer changes between versions.
+`evolve_nullability_for_bootstrap` still runs for materialized views with declared schemas, and only has an effect when a version drops an unconfirmed key.
 
 ### `EXPLAIN ... WITH (schema)`
 
@@ -216,7 +235,7 @@ The main risks are:
   Two-token lookahead resolves it, and roundtrip tests cover it.
 * **Cast semantics surprising users**, e.g. assignment casts to `varchar(n)` or `numeric(p, s)`.
   This is the same behavior as `INSERT`, see open questions.
-* **Key checks failing for reasonable queries** because MIR key inference is incomplete (e.g. through casts or `UNION ALL` of disjoint inputs).
+* **Key checks failing for reasonable queries**, at creation or after an upgrade, because MIR key inference is incomplete (e.g. through casts or `UNION ALL` of disjoint inputs).
   In particular, `Map` carries a key over to a new column only if exactly one of its expressions preserves uniqueness, and `cast_relation` puts all casts into one `Map`, so declaring two columns with widening casts loses every key through them.
   Users can drop the key from the declaration. Runtime enforcement could be added later for those cases.
 
@@ -227,7 +246,7 @@ Two follow-ups would remove the implicit schema entirely:
 
 * **Freeze at creation.**
   When a materialized view is created without column definitions, write the inferred schema into `create_sql`, the same way the selected `AS OF` is written back today.
-  Inferred keys pass the key check by construction, with the same caveat that the inference can be wrong.
+  Inferred keys become expected keys and are re-checked on every plan like declared ones.
   Inferred `NOT NULL` becomes a runtime assertion, which also turns a nullability-inference bug from a persist encoder panic into a query error.
 * **Migrate existing materialized views.**
   Rewrite their `create_sql` with the schema their shard currently has.
@@ -240,12 +259,12 @@ Both change what `SHOW CREATE MATERIALIZED VIEW` prints for users who never aske
 ## Minimal Viable Prototype
 
 * Parser, planner, optimizer and catalog changes for names, types, `NULL`/`NOT NULL`, behind the feature flag.
-* Key declarations with the creation-time check.
+* Key declarations with the check on every plan and `mz_materialized_view_unconfirmed_keys`.
 * Replacement validation against declared schemas and schema inheritance.
 * Tests:
   * sqllogictest for parsing, casts, error messages, `SHOW CREATE`, key check failures, and the `MustNotBeNull` runtime error.
   * testdrive for an upsert sink keyed on a declared primary key.
-  * A platform check that a materialized view with a declared schema survives upgrade and restart with an unchanged `RelationDesc`.
+  * A platform check that a materialized view with a declared schema survives upgrade and restart with unchanged names, types and nullability, and with its keys confirmed.
 
 ## Alternatives
 
@@ -263,22 +282,27 @@ Freezing the inferred desc in a new catalog field fixes drift without any syntax
 It does not let users or replacements *state* the schema, and it creates a second source of truth next to `create_sql` that the two would have to agree with.
 Phase 2 achieves the same freezing through `create_sql`.
 
-### Keys without the creation-time check
+### Frozen keys
+
+Declared keys could be checked only at creation and then trusted forever, which makes the whole `RelationDesc` stable across versions.
+As [Keys](#keys) shows, a key confirmed at creation can become false without any optimizer bug, through changed function or query semantics or changed input keys, and a frozen key would also outlive fixes to the analysis that confirmed it.
+The system could not tell the user, because it would never look again.
+
+### Keys without any check
 
 Accepting declared keys without any check (like `KEY (...) NOT ENFORCED` on sinks) is simpler.
 The optimizer consumes `RelationDesc` keys, so a mistyped declaration silently produces wrong results downstream, and the check catches the common case of a key the query plainly does not have.
 Keys that are informational only would need a place in `RelationDesc` that the optimizer ignores, which does not exist today.
 
-### Nullability and keys stay inferred
+### Nullability stays inferred
 
-Only names and scalar types could be declarable, with nullability and keys left to analysis as a second tier of the type.
-That avoids freezing an analysis result, but it keeps the drift this design sets out to remove: nullability and keys are part of the `RelationDesc` that persist stores as the shard's schema, and that sinks, dependent views and replacements consume.
-Separating them from the persist schema identity is possible, but it is a larger change to persist and the controller.
+Only names and scalar types could be declarable, with nullability left to analysis like keys.
+Unlike keys, a declared `NOT NULL` is enforced on every row, so freezing it does not rely on analysis, and leaving it inferred would keep the drift this design sets out to remove: nullability is part of the `RelationDesc` that persist stores as the shard's schema, and that sinks, dependent views and replacements consume.
 
 ### Runtime-enforced keys
 
 Checking uniqueness in the dataflow means maintaining a count per key, i.e. an arrangement the size of the materialized view.
-It turns declared keys into enforced constraints, but adds a large and surprising cost.
+It turns declared keys into enforced constraints that could be frozen like `NOT NULL`, but adds a large and surprising cost.
 It can be added later as an opt-in, also for keys the optimizer cannot infer.
 
 ### Sink-style `KEY (...)` instead of `PRIMARY KEY` / `UNIQUE`
@@ -287,7 +311,7 @@ Materialize has two precedents for declaring keys.
 User-facing, `CREATE SINK ... KEY (...) [NOT ENFORCED]` validates a requested key against the inferred keys, which is the same check this design applies.
 In column-definition lists, `PRIMARY KEY` and `UNIQUE` are what `CREATE TABLE` parses and what purification writes into the `create_sql` of tables created from Postgres, MySQL and SQL Server sources.
 Since the declared schema is a column-definition list, we follow the second precedent and reuse its grammar and planning code.
-A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we reject for materialized views (see [Unenforced keys](#unenforced-keys)).
+A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we reject for materialized views (see [Keys without any check](#keys-without-any-check)).
 
 ### Schema as a `WITH` option
 
@@ -308,4 +332,9 @@ A sink-style `KEY (...)` clause would also invite `NOT ENFORCED`, which we rejec
   The prototype errors.
 * Should `mz_materialized_views` expose whether the schema is declared?
   The prototype does not.
+* What happens to an upsert sink keyed on a key that a new version drops?
+  Its `create_sql` fails to re-plan on boot, as it does today when an inferred key disappears.
+  Planning such a sink could keep running with a notice instead, like `KEY (...) NOT ENFORCED`.
+* Should a dropped key say why it was dropped?
+  Recording at creation how a key was derived (only structural steps, through which uniqueness-preserving functions, from which input keys) would let a later version tell an analysis gap apart from a changed function or a missing input key.
 * Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
