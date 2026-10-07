@@ -29,6 +29,8 @@ ENV CGO_ENABLED=0
 # TODO: Fork it under the MaterializeInc organization (like e.g. sqlsmith).
 ADD https://api.github.com/repos/MaterializeInc/dbbench/git/commits/10b2a0b5159f06945646fa1179bda4be51fe02b4 version.json
 
+COPY qpsbench /workdir/qpsbench
+
 # Clone and build dbbench. Some forks place main under ./cmd/dbbench; handle both.
 RUN git clone https://github.com/MaterializeInc/dbbench /workdir/dbbench \
     && cd /workdir/dbbench \
@@ -39,6 +41,9 @@ RUN git clone https://github.com/MaterializeInc/dbbench /workdir/dbbench \
        else \
          go build -trimpath -ldflags="-s -w" -o /usr/local/bin/dbbench .; \
        fi \
+    && cp -r /workdir/qpsbench ./qpsbench \
+    && go test ./qpsbench \
+    && go build -trimpath -ldflags="-s -w" -o /usr/local/bin/qpsbench ./qpsbench \
     && cd /workdir \
     && rm -rf /workdir/dbbench
 
