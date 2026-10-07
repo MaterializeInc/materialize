@@ -203,8 +203,24 @@ mod tests {
                 .expect("open")
                 .is_none()
         );
-        drop(acquire(&client, 30));
+        // Prepare from the hint, not a caller-supplied overlapping timestamp.
+        // Advancement need not force a reader through the publication writer.
+        let overlap: BTreeMap<_, _> = bundle()
+            .iter()
+            .map(|id| {
+                let floor = client.reusable_frontier(id, None).expect("overlap");
+                assert_eq!(client.reusable_frontier(id, Some(30.into())), Some(floor));
+                assert_eq!(client.reusable_frontier(id, Some(20.into())), None);
+                (id, floor)
+            })
+            .collect();
+        assert_eq!(overlap, advanced);
+        let concurrent = client
+            .try_acquire(&bundle(), &overlap, &dependencies())
+            .expect("open")
+            .expect("cached overlap is protected during publication");
         client.finish_publication(false);
+        drop(concurrent);
         assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(10.into()));
         assert_eq!(
             client.prepare_publication_if_needed(cadence),
@@ -235,6 +251,9 @@ mod tests {
             client.prepare_publication_if_needed(cadence),
             Some(BTreeMap::new())
         );
+        for id in bundle().iter() {
+            assert_eq!(client.reusable_frontier(id, None), None);
+        }
         client.finish_publication(true);
         assert_eq!(client.prepare_publication_if_needed(cadence), None);
         assert_eq!(
@@ -247,7 +266,11 @@ mod tests {
     #[mz_ore::test]
     fn historical_grant_expansion_requires_commit() {
         let client = ClientReadProtection::new(1);
-        publish(&client, requirements(&[(1, 100), (2, 100)]));
+        client.prepare_publication(requirements(&[(1, 100), (2, 100)]));
+        for id in bundle().iter() {
+            assert_eq!(client.reusable_frontier(id, None), None);
+        }
+        client.finish_publication(true);
         let ordinary = acquire(&client, 120);
         for id in bundle().iter() {
             for target in [None, Some(Timestamp::from(100)), Some(Timestamp::from(120))] {
@@ -271,6 +294,10 @@ mod tests {
         assert!(try_historical().is_none());
         client.prepare_publication(historical.clone());
         assert!(try_historical().is_none());
+        for id in bundle().iter() {
+            assert_eq!(client.reusable_frontier(id, None), Some(100.into()));
+            assert_eq!(client.reusable_frontier(id, Some(50.into())), None);
+        }
         // An expansion must not interrupt reads already covered by both grants.
         drop(acquire(&client, 120));
         client.finish_publication(false);

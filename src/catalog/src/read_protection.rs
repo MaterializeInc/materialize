@@ -157,10 +157,21 @@ impl ClientReadProtection {
     /// A grant can supply the acquisition floor only if it covers the desired
     /// timestamp. A later grant says nothing about older retained history, which
     /// the caller must observe and protect through a committed publication.
-    /// With no timestamp preference, reuse the established window.
+    /// With no timestamp preference, reuse the established window. A pending
+    /// publication can restrict that window but cannot expand its authority.
+    /// Acquisition must still validate the returned hint atomically.
     pub fn reusable_frontier(&self, id: GlobalId, read_ts: Option<Timestamp>) -> Option<Timestamp> {
-        self.granted_frontier(id)
-            .filter(|grant| read_ts.is_none_or(|time| *grant <= time))
+        let state = self.state.lock().expect("read protection mutex poisoned");
+        if state.closed {
+            return None;
+        }
+        let mut frontier = *state.committed.get(&id)?;
+        if let Some(pending) = &state.pending {
+            frontier = frontier.max(*pending.get(&id)?);
+        }
+        read_ts
+            .is_none_or(|time| frontier <= time)
+            .then_some(frontier)
     }
 
     /// Acquire one token per ID in the union of the storage and compute sets
