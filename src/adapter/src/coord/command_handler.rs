@@ -49,6 +49,7 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -1263,6 +1264,12 @@ impl Coordinator {
                     .inc();
             }
             _ => {}
+        }
+        let application_name = ApplicationNameHint::from_str(ctx.session().application_name());
+        if let Some(labels) =
+            metrics::as_of_query_label_values(session_type, application_name, &stmt)
+        {
+            self.metrics.as_of_queries.with_label_values(&labels).inc();
         }
 
         self.handle_execute_inner(stmt, params, ctx).await

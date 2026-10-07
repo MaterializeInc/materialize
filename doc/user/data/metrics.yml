@@ -198,6 +198,15 @@ metrics:
   help: Total rows appended to mz_object_arrangement_size_history since process start.
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_as_of_queries_total
+  help: The total number of SELECT and SUBSCRIBE executions with an AS OF clause.
+  labels:
+  - application_name
+  - kind
+  - session_type
+  - statement
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_auth_refresh_tasks_active
   help: The number of active refresh tasks we have running.
   source: src/frontegg-auth/src/metrics.rs

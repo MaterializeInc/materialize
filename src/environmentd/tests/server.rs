@@ -3319,7 +3319,7 @@ async fn test_http_metrics() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
 #[allow(clippy::disallowed_methods)]
-async fn test_time_to_first_row_metric() {
+async fn test_statement_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
     let client = server.connect().application_name("dbt").await.unwrap();
@@ -3360,6 +3360,62 @@ async fn test_time_to_first_row_metric() {
             ("strategy", "constant"),
         ],
     );
+
+    // Each SELECT or SUBSCRIBE with an AS OF clause counts once per execution. A cursor's SUBSCRIBE
+    // counts when FETCH runs it, not at DECLARE.
+    let as_of_queries = |kind, statement, application_name| {
+        test_util::get_counter_value(
+            &server.metrics_registry,
+            "mz_as_of_queries_total",
+            &[
+                ("session_type", "user"),
+                ("kind", kind),
+                ("statement", statement),
+                ("application_name", application_name),
+            ],
+        )
+    };
+
+    // The harness's default application name reports as `unrecognized`.
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    client.batch_execute("SELECT * FROM t").await.unwrap();
+    client
+        .batch_execute("SELECT * FROM t AS OF AT LEAST 0")
+        .await
+        .unwrap();
+    client.batch_execute("SELECT 1 AS OF 0").await.unwrap();
+    assert_eq!(as_of_queries("at_least", "select", "unrecognized"), 1);
+    assert_eq!(as_of_queries("at", "select", "unrecognized"), 1);
+
+    client.batch_execute("BEGIN").await.unwrap();
+    client
+        .batch_execute("DECLARE c CURSOR FOR SUBSCRIBE t AS OF AT LEAST 0")
+        .await
+        .unwrap();
+    assert_eq!(as_of_queries("at_least", "subscribe", "unrecognized"), 0);
+    client
+        .batch_execute("FETCH ALL c WITH (timeout = '0s')")
+        .await
+        .unwrap();
+    assert_eq!(as_of_queries("at_least", "subscribe", "unrecognized"), 1);
+    client.batch_execute("COMMIT").await.unwrap();
+
+    for application_name in ["web_console", "web_console_shell"] {
+        let client = server
+            .connect()
+            .application_name(application_name)
+            .await
+            .unwrap();
+        client
+            .batch_execute("SELECT * FROM t AS OF AT LEAST 0")
+            .await
+            .unwrap();
+        assert_eq!(as_of_queries("at_least", "select", application_name), 1);
+    }
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
