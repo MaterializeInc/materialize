@@ -895,13 +895,11 @@ impl<'w> Worker<'w> {
                         .get(self.storage_state.storage_configuration.config_set());
 
                 // Apply storage's upsert spill flag to both stash flavors'
-                // mechanisms: the storage leg of the process-wide chunk
-                // spill gate (chunked flavor) and the storage-owned column
-                // pager (paged flavor). The buffer pool, the pager pool, and
-                // their budgets are the shared ones configured by compute's
-                // `apply_worker_config` (compute and storage run in the same
-                // process). The chunk gate ORs storage's leg with compute's,
-                // so chunks spill while either subsystem's flag is set.
+                // mechanisms: the storage chunk spill gate (chunked flavor)
+                // and the storage-owned column pager (paged flavor). The
+                // buffer pool, the pager pool, and their budgets are the
+                // shared ones configured by compute's `apply_worker_config`
+                // (compute and storage run in the same process).
                 //
                 // The flag is replica-scoped: the storage controller merges
                 // per-replica overrides into the `UpdateConfiguration`
