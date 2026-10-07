@@ -1424,7 +1424,7 @@ impl Catalog {
             // them visible to the same validators as explicitly selected births.
             let mut admission_updates = tx.get_and_commit_op_updates();
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            preliminary_state
+            let (_builtin_updates, _catalog_updates) = preliminary_state
                 .to_mut()
                 .apply_updates(admission_updates.clone(), &mut local_expr_cache)
                 .await;
@@ -5590,7 +5590,8 @@ mod tests {
             // Automatic births follow both logical and actual-import permission.
             // Reconsidering the same immutable selection after compaction does
             // not pin its first candidate timestamp or require a client grant.
-            let (index_id, index_gid) = catalog.allocate_user_id_for_test().await.unwrap();
+            let (index_id, index_gid) = catalog.allocate_user_id_for_test().await
+                .expect("allocate input index identity");
             let index_sql = format!("CREATE INDEX mv_input_idx IN CLUSTER quickstart ON {prefix}.mv_input (a)");
             let index = state.with_enable_for_item_parsing(|state| state.parse_item(
                 index_gid, &index_sql, &BTreeMap::new(), None, false, None,
@@ -5615,7 +5616,8 @@ mod tests {
                     },
                 ], None, snapshot.clone(), birth,
             ).await.expect("admit input index");
-            let (automatic_id, automatic_gid) = catalog.allocate_user_id_for_test().await.unwrap();
+            let (automatic_id, automatic_gid) = catalog.allocate_user_id_for_test().await
+                .expect("allocate automatic MV identity");
             let automatic_sql = format!("CREATE MATERIALIZED VIEW {prefix}.mv_automatic IN CLUSTER quickstart AS SELECT * FROM {prefix}.mv_input UNION ALL SELECT * FROM {prefix}.mv_view WHERE false");
             let automatic = indexed.with_enable_for_item_parsing(|state| state.parse_item(
                 automatic_gid, &automatic_sql, &BTreeMap::new(), None, false, None,
@@ -5651,7 +5653,8 @@ mod tests {
                 let (mut admitted, _) = catalog.transact_incremental_dry_run(
                     &advanced, automatic_ops.clone(), None, Some(advanced_snapshot), birth,
                 ).await.expect("admit the retained selection at current permission");
-                let mv = admitted.get_entry(&automatic_id).materialized_view().unwrap();
+                let mv = admitted.get_entry(&automatic_id).materialized_view()
+                    .expect("admitted materialized view");
                 assert_eq!(mv.initial_as_of, Some(Antichain::from_elem(floor)));
                 assert_eq!(
                     admitted.collection_compaction_bounds()[&automatic_gid],
