@@ -418,6 +418,21 @@ impl Coordinator {
         ));
         if self.client_protection_catalog.is_none() {
             if once {
+                // Peers can advance the catalog during the owner's backoff.
+                // Refresh at the attempt boundary as well as after conflicts.
+                if let Err(error) = self.refresh_catalog(None).await {
+                    if matches!(&error, AdapterError::Catalog(error) if matches!(
+                        &error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::Fence(_)
+                        )
+                    )) {
+                        // An early refresh must not bypass transaction-open's
+                        // terminal fence handling and leave cached grants usable.
+                        mz_ore::halt!("catalog writer fenced: {error}");
+                    }
+                    return Err(error);
+                }
                 return self.catalog_transact_once(vec![op]).await;
             }
             return self
