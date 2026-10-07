@@ -24,7 +24,6 @@ use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
-use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
@@ -48,6 +47,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
+use crate::extensions::temporal_bucket::TemporalBucketingParams;
 use crate::render::Pairer;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
@@ -103,11 +103,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
         ) {
-            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                .get(&self.config_set)
-                .try_into()
-                .expect("must fit");
-            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
+            T::maybe_apply_temporal_bucketing(
+                ok_input.inner,
+                self.as_of_frontier.clone(),
+                TemporalBucketingParams::from_config(&self.config_set),
+            )
         } else {
             ok_input
         };

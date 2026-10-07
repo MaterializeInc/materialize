@@ -21,7 +21,6 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
@@ -52,6 +51,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
+use crate::extensions::temporal_bucket::TemporalBucketingParams;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
@@ -1080,13 +1080,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 ArrangementStrategy::Direct
             };
             let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
-                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                    .get(config_set)
-                    .try_into()
-                    .expect("must fit");
                 bucketed = true;
                 // Temporal bucketing is columnar throughout, so no round trip here.
-                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                T::maybe_apply_temporal_bucketing(
+                    oks.inner,
+                    as_of.clone(),
+                    TemporalBucketingParams::from_config(config_set),
+                )
             } else {
                 oks
             };
@@ -1111,13 +1111,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     strategy
                 };
                 let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
-                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                        .get(config_set)
-                        .try_into()
-                        .expect("must fit");
                     bucketed = true;
                     // Temporal bucketing is columnar throughout, so no round trip here.
-                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                    T::maybe_apply_temporal_bucketing(
+                        oks.inner,
+                        as_of.clone(),
+                        TemporalBucketingParams::from_config(config_set),
+                    )
                 } else {
                     oks
                 };

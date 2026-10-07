@@ -219,6 +219,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_peek_response_stash_batch_max_runs
     compute_peek_response_stash_read_batch_size_bytes
     compute_peek_response_stash_read_memory_budget_bytes
+    compute_temporal_bucketing_min_width
     compute_temporal_bucketing_summary
     console_oidc_client_id
     console_oidc_scopes

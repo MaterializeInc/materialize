@@ -333,6 +333,17 @@ pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The minimum width of a temporal bucket. Buckets stop splitting at the largest power of two
+/// milliseconds no larger than this, and zero disables the minimum. Read at operator construction
+/// time.
+pub const TEMPORAL_BUCKETING_MIN_WIDTH: Config<Duration> = Config::new(
+    "compute_temporal_bucketing_min_width",
+    Duration::ZERO,
+    "The minimum width of a temporal bucket, rounded down to a power of two milliseconds. \
+     Zero disables the minimum.",
+    ParameterScope::Environment,
+);
+
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -824,6 +835,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
+        .add(&TEMPORAL_BUCKETING_MIN_WIDTH)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

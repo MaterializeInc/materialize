@@ -126,7 +126,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_ERROR_DISTINCT, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_ERROR_DISTINCT, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
@@ -164,7 +164,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::extensions::temporal_bucket::TemporalBucketing;
+use crate::extensions::temporal_bucket::{TemporalBucketing, TemporalBucketingParams};
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
@@ -1509,14 +1509,10 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     // Only consolidating Unions carry non-`Direct` strategies;
                     // see the `Union` arm of `lower_mir_expr_stack_safe`.
                     let os = if matches!(strategy, ArrangementStrategy::TemporalBucketing) {
-                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                            .get(&self.config_set)
-                            .try_into()
-                            .expect("must fit");
                         T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),
-                            summary,
+                            TemporalBucketingParams::from_config(&self.config_set),
                         )
                     } else {
                         os
@@ -1711,7 +1707,7 @@ pub trait MaybeBucketByTime: Timestamp + ColumnarData {
     fn maybe_apply_temporal_bucketing<'scope, D>(
         stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
         as_of: Antichain<mz_repr::Timestamp>,
-        summary: mz_repr::Timestamp,
+        params: TemporalBucketingParams,
     ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
     where
         D: differential_dataflow::ExchangeData
@@ -1732,7 +1728,7 @@ pub trait MaybeBucketByTime: Timestamp + ColumnarData {
     fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
-        summary: mz_repr::Timestamp,
+        params: TemporalBucketingParams,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
         D: differential_dataflow::ExchangeData
@@ -1771,7 +1767,7 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
     fn maybe_apply_temporal_bucketing<'scope, D>(
         stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
         as_of: Antichain<mz_repr::Timestamp>,
-        summary: mz_repr::Timestamp,
+        params: TemporalBucketingParams,
     ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
     where
         D: differential_dataflow::ExchangeData
@@ -1784,13 +1780,15 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
         for<'a> <(D, Self, Diff) as ColumnarData>::Container:
             ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
     {
-        stream.bucket(as_of, summary).as_collection()
+        stream
+            .bucket(as_of, params.summary, params.min_bits)
+            .as_collection()
     }
 
     fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
-        summary: mz_repr::Timestamp,
+        params: TemporalBucketingParams,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
         D: differential_dataflow::ExchangeData
@@ -1803,7 +1801,9 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
         for<'a> <(D, Self, Diff) as ColumnarData>::Container:
             ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
     {
-        stream.bucket(as_of, summary).as_collection()
+        stream
+            .bucket(as_of, params.summary, params.min_bits)
+            .as_collection()
     }
 }
 
@@ -1840,7 +1840,7 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn maybe_apply_temporal_bucketing<'scope, D>(
         stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
         _as_of: Antichain<mz_repr::Timestamp>,
-        _summary: mz_repr::Timestamp,
+        _params: TemporalBucketingParams,
     ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
     where
         D: differential_dataflow::ExchangeData
@@ -1860,7 +1860,7 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         _as_of: Antichain<mz_repr::Timestamp>,
-        _summary: mz_repr::Timestamp,
+        _params: TemporalBucketingParams,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
         D: differential_dataflow::ExchangeData

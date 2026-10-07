@@ -27,7 +27,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COLUMNAR_ACCUMULABLE_DIFF, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::ENABLE_COLUMNAR_ACCUMULABLE_DIFF;
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -50,6 +50,7 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
+use crate::extensions::temporal_bucket::TemporalBucketingParams;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -170,14 +171,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 temporal_bucketing_strategy,
                 ArrangementStrategy::TemporalBucketing
             ) {
-                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                    .get(&self.config_set)
-                    .try_into()
-                    .expect("must fit");
                 T::maybe_apply_temporal_bucketing_vec(
                     key_val_collection.inner,
                     self.as_of_frontier.clone(),
-                    summary,
+                    TemporalBucketingParams::from_config(&self.config_set),
                 )
             } else {
                 key_val_collection
