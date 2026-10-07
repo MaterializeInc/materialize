@@ -94,8 +94,8 @@ mod tests {
 
     #[mz_ore::test]
     fn preparation_preserves_policy_and_redacts_secrets() {
-        let selected = NonZeroU32::new(4096).unwrap();
-        let current = NonZeroU32::new(8192).unwrap();
+        let selected = NonZeroU32::new(4096).expect("nonzero iterations");
+        let current = NonZeroU32::new(8192).expect("nonzero iterations");
         let mut raw = RoleAttributesRaw::new();
         raw.password = Some("create-secret".into());
         raw.scram_iterations = Some(selected);
@@ -107,9 +107,18 @@ mod tests {
         let Op::CreateRole { attributes, .. } = create else {
             unreachable!()
         };
-        let verifier = attributes.password.unwrap().into_verifier();
-        assert_eq!(scram256_parse_opts(&verifier).unwrap().iterations, selected);
-        scram256_verify(raw.password.as_ref().unwrap(), &verifier).unwrap();
+        let verifier = attributes
+            .password
+            .expect("prepared CREATE password")
+            .into_verifier();
+        assert_eq!(
+            scram256_parse_opts(&verifier)
+                .expect("valid SCRAM verifier")
+                .iterations,
+            selected
+        );
+        scram256_verify(raw.password.as_ref().expect("CREATE password"), &verifier)
+            .expect("CREATE password authenticates");
 
         // Replanning with a different password or policy prepares new input.
         for (policy, expected) in [(Some(selected), selected), (None, current)] {
@@ -135,8 +144,14 @@ mod tests {
             };
             let verifier = password.into_verifier();
             assert!(!debug.contains(&verifier));
-            assert_eq!(scram256_parse_opts(&verifier).unwrap().iterations, expected);
-            scram256_verify(&"alter-secret".into(), &verifier).unwrap();
+            assert_eq!(
+                scram256_parse_opts(&verifier)
+                    .expect("valid SCRAM verifier")
+                    .iterations,
+                expected
+            );
+            scram256_verify(&"alter-secret".into(), &verifier)
+                .expect("ALTER password authenticates");
             assert!(scram256_verify(&"create-secret".into(), &verifier).is_err());
         }
         let clear = Op::alter_role(
@@ -175,16 +190,23 @@ mod tests {
     fn create_missing_policy_has_secure_fallback() {
         let mut raw = RoleAttributesRaw::new();
         raw.password = Some("secret".into());
-        let prepared = std::panic::catch_unwind(|| PreparedRoleAttributes::from(raw));
+        let prepared = mz_ore::panic::catch_unwind(|| PreparedRoleAttributes::from(raw));
         if mz_ore::assert::soft_assertions_enabled() {
             assert!(prepared.is_err());
         } else {
-            let verifier = prepared.unwrap().password.unwrap().into_verifier();
+            let verifier = prepared
+                .expect("fallback prepares password")
+                .password
+                .expect("prepared fallback password")
+                .into_verifier();
             assert_eq!(
-                scram256_parse_opts(&verifier).unwrap().iterations.get(),
+                scram256_parse_opts(&verifier)
+                    .expect("valid SCRAM verifier")
+                    .iterations
+                    .get(),
                 600_000
             );
-            scram256_verify(&"secret".into(), &verifier).unwrap();
+            scram256_verify(&"secret".into(), &verifier).expect("fallback password authenticates");
         }
     }
 }

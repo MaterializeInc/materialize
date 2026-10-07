@@ -4872,15 +4872,6 @@ where
         items
     }
 
-    /// Returns the number of items viewable in the current transaction.
-    fn len(&self) -> usize {
-        let mut count = 0;
-        self.for_values(|_, _| {
-            count += 1;
-        });
-        count
-    }
-
     /// Iterates over the items viewable in the current transaction, and provides a
     /// map where additional pending items can be inserted, which will be appended
     /// to current pending items. Does not verify uniqueness.
