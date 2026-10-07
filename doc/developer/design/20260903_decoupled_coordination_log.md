@@ -30,28 +30,28 @@ retry stale bounds.
 The approved cadence correction coalesces advancement-only replica aggregates at
 the existing publication interval. New or stronger protection still commits before
 use, delayed releases retain committed protection, and heartbeat renewal remains
-independent. Keep heartbeat/grace and retry policy unchanged. Verify with the
-current interval in existing failing workloads. A larger interval needs a measured
-contention/retention decision, not a fixture-only slowdown. Keep this correction
-separate from the conflict-work trims.
+independent. The current 1s interval still has demonstrated runtime contention.
+A single 5s comparison in the existing workloads has been requested, not approved.
+Keep heartbeat/grace, retry policy and deadlines unchanged. Measure contention and
+retained frontiers before proposing a default change, not a fixture-only slowdown.
+Keep this correction separate from the conflict-work trims.
 
 Investigate increasing native warm catch-up cost in the existing Short Zippy
 workflow. The retained-metrics hydration index reconstructs at its initial
 committed bound across deployments. Its imports include the shared catalog shard.
-The catalog limiter retains dense historical progress even while its input
-frontier is current. Verify the authority-query filter correction at the source
-boundary and in that workflow. Physical replay volume remains unmeasured, and
-hydration queuing is a separate cost. The 30-day metrics policy justifies the
-retained bound. Preserve committed history, state layout and readiness. Remove
-the temporary logging and fixed Zippy seed once their question is answered.
+The authority-query filter removes the demonstrated dense catalog feedback.
+The remaining measured cost is the two-slot system-cluster hydration queue.
+Physical replay volume and the underlying compute cost remain unmeasured. The
+30-day metrics policy justifies the retained bound. Preserve committed history,
+state layout and readiness. Keep temporary diagnostics scoped to the unresolved
+hydration question, then remove them and the fixed Zippy seed.
 
-Close the index timeline-protection race at catalog admission. Commit the
-creator's existing client requirement with a new index and retain its tokens
-through ordinary timeline maintenance, without waiting for installation.
-Reconstruction also needs early client protection through bootstrap. Common
-catalog admission still owns the bound, and actual execution still checks
-readability. Verify the zero-replica boundary and existing refresh-MV SLT. The
-observed `SELECT * FROM mvi2` hang is not yet causally attributed to this race.
+Preserve atomic creator protection at index admission and early reconstruction
+protection through bootstrap. The zero-replica boundary and refresh-MV queries
+pass. Bootstrap previews use the same stale-prefix refresh and original planning
+revision guard as commit. Common admission still owns the bound, and actual
+execution still checks readability. Keep that slice closed rather than expanding
+its proof. The remaining one-second EXPLAIN timeout is a separate failure.
 
 The shared adapter client also loses protection after renewal repeatedly fails
 for longer than the unchanged-heartbeat grace. Earlier query timeouts precede
