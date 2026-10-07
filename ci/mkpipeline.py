@@ -148,6 +148,34 @@ def get_pull_request_labels() -> set[str]:
         return set()
 
 
+def apply_antithesis_label(
+    pipeline: Any, labels: set[str], annotate_label: bool
+) -> None:
+    """Under the `ci-antithesis` PR label, run the build steps and the
+    Antithesis image build and skip every test. Without it, skip the image
+    build.
+
+    The label skips tests without failing the build, unlike `ci-no-test`:
+    `ci-no-test` fails the pipeline step, and the build steps it uploaded then
+    never start, since they wait on it."""
+    labeled = "ci-antithesis" in labels
+    if labeled:
+        trim_test_selection_id(pipeline, set())
+        if annotate_label:
+            annotate(
+                "warning",
+                "ci-antithesis",
+                "**`ci-antithesis`** GitHub label: building and pushing Antithesis images, skipping all tests",
+            )
+    for step in steps(pipeline):
+        if step.get("id") != "build-x86_64-antithesis":
+            continue
+        if labeled:
+            step.pop("skip", None)
+        else:
+            step["skip"] = "Only runs on PRs labeled ci-antithesis"
+
+
 def enable_nightly_for_labeled_pr(
     pipeline: Any, pipeline_name: str, labels: set[str]
 ) -> bool:
@@ -385,6 +413,7 @@ so it is executed.""",
                 lto,
                 keep_steps,
             )
+    apply_antithesis_label(pipeline, pr_labels, annotate_label=not args.dry_run)
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
     prioritize_pipeline(pipeline, args.priority)
