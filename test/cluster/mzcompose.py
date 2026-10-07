@@ -5018,6 +5018,7 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
 
         c.sql(
             """
+            ALTER SYSTEM SET log_filter = 'info,mz_adapter::frontend_read_then_write=debug';
             ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
             ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
             """,
@@ -5069,10 +5070,12 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
             time.sleep(5)
             # Drop the cluster while the peek is parked: the coordinator retires
             # the pending peek and logs its end of execution.
+            print("Dropping victim while the registered peek is paused", flush=True)
             control.execute("DROP CLUSTER victim CASCADE")
             # Resume the peek: `client.peek()` now fails (cluster gone) and the
             # frontend asks the coordinator to retire the already-retired peek,
             # which must be a no-op.
+            print("Releasing the registered peek after DROP returned", flush=True)
             control.execute(f"SET failpoints = '{failpoint}=off'")
 
         peek_thread.join(timeout=30)
