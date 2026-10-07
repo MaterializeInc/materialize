@@ -220,8 +220,12 @@ mod tests {
             matches!(preflight, Ok(Ok(_))),
             "this environment's resolver can't resolve {HOST}: {preflight:?}"
         );
+        // NOTE: The OS resolver may cache the 1s-TTL answer for several
+        // seconds, so attempts are spaced out until both answers were seen.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
         let (mut rejected, mut allowed) = (0, 0);
-        for _ in 0..20 {
+        while (rejected < 3 || allowed < 3) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             // A fresh client per attempt so a pooled connection can't skip DNS.
             let client = build_http_client(true).expect("build client");
             let result = client
@@ -251,6 +255,10 @@ mod tests {
             }
         }
         println!("rebinding attempts: {allowed} allowed to {public}, {rejected} rejected");
+        assert!(
+            rejected > 0 && allowed > 0,
+            "DNS never flipped between answers, so rebinding was not exercised"
+        );
     }
 }
 
