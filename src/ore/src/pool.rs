@@ -589,7 +589,8 @@ struct Spill {
 pub const SPILL_IN_FLIGHT_MAX: usize = 64;
 
 /// The most extent bytes one spill-thread pass demotes to the file store
-/// before the thread returns to its eviction queue.
+/// while the eviction queue is empty. With queued evictions a pass demotes
+/// one extent, so a spill thread alternates one eviction with one demotion.
 ///
 /// Demotions are device writes. On a device slower than the rate at which
 /// evictions fill the compressed tier, an unbounded pass never gets the tier
@@ -2461,7 +2462,7 @@ impl PoolInner {
     /// moves to the back of the queue, and a store that can place no class
     /// or has writes disabled ends the pass. An inline file-mode pass with
     /// spill threads present stops at the [`backstop_threshold`], and a
-    /// background file-mode pass stops after [`BACKGROUND_DEMOTION_BYTES`].
+    /// background file-mode pass stops per [`BACKGROUND_DEMOTION_BYTES`].
     fn enforce_compressed_cap(&self, pass: Pass) {
         let cap = self.compressed_cap();
         let over = match (&self.store, pass) {
@@ -2490,9 +2491,14 @@ impl PoolInner {
         // probes the store at most once per class.
         let mut refused_classes = 0u64;
         let mut remaining = self.extent_queue().len();
+        let demotion_limit = match pass {
+            Pass::Background if !self.spill_queue().is_empty() => 1,
+            Pass::Background => BACKGROUND_DEMOTION_BYTES,
+            Pass::Inline => u64::MAX,
+        };
         let mut demoted_bytes = 0u64;
         while remaining > 0 && above(self) {
-            if pass == Pass::Background && demoted_bytes >= BACKGROUND_DEMOTION_BYTES {
+            if demoted_bytes >= demotion_limit {
                 break;
             }
             remaining -= 1;
