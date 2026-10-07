@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Text, VStack } from "@chakra-ui/react";
+import { Text, useLatestRef, VStack } from "@chakra-ui/react";
 import { useAtomValue } from "jotai";
 import React from "react";
 import { Link, Navigate, Route } from "react-router-dom";
@@ -29,7 +29,7 @@ import { OnboardingSteps } from "./OnboardingSteps";
 
 const REGION_READY_TOAST_ID = "region-ready-toast";
 
-export const RegionReadyToastBody = (props: {
+const RegionReadyToastBody = (props: {
   currentRegionId: string;
   regionPath: string;
 }) => {
@@ -56,10 +56,7 @@ const RegionReadyToast = () => {
 
   // The toast reference isn't stable, so the unmount cleanup reads it through
   // a ref instead of depending on it directly.
-  const toastRef = React.useRef(toast);
-  React.useEffect(() => {
-    toastRef.current = toast;
-  }, [toast]);
+  const toastRef = useLatestRef(toast);
 
   React.useEffect(() => {
     if (
@@ -83,11 +80,14 @@ const RegionReadyToast = () => {
   }, [currentEnvironment, currentRegionId, regionSlug, toast]);
 
   React.useEffect(() => {
+    // Any toast instance can close the toast, since they share Chakra's
+    // global toast store.
+    const closeToast = toastRef.current.close;
     return () => {
       // Close the toast when this component unmounts
-      toastRef.current.close(REGION_READY_TOAST_ID);
+      closeToast(REGION_READY_TOAST_ID);
     };
-  }, []);
+  }, [toastRef]);
 
   return null;
 };

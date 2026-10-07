@@ -39,6 +39,7 @@ import {
   NAV_MIN_HEIGHT_PX,
   NAV_MIN_WIDTH_PX,
 } from "./constants";
+import { AccountOnlyNavContext } from "./NavBar/AccountOnlyNavContext";
 import { CreateObjectButton } from "./NavBar/CreateObjectButton";
 import { HideIfEnvironmentDisabled } from "./NavBar/NavItem";
 import {
@@ -188,137 +189,132 @@ export const NavBar = ({ isCollapsed, accountOnly }: NavBarProps) => {
   }
 
   return (
-    <NavBarContainer
-      isCollapsed={isCollapsed}
-      ref={(el) => {
-        referenceRef(el);
-        navBarContainerRef.current = el;
-      }}
-    >
-      <Flex
-        alignItems={{ base: "center", lg: "stretch" }}
-        direction={{ base: "row", lg: "column" }}
-        flexGrow="1"
-        overflow="auto"
+    <AccountOnlyNavContext.Provider value={Boolean(accountOnly)}>
+      <NavBarContainer
+        isCollapsed={isCollapsed}
+        ref={(el) => {
+          referenceRef(el);
+          navBarContainerRef.current = el;
+        }}
       >
-        <NavBarHeader isCollapsed={isCollapsed} isMobile={isMobile}>
-          {isMobile && (
-            <IconButton
-              aria-label="Open navigation menu"
-              icon={isMobileNavOpen ? <CloseIcon /> : <HamburgerIcon />}
-              onClick={toggleMobileNav}
-              variant="inline"
-            />
+        <Flex
+          alignItems={{ base: "center", lg: "stretch" }}
+          direction={{ base: "row", lg: "column" }}
+          flexGrow="1"
+          overflow="auto"
+        >
+          <NavBarHeader isCollapsed={isCollapsed} isMobile={isMobile}>
+            {isMobile && (
+              <IconButton
+                aria-label="Open navigation menu"
+                icon={isMobileNavOpen ? <CloseIcon /> : <HamburgerIcon />}
+                onClick={toggleMobileNav}
+                variant="inline"
+              />
+            )}
+          </NavBarHeader>
+          {isMobile && <Spacer />}
+          {!isCollapsed && <NavBarEnvironmentSelect />}
+          {isMobileNavOpen && (
+            <Box
+              background={colors.background.secondary}
+              borderColor={colors.border.primary}
+              borderRightWidth={1}
+              ref={popperRef}
+              width="272px"
+            >
+              <AppConfigSwitch
+                cloudConfigElement={({ runtimeConfig }) => (
+                  <CloudNavMenu
+                    closeMenu={closeMobileNav}
+                    offsetY={navBarContainerHeight}
+                    runtimeConfig={runtimeConfig}
+                    isMobile={true}
+                  />
+                )}
+                selfManagedConfigElement={
+                  <SelfManagedNavMenu
+                    closeMenu={closeMobileNav}
+                    offsetY={navBarContainerHeight}
+                    isMobile={true}
+                  />
+                }
+              />
+            </Box>
           )}
-        </NavBarHeader>
-        {isMobile && <Spacer />}
-        {!isCollapsed && <NavBarEnvironmentSelect />}
-        {isMobileNavOpen && (
-          <Box
-            background={colors.background.secondary}
-            borderColor={colors.border.primary}
-            borderRightWidth={1}
-            ref={popperRef}
-            width="272px"
-          >
-            <AppConfigSwitch
-              cloudConfigElement={({ runtimeConfig }) => (
-                <CloudNavMenu
-                  closeMenu={closeMobileNav}
-                  offsetY={navBarContainerHeight}
-                  runtimeConfig={runtimeConfig}
-                  isMobile={true}
-                  accountOnly={accountOnly}
-                />
-              )}
-              selfManagedConfigElement={
-                <SelfManagedNavMenu
-                  closeMenu={closeMobileNav}
-                  offsetY={navBarContainerHeight}
-                  isMobile={true}
-                  accountOnly={accountOnly}
-                />
-              }
-            />
-          </Box>
-        )}
-        {!accountOnly && <CreateObjectButton isCollapsed={isCollapsed} />}
-        <AppConfigSwitch
-          cloudConfigElement={({ runtimeConfig }) => (
-            <CloudNavMenu
-              isCollapsed={isCollapsed}
-              runtimeConfig={runtimeConfig}
-              isMobile={false}
-              accountOnly={accountOnly}
-            />
-          )}
-          selfManagedConfigElement={
-            <SelfManagedNavMenu
-              isCollapsed={isCollapsed}
-              isMobile={false}
-              accountOnly={accountOnly}
-            />
-          }
-        />
-        {!isMobile && <Spacer />}
-        {!isMobile && !isCollapsed && (
-          <FreeTrialNotice mb="4" mx={{ lg: "4" }} />
-        )}
-      </Flex>
-      <Flex
-        direction={{ base: "row", lg: "column" }}
-        align={{ base: "center", lg: "stretch" }}
-        gap={{ base: "4", lg: "0" }}
-        py={{ base: 0, lg: 2 }}
-      >
-        {!isMobile && (
+          {!accountOnly && <CreateObjectButton isCollapsed={isCollapsed} />}
           <AppConfigSwitch
-            cloudConfigElement={({ runtimeConfig }) =>
-              runtimeConfig.isImpersonating ? null : (
-                <HideIfEnvironmentDisabled>
-                  <ConnectMenuItem
-                    isCollapsed={isCollapsed}
-                    width="100%"
-                    onClick={onOpenConnectDrawer}
-                  />
-
-                  <ConnectDrawer
-                    user={runtimeConfig.user}
-                    onClose={onCloseConnectDrawer}
-                    isOpen={isConnectDrawerOpen}
-                  />
-                </HideIfEnvironmentDisabled>
-              )
-            }
-            selfManagedConfigElement={({ appConfig, runtimeConfig }) =>
-              appConfig.authMode === "None" ? null : (
-                <HideIfEnvironmentDisabled>
-                  <ConnectMenuItem
-                    isCollapsed={isCollapsed}
-                    width="100%"
-                    onClick={onOpenConnectDrawer}
-                  />
-                  <ConnectDrawer
-                    onClose={onCloseConnectDrawer}
-                    isOpen={isConnectDrawerOpen}
-                    oidcEnabled={runtimeConfig.isOidcAvailable}
-                    auth={
-                      runtimeConfig.isOidcAvailable
-                        ? runtimeConfig.auth
-                        : undefined
-                    }
-                  />
-                </HideIfEnvironmentDisabled>
-              )
+            cloudConfigElement={({ runtimeConfig }) => (
+              <CloudNavMenu
+                isCollapsed={isCollapsed}
+                runtimeConfig={runtimeConfig}
+                isMobile={false}
+              />
+            )}
+            selfManagedConfigElement={
+              <SelfManagedNavMenu isCollapsed={isCollapsed} isMobile={false} />
             }
           />
-        )}
-        <ProfileDropdown
-          display="flex"
-          width={{ base: "auto", lg: "100%" }}
-          isCollapsed={isCollapsed}
-        />
-      </Flex>
-    </NavBarContainer>
+          {!isMobile && <Spacer />}
+          {!isMobile && !isCollapsed && (
+            <FreeTrialNotice mb="4" mx={{ lg: "4" }} />
+          )}
+        </Flex>
+        <Flex
+          direction={{ base: "row", lg: "column" }}
+          align={{ base: "center", lg: "stretch" }}
+          gap={{ base: "4", lg: "0" }}
+          py={{ base: 0, lg: 2 }}
+        >
+          {!isMobile && (
+            <AppConfigSwitch
+              cloudConfigElement={({ runtimeConfig }) =>
+                runtimeConfig.isImpersonating ? null : (
+                  <HideIfEnvironmentDisabled>
+                    <ConnectMenuItem
+                      isCollapsed={isCollapsed}
+                      width="100%"
+                      onClick={onOpenConnectDrawer}
+                    />
+
+                    <ConnectDrawer
+                      user={runtimeConfig.user}
+                      onClose={onCloseConnectDrawer}
+                      isOpen={isConnectDrawerOpen}
+                    />
+                  </HideIfEnvironmentDisabled>
+                )
+              }
+              selfManagedConfigElement={({ appConfig, runtimeConfig }) =>
+                appConfig.authMode === "None" ? null : (
+                  <HideIfEnvironmentDisabled>
+                    <ConnectMenuItem
+                      isCollapsed={isCollapsed}
+                      width="100%"
+                      onClick={onOpenConnectDrawer}
+                    />
+                    <ConnectDrawer
+                      onClose={onCloseConnectDrawer}
+                      isOpen={isConnectDrawerOpen}
+                      oidcEnabled={runtimeConfig.isOidcAvailable}
+                      auth={
+                        runtimeConfig.isOidcAvailable
+                          ? runtimeConfig.auth
+                          : undefined
+                      }
+                    />
+                  </HideIfEnvironmentDisabled>
+                )
+              }
+            />
+          )}
+          <ProfileDropdown
+            display="flex"
+            width={{ base: "auto", lg: "100%" }}
+            isCollapsed={isCollapsed}
+          />
+        </Flex>
+      </NavBarContainer>
+    </AccountOnlyNavContext.Provider>
   );
 };

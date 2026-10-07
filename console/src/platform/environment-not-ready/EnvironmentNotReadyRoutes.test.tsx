@@ -106,18 +106,16 @@ describe("EnvironmentNotReadyRoutes", () => {
     expect(screen.queryByText("Create New")).not.toBeInTheDocument();
   });
 
-  it("keeps the nav account-only in this flow regardless of environment health", async () => {
+  it("keeps the nav account-only once the region is healthy", async () => {
     // The nav in this flow is gated on the route, not on health state, so a
-    // transient "crashed" reading during boot cannot flash the full sidebar.
+    // healthy region does not reveal region-scoped items until the user leaves.
     await renderRoutes(["/creating-environment"], ({ set }) =>
-      setFakeEnvironment(set, "aws/us-east-1", {
-        ...healthyEnvironment,
-        status: { ...healthyEnvironment.status, health: "crashed" },
-      }),
+      setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
     );
     expect(await screen.findByText("Admin")).toBeInTheDocument();
     expect(screen.queryByText("Clusters")).not.toBeInTheDocument();
     expect(screen.queryByText("Create New")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("connect-menu-button")).not.toBeInTheDocument();
   });
 
   it("does not show the welcome dialog when a region becomes ready", async () => {
