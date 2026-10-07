@@ -3661,15 +3661,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Verifies that this process has not missed catalog content updates.
-    pub(super) async fn ensure_not_out_of_sync(&mut self) -> Result<(), CatalogError> {
-        self.durable_catalog
-            .as_mut()
-            .ok_or(DurableCatalogError::DryRunTransaction)?
-            .ensure_not_out_of_sync(self.upper)
-            .await
-    }
-
     pub(crate) fn is_prewarming(&self) -> bool {
         self.prewarming_plan_build.is_some()
     }

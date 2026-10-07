@@ -749,12 +749,13 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     fn classify_upper_mismatch(
         &self,
         updates_applied_before: u64,
-        actual_upper: Timestamp,
     ) -> Result<(), DurableCatalogError> {
         if self.updates_applied != updates_applied_before {
             Err(DurableCatalogError::CatalogOutOfSync {
                 update_count: usize::cast_from(self.updates_applied - updates_applied_before),
-                upper: actual_upper,
+                // Synchronization can pass the upper reported by the failed CAS.
+                // Give the caller the whole prefix to drain before rebuilding.
+                upper: self.upper,
             })
         } else {
             Ok(())
@@ -2452,7 +2453,12 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
     /// Creates a transaction without validating pending catalog updates.
     async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
         self.metrics.transactions_started.inc();
-        let snapshot = self.snapshot().await?;
+        self.sync_to_current_upper().await?;
+        self.transaction_from_synced_snapshot()
+    }
+
+    fn transaction_from_synced_snapshot(&mut self) -> Result<Transaction<'_>, CatalogError> {
+        let snapshot = self.cached_snapshot()?;
         let commit_ts = self.upper;
         let generation = self
             .fenceable_token
@@ -2635,9 +2641,11 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
-        let mut txn = self.transaction_unchecked().await?;
-        txn.ensure_not_out_of_sync().await?;
-        Ok(txn)
+        self.metrics.transactions_started.inc();
+        self.sync_to_current_upper().await?;
+        // Reject a stale projection before cloning and decoding the snapshot.
+        self.ensure_not_out_of_sync(self.upper).await?;
+        self.transaction_from_synced_snapshot()
     }
 
     fn transaction_from_snapshot(
@@ -2756,11 +2764,10 @@ impl DurableCatalogState for PersistCatalogState {
                     match result {
                         Ok(next_upper) => break next_upper,
                         Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
-                        Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
+                        Err(CompareAndAppendError::UpperMismatch { .. }) => {
                             // The mismatch synchronized the handle. Retry only if it applied no
                             // content.
-                            let result = catalog
-                                .classify_upper_mismatch(updates_applied_before, actual_upper);
+                            let result = catalog.classify_upper_mismatch(updates_applied_before);
                             debug!(
                                 target: "mz_adapter::frontend_read_then_write",
                                 phase = "commit_mismatch", attempt,

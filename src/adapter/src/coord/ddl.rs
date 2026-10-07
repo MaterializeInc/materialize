@@ -519,17 +519,18 @@ impl Coordinator {
             tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                 failed = result.is_err(), retry_after_planning_change, "catalog outer attempt completed");
             match result {
-                Err(AdapterError::Catalog(error))
-                    if matches!(
-                        &error.kind,
-                        mz_catalog::memory::error::ErrorKind::Durable(
-                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-                        )
-                    ) =>
-                {
+                Err(AdapterError::Catalog(error)) => {
+                    let mz_catalog::memory::error::ErrorKind::Durable(
+                        mz_catalog::durable::DurableCatalogError::CatalogOutOfSync {
+                            upper, ..
+                        },
+                    ) = &error.kind
+                    else {
+                        return Err(AdapterError::Catalog(error));
+                    };
                     trace_catalog_await!(
                         "catalog_outer_conflict_refresh",
-                        self.refresh_catalog(None).await
+                        self.refresh_catalog(Some(*upper)).await
                     )?;
                     if !retry_after_planning_change
                         && self.catalog().transient_revision() != revision
@@ -1075,16 +1076,21 @@ impl Coordinator {
             tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                 failed = result.is_err(), "catalog commit attempt completed");
             match result {
-                Err(error)
-                    if matches!(&error,
-                    AdapterError::Catalog(error) if matches!(&error.kind,
-                        mz_catalog::memory::error::ErrorKind::Durable(
-                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-                        ))) =>
-                {
+                Err(error) => {
+                    let AdapterError::Catalog(catalog_error) = &error else {
+                        return Err(error);
+                    };
+                    let mz_catalog::memory::error::ErrorKind::Durable(
+                        mz_catalog::durable::DurableCatalogError::CatalogOutOfSync {
+                            upper, ..
+                        },
+                    ) = &catalog_error.kind
+                    else {
+                        return Err(error);
+                    };
                     trace_catalog_await!(
                         "catalog_inner_conflict_refresh",
-                        self.refresh_catalog(None)
+                        self.refresh_catalog(Some(*upper))
                             .wall_time()
                             .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
                             .await

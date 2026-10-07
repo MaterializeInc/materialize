@@ -10,114 +10,59 @@ status belong in the PR.
 
 Implementer session: `2026-09-14-13-05-31-256`.
 
-Linear upstream integration retains native ownership on the shared compute/storage
-runtime and keeps connection state at the storage boundary. The replica-reported
-hydration stability gate uses native query protection and deployment-local
-observations. Scheduling timestamps are obtained off the coordinator loop.
-History is consolidated on `decoupled-coordination`,
-with side-branch work accounted for and original trees preserved in local archival
-tags. Verify the combined integration and approved corrections in regular PR CI.
-Preserve designer commits and useful implementation boundaries.
-The replay onto upstream `d9a2c5dc40` retains all 138 local commits. Accept
-upstream's unconditional frontend OCC and removal of legacy coordinator write
-locks, while preserving fresh catalog certification, read protection, the
-adapter-owned table writer and the approved Persist-arbitrated OCC correction.
-The moved background PeekClient constructor no longer takes the removed flag.
-The renamed two-instance txn-WAL workflow remains paired with its nightly entry.
-Independent static review found no blocking integration issue. Compilation and
-runtime verification remain CI-owned.
-Keep the upstream base pinned for now. Newer upstream merge conflicts are deferred
-by Aljoscha, not a reason to interrupt runtime verification or chase another rebase.
-The imported drop-only prewarming workflow is removed because it asserts legacy
-restarts. Native retirement and SQL DROP membership contracts remain unchanged.
-CI137934 passed Cargo, Clippy, all five SLT shards, native outage and warm
-promotion. The publication and retention fixtures explicitly request per-shard
-metrics and pass in CI137946, retaining all assertions. CI137961 again passes
-native outage, warm promotion and publication. Its Cargo failures expose startup
-replica-status notices in protocol assertions. Opt-in fixture setup now observes
-all declared replica processes online before opening those assertion connections,
-without changing notices or goldens. CI137969 verifies the correction with all
-4,250 Cargo tests passing. Both Clippy jobs, all SLT and Testdrive shards, native
-outage, warm promotion, publication and retention pass. Parallel2 passes, while
-Parallel1 times out and its maintenance phase timings are under investigation.
-The oracle-only rejection is removed, so timestamp-conflict replies now describe
-actual txns conflicts. Both focused committer tests passed in CI137885.
-Upstream OIDs are preserved and the two unreleased raw sources use fresh OIDs.
-Older branch-built catalogs are not a compatibility requirement.
+The active branch is `decoupled-coordination`, linear on upstream `d9a2c5dc40`.
+Keep that base pinned. Further upstream integration is explicitly deferred.
+Side-branch work is accounted for and original trees are preserved in local
+archival tags. Preserve designer commits and useful implementation boundaries
+when folding our remaining fixups. Detailed verification belongs in the
+[PR status](https://github.com/MaterializeInc/materialize/pull/38696).
 
-Prioritize the remaining read-then-write timeouts in parallel checks. The
-catalog-only completion regression passes: table keepalives remain staged but
-are not awaited on the coordinator. CI137946 handoff traces locate dominant waits
-before coordinator receipt: roughly 115s in shard1 and 147s in shard2, while
-thousands of native responses are dispatched. Matching subscribe batches wait
-48s and 82s after reaching the adapter. Catalog/worker waits are much smaller for
-these attempts. Client commands get a bounded batch each message-bearing round,
-after the selected messages, without removing maintenance priority. Timer-only
-rounds admit no extra client work that could consume their re-armed delays.
-CI137961 confirms client receipts interleaving with internal responses and the
-early DELETE/UPDATE counterparts committing. Parallel1 still fails: its longest
-write submit-to-receipt interval is 30.469s and subscribe handoff reaches 40.788s.
-The Kafka UPDATE accumulates retries and times out. Gaps now include no internal
-dispatch either. A successful bound publication near one gap's end takes only
-0.299s, so it does not explain the preceding 28s. Keep scheduling unchanged.
-CI137969 locates 96.1% of completed maintenance time in client read-protection
-publication, including a 264.610s call. Bounds publication peaks at 5.427s.
-An independently measured 178.893s ordinary handler also delays dispatch, so not
-every stall has one owner. CI137986 Parallel1 aborts from coordinator stack overflow
-during nested catalog refresh, not the old timeout or OOM. Its pre-abort publication
-sample is retry-heavy, but too short to explain the earlier minute-long calls.
-Catalog probes now expand around awaited expressions rather than adding generic
-async wrappers along the nested path. Direct common/durable timings remain.
-Verify this stack-pressure correction and identify the expensive sub-await/retry
-cost before a scheduling remedy. Nested durations overlap. Remove probes after repair.
-Preserve freshness, future-time checks, catalog completion before acknowledgement,
-refolding at every new target and existing deadlines. Lower-priority read/timeline
-branches retain their ordering. No broader scheduler redesign is included.
-The DROP-preparation correction refreshes the owner's committed requirement
-after metadata contention without deriving it from an import's available history.
-The unchanged selected-plan-explain regression passes in CI137817 and CI137825. Its companion
-retention fixture uses blind INSERTs for compaction work, not read-dependent
-UPDATEs, and passes in CI137825. That isolates the fixture and does not resolve
-the parallel UPDATEs. Cluster1 also passes after removing the transient retained
-compaction-command count assertion, without changing runtime measurements.
-CI137986 Cluster3 also exposes two distinct observations: DROP metrics have an
-independent observer, so their fixture now polls actual absence for both IDs.
-The paused-index bound assertion stays unchanged: six returning publication
-conflicts interrupted its progress window after replica reclamation.
+Prioritize the parallel-workload stalls. Repeated catalog conflicts amplify
+client read-protection publication and ordinary DDL into long coordinator-owned
+intervals. Measured write and subscribe handoffs overlap these intervals.
+Transaction opens, losing CAS calls and conflict synchronization dominate the
+longest measured publication, not one oracle wait or successful completion.
+The bounded retry trim rejects stale opens before snapshot construction and
+refreshes through the already-synchronized conflict prefix. It does not establish
+workload liveness. Do not reuse candidates across arbitrary metadata changes or
+retry stale bounds.
 
-All five SQL logic test shards pass in CI137778, including scheduled-compaction's
-unchanged 1/0/1 membership and audit assertions. Preserve those assertions.
-CI137885 SLT1 first fails its one-second EXPLAIN FILTER PUSHDOWN on
-`mv_aligned_to_past`, after both `mv12` queries complete. The automatic diagnostic
-rewrite later exhausts the job budget while still making progress. Its final SQL
-is not logged. Do not treat this as proof of a permanent recovery stall.
-Earlier real-time-window observations do not create another investigation campaign.
-The imported hydration-stability restart and no-dataflow workflows pass in
-CI137762, alongside warm handover.
+Cadence decision pending with Aljoscha: coalesce advancement-only replica
+aggregates at the configured publication interval, then tune that interval using
+the existing workloads if necessary. This may retain extra history. New protection
+must still commit synchronously, with heartbeat and grace unchanged. Do not change
+cadence or retry policy before resolving that tradeoff.
 
-Comment-ID collision coverage now uses dynamic setup in the SQL integration
-harness. Preserve actual collisions and exact comment attribution when adjusting
-its setup or cost. EXPLAIN reports selected recovery plans, not necessarily the
-running dataflow after imported-index removal.
+The shared adapter client also loses protection after renewal repeatedly fails
+for longer than the unchanged-heartbeat grace. Earlier query timeouts precede
+that loss. No intervening successful renewal or premature reclamation is shown,
+although the reclaiming peer and exact commit are unlogged. Fix publication
+progress, not grace or closure checks. The existing SLT EXPLAIN FILTER PUSHDOWN
+timeout remains unresolved. Do not infer its cause solely from nearby publication
+warnings or its later diagnostic-rewrite timeout.
 
-The missing hydration-history episode recurs in CI137825 Testdrive4 at line 596.
-The capture shows a zero-row visit followed 24s later by a one-row append,
-beyond the roughly 20s observation budget. A scoped 60s observation wait preserves
-the retention assertions and serial collector behavior. Temporary collection logs
-are removed. The appended row's identity and initial raw hydration completion were
-not logged, so this is evidence of delayed sampling, not a proven write/read mismatch.
-Keep history across deployments.
+Keep the approved Persist-arbitrated OCC contract: subscribe-certified targets,
+freshness and future-time checks, refolding at every changed target, actual txns
+upper on conflict, and catalog completion before acknowledgement. Catalog-only
+completion stages table keepalives without waiting for them on the coordinator.
+Bounded client admission applies only to message-bearing rounds, after selected
+messages. Timer-only rounds retain their ordering.
 
-Zippy passes in CI137778. Retain the CI137762 observation: seven promotions
-complete while readiness grows from 42s to 363s, then backup/restore exhausts the
-job budget with only the catalog shard unfinished after 353s. This is not evidence
-of an unfinished promotion or a new investigation campaign.
-Keep the observed retention costs and unproven plateau visible. Preserve native
-ownership, read protection, external-sink safeguards and compatible-version
-handover on fresh environments. The outage, targeted DDL and bounded-throughput
-proofs stay closed.
-Pre-feature environment conversion and independent query-client isolation are
-outside M2. Use CI for CPU/RAM-heavy builds and tests.
+Catalog timing probes expand around awaited expressions rather than adding
+owning async wrappers along nested refresh paths. Nested timings overlap.
+Remove temporary probes after the repair is verified. Heavy builds and runtime
+verification remain CI-owned, using the existing failing workflows and deadlines.
+
+Preserve the independent DROP-metric retirement observation and the unchanged
+paused-index advancement assertion. Keep history across deployments. Earlier
+hydration sampling and catalog restore/readiness costs remain observations in
+the PR, not additional investigation campaigns.
+
+Native ownership, read protection, external-sink safeguards and compatible-version
+warm handover remain required. The outage, targeted DDL and bounded-throughput
+proof scopes stay closed. Pre-feature conversion and independent query-client
+isolation are outside M2. Surface consequential ownership or ordering changes
+before implementing them.
 
 ## Historical reference, only when changing these areas
 

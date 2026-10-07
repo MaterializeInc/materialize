@@ -163,10 +163,16 @@ async fn test_persist_same_generation_rejects_stale_transaction() {
     }
     let ts = first_txn.upper();
     first_txn.commit(ts).await.unwrap();
-    assert!(matches!(
-        stale_txn.commit(ts).await.unwrap_err(),
-        CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })
-    ));
+    let CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { upper, .. }) =
+        stale_txn.commit(ts).await.unwrap_err()
+    else {
+        panic!("stale transaction must report a catalog conflict");
+    };
+    assert_eq!(upper, second.synced_upper());
+    // The reported prefix is sufficient to refresh the projection before retrying.
+    // Allocator changes are durable content without projection updates.
+    second.sync_updates(upper).await.unwrap();
+    drop(second.transaction().await.unwrap());
     assert_eq!(
         second.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap(),
         initial_id + 1
@@ -199,23 +205,26 @@ async fn test_persist_transaction_rejects_pending_catalog_content() {
         .await
         .unwrap();
 
-    let mut update_counts = Vec::new();
+    let mut conflicts = Vec::new();
     for _ in 0..2 {
         let err = state.transaction().await.unwrap_err();
         match err {
             CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
-                update_count, ..
+                update_count,
+                upper,
             }) => {
                 assert!(update_count > 0);
-                update_counts.push(update_count);
+                assert_eq!(upper, state.synced_upper());
+                conflicts.push((update_count, upper));
             }
             err => panic!("unexpected error: {err:?}"),
         }
     }
-    assert_eq!(update_counts[0], update_counts[1]);
+    assert_eq!(conflicts[0], conflicts[1]);
 
-    let updates = state.sync_to_current_updates().await.unwrap();
-    assert_eq!(updates.len(), update_counts[0]);
+    let (update_count, upper) = conflicts[0];
+    let updates = state.sync_updates(upper).await.unwrap();
+    assert_eq!(updates.len(), update_count);
 
     let txn = state.transaction().await.unwrap();
     drop(txn);
