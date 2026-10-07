@@ -111,14 +111,14 @@ steps:
       queue: linux-aarch64-small
 
   - id: cluster-spec-sheet-staging
-    label: "Cluster spec sheet: envd Scalability + Cluster Object Count Limits (against Staging)"
-    timeout_in_minutes: 3600
+    label: "Cluster spec sheet: QPS concurrency sweep (against Staging)"
+    timeout_in_minutes: 180
     depends_on: devel-docker-tags
-    parallelism: 7
+    parallelism: 1
     concurrency: 1
     # Each slot is one dedicated staging account from the e2e pool of 20
     # (see staging_credentials in the composition). mkpipeline rotates the
-    # 7-shard window over the pool per build, so concurrent builds use
+    # single-shard window over the pool per build, so concurrent builds use
     # disjoint accounts instead of queueing on the previous build's shards.
     concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
     concurrency_pool: 20
@@ -129,8 +129,11 @@ steps:
           args:
             - --cleanup
             - --target=cloud-staging
-            - envd_qps_scalability
-            - envd_objects_scalability
-            - cluster_object_limits
+            - --qps-clusters=10
+            - --system-parameter-default=enable_prepared_query_reuse=true
+            - --system-parameter-default=enable_prepared_query_templates=true
+            - --system-parameter-default=enable_frontend_transaction_completion=true
+            - --system-parameter-default=statement_logging_default_sample_rate=0
+            - qps_envd_strong_scaling
     agents:
-      queue: linux-aarch64-small
+      queue: linux-aarch64-medium
