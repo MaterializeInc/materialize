@@ -57,6 +57,13 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog};
 use mz_catalog::memory::implications::ParsedStateUpdate;
 
+type CommittedCatalogTransaction = (
+    BuiltinTableAppendNotify,
+    Vec<ParsedStateUpdate>,
+    Vec<u64>,
+    crate::ReadHolds,
+);
+
 // Expand around the awaited expression instead of owning another future. Catalog
 // implications can reenter transactions, so inline async wrappers can amplify stack use.
 macro_rules! trace_catalog_await {
@@ -220,8 +227,37 @@ impl Coordinator {
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates, created_clients, admission_holds) =
-            self.catalog_transact_inner(conn_id, ops).await?;
+        let committed = self.catalog_transact_inner(conn_id, ops).await?;
+        Box::pin(self.complete_catalog_transaction(ctx, committed, start)).await
+    }
+
+    /// Attempts a protection metadata write once and finishes every committed effect.
+    /// A definitive conflict refreshes the catalog and returns to the maintenance
+    /// owner, which must resample its proposal before retrying. This must not be
+    /// used for DDL whose prepared plans and holds need a retained continuation.
+    pub(super) async fn catalog_transact_once(
+        &mut self,
+        ops: Vec<catalog::Op>,
+    ) -> Result<Vec<u64>, AdapterError> {
+        assert!(ops.iter().all(|op| matches!(
+            op,
+            Op::CreateClientIncarnation { .. }
+                | Op::PublishClientReadRequirements { .. }
+                | Op::ReclaimClientIncarnation { .. }
+                | Op::SetReadProtection { .. }
+        )));
+        let start = Instant::now();
+        let committed = self.catalog_transact_attempt(None, ops, false).await?;
+        Box::pin(self.complete_catalog_transaction(None, committed, start)).await
+    }
+
+    async fn complete_catalog_transaction(
+        &mut self,
+        ctx: Option<&mut ExecuteContext>,
+        committed: CommittedCatalogTransaction,
+        start: Instant,
+    ) -> Result<Vec<u64>, AdapterError> {
+        let (table_updates, catalog_updates, created_clients, admission_holds) = committed;
 
         let table_updates_wait = self
             .metrics
@@ -512,19 +548,12 @@ impl Coordinator {
                     | catalog::Op::ReclaimClientIncarnation { .. }
             )
         });
-        let reclaims_client = ops
-            .iter()
-            .any(|op| matches!(op, catalog::Op::ReclaimClientIncarnation { .. }));
         loop {
-            // A failed CAS can reveal a creation that cannot install yet. Check
-            // on every attempt, after foreign implications as well as initially.
-            if reclaims_client && !self.pending_compute_installations.is_empty() {
-                return Err(AdapterError::DDLTransactionRace);
-            }
             let revision = self.catalog().transient_revision();
             let result = trace_catalog_await!(
                 "catalog_outer_attempt",
-                self.catalog_transact_attempt(conn_id, ops.clone()).await
+                self.catalog_transact_attempt(conn_id, ops.clone(), true)
+                    .await
             );
             tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                 failed = result.is_err(), retry_after_planning_change, "catalog outer attempt completed");
@@ -911,15 +940,17 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
-    ) -> Result<
-        (
-            BuiltinTableAppendNotify,
-            Vec<ParsedStateUpdate>,
-            Vec<u64>,
-            crate::ReadHolds,
-        ),
-        AdapterError,
-    > {
+        retry_inline: bool,
+    ) -> Result<CommittedCatalogTransaction, AdapterError> {
+        // A failed CAS can reveal a creation that cannot install yet. Check
+        // on every attempt, after foreign implications as well as initially.
+        if !self.pending_compute_installations.is_empty()
+            && ops
+                .iter()
+                .any(|op| matches!(op, Op::ReclaimClientIncarnation { .. }))
+        {
+            return Err(AdapterError::DDLTransactionRace);
+        }
         let internal_metadata = conn_id.is_none()
             && self.controller.replica_owned_compute()
             && ops.iter().all(catalog::Op::is_deployment_metadata);
@@ -1203,6 +1234,12 @@ impl Coordinator {
                             "prepared catalog transaction",
                             "client read protection incarnation is closed",
                         ));
+                    }
+                    if !retry_inline {
+                        // The failed write is definitive and catch-up is complete.
+                        // Return before allocating another candidate timestamp so
+                        // the owner can release the coordinator during backoff.
+                        break Err(error);
                     }
                     oracle_write_ts = trace_catalog_await!(
                         "catalog_retry_write_ts",

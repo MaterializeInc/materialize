@@ -10,6 +10,7 @@
 //! Publishes durable recovery requirements and compaction permission together.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,45 @@ use crate::query_client::QueryClient;
 use crate::{AdapterError, CollectionIdBundle, ReadHolds, TimelineContext};
 
 pub(super) const CATALOG_SUBSCRIPTION_INTERVAL: Duration = Duration::from_secs(1);
+
+pub(super) fn is_read_protection_conflict(error: &AdapterError) -> bool {
+    matches!(error, AdapterError::DDLTransactionRace)
+        || matches!(error, AdapterError::Catalog(error) if matches!(
+            &error.kind,
+            mz_catalog::memory::error::ErrorKind::Durable(
+                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+            )
+        ))
+}
+
+/// Both timers publish the same client's protection. Neither may consume the
+/// other's backoff, or attempts slower than the delay can alternate forever
+/// ahead of queued messages in the coordinator's biased select.
+pub(super) fn defer_protection_retry(
+    retry: Pin<&mut tokio::time::Sleep>,
+    mut sibling: Pin<&mut tokio::time::Sleep>,
+    delay: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + delay;
+    retry.reset(deadline);
+    let sibling_deadline = sibling.deadline();
+    sibling.as_mut().reset(sibling_deadline.max(deadline));
+}
+
+/// Clip to the next renewal threshold, but never spin on an expired deadline.
+/// Delaying an attempt does not extend the incarnation's protection validity.
+fn limit_conflict_delay(delay: Duration, age: Duration) -> Duration {
+    let heartbeat = mz_catalog::read_protection::client_protection_heartbeat_interval();
+    let safety = mz_catalog::read_protection::client_protection_unchanged_grace() - heartbeat;
+    let remaining = if age < heartbeat {
+        heartbeat - age
+    } else if age < safety {
+        safety - age
+    } else {
+        delay
+    };
+    delay.min(remaining)
+}
 
 /// A pending publication that protects a serving timeline window at admission.
 /// Finish only after a definitive transaction outcome. Cancellation must leave
@@ -81,6 +121,17 @@ impl ReadProtectionPublication<'_> {
 }
 
 impl Coordinator {
+    pub(super) fn read_protection_conflict_delay(&self) -> Duration {
+        let delay = mz_catalog::retry::sample_duration(
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+        );
+        match &self.query_client {
+            Some(client) => limit_conflict_delay(delay, client.last_publication().elapsed()),
+            None => delay,
+        }
+    }
+
     /// Prepares client protection for indexes in a candidate or committed catalog.
     /// The catalog still owns admission and bound validation. These requirements
     /// preserve the serving adapter's oracle window, independently of installation.
@@ -174,32 +225,57 @@ impl Coordinator {
     /// Client metadata is live even when SQL uses a prewarming savepoint. This
     /// writer validates its own projection but does not enact maintained objects.
     async fn transact_client_protection(&mut self, op: Op) -> Result<Vec<u64>, AdapterError> {
+        self.transact_client_protection_inner(op, false).await
+    }
+
+    async fn sync_client_protection_catalog(&mut self) -> Result<(), AdapterError> {
+        let catalog = self
+            .client_protection_catalog
+            .as_mut()
+            .expect("private client protection writer exists");
+        if let Err(error) = catalog.sync_to_current_updates().await {
+            if matches!(
+                &error,
+                mz_catalog::durable::CatalogError::Durable(
+                    mz_catalog::durable::DurableCatalogError::Fence(_)
+                )
+            ) {
+                // A cached incarnation is not evidence that this writer can
+                // still renew protection or issue protected grants.
+                if let Some(client) = &self.query_client {
+                    client.protection.mark_closed();
+                }
+            }
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    /// Timer owners request one attempt and rebuild the aggregate after yielding.
+    /// Bootstrap and foreground acquisition retain their inline conflict recovery.
+    async fn transact_client_protection_inner(
+        &mut self,
+        op: Op,
+        once: bool,
+    ) -> Result<Vec<u64>, AdapterError> {
         assert!(matches!(
             &op,
             Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
         ));
-        let Some(catalog) = &mut self.client_protection_catalog else {
+        if self.client_protection_catalog.is_none() {
+            if once {
+                return self.catalog_transact_once(vec![op]).await;
+            }
             return self
                 .catalog_transact_with_results(None, None, vec![op])
                 .await;
-        };
+        }
         loop {
-            if let Err(error) = catalog.sync_to_current_updates().await {
-                if matches!(
-                    &error,
-                    mz_catalog::durable::CatalogError::Durable(
-                        mz_catalog::durable::DurableCatalogError::Fence(_)
-                    )
-                ) {
-                    // This writer cannot renew protection. Its cached projection
-                    // may still contain the incarnation, so presence is not evidence
-                    // that the client can continue issuing protected grants.
-                    if let Some(client) = &self.query_client {
-                        client.protection.mark_closed();
-                    }
-                }
-                return Err(error.into());
-            }
+            self.sync_client_protection_catalog().await?;
+            let catalog = self
+                .client_protection_catalog
+                .as_mut()
+                .expect("checked above");
             let ts = catalog.current_upper().await;
             match catalog
                 .transact(
@@ -211,14 +287,18 @@ impl Coordinator {
                 .await
             {
                 Ok(result) => return Ok(result.created_client_incarnations),
-                Err(AdapterError::Catalog(error))
-                    if matches!(
+                Err(error)
+                    if matches!(&error, AdapterError::Catalog(error) if matches!(
                         &error.kind,
                         mz_catalog::memory::error::ErrorKind::Durable(
                             mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
                         )
-                    ) =>
+                    )) =>
                 {
+                    if once {
+                        self.sync_client_protection_catalog().await?;
+                        return Err(error);
+                    }
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -548,7 +628,7 @@ impl Coordinator {
         }
     }
 
-    /// Publishes the client aggregate and heartbeat through the same transaction path.
+    /// Attempts one publication of the client aggregate and heartbeat.
     pub(super) async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
         let Some(client) = self.query_client.clone() else {
             return Ok(());
@@ -561,11 +641,16 @@ impl Coordinator {
         };
         let incarnation = client.protection.incarnation();
         let result = self
-            .transact_client_protection(Op::PublishClientReadRequirements {
-                incarnation,
-                requirements,
-            })
+            .transact_client_protection_inner(
+                Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements,
+                },
+                true,
+            )
             .await;
+        // Definitive failure releases only the pending barrier, not committed
+        // protection. No barrier survives the timer owner's yield between attempts.
         client.protection.finish_publication(result.is_ok());
         if !self
             .client_read_catalog()
@@ -595,9 +680,7 @@ impl Coordinator {
             .client_protection_reclaimer
             .observe(active, Instant::now());
         if !expired.is_empty() {
-            self.catalog_transact_with_context(
-                None,
-                None,
+            self.catalog_transact_once(
                 expired
                     .into_iter()
                     .map(
@@ -777,7 +860,7 @@ impl Coordinator {
             requirements: candidates.requirements,
             bounds: candidates.bounds,
         }];
-        self.catalog_transact(None, ops).await?;
+        self.catalog_transact_once(ops).await?;
         self.read_protection_pending.clear();
 
         tracing::info!(
@@ -796,6 +879,49 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn overlapping_protection_retries_leave_queued_work_ready() {
+        for heartbeat_first in [false, true] {
+            let due = tokio::time::Instant::now() - Duration::from_secs(1);
+            let heartbeat = tokio::time::sleep_until(due);
+            let publication = tokio::time::sleep_until(due);
+            tokio::pin!(heartbeat, publication);
+            // An attempt outlived both timers. Exercise either owner returning a
+            // conflict before polling the same maintenance-first select ordering.
+            let (retry, sibling) = if heartbeat_first {
+                (heartbeat.as_mut(), publication.as_mut())
+            } else {
+                (publication.as_mut(), heartbeat.as_mut())
+            };
+            defer_protection_retry(retry, sibling, Duration::from_secs(60));
+            tokio::select! {
+                biased;
+                _ = heartbeat.as_mut() => panic!("heartbeat bypassed backoff"),
+                _ = publication.as_mut() => panic!("publication bypassed backoff"),
+                _ = std::future::ready(()) => (),
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn conflict_delay_respects_renewal_headroom_without_expired_deadline_spin() {
+        let heartbeat = mz_catalog::read_protection::client_protection_heartbeat_interval();
+        let safety = mz_catalog::read_protection::client_protection_unchanged_grace() - heartbeat;
+        let delay = Duration::from_millis(100).min(heartbeat / 2);
+        let epsilon = Duration::from_nanos(1);
+        for (age, expected) in [
+            (Duration::ZERO, delay),
+            (heartbeat - epsilon, epsilon),
+            (heartbeat, delay),
+            (heartbeat + epsilon, delay),
+            (safety - epsilon, epsilon),
+            (safety, delay),
+            (safety + epsilon, delay),
+        ] {
+            assert_eq!(limit_conflict_delay(delay, age), expected, "age={age:?}");
+        }
+    }
 
     fn publication_candidates(
         requirements: &BTreeMap<GlobalId, MaintainedReadRequirement>,

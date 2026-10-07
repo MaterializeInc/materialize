@@ -4922,19 +4922,30 @@ impl Coordinator {
                     // Polling the pinned timer is cancel-safe. Renewal and requirement
                     // publication share one transaction before checking abandoned clients.
                     _ = client_heartbeat_timer.as_mut() => {
+                        let mut conflict = false;
                         if self.query_client.as_ref().is_some_and(|client| {
                             client.last_publication().elapsed() >= client_heartbeat_delay
                         }) && let Err(error) = trace_maintenance(
                             "heartbeat_publish_client", self.publish_client_read_protection()
                         ).await {
+                            conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to publish query client protection");
                         }
                         if let Err(error) = trace_maintenance(
                             "heartbeat_reclaim", self.reclaim_client_read_protection()
                         ).await {
+                            conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to reclaim query client protection");
                         }
-                        client_heartbeat_timer.set(tokio::time::sleep(client_heartbeat_delay));
+                        if conflict {
+                            read_protection::defer_protection_retry(
+                                client_heartbeat_timer.as_mut(),
+                                publication_timer.as_mut(),
+                                self.read_protection_conflict_delay(),
+                            );
+                        } else {
+                            client_heartbeat_timer.set(tokio::time::sleep(client_heartbeat_delay));
+                        }
                     }
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
@@ -4975,19 +4986,31 @@ impl Coordinator {
                         if self.query_client.is_some()
                             || (self.catalog().state().catalog_read_protection_enabled()
                                 && !self.controller.read_only()) => {
+                        let mut conflict = false;
                         if let Err(error) = trace_maintenance(
                             "publication_client", self.publish_client_read_protection()
                         ).await {
+                            conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to publish query client protection");
                         }
                         if let Err(error) = trace_maintenance(
                             "publication_bounds", self.publish_read_protection()
                         ).await {
+                            conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to publish catalog read protection");
                         }
-                        publication_timer.set(tokio::time::sleep(mz_catalog::retry::periodic_delay(
-                            publication_delay,
-                        )));
+                        // Only definitive outcomes reach here. Rebuild proposals on
+                        // the next turn, retaining committed protection meanwhile.
+                        if conflict {
+                            read_protection::defer_protection_retry(
+                                publication_timer.as_mut(),
+                                client_heartbeat_timer.as_mut(),
+                                self.read_protection_conflict_delay(),
+                            );
+                        } else {
+                            let delay = mz_catalog::retry::periodic_delay(publication_delay);
+                            publication_timer.set(tokio::time::sleep(delay));
+                        }
                     }
                     // Polling the pinned Sleep is cancellation-safe. Snapshot
                     // observations, not permissions or controller installation.

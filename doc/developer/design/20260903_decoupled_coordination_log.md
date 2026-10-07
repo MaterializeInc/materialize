@@ -28,9 +28,9 @@ operation pending, not the coordinator occupied. Revalidate against refreshed
 state rather than retrying stale bounds or blindly reusing candidates.
 
 Shared typed snapshots, storage metadata sharing and scoped uniqueness lookups
-are implemented, with combined CI verification pending. Replica retry yielding
-and adapter maintenance staggering are implemented. The next main slice is
-adapter retry resumption. Keep prepared rewrite identities and read holds across
+are implemented. Replica retries and timer-owned adapter protection writes yield
+between attempts. Maintenance is staggered. Next finish foreground adapter retry
+resumption. Keep prepared rewrite identities and read holds across
 metadata-only retry waits, but never carry an unfinished publication barrier.
 Check the preparation revision before reuse and preserve cancellation and explicit
 DDL transaction completion. Do not trade CAS spinning for repeated optimization.
