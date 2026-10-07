@@ -247,6 +247,10 @@ static RELATIONS: &[Relation] = &[
         category: RelationCategory::Basic,
     },
     Relation {
+        name: "mz_materialized_view_unconfirmed_keys",
+        category: RelationCategory::Basic,
+    },
+    Relation {
         name: "mz_cluster_schedules",
         category: RelationCategory::Basic,
     },

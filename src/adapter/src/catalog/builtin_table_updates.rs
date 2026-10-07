@@ -16,12 +16,12 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_SESSIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_UNCONFIRMED_KEYS, MZ_OPERATORS, MZ_PSEUDO_TYPES,
+    MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA,
+    MZ_TYPES, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, Type};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, MaterializedView, Type};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
@@ -160,13 +160,17 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // Tables, views, materialized views, indexes, and metric sinks
+            // Unconfirmed keys depend on the running version's analysis, so
+            // they cannot be derived from `mz_catalog_raw`.
+            CatalogItem::MaterializedView(mview) => {
+                self.pack_materialized_view_unconfirmed_keys_update(id, mview, diff)
+            }
+            // Tables, views, indexes, and metric sinks
             // are exposed through materialized views derived from
             // `mz_catalog_raw`, and logs and secrets never had builtin-table
             // rows, so none pack a row here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
             | CatalogItem::Index(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
@@ -178,6 +182,49 @@ impl CatalogState {
             CatalogItem::Connection(_) => vec![],
         };
 
+        updates
+    }
+
+    fn pack_materialized_view_unconfirmed_keys_update(
+        &self,
+        id: CatalogItemId,
+        mview: &MaterializedView,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut updates = Vec::new();
+        if mview.unconfirmed_keys.is_empty() {
+            return updates;
+        }
+        let declared = mview
+            .declared_desc
+            .as_ref()
+            .expect("only declared keys can be unconfirmed");
+        // Formatted like `mz_version()`.
+        let mz_version = self
+            .config
+            .build_info
+            .human_version(self.config.helm_chart_version.clone());
+        for key in &mview.unconfirmed_keys {
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.push(Datum::String(&id.to_string()));
+            packer
+                .try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: key.len(),
+                    }],
+                    key.iter()
+                        .map(|&i| Datum::String(declared.get_name(i).as_str())),
+                )
+                .expect("key is 1 dimensional, and its length is used for the array length");
+            packer.push(Datum::String(&mz_version));
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_MATERIALIZED_VIEW_UNCONFIRMED_KEYS,
+                row,
+                diff,
+            ));
+        }
         updates
     }
 

@@ -115,6 +115,75 @@ CREATE MATERIALIZED VIEW mv_bad_key (a int4 PRIMARY KEY, PRIMARY KEY (a)) AS SEL
 statement error unknown column in constraint: b
 CREATE MATERIALIZED VIEW mv_bad_key (a int4, PRIMARY KEY (b)) AS SELECT a FROM t GROUP BY a
 
+# Keys confirmed at creation are not reported as unconfirmed.
+query I
+SELECT count(*) FROM mz_internal.mz_materialized_view_unconfirmed_keys
+----
+0
+
+# Re-planning drops a declared key that the running configuration cannot
+# confirm, while creation rejects it. With cast elimination, the casts from
+# `varchar` to `text` disappear and the key survives. Without, the two casts
+# are in one `Map`, which keeps no key through them.
+statement ok
+CREATE TABLE tv (a varchar NOT NULL, b varchar NOT NULL)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_cast (a text NOT NULL, b text NOT NULL, PRIMARY KEY (a, b)) AS SELECT DISTINCT a, b FROM tv
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cast_elimination = false
+----
+COMPLETE 0
+
+statement error cannot prove that \(a, b\) is a key of the materialized view
+CREATE MATERIALIZED VIEW mv_cast_2 (a text NOT NULL, b text NOT NULL, PRIMARY KEY (a, b)) AS SELECT DISTINCT a, b FROM tv
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR REPLAN MATERIALIZED VIEW mv_cast
+----
+materialize.public.mv_cast:
+  Project (#2, #3)
+    Map (varchar_to_text(#0{a}), varchar_to_text(#1{b}))
+      Distinct project=[#0{a}, #1{b}]
+        ReadStorage materialize.public.tv
+
+Source materialize.public.tv
+
+Schema of materialize.public.mv_cast:
+  a text NOT NULL,
+  b text NOT NULL
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_cast_elimination
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR REPLAN MATERIALIZED VIEW mv_cast
+----
+materialize.public.mv_cast:
+  Distinct project=[#0{a}, #1{b}]
+    ReadStorage materialize.public.tv
+
+Source materialize.public.tv
+
+Schema of materialize.public.mv_cast:
+  a text NOT NULL,
+  b text NOT NULL,
+  UNIQUE (a, b)
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW mv_cast
+
 # Declared keys and nullability are visible to dependent objects.
 statement ok
 CREATE MATERIALIZED VIEW mv_pk_reader AS SELECT * FROM mv_pk
