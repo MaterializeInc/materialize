@@ -543,25 +543,31 @@ async integration in every runtime. A protocol core with no I/O owns none of
 that. Each language keeps its native driver for the connection, which users
 already trust, and feeds rows into the protocol core.
 
-Bindings will use PyO3 and maturin (abi3 wheels) for Python, napi-rs for Node,
-and WebAssembly for browsers and edge runtimes. The WebAssembly build is how the
-browser and function cases, and the Console's own subscribe client, can reuse
-the protocol core later. Rows will cross the boundary in one call per `FETCH`,
-because a call per row pays a binding crossing per row. The protocol core will
-not panic across the boundary, and its errors will become each language's
-native exceptions. It will not depend on Materialize workspace crates, so it
-builds and versions on its own.
+The protocol core will ship in two builds. Python will bind the native build
+through PyO3 and maturin (abi3 wheels), and the Rust package will use the
+library directly. Node will use the WebAssembly build, the same one browsers and
+edge runtimes use, so the Node package is one artifact for every platform. This
+repository already publishes Rust compiled to WebAssembly to npm
+(`ci/deploy/npm.py`). WebAssembly runs slower than native code, which matters
+little here because rows will cross into the protocol core in one call per
+`FETCH`, not one call per row. The protocol core will not panic across the
+boundary, and its errors will become each language's native exceptions. It will
+not depend on Materialize workspace crates, so it builds and versions on its
+own.
 
-The costs are a wheel and npm build matrix per platform, Rust stack traces in
-Python and Node bug reports, and a source build that needs a Rust toolchain on
-unsupported platforms. Go binds through cgo, which is painful, so Go will be
-hand-written against the conformance vectors. If native packaging proves too
-costly, the fallback is B plus A.
+The WebAssembly build also covers later languages without native builds. Go can
+run it through wazero and JVM languages through Chicory, both written in their
+own language, which avoids cgo and JNI. If that proves too slow, the language is
+hand-written against the conformance vectors.
+
+The costs are a Python wheel per platform, Rust stack traces in Python bug
+reports, and a source build that needs a Rust toolchain wherever no wheel
+exists. If native packaging proves too costly, the fallback is B plus A.
 
 ### Generated and hand-written parts
 
 The binding glue and each package's type definitions will be generated from the
-protocol core. napi-rs emits TypeScript declarations, and the Python package
+protocol core. wasm-bindgen emits TypeScript declarations, and the Python package
 will ship type stubs generated from the PyO3 module. Type mapping lives in the
 protocol core: it decodes each Materialize type into one documented value
 model, and each binding converts that model to the language's native types
@@ -578,7 +584,8 @@ misc/materialize-sdk/
   spec/          behavior spec, versioned
   conformance/   vectors, shared by every package
   python/        package: PyO3 binding, psycopg transport, sinks
-  node/          package: napi-rs binding, node-postgres transport, sinks
+  node/          package: WebAssembly build, node-postgres transport, sinks
+  rust/          package: protocol core directly, tokio-postgres transport, sinks
   test/          mzcompose end-to-end suite, run in the nightlies
 ```
 
@@ -586,6 +593,17 @@ The SDK will start in its own Cargo workspace under `misc/`, outside the
 Materialize workspace, so its dependencies and lockfile stay independent. A
 spec change and its fallout in every package then land in one PR, and server
 changes run against every package in the nightlies.
+
+Releases will work the way `dbt-materialize` releases do. A pull request bumps
+the SDK version and merges to `main`. The deploy pipeline, which runs on every
+`main` build (`ci/deploy/pipeline.template.yml`), publishes each package whose
+version is not yet on its registry, as `ci/deploy/pypi.py` does today. Releases
+need no tags. Python wheels will be built on the existing Linux x86-64, Linux
+ARM, and macOS ARM Buildkite queues, with macOS x86-64 cross-compiled on the ARM
+agent. Windows has no queue, so it gets the source package, which needs a Rust
+toolchain to install. Publishing to crates.io needs a new deploy step. Go is the
+exception to the pattern: Go modules are versioned by git tags, so a Go package
+needs tags in this repository or a repository of its own.
 
 Each release will publish every package at the same version, built from the
 same protocol core, so a version number means the same behavior in every
