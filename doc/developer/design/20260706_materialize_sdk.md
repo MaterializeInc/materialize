@@ -672,6 +672,30 @@ and a Redis or Postgres reference sink chosen by demand.
 GA requires dedicated SQLSTATEs released, the client docs rewritten on the SDK,
 and both languages passing the same vectors and end-to-end suite.
 
+## Future work
+
+The name leaves room for modules beyond `subscribe` and `sink`. The candidates
+are places where an ordinary driver behaves unexpectedly against Materialize:
+
+- After its first query, a read transaction is confined to one time domain, and
+  reading objects outside it fails with SQLSTATE 25000
+  (`RelationOutsideTimeDomain` in `src/adapter/src/error.rs`). Drivers and ORMs
+  that open a transaction for every query hit this. A module could default reads
+  to autocommit and offer one call that reads several views at one timestamp.
+- A transaction becomes write-only after its first write, and some DDL refuses to
+  run inside a transaction. Typed errors could name the fix for each.
+- A cursor cannot outlive its transaction (`WITH HOLD` is rejected in
+  `src/sql-parser/src/parser.rs`), and only `FETCH ... WITH (timeout = ...)` lets a
+  cursor loop idle. `subscribe` already handles both.
+- Drivers return types they do not know, such as `mz_timestamp`, as text. The
+  protocol core's value model could serve plain queries too.
+
+Each module adds maintenance: it tracks server behavior, needs vectors and
+end-to-end scenarios, and multiplies across languages. A module will be added
+only when support or field evidence shows users hitting the problem, and only
+with nightly end-to-end coverage. Plain query execution, DDL management (owned
+by mz-deploy and the Terraform provider), and ORM integration stay out of scope.
+
 ## Alternatives
 
 ### The product strawman
@@ -748,3 +772,5 @@ produce.
 10. Repository home: should the packages stay under `misc/` in this repository
     for good, or move to their own repository once the spec settles, keeping
     the protocol core, vectors, and end-to-end suite here?
+11. Future-work modules: are any of them worth their maintenance cost, and what
+    evidence should trigger one?
