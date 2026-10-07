@@ -1045,9 +1045,13 @@ impl Coordinator {
             as_of,
             mz_now,
             read_holds,
-            plan.source_imports
-                .into_iter()
-                .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
+            plan.source_imports.into_iter().filter_map(|(id, import)| {
+                import
+                    .desc
+                    .arguments
+                    .operators
+                    .map(|plan| (id, plan.into_map_filter_project()))
+            }),
         )
         .await
     }
