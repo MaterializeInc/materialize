@@ -40,7 +40,11 @@ and waking waiters. The existing fixture now exercises repeated-conflict
 cancellation. APPLY REPLACEMENT retains preparation in its existing cancellable
 watch context and invalidates cache entries only after a definitive commit.
 These slices still need CI verification.
-Next finish ordinary DDL and explicit DDL COMMIT resumption,
+SQL CREATE ROLE and COMMENT use a shared retained catalog-commit stage. Startup
+role creation retains its separate owner. The existing parallel password fixture
+must verify the demonstrated role stall rather than infer success from cheaper
+candidate work.
+Next finish remaining ordinary DDL and explicit DDL COMMIT resumption,
 plus direct preparation acquisition. Preserve cancellation and commit-once
 completion. Do not trade CAS spinning for repeated optimization.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,

@@ -424,6 +424,11 @@ pub enum Message {
         span: Span,
         stage: PeekStage,
     },
+    CatalogCommitStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: CatalogCommitStage,
+    },
     DropObjectsStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -584,6 +589,7 @@ impl Message {
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
+            Message::CatalogCommitStageReady { .. } => "catalog_commit_stage_ready",
             Message::DropObjectsStageReady { .. } => "drop_objects_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
@@ -801,6 +807,16 @@ pub struct PeekStageExplainPushdown {
     validity: PlanValidity,
     determination: TimestampDetermination,
     imports: BTreeMap<GlobalId, MapFilterProject>,
+}
+
+/// SQL work whose only remaining effect is a catalog commit and response.
+#[derive(Debug)]
+pub struct CatalogCommitStage {
+    validity: PlanValidity,
+    planning_revision: u64,
+    ops: Vec<crate::catalog::Op>,
+    prepared: Option<ddl::PreparedCatalogTransaction>,
+    response: ExecuteResponse,
 }
 
 #[derive(Debug)]

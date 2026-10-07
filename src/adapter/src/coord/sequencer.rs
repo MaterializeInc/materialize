@@ -264,13 +264,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateRole(plan) => {
-                    let result = self
-                        .sequence_create_role(Some(ctx.session().conn_id()), plan)
-                        .await;
-                    if let Some(notice) = self.should_emit_rbac_notice(ctx.session()) {
-                        ctx.session().add_notice(notice);
-                    }
-                    ctx.retire(result);
+                    self.sequence_create_role_sql(ctx, plan).await;
                 }
                 Plan::CreateCluster(plan) => {
                     let result = self.sequence_create_cluster(ctx.session(), plan).await;
@@ -321,8 +315,7 @@ impl Coordinator {
                     ctx.retire(res);
                 }
                 Plan::Comment(plan) => {
-                    let result = self.sequence_comment_on(ctx.session(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_comment_on(ctx, plan).await;
                 }
                 Plan::CopyTo(plan) => {
                     self.sequence_copy_to(ctx, plan, target_cluster).await;

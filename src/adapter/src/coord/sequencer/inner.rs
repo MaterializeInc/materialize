@@ -120,6 +120,7 @@ use crate::util::viewable_variables;
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
+mod catalog_commit;
 mod cluster;
 mod copy_from;
 mod create_index;
@@ -990,20 +991,46 @@ impl Coordinator {
         Ok(())
     }
 
+    fn prepare_create_role(
+        &self,
+        plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
+    ) -> Result<catalog::Op, AdapterError> {
+        self.validate_role_attributes(&attributes)?;
+        Ok(catalog::Op::CreateRole {
+            name,
+            attributes: attributes.into(),
+        })
+    }
+
     #[instrument]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
+        plan: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.validate_role_attributes(&attributes.clone())?;
-        let op = catalog::Op::CreateRole {
-            name,
-            attributes: attributes.into(),
-        };
+        let op = self.prepare_create_role(plan)?;
         self.catalog_transact_with_context(conn_id, None, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
+    }
+
+    pub(crate) async fn sequence_create_role_sql(
+        &mut self,
+        ctx: ExecuteContext,
+        plan: plan::CreateRolePlan,
+    ) {
+        let op = match self.prepare_create_role(plan) {
+            Ok(op) => op,
+            Err(error) => {
+                if let Some(notice) = self.should_emit_rbac_notice(ctx.session()) {
+                    ctx.session().add_notice(notice);
+                }
+                ctx.retire(Err(error));
+                return;
+            }
+        };
+        self.sequence_catalog_commit(ctx, vec![op], ExecuteResponse::CreatedRole)
+            .await;
     }
 
     #[instrument]
@@ -1304,16 +1331,16 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_comment_on(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         plan: plan::CommentPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         let op = catalog::Op::Comment {
             object_id: plan.object_id,
             sub_component: plan.sub_component,
             comment: plan.comment,
         };
-        self.catalog_transact(Some(session), vec![op]).await?;
-        Ok(ExecuteResponse::Comment)
+        self.sequence_catalog_commit(ctx, vec![op], ExecuteResponse::Comment)
+            .await;
     }
 
     fn validate_dropped_role_ownership(

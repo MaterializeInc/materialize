@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
+use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_sql::catalog::ErrorMessageObjectDescription;
 use mz_sql::names::ObjectId;
