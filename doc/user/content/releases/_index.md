@@ -24,6 +24,31 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-10-07* <br>
 *Released to Materialize Self-Managed: 2026-10-08* <br>
 
+### Alerting for Self-Managed {#v26.45.1-alerting}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the monitoring stack ships with ready-made alerts, so you hear about a problem before your users do:
+
+- **Ready-made alert rules**: 34 alerts are on by default, covering Materialize and the Kubernetes platform under it. They include `environmentd` going down, clusters falling behind or stuck hydrating, replicas nearing their memory limit or being OOM-killed, and panics in Materialize's logs.
+- **Route each alert to whoever acts on it**: Every alert carries a severity and an audience, `platform` for the team operating the deployment and `workload` for the teams that own the clusters, so you can send each to the right people.
+- **Notify the tools your team already uses**: Configure PagerDuty, Slack, Microsoft Teams, email, or webhook receivers from Terraform. Notifications link to the alert in Grafana and to a pre-filled silence.
+
+A default install configures no receiver, so alerts notify nobody until you add one. For more information, see [Alerting](/observability/self-managed/alerting/), [Customize alerting](/observability/self-managed/customize-alerting/), and the [list of bundled alerts ⧉](https://materializeinc.github.io/materialize-monitoring/reference/common-alerts/).
+
+### External dependency monitoring for Self-Managed {#v26.45.1-external-dependencies}
+
+<red>*Materialize Self-Managed only*</red>
+
+Materialize depends on object storage, a metadata database, and your cloud provider's infrastructure. Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the monitoring stack shows their health beside Materialize's own, so you can tell quickly whether a problem is in Materialize or in something it depends on:
+
+- **Materialize Persist (Storage)**: Materialize's view of the object storage that holds its data.
+- **Materialize Consensus (Metadata)**: Materialize's view of the metadata database, including whether it is reachable and how long commits take.
+- **Infrastructure Cloud Provider**: Metrics pulled from AWS CloudWatch, Google Cloud Monitoring, or Azure Monitor, such as node status checks, compute quota usage, and the metadata database's storage. See [Cloud provider metrics ⧉](https://materializeinc.github.io/materialize-monitoring/metrics/collecting/cloud-provider-metrics/).
+- **Metadata database alerts**: `consensus-unreachable` fires when Materialize has not reached the metadata database for five minutes, or your cloud provider reports it down, and `consensus-failures` fires on sustained errors.
+
+For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
+
 ## v26.44.1
 *Released to Materialize Cloud: 2026-09-30* <br>
 *Released to Materialize Self-Managed: 2026-10-01* <br>
