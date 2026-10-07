@@ -23,7 +23,6 @@ use mz_expr::row::RowCollection;
 use mz_expr::{MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::{CatalogItemId, Diff, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::catalog::{CatalogError, SessionCatalog};
@@ -368,11 +367,13 @@ impl Coordinator {
                     let result = self.sequence_explain_schema(plan);
                     ctx.retire(result);
                 }
-                // `try_frontend_peek` and `try_frontend_read_then_write` take over every statement
-                // that plans to one of these.
+                // `SessionClient::execute_attempts` unrolls SQL `EXECUTE`, and `try_frontend_peek` and
+                // `try_frontend_read_then_write` take over every statement that plans to one of the
+                // others.
                 // TODO(SQL-760): Drop the manual soft panic once internal errors soft-panic
                 // centrally.
                 plan @ (Plan::CopyTo(_)
+                | Plan::Execute(_)
                 | Plan::ExplainTimestamp(_)
                 | Plan::Insert(_)
                 | Plan::ReadThenWrite(_)
@@ -551,45 +552,6 @@ impl Coordinator {
                         );
                         ctx.retire(Ok(ExecuteResponse::Prepare));
                     }
-                }
-                Plan::Execute(plan) => {
-                    match self.sequence_execute(ctx.session_mut(), plan) {
-                        Ok(portal_name) => {
-                            let (tx, _, session, extra, response_barriers) = ctx.into_parts();
-                            // The obligation travels as data and
-                            // `handle_execute` arms it again. It cannot be
-                            // dropped in between: the command goes to the
-                            // channel this loop drains, and a spawned barrier
-                            // task is only dropped when the process is going
-                            // down, at which point nothing records anything.
-                            let command = Message::Command(
-                                OpenTelemetryContext::obtain(),
-                                Command::Execute {
-                                    portal_name,
-                                    session,
-                                    tx: tx.take(),
-                                    outer_ctx_extra: Some(extra.defuse()),
-                                },
-                            );
-                            if response_barriers.is_empty() {
-                                self.internal_cmd_tx
-                                    .send(command)
-                                    .expect("sending to self.internal_cmd_tx cannot fail");
-                            } else {
-                                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                                mz_ore::task::spawn(
-                                    || "execute_after_response_barriers",
-                                    async move {
-                                        for barrier in response_barriers {
-                                            barrier.await;
-                                        }
-                                        let _ = internal_cmd_tx.send(command);
-                                    },
-                                );
-                            }
-                        }
-                        Err(err) => ctx.retire(Err(err)),
-                    };
                 }
                 Plan::Deallocate(plan) => match plan.name {
                     Some(name) => {

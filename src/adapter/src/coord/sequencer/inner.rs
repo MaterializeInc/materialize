@@ -3773,25 +3773,6 @@ impl Coordinator {
         Ok(())
     }
 
-    // Returns the name of the portal to execute.
-    #[instrument]
-    pub(super) fn sequence_execute(
-        &self,
-        session: &mut Session,
-        plan: plan::ExecutePlan,
-    ) -> Result<String, AdapterError> {
-        // Verify the stmt is still valid.
-        Self::verify_prepared_statement(self.catalog(), session, &plan.name)?;
-        let ps = session
-            .get_prepared_statement_unverified(&plan.name)
-            .expect("known to exist");
-        let stmt = ps.stmt().cloned();
-        let desc = ps.desc().clone();
-        let state_revision = ps.state_revision;
-        let logging = Arc::clone(ps.logging());
-        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), state_revision)
-    }
-
     #[instrument]
     pub(super) async fn sequence_grant_privileges(
         &mut self,
