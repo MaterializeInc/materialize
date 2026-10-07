@@ -44,12 +44,12 @@ use mz_sql_parser::ast::{
     CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
     DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption, GlueAvroSeed, Ident,
     KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
-    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, SourceEnvelope, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
-    UnresolvedItemName,
+    LoadGeneratorOptionName, MaterializedViewColumns, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -2905,6 +2905,45 @@ async fn compile_proto(
         schema,
         message_name,
     })
+}
+
+/// Gives a replacement materialized view without a column list the column
+/// definitions of its target, if the target declares its schema.
+///
+/// Writing the definitions into the statement keeps the replacement's
+/// `create_sql` self-contained, so re-planning it does not depend on the
+/// target, and records dependencies on the types the definitions use. Applying
+/// the replacement copies its column list to the target, which keeps the
+/// target's schema declared.
+pub fn purify_create_materialized_view_columns(
+    catalog: &dyn SessionCatalog,
+    cmvs: &mut CreateMaterializedViewStatement<Aug>,
+    resolved_ids: &mut ResolvedIds,
+) -> Result<(), PlanError> {
+    // Planning reports a missing or invalid replacement target.
+    let Some(ResolvedItemName::Item { id, .. }) = &cmvs.replacement_for else {
+        return Ok(());
+    };
+    if !cmvs.columns.is_empty() {
+        return Ok(());
+    }
+    let target = catalog.get_item(id);
+    let stmt = mz_sql_parser::parser::parse_statements(target.create_sql())?
+        .into_element()
+        .ast;
+    let Statement::CreateMaterializedView(target_stmt) = stmt else {
+        return Ok(());
+    };
+    if !matches!(
+        target_stmt.columns,
+        MaterializedViewColumns::Definitions { .. }
+    ) {
+        return Ok(());
+    }
+    let (columns, ids) = crate::names::resolve(catalog, target_stmt.columns)?;
+    cmvs.columns = columns;
+    resolved_ids.extend_from(&ids);
+    Ok(())
 }
 
 const MZ_NOW_NAME: &str = "mz_now";

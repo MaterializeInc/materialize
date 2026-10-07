@@ -194,7 +194,7 @@ q  text
 
 # Replacements are compared against the declared schema.
 statement error replacement must declare its schema because its target does
-CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a::int8 AS x, b AS y, c::numeric(10, 1) AS z FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp (x, y, z) FOR mv AS SELECT a::int8, b, c::numeric(10, 1) FROM t
 
 statement error replacement schema differs from target schema
 CREATE REPLACEMENT MATERIALIZED VIEW rp (x int8, y text, z numeric(10, 1)) FOR mv AS SELECT a, b, c FROM t
@@ -215,6 +215,66 @@ query T
 SELECT create_sql LIKE '%("x" %int8% NOT NULL, "y" %text%, "z" %numeric%10%1%)%' FROM mz_materialized_views WHERE name = 'mv'
 ----
 true
+
+# A replacement without a column list gets the target's column definitions,
+# including names, and is cast to them as if they were written out.
+statement error materialized view materialize.public.rp declares 3 columns, but its query produces 2
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a::int8, b FROM t
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a * 10 AS ignored, b, c FROM t
+
+query TTT rowsort
+SELECT name, nullable, type FROM (SHOW COLUMNS FROM rp)
+----
+x  false  bigint
+y  true  text
+z  true  numeric
+
+query T
+SELECT create_sql LIKE '%("x" %int8% NOT NULL, "y" %text%, "z" %numeric%10%1%)%' FROM mz_materialized_views WHERE name = 'rp'
+----
+true
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query ITR rowsort
+SELECT * FROM mv
+----
+10  x  1.2
+20  y  2.5
+
+query T
+SELECT create_sql LIKE '%("x" %int8% NOT NULL, "y" %text%, "z" %numeric%10%1%)%' FROM mz_materialized_views WHERE name = 'mv'
+----
+true
+
+# Types used by inherited column definitions are dependencies, also after the
+# replacement is applied.
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE VIEW lists AS SELECT LIST[a]::int4_list AS l FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv_typed (l int4_list) AS SELECT l FROM lists
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv_typed AS SELECT l FROM lists
+
+statement ok
+ALTER MATERIALIZED VIEW mv_typed APPLY REPLACEMENT rp
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies d
+JOIN mz_materialized_views m ON d.object_id = m.id
+JOIN mz_types ty ON d.referenced_object_id = ty.id
+WHERE m.name = 'mv_typed' AND ty.name = 'int4_list'
+----
+1
 
 # An implicit target can be given a declared schema that matches its current
 # one.
