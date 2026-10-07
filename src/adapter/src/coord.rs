@@ -111,8 +111,7 @@ use mz_compute_client::controller::error::{
     CollectionLookupError, CollectionMissing, DataflowCreationError, InstanceMissing,
 };
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
 };
@@ -4515,7 +4514,7 @@ impl Coordinator {
     /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) {
@@ -4528,7 +4527,7 @@ impl Coordinator {
     /// initialize the read policies for its exported readable objects.
     pub(crate) async fn try_ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
@@ -4559,7 +4558,7 @@ impl Coordinator {
     /// Like `ship_dataflow`, but also await on builtin table updates.
     pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
         target_replica: Option<ReplicaId>,
@@ -4851,10 +4850,7 @@ fn arrangement_sizes_expired_retractions(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-    ) {
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: LirDataflowDescription) {
         // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
         // called after `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors (which has

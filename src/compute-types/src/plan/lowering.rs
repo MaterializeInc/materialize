@@ -22,7 +22,7 @@ use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, StableRow, Timestamp};
 
-use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
+use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport, LirDataflowDescription};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::scalar::{
@@ -136,7 +136,7 @@ impl Context {
     pub fn lower(
         mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-    ) -> Result<DataflowDescription<LirRelationExpr>, String> {
+    ) -> Result<LirDataflowDescription, String> {
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
         for IndexImport {
@@ -220,7 +220,7 @@ impl Context {
     /// utter the `mz_now()` predicates that temporal bounds fold into, so it
     /// consumes the MIR `MfpPlan`s stashed in [`Self::source_get_mfps`] rather
     /// than round-tripping the lowered LIR plans back through MIR.
-    fn refine_source_mfps(&mut self, dataflow: &mut DataflowDescription<LirRelationExpr>) {
+    fn refine_source_mfps(&mut self, dataflow: &mut LirDataflowDescription) {
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
             let source = &mut source_import.desc;
             let source_id = *source_id;

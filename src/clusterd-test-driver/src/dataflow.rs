@@ -15,7 +15,7 @@
 //! hard and reusable — the MIR-to-LIR lowering, the [`RenderPlan`] conversion, the
 //! [`CollectionMetadata`] attachment, and the `SqlRelationType`-versus-
 //! `ReprRelationType` bookkeeping — and produces a
-//! `DataflowDescription<RenderPlan, CollectionMetadata>` ready to ship as
+//! `RenderDataflowDescription<CollectionMetadata>` ready to ship as
 //! [`ComputeCommand::CreateDataflow`].
 //!
 //! [`index_dataflow`] is thin sugar over the builder for the common single-index
@@ -27,7 +27,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_compute_types::dataflows::{
-    BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
+    BuildDesc, DataflowDescription, IndexDesc, IndexImport, LirDataflowDescription,
+    RenderDataflowDescription, SourceImport,
 };
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -167,8 +168,8 @@ impl Input {
 ///     using the same [`import_source`] / [`insert_plan`] / [`export_index`] helpers
 ///     the optimizer uses.
 ///  2. Lower it to LIR via [`LirRelationExpr::finalize_dataflow`], yielding
-///     [`DataflowDescription<LirRelationExpr, ()>`].
-///  3. Augment it into [`DataflowDescription<RenderPlan, CollectionMetadata>`] by
+///     [`LirDataflowDescription`].
+///  3. Augment it into [`RenderDataflowDescription<CollectionMetadata>`] by
 ///     converting each object's [`LirRelationExpr`] via [`RenderPlan::try_from`] and attaching
 ///     the storage [`CollectionMetadata`] to each source import — the same step
 ///     performed in `compute-client`'s `Instance::create_dataflow`.
@@ -183,8 +184,7 @@ impl Input {
 /// [`insert_plan`]: DataflowDescription::insert_plan
 /// [`export_index`]: DataflowDescription::export_index
 /// [`DataflowDescription<OptimizedMirRelationExpr, ()>`]: DataflowDescription
-/// [`DataflowDescription<Plan, ()>`]: DataflowDescription
-/// [`DataflowDescription<RenderPlan, CollectionMetadata>`]: DataflowDescription
+/// [`RenderDataflowDescription<CollectionMetadata>`]: RenderDataflowDescription
 pub struct DataflowBuilder {
     /// The MIR-level description being accumulated.
     mir: DataflowDescription<OptimizedMirRelationExpr, ()>,
@@ -448,7 +448,7 @@ impl DataflowBuilder {
     /// column out of range, or an unbalanced object graph), so a caller driving
     /// this from external input — notably the script reader — can surface a clean
     /// error instead of crashing the process.
-    pub fn finish(self) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+    pub fn finish(self) -> anyhow::Result<RenderDataflowDescription<CollectionMetadata>> {
         let features = OptimizerFeatures::default();
         let lowered = Self::lower(self.mir, self.optimize, &features)?;
         augment(lowered, &self.sources, &self.sinks)
@@ -499,7 +499,7 @@ impl DataflowBuilder {
         mut mir: DataflowDescription<OptimizedMirRelationExpr, ()>,
         optimize: bool,
         features: &OptimizerFeatures,
-    ) -> anyhow::Result<DataflowDescription<LirRelationExpr, ()>> {
+    ) -> anyhow::Result<LirDataflowDescription> {
         // Optionally run the MIR dataflow optimizer first (e.g. to fill a `Join`'s
         // implementation). The index oracle is built from this dataflow's own
         // `index_imports`, so the optimizer recognizes imported arrangements and
@@ -544,7 +544,7 @@ pub fn index_dataflow(
     key_cols: Vec<usize>,
     as_of: Timestamp,
     shard_upper: Timestamp,
-) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+) -> anyhow::Result<RenderDataflowDescription<CollectionMetadata>> {
     let mut builder = DataflowBuilder::new("headless-index");
     builder.import_persist(
         source_id,
@@ -580,7 +580,7 @@ pub fn count_over_index(
     reduce_id: GlobalId,
     out_index_id: GlobalId,
     as_of: Timestamp,
-) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+) -> anyhow::Result<RenderDataflowDescription<CollectionMetadata>> {
     let mut builder = DataflowBuilder::new("headless-count");
     // `monotonic: false` keeps the import faithful to a general (non-append-only)
     // index; the count reduce does not require monotonicity.
@@ -615,10 +615,10 @@ pub fn count_over_index(
 /// per-id [`PersistSource`] supplies the metadata and the exclusive `upper` telling
 /// the compute instance up to which timestamp the shard's data is available.
 fn augment(
-    lowered: DataflowDescription<LirRelationExpr, ()>,
+    lowered: LirDataflowDescription,
     sources: &BTreeMap<GlobalId, PersistSource>,
     sinks: &BTreeMap<GlobalId, CollectionMetadata>,
-) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+) -> anyhow::Result<RenderDataflowDescription<CollectionMetadata>> {
     // Attach the storage metadata to each source import, looked up by id. In a live
     // controller the `upper` is the storage collection's real write frontier; the
     // caller provides it via `PersistSource::upper` to reflect the written data.

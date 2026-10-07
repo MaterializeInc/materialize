@@ -26,8 +26,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_expr::{MapFilterProject, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -4544,7 +4543,7 @@ impl Coordinator {
     async fn ship_new_dataflow(
         &mut self,
         id_bundle: &CollectionIdBundle,
-        mut df_desc: DataflowDescription<LirRelationExpr>,
+        mut df_desc: LirDataflowDescription,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
     ) {

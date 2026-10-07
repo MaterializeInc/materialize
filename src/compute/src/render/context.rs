@@ -99,8 +99,8 @@ pub struct Context<'scope, T: RenderTimestamp> {
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Creates a new empty Context.
-    pub fn for_dataflow_in<Plan>(
-        dataflow: &DataflowDescription<Plan, CollectionMetadata>,
+    pub fn for_dataflow_in<Plan, O>(
+        dataflow: &DataflowDescription<Plan, CollectionMetadata, O>,
         scope: Scope<'scope, T>,
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,

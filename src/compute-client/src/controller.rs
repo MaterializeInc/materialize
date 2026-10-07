@@ -42,7 +42,6 @@ use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::config::ComputeReplicaConfig;
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
     COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
@@ -881,7 +880,7 @@ impl ComputeController {
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        mut dataflow: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        mut dataflow: mz_compute_types::dataflows::LirDataflowDescription,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
@@ -1161,10 +1160,12 @@ impl ComputeController {
     /// `optimize_dataflow` prunes the import list to this set, so the two agree and the filtering
     /// is a no-op. It is here because this is the consumer whose wrong answer hangs an environment,
     /// and deriving the answer from the read set makes it independent of the list staying tight.
+    ///
+    /// [`DataflowDescription::used_import_ids`]: mz_compute_types::dataflows::DataflowDescription::used_import_ids
     fn determine_time_dependence(
         &self,
         instance_id: ComputeInstanceId,
-        dataflow: &DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        dataflow: &mz_compute_types::dataflows::LirDataflowDescription,
         used_imports: &BTreeSet<GlobalId>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
         let instance = self

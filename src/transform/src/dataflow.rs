@@ -1383,7 +1383,7 @@ impl<Notice> DataflowMetainfo<Notice> {
     /// Create a [`UsedIndexes`] instance by resolving each `id` in the
     /// `index_ids` iterator against an entry expected to exist in the
     /// [`DataflowMetainfo::index_usage_types`].
-    pub fn used_indexes<T>(&self, df_desc: &DataflowDescription<T>) -> UsedIndexes {
+    pub fn used_indexes<T, O>(&self, df_desc: &DataflowDescription<T, (), O>) -> UsedIndexes {
         UsedIndexes::new(
             df_desc
                 .index_imports
