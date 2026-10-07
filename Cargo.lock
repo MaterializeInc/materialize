@@ -7602,6 +7602,7 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-ssh-util",
  "proptest",
  "proptest-derive",
@@ -8150,11 +8151,11 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
  "openssl",
- "postgres-protocol",
  "postgres_array",
  "proptest",
  "proptest-derive",
@@ -8466,6 +8467,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
+]
+
+[[package]]
+name = "mz-source-schema-change"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "postgres-protocol",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
