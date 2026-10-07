@@ -147,13 +147,15 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicUsize};
+use std::sync::atomic::{self, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::bytes::indexed;
 use columnar::{Columnar, Index, Len, Ref};
 use itertools::Itertools;
-use mz_ore::cast::CastLossy;
+use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::metric;
+use mz_ore::metrics::{ComputedUIntGauge, MakeCollectorOpts, MetricsRegistry};
 use mz_ore::pool::ChunkHandle;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -277,6 +279,14 @@ pub struct CorrectionV2<D: Data> {
 /// picked up next op" path is a correctness safety net for pathological bucket counts, not a hot
 /// path we expect to exercise. Lower it if restoration ever needs to interleave with other work.
 const RESTORE_FUEL: i64 = 1_000_000;
+
+/// The serialized size from which a read writes `emitted` one generation deep, see
+/// [`CorrectionV2::consolidate_before`].
+///
+/// A steady-state read emits a few timestamps' worth of updates, far below this. A hydration
+/// read emits the whole snapshot, about 74 GiB for 600M TPC-H `lineitem` rows, far above it.
+/// The value between is not tuned.
+const EMITTED_DEEP_BYTES: usize = 256 << 20;
 
 impl<D: Data> CorrectionV2<D> {
     /// Construct a new [`CorrectionV2`] instance.
@@ -532,12 +542,20 @@ impl<D: Data> CorrectionV2<D> {
         }
 
         // The merged chain becomes `emitted`, which the caller reads next and the next
-        // consolidation merges with the feedback retractions, so the chunks the merge writes are
-        // the youngest generation whatever the depth of their inputs. A lone input chain is
-        // reused as is and keeps its chunks' depths, since re-spilling them would cost a copy.
+        // consolidation merges with the feedback retractions. A small `emitted` is the youngest
+        // generation whatever the depth of its inputs. A large one, such as a hydration snapshot,
+        // rests in the buffer for as long as its feedback takes to arrive, so it is written one
+        // generation deeper, which lets the pool compress it. A lone input chain is reused as is
+        // and keeps its chunks' depths, since re-spilling them would cost a copy.
+        let lower_bytes: usize = lowers.iter().map(|c| c.size).sum();
+        let depth = if lower_bytes >= EMITTED_DEEP_BYTES {
+            1
+        } else {
+            0
+        };
         let merged = if stale_times == 0 {
             let cursors: Vec<_> = lowers.into_iter().filter_map(Chain::into_cursor).collect();
-            merge_cursors(cursors, 0)
+            merge_cursors(cursors, depth)
         } else if stale_times < MAX_STALE_RUNS {
             let mut runs = Vec::new();
             for chain in lowers {
@@ -545,7 +563,7 @@ impl<D: Data> CorrectionV2<D> {
                     runs.append(&mut cursor.advance_by(since_ts));
                 }
             }
-            merge_cursors(runs, 0)
+            merge_cursors(runs, depth)
         } else {
             let mut updates: Vec<_> = lowers.iter().flat_map(|c| c.iter()).collect();
             for (_, time, _) in &mut updates {
@@ -1660,11 +1678,56 @@ struct Chunk<D: Data> {
     first_time: Timestamp,
     /// Time of the last update, cached likewise.
     last_time: Timestamp,
-    /// The generational depth: 0 for chunks built from staged updates or written by a read,
-    /// one more than the deepest input for chunks written by a bucket's chain merge. The pool
+    /// The generational depth: 0 for chunks built from staged updates or written by a small
+    /// read, 1 for chunks written by a large read (see [`EMITTED_DEEP_BYTES`]), and one more
+    /// than the deepest input for chunks written by a bucket's chain merge. The pool
     /// treats deeper chunks as colder, and compresses them past the floor set by
     /// [`chunk::set_compress_min_depth`].
     depth: u8,
+    /// Whether the pool declined the body at mint, which decides the heap gauge a resident body
+    /// counts toward.
+    heap_at_mint: bool,
+}
+
+/// Bytes of chunk bodies held on the heap because the pool declined them at mint, process-wide.
+static HEAP_MINTED_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Bytes of chunk bodies [`Chunk::body`] took out of the pool onto the heap, process-wide.
+static HEAP_MATERIALIZED_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Chunks [`Chunk::body`] took out of the pool, process-wide.
+static MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
+/// Bytes [`Chunk::with_view`] copied out of the pool for scoped reads, process-wide.
+static VIEW_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Install the correction buffer's heap residency metrics into `registry`. Idempotent.
+pub fn register_metrics(registry: &MetricsRegistry) {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        // Every name and help string is a literal at the `metric!` call so the metrics-catalog
+        // scanner, which reads the source rather than the expanded macro, can index them.
+        gauge(registry, metric!(name: "mz_compute_correction_heap_minted_bytes", help: "Bytes of MV sink correction chunks held on the heap because the buffer pool declined them at mint."), &HEAP_MINTED_BYTES);
+        gauge(registry, metric!(name: "mz_compute_correction_heap_materialized_bytes", help: "Bytes of MV sink correction chunks taken out of the buffer pool onto the heap by a merge or split read."), &HEAP_MATERIALIZED_BYTES);
+        gauge(registry, metric!(name: "mz_compute_correction_materializations_total", help: "MV sink correction chunks taken out of the buffer pool onto the heap."), &MATERIALIZATIONS);
+        gauge(registry, metric!(name: "mz_compute_correction_view_copy_bytes_total", help: "Bytes copied out of the buffer pool for scoped reads of MV sink correction chunks."), &VIEW_COPY_BYTES);
+    });
+}
+
+/// Register one computed gauge reading `value` at scrape time.
+fn gauge(registry: &MetricsRegistry, opts: MakeCollectorOpts, value: &'static AtomicU64) {
+    let _gauge: ComputedUIntGauge =
+        registry.register_computed_gauge(opts, move || value.load(atomic::Ordering::Relaxed));
+}
+
+impl<D: Data> Drop for Chunk<D> {
+    fn drop(&mut self) {
+        if self.resident.get().is_some() {
+            let gauge = if self.heap_at_mint {
+                &HEAP_MINTED_BYTES
+            } else {
+                &HEAP_MATERIALIZED_BYTES
+            };
+            gauge.fetch_sub(u64::cast_from(self.size()), atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1713,9 +1776,14 @@ impl<D: Data> Chunk<D> {
                 if cell.set(ColumnBody::Words(words)).is_err() {
                     unreachable!("cell is fresh");
                 }
+                HEAP_MINTED_BYTES.fetch_add(
+                    u64::cast_from(body_words * std::mem::size_of::<u64>()),
+                    atomic::Ordering::Relaxed,
+                );
                 (Mutex::new(None), cell)
             }
         };
+        let heap_at_mint = resident.get().is_some();
         Self {
             pooled,
             body_words,
@@ -1724,6 +1792,7 @@ impl<D: Data> Chunk<D> {
             first_time,
             last_time,
             depth,
+            heap_at_mint,
         }
     }
 
@@ -1745,6 +1814,9 @@ impl<D: Data> Chunk<D> {
                 .expect("a chunk the pool declined is materialized at construction");
             let mut words = Vec::new();
             handle.take(&mut words);
+            MATERIALIZATIONS.fetch_add(1, atomic::Ordering::Relaxed);
+            HEAP_MATERIALIZED_BYTES
+                .fetch_add(u64::cast_from(self.size()), atomic::Ordering::Relaxed);
             ColumnBody::Words(words)
         })
     }
@@ -1762,7 +1834,13 @@ impl<D: Data> Chunk<D> {
         {
             let pooled = self.pooled.lock().expect("pool handle mutex poisoned");
             match pooled.as_ref() {
-                Some(handle) => handle.read_into(&mut words),
+                Some(handle) => {
+                    handle.read_into(&mut words);
+                    VIEW_COPY_BYTES.fetch_add(
+                        u64::cast_from(words.len() * std::mem::size_of::<u64>()),
+                        atomic::Ordering::Relaxed,
+                    );
+                }
                 // Materialized between the check above and the lock.
                 None => {
                     drop(pooled);
