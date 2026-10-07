@@ -27,6 +27,14 @@ adapter and replica owners. Waiting for new protection keeps the requesting
 operation pending, not the coordinator occupied. Revalidate against refreshed
 state rather than retrying stale bounds or blindly reusing candidates.
 
+Shared typed snapshots, storage metadata sharing and scoped uniqueness lookups
+are implemented, with combined CI verification pending. Replica retry yielding
+and adapter maintenance staggering are implemented. The next main slice is
+adapter retry resumption. Keep prepared rewrite identities and read holds across
+metadata-only retry waits, but never carry an unfinished publication barrier.
+Check the preparation revision before reuse and preserve cancellation and explicit
+DDL transaction completion. Do not trade CAS spinning for repeated optimization.
+
 Keep the 1s publication default while making contention cheap and nonblocking.
 Defer the 5s comparison until that repair is measured. Preserve heartbeat/grace,
 statement deadlines, commit-before-use and definitive write outcomes. Verify with
