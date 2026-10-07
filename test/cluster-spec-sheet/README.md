@@ -27,7 +27,7 @@ regions behind.
 
 ## Running manually in Cloud
 
-To run the cloud canary test manually, you can specify either `--target=cloud-production` (which is hardcoded to aws/us-east-1) or `--target=cloud-staging` (which is hardcoded to aws/eu-west-1). For production, you need to set the environment variables `NIGHTLY_MZ_USERNAME` and `MZ_CLI_APP_PASSWORD`. For staging, the run uses one account from the E2E database pool: set `E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_<n>` for the pool index `<n>` and select it with `CI_CONCURRENCY_POOL_SLOT=<n>` (outside CI, index 0 is used when the slot is unset); the username is derived from the index. Staging runs also need `BUILDKITE_COMMIT`, which selects the image version to enable.
+To run the cloud canary test manually, you can specify either `--target=cloud-production` or `--target=cloud-staging` (both use aws/us-east-1). For production, you need to set the environment variables `NIGHTLY_MZ_USERNAME` and `MZ_CLI_APP_PASSWORD`. For staging, the run uses one account from the E2E database pool: set `E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_<n>` for the pool index `<n>` and select it with `CI_CONCURRENCY_POOL_SLOT=<n>` (outside CI, index 0 is used when the slot is unset); the username is derived from the index. Staging runs also need `BUILDKITE_COMMIT`, which selects the image version to enable.
 
 The username is an email address, the app password is a password generated in the cloud console (something like `mzp_...`).
 
@@ -79,6 +79,60 @@ You can also specify a specific scenario by name.
 For testing just the scaffolding of the cluster spec sheet itself, you can make the run much faster by using the various scaling options, e.g.:
 ```
 --scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4 --envd-objects-scalability-sizes=1,10,100 --cluster-object-limits-max=500
+```
+
+### QPS concurrency and environmentd CPU sweep
+
+`qps_envd_strong_scaling` measures persistent prepared-query clients at
+`1,2,4,8,16,32,64,128,256,512` concurrency for each existing environmentd
+CPU allocation (`1,2,4,8,16,32`, capped by `--max-scale`). It uses 32
+independently routed, single-replica `50cc` query clusters in Cloud.
+Clients are distributed round-robin and each cluster has the same indexed
+ten-row view. Smaller concurrency points activate only as many clusters as
+there are clients. The sweep reuses setup cluster `c` as its first query
+cluster and drops the unused `quickstart` cluster. The staging account's
+cluster-count limit must permit `--qps-clusters`; an environmentd default
+does not override an account's configured limit.
+
+Each point warms up for 5 seconds and measures for 20 seconds. The default
+prepared-only sweep spends 25 minutes in query phases, plus region/cluster
+setup and connection startup. `--qps-protocols=prepared,simple` doubles the
+query-phase budget. Override `--qps-concurrencies`, `--qps-clusters`,
+`--qps-duration`, `--qps-warmup`, or `--qps-query-timeout` for shorter probes
+or additional headroom. Startup and prepare-once work are excluded. QPS
+includes draining queries started in the measurement window. A failed or
+timed-out query invalidates the point instead of producing a success QPS.
+
+The CSV includes concurrency, protocol, configured/active cluster counts,
+mean and percentile latency, replica CPU samples and driver qualification
+warnings. Percentiles are logarithmic-bucket upper bounds (within 6.25% or
+1 microsecond). Full per-point results are saved under `qps-logs/`. Analysis
+produces throughput, mean-latency and p99 plots against concurrency with one
+line per environmentd CPU allocation and dotted single-client-latency ideals.
+QPS remains uploaded to the existing
+analytics schema with protocol/concurrency/topology in `test_name` and
+scenario version `2.0.0`. The new latency and qualification fields live in
+the CSV and JSON artifacts.
+
+Warnings are printed and surfaced as a Buildkite warning annotation when
+the driver uses >=80% of its effective CPU capacity, is throttled in >=5%
+of quota periods, or has >=10ms p99 scheduling lag. Missing cgroup/replica
+telemetry and replicas reaching >=80% CPU also produce warnings. These are
+qualification heuristics: their absence does not rule out every driver,
+network, host-contention or compute bottleneck. Increase the cluster count
+before interpreting a compute-constrained plateau as an adapter limit.
+Docker replicas use one worker but share environmentd's container quota.
+Docker is useful for a smoke test, not an isolated adapter scaling result.
+
+Experimental flags can be supplied explicitly on staging or Docker, without
+changing the benchmark's default production settings. For this QPS stack:
+
+```shell
+bin/mzcompose --find cluster-spec-sheet run default --target=cloud-staging --cleanup \
+  --system-parameter-default=enable_prepared_query_reuse=true \
+  --system-parameter-default=enable_prepared_query_templates=true \
+  --system-parameter-default=enable_frontend_transaction_completion=true \
+  qps_envd_strong_scaling
 ```
 
 ### envd objects scalability scenarios
