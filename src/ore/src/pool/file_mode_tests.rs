@@ -1083,16 +1083,13 @@ fn concurrent_file_mode_churn() {
     assert_eq!(store.slots_in_use(), 0);
 }
 
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)]
-fn background_pass_demotes_a_bounded_amount() {
-    let extent = u64::cast_from(stored_class_size(&payload(SMALL, 0), &TEST_CODEC));
-    let chunks = BACKGROUND_DEMOTION_BYTES / extent + 8;
-    let (_dir, pool) = file_pool(1 << 30, 1 << 30);
+/// Inserts `chunks` chunks and evicts each into the compressed tier, with a
+/// target high enough that nothing demotes.
+fn evicted_chunks(pool: &Pool, chunks: u64) -> Vec<ChunkHandle> {
     pool.set_rss_target(2 << 30);
     let handles: Vec<_> = (0..chunks)
         .map(|seed| {
-            let handle = insert(&pool, &payload(SMALL, seed));
+            let handle = insert(pool, &payload(SMALL, seed));
             pool.evict(&handle);
             handle
         })
@@ -1102,9 +1099,17 @@ fn background_pass_demotes_a_bounded_amount() {
         0,
         "all extents fit the cap"
     );
+    handles
+}
 
-    // A spill thread's pass goes down toward a zero cap, but no further than
-    // the bound per call.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn background_pass_demotes_a_bounded_amount() {
+    let extent = u64::cast_from(stored_class_size(&payload(SMALL, 0), &TEST_CODEC));
+    let chunks = BACKGROUND_DEMOTION_BYTES / extent + 8;
+    let (_dir, pool) = file_pool(1 << 30, 1 << 30);
+    let handles = evicted_chunks(&pool, chunks);
+
     pool.0.rss_target_bytes.store(1, Ordering::Relaxed);
     pool.0.enforce_compressed_cap(Pass::Background);
     assert_eq!(
@@ -1122,6 +1127,31 @@ fn background_pass_demotes_a_bounded_amount() {
         assert_eq!(read(handle), payload(SMALL, seed));
     }
     drop(handles);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn background_pass_with_queued_evictions_demotes_one_extent() {
+    let (_dir, pool) = file_pool(1 << 30, 1 << 30);
+    let handles = evicted_chunks(&pool, 4);
+    pool.enable_spill_without_threads();
+    pool.fake_spill_threads();
+    let queued = insert(&pool, &payload(SMALL, 4));
+    pool.evict(&queued);
+    assert_eq!(queued.residency(), Residency::WriteInFlight);
+
+    pool.0.rss_target_bytes.store(1, Ordering::Relaxed);
+    pool.0.enforce_compressed_cap(Pass::Background);
+    assert_eq!(pool.stats().extent_file_writes, 1);
+
+    while pool.spill_step() {}
+    for (seed, handle) in (0..4).zip_eq(&handles) {
+        assert_eq!(read(handle), payload(SMALL, seed));
+    }
+    assert_eq!(read(&queued), payload(SMALL, 4));
+    drop(handles);
+    drop(queued);
     assert_drained(&pool);
 }
 
