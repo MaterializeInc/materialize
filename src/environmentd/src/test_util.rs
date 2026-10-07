@@ -1471,7 +1471,10 @@ impl TestServerWithRuntime {
     /// Does not suppress subsequent notices.
     pub fn wait_for_replica_statuses(&self) -> Result<(), anyhow::Error> {
         let mut client = self.connect_internal(postgres::NoTls)?;
-        client.batch_execute("SET statement_timeout = '5s'")?;
+        let query = sql!("SET statement_timeout = '5s'");
+        // The SQL wrappers accept async tokio-postgres clients, not this synchronous client.
+        #[allow(clippy::disallowed_methods)]
+        client.batch_execute(query.as_str())?;
         Retry::default()
             .max_duration(Duration::from_secs(30))
             .retry(|_| {
