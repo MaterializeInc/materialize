@@ -32,11 +32,15 @@ incremental OID occupancy are implemented. Temporary item OIDs are covered by
 durable rows without an extra catalog-wide scan. Replica retries, adapter
 protection maintenance (including timeline windows) and frontend protection
 requests yield between attempts.
-Maintenance is staggered. Next finish DDL preparation/acquisition and commit
-resumption. Keep prepared rewrite identities and read holds across metadata-only
-retry waits, but never carry an unfinished publication barrier.
-Check the preparation revision before reuse and preserve cancellation and explicit
-DDL transaction completion. Do not trade CAS spinning for repeated optimization.
+Maintenance is staggered. DROP retains prepared selections and input holds across
+staged metadata-conflict retries. Reuse checks the full preparation revision and
+incarnation, and each attempt owns and resolves its publication barrier.
+Local invalidation replans the original statement after releasing its DDL lock
+and waking waiters. The existing fixture now exercises repeated-conflict
+cancellation. This slice still needs CI verification.
+Next finish APPLY REPLACEMENT, ordinary DDL and explicit DDL COMMIT resumption,
+plus direct preparation acquisition. Preserve cancellation and commit-once
+completion. Do not trade CAS spinning for repeated optimization.
 Password-bearing role creation still repeats SCRAM hashing on candidate retries.
 Keep that preparation cost distinct from OID scans and coordinator resumption.
 

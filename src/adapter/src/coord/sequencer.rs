@@ -328,8 +328,7 @@ impl Coordinator {
                     self.sequence_copy_to(ctx, plan, target_cluster).await;
                 }
                 Plan::DropObjects(plan) => {
-                    let result = self.sequence_drop_objects(&mut ctx, plan).await;
-                    ctx.retire(result);
+                    self.sequence_drop_objects(ctx, plan).await;
                 }
                 Plan::DropOwned(plan) => {
                     let result = self.sequence_drop_owned(ctx.session_mut(), plan).await;

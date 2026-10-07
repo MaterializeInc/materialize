@@ -64,6 +64,31 @@ type CommittedCatalogTransaction = (
     crate::ReadHolds,
 );
 
+/// Prepared definitions and live input holds, but no unfinished publication.
+/// Reuse requires the same planning revision and protection incarnation. Each
+/// commit attempt rebuilds creator protection against the current catalog.
+pub(super) struct PreparedCatalogTransaction {
+    ops: Vec<Op>,
+    _protection: Vec<crate::ReadHolds>,
+    revision: u64,
+    incarnation: Option<u64>,
+    initial_write_ts: Option<mz_repr::Timestamp>,
+    rewritten_objects: Vec<String>,
+    webhook_sources_to_restart: BTreeSet<CatalogItemId>,
+    observer: Option<(
+        crate::test_util::Observer,
+        BTreeMap<GlobalId, mz_repr::Timestamp>,
+    )>,
+}
+
+impl std::fmt::Debug for PreparedCatalogTransaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedCatalogTransaction")
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
 // Expand around the awaited expression instead of owning another future. Catalog
 // implications can reenter transactions, so inline async wrappers can amplify stack use.
 macro_rules! trace_catalog_await {
@@ -249,6 +274,63 @@ impl Coordinator {
         let start = Instant::now();
         let committed = self.catalog_transact_attempt(None, ops, false).await?;
         Box::pin(self.complete_catalog_transaction(None, committed, start)).await
+    }
+
+    /// Attempts DDL once, retaining prepared selections and holds on metadata
+    /// contention. `false` means no write committed and the owner must yield
+    /// before calling again. A submitted write always reaches a definitive outcome.
+    pub(super) async fn try_catalog_transact_with_context(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        ops: &[Op],
+        prepared: &mut Option<PreparedCatalogTransaction>,
+    ) -> Result<bool, AdapterError> {
+        let start = Instant::now();
+        let conn_id = ctx.session().conn_id().clone();
+        if !self.active_conns.contains_key(&conn_id) {
+            return Err(AdapterError::Canceled);
+        }
+        let revision = self.catalog().transient_revision();
+        let preparation = if prepared.is_none() {
+            Box::pin(self.prepare_catalog_transaction(Some(&conn_id), ops.to_vec()))
+                .await
+                .map(|value| *prepared = Some(value))
+        } else {
+            Ok(())
+        };
+        let result = match preparation {
+            Ok(()) => {
+                Box::pin(self.commit_prepared_catalog_transaction(
+                    Some(&conn_id),
+                    prepared.as_mut().expect("prepared above"),
+                    false,
+                ))
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(committed) => {
+                // Keep rewrite holds through completion, then release them once.
+                let _prepared = prepared.take();
+                Box::pin(self.complete_catalog_transaction(Some(ctx), committed, start)).await?;
+                Ok(true)
+            }
+            Err(AdapterError::Catalog(error)) => {
+                let mz_catalog::memory::error::ErrorKind::Durable(
+                    mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { upper, .. },
+                ) = &error.kind
+                else {
+                    return Err(AdapterError::Catalog(error));
+                };
+                self.refresh_catalog(Some(*upper)).await?;
+                if self.catalog().transient_revision() != revision {
+                    return Err(AdapterError::DDLTransactionRace);
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn complete_catalog_transaction(
@@ -936,12 +1018,11 @@ impl Coordinator {
         Ok((protection, rewritten_objects))
     }
 
-    async fn catalog_transact_attempt(
+    async fn prepare_catalog_transaction(
         &mut self,
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
-        retry_inline: bool,
-    ) -> Result<CommittedCatalogTransaction, AdapterError> {
+    ) -> Result<PreparedCatalogTransaction, AdapterError> {
         // A failed CAS can reveal a creation that cannot install yet. Check
         // on every attempt, after foreign implications as well as initially.
         if !self.pending_compute_installations.is_empty()
@@ -1019,7 +1100,7 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let mut oracle_write_ts = trace_catalog_await!(
+        let oracle_write_ts = trace_catalog_await!(
             "catalog_write_ts",
             self.get_catalog_write_ts()
                 .wall_time()
@@ -1064,6 +1145,84 @@ impl Coordinator {
             .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
             .await?;
 
+        Ok(PreparedCatalogTransaction {
+            ops,
+            _protection: _written_plan_protection,
+            revision: self.catalog().transient_revision(),
+            incarnation: self
+                .query_client
+                .as_ref()
+                .map(|client| client.protection.incarnation()),
+            initial_write_ts: Some(oracle_write_ts),
+            rewritten_objects,
+            webhook_sources_to_restart,
+            observer: prepared_observer,
+        })
+    }
+
+    async fn catalog_transact_attempt(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ops: Vec<Op>,
+        retry_inline: bool,
+    ) -> Result<CommittedCatalogTransaction, AdapterError> {
+        let mut prepared = Box::pin(self.prepare_catalog_transaction(conn_id, ops)).await?;
+        Box::pin(self.commit_prepared_catalog_transaction(conn_id, &mut prepared, retry_inline))
+            .await
+    }
+
+    async fn commit_prepared_catalog_transaction(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        prepared: &mut PreparedCatalogTransaction,
+        retry_inline: bool,
+    ) -> Result<CommittedCatalogTransaction, AdapterError> {
+        if self.catalog().transient_revision() != prepared.revision {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        if prepared.initial_write_ts.is_none()
+            && let Some(incarnation) = prepared.incarnation
+        {
+            let client = self.query_client.as_ref().ok_or_else(|| {
+                AdapterError::internal(
+                    "prepared catalog transaction",
+                    "query client is unavailable",
+                )
+            })?;
+            if client.protection.incarnation() != incarnation {
+                return Err(AdapterError::CatalogSnapshotChanged);
+            }
+            if !self
+                .catalog()
+                .state()
+                .client_incarnations()
+                .contains_key(&incarnation)
+            {
+                client.protection.mark_closed();
+                return Err(AdapterError::internal(
+                    "prepared catalog transaction",
+                    "client read protection incarnation is closed",
+                ));
+            }
+        }
+        let internal_metadata = conn_id.is_none()
+            && self.controller.replica_owned_compute()
+            && prepared.ops.iter().all(catalog::Op::is_deployment_metadata);
+        if self.read_only_controllers && !internal_metadata {
+            return Err(AdapterError::ReadOnly);
+        }
+        if prepared.initial_write_ts.is_none() {
+            self.validate_resource_limits(&prepared.ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
+        }
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        let mut oracle_write_ts = match prepared.initial_write_ts.take() {
+            Some(ts) => ts,
+            None => self.get_catalog_write_ts().await,
+        };
+        let mut ops = prepared.ops.clone();
+        let rewritten_objects = &mut prepared.rewritten_objects;
+        let webhook_sources_to_restart = &mut prepared.webhook_sources_to_restart;
+        let prepared_observer = &prepared.observer;
         let mut timeline_publication = None;
         if self.controller.replica_owned_compute()
             && let Some(client) = self.query_client.clone()
@@ -1124,10 +1283,10 @@ impl Coordinator {
         // held inputs. Retry commit validation against the refreshed prefix,
         // not the expensive preparation that preceded it. Structural changes
         // return to the outer loop's planning-conflict policy.
-        let prepared_revision = self.catalog().transient_revision();
+        let prepared_revision = prepared.revision;
         let result = loop {
             if !rewritten_objects.is_empty()
-                && let Some((observer, baseline)) = &prepared_observer
+                && let Some((observer, baseline)) = prepared_observer
             {
                 let selections = ops
                     .iter()
@@ -1272,7 +1431,7 @@ impl Coordinator {
             let _ = conn
                 .notice_tx
                 .send(crate::notice::AdapterNotice::RewrittenPlans {
-                    objects: rewritten_objects,
+                    objects: std::mem::take(rewritten_objects),
                 });
             self.metrics
                 .optimization_notices
@@ -1303,7 +1462,7 @@ impl Coordinator {
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
             if !webhook_sources_to_restart.is_empty() {
-                self.restart_webhook_sources(webhook_sources_to_restart);
+                self.restart_webhook_sources(std::mem::take(webhook_sources_to_restart));
             }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))

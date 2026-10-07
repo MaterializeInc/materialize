@@ -135,6 +135,10 @@ impl Coordinator {
         ctx: ExecuteContext,
         continuation: ExecuteCatalogContinuation,
     ) {
+        if !self.active_conns.contains_key(ctx.session().conn_id()) {
+            ctx.retire(Err(AdapterError::Canceled));
+            return;
+        }
         let (_, cancel_rx) = self
             .connection_cancel_watches
             .entry(ctx.session().conn_id().clone())
@@ -173,12 +177,13 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         continuation: ExecuteCatalogContinuation,
     ) {
-        // Cancellation can arrive after handle_spawn sends the continuation but
-        // before the loop processes it. In particular, do not start DDL in that gap.
-        if self
-            .connection_cancel_watches
-            .get(ctx.session().conn_id())
-            .is_some_and(|(_, rx)| *rx.borrow())
+        // Cancellation or termination can arrive after the continuation is queued.
+        // Termination removes the cancel watch as well as the connection.
+        if !self.active_conns.contains_key(ctx.session().conn_id())
+            || self
+                .connection_cancel_watches
+                .get(ctx.session().conn_id())
+                .is_some_and(|(_, rx)| *rx.borrow())
         {
             ctx.retire(Err(AdapterError::Canceled));
             return;

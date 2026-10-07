@@ -424,6 +424,11 @@ pub enum Message {
         span: Span,
         stage: PeekStage,
     },
+    DropObjectsStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: DropObjectsStage,
+    },
     CreateIndexStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -579,6 +584,7 @@ impl Message {
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
+            Message::DropObjectsStageReady { .. } => "drop_objects_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
@@ -795,6 +801,20 @@ pub struct PeekStageExplainPushdown {
     validity: PlanValidity,
     determination: TimestampDetermination,
     imports: BTreeMap<GlobalId, MapFilterProject>,
+}
+
+#[derive(Debug)]
+pub struct DropObjectsStage {
+    validity: PlanValidity,
+    // A DROP cascade depends on the full structural snapshot, even when its
+    // explicit dependencies still exist after an intervening local DDL.
+    planning_revision: u64,
+    ops: Vec<catalog::Op>,
+    prepared: Option<ddl::PreparedCatalogTransaction>,
+    object_type: mz_sql::catalog::ObjectType,
+    dropped_active_db: bool,
+    dropped_active_cluster: bool,
+    expr_cache_invalidate_ids: BTreeSet<GlobalId>,
 }
 
 #[derive(Debug)]

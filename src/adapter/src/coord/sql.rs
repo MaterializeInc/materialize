@@ -246,6 +246,13 @@ impl Coordinator {
             drop(txn_reads);
         }
 
+        self.release_ddl_lock(conn_id);
+
+        retire_notify
+    }
+
+    /// Releases this active connection's DDL guard and wakes queued statements.
+    pub(super) fn release_ddl_lock(&mut self, conn_id: &ConnectionId) {
         if let Some(_guard) = self
             .active_conns
             .get_mut(conn_id)
@@ -258,8 +265,6 @@ impl Coordinator {
                 let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
             }
         }
-
-        retire_notify
     }
 
     /// Adds coordinator bookkeeping for an active compute sink.

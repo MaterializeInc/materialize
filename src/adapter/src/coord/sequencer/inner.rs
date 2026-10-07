@@ -28,7 +28,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_expr::{MapFilterProject, ResultSpec};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::collections::CollectionExt;
 use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -126,6 +126,7 @@ mod create_index;
 mod create_materialized_view;
 mod create_metric_sink;
 mod create_view;
+mod drop_objects;
 mod explain_timestamp;
 mod peek;
 mod secret;
@@ -209,6 +210,14 @@ impl Coordinator {
         S: Staged + 'static,
         S::Ctx: Send + 'static,
     {
+        // A ready message can outlive termination and its removed cancel watch.
+        if ctx
+            .session()
+            .is_some_and(|session| !self.active_conns.contains_key(session.conn_id()))
+        {
+            ctx.retire(Err(AdapterError::Canceled));
+            return;
+        }
         if let Err(error) = stage.validity().check(self.catalog()) {
             ctx.handle_error(error);
             return;
@@ -1302,79 +1311,6 @@ impl Coordinator {
         };
         self.catalog_transact(Some(session), vec![op]).await?;
         Ok(ExecuteResponse::Comment)
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_drop_objects(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan::DropObjectsPlan {
-            drop_ids,
-            object_type,
-            referenced_ids,
-        }: plan::DropObjectsPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
-        let mut objects = Vec::new();
-        for obj_id in &drop_ids {
-            if !referenced_ids_hashset.contains(obj_id) {
-                let object_info = ErrorMessageObjectDescription::from_id(
-                    obj_id,
-                    &self.catalog().for_session(ctx.session()),
-                )
-                .to_string();
-                objects.push(object_info);
-            }
-        }
-
-        if !objects.is_empty() {
-            ctx.session()
-                .add_notice(AdapterNotice::CascadeDroppedObject { objects });
-        }
-
-        // Collect GlobalIds for expression cache invalidation.
-        let expr_cache_invalidate_ids: BTreeSet<_> = drop_ids
-            .iter()
-            .filter_map(|id| match id {
-                ObjectId::Item(item_id) => Some(self.catalog().get_entry(item_id).global_ids()),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-
-        let DropOps {
-            ops,
-            dropped_active_db,
-            dropped_active_cluster,
-        } = self.sequence_drop_common(ctx.session(), drop_ids)?;
-
-        self.catalog_transact_with_context(None, Some(ctx), ops)
-            .await?;
-
-        // Invalidate expression cache entries for dropped objects.
-        if !expr_cache_invalidate_ids.is_empty() {
-            let _fut = self.catalog().update_expression_cache(
-                Default::default(),
-                Default::default(),
-                expr_cache_invalidate_ids,
-            );
-        }
-
-        fail::fail_point!("after_sequencer_drop_replica");
-
-        if dropped_active_db {
-            ctx.session()
-                .add_notice(AdapterNotice::DroppedActiveDatabase {
-                    name: ctx.session().vars().database().to_string(),
-                });
-        }
-        if dropped_active_cluster {
-            ctx.session()
-                .add_notice(AdapterNotice::DroppedActiveCluster {
-                    name: ctx.session().vars().cluster().to_string(),
-                });
-        }
-        Ok(ExecuteResponse::DroppedObject(object_type))
     }
 
     fn validate_dropped_role_ownership(

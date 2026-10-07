@@ -18,11 +18,13 @@ use mz_catalog::durable::{CatalogError, DurableCatalogError, persist_backed_cata
 use mz_catalog::expr_cache::ExpressionCacheHandle;
 use mz_environmentd::test_util::TestHarness;
 use mz_postgres_util::{PostgresError, batch_execute, query_one, sql};
+use tokio::io::AsyncReadExt;
 use tokio_postgres::error::SqlState;
 
 #[derive(Clone, Copy)]
 enum Conflict {
     Heartbeat,
+    Cancellation,
     Structural,
     Reclamation,
 }
@@ -30,6 +32,11 @@ enum Conflict {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn metadata_conflict_preserves_prepared_mv_rewrite() {
     run(Conflict::Heartbeat).await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn repeated_metadata_conflicts_allow_prepared_mv_rewrite_cancellation() {
+    run(Conflict::Cancellation).await;
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -176,8 +183,7 @@ async fn run_inner(conflict: Conflict) {
         .expect("advance the timeline window before preparation");
 
     let observations = Arc::new(Mutex::new(Vec::new()));
-    let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
-    let prepared_tx = Mutex::new(Some(prepared_tx));
+    let (prepared_tx, mut prepared_rx) = tokio::sync::mpsc::unbounded_channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let release_rx = Mutex::new(release_rx);
     let rendezvous_failed = Arc::new(AtomicBool::new(false));
@@ -185,10 +191,13 @@ async fn run_inner(conflict: Conflict) {
         let observations = Arc::clone(&observations);
         let rendezvous_failed = Arc::clone(&rendezvous_failed);
         move |observation| {
-            observations.lock().unwrap().push(observation.clone());
-            let prepared_tx = prepared_tx.lock().unwrap().take();
-            if let Some(tx) = prepared_tx {
-                if tx.send(observation.clone()).is_ok() {
+            let first = {
+                let mut observations = observations.lock().unwrap();
+                observations.push(observation.clone());
+                observations.len() == 1
+            };
+            if first || matches!(conflict, Conflict::Cancellation) {
+                if prepared_tx.send(observation.clone()).is_ok() {
                     // Never leave the coordinator parked if the peer task fails.
                     if release_rx
                         .lock()
@@ -208,7 +217,7 @@ async fn run_inner(conflict: Conflict) {
     let drop_index = batch_execute(&client, sql!("DROP INDEX rewrite_idx"));
     tokio::pin!(drop_index);
     let prepared = tokio::select! {
-        prepared = prepared_rx => prepared.expect("DROP must prepare a nonempty rewrite"),
+        prepared = prepared_rx.recv() => prepared.expect("DROP must prepare a nonempty rewrite"),
         result = &mut drop_index => panic!("DROP completed without observing its required rewrite: {result:?}"),
     };
     let revision = prepared.selections[&mv];
@@ -260,7 +269,7 @@ async fn run_inner(conflict: Conflict) {
             "unrelated holds must not mask preparation protection at {required}: {prepared:?}"
         );
         match conflict {
-            Conflict::Heartbeat => {
+            Conflict::Heartbeat | Conflict::Cancellation => {
                 txn.publish_client_read_requirements(peer_incarnation, BTreeMap::new())
                     .unwrap();
             }
@@ -293,7 +302,60 @@ async fn run_inner(conflict: Conflict) {
     };
     let commit_started = std::time::Instant::now();
     release_tx.send(()).expect("release prepared commit");
-    let result = drop_index.await;
+    let result = if matches!(conflict, Conflict::Cancellation) {
+        let mut cancel_queued = false;
+        loop {
+            tokio::select! {
+                prepared = prepared_rx.recv() => {
+                    prepared.expect("DROP observer must remain installed");
+                }
+                result = &mut drop_index => {
+                    assert!(cancel_queued, "DROP must retry before cancellation");
+                    break result;
+                }
+            }
+            if !cancel_queued {
+                let mut stream = tokio::net::TcpStream::connect(server.sql_local_addr())
+                    .await
+                    .unwrap();
+                client
+                    .cancel_token()
+                    .cancel_query_raw(&mut stream, tokio_postgres::NoTls)
+                    .await
+                    .unwrap();
+                // Pgwire synchronously enqueues CancelRequest before closing
+                // this stream, even while the observer parks the coordinator.
+                stream.read_to_end(&mut Vec::new()).await.unwrap();
+                cancel_queued = true;
+            }
+            // Every attempted commit must lose, including retries that race
+            // the queued cancellation. No particular backoff must service it.
+            loop {
+                peer.sync_to_current_updates().await.unwrap();
+                let mut txn = match peer.transaction().await {
+                    Ok(txn) => txn,
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) => continue,
+                    Err(error) => panic!("peer heartbeat snapshot: {error}"),
+                };
+                txn.publish_client_read_requirements(peer_incarnation, BTreeMap::new())
+                    .unwrap();
+                let ts = txn.upper();
+                let _ = txn.get_and_commit_op_updates();
+                match txn.commit(ts).await {
+                    Ok(()) => break,
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) => continue,
+                    Err(error) => panic!("peer heartbeat commit: {error}"),
+                }
+            }
+            release_tx.send(()).expect("release prepared retry");
+        }
+    } else {
+        drop_index.await
+    };
     eprintln!(
         "prepared rewrite DROP completed after {:?}",
         commit_started.elapsed()
@@ -306,6 +368,12 @@ async fn run_inner(conflict: Conflict) {
 
     match conflict {
         Conflict::Heartbeat => result.unwrap(),
+        Conflict::Cancellation => match result.unwrap_err() {
+            PostgresError::Postgres(error) => {
+                assert_eq!(error.code(), Some(&SqlState::QUERY_CANCELED));
+            }
+            error => panic!("expected query cancellation: {error}"),
+        },
         Conflict::Structural => match result.unwrap_err() {
             PostgresError::Postgres(error) => {
                 assert_eq!(error.code(), Some(&SqlState::T_R_SERIALIZATION_FAILURE));
@@ -352,7 +420,7 @@ async fn run_inner(conflict: Conflict) {
                     );
                 }
             }
-            Conflict::Structural | Conflict::Reclamation => {
+            Conflict::Cancellation | Conflict::Structural | Conflict::Reclamation => {
                 assert!(index_exists);
                 assert_eq!(actual, selection.revision);
                 if matches!(conflict, Conflict::Reclamation) {
@@ -363,10 +431,15 @@ async fn run_inner(conflict: Conflict) {
                             .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
                             .any(|client| Some(client.id) == prepared.incarnation)
                     );
-                } else {
+                } else if matches!(conflict, Conflict::Structural) {
                     assert!(
                         txn.get_databases()
                             .any(|database| database.name == "rewrite_renamed")
+                    );
+                } else {
+                    assert!(
+                        txn.get_databases()
+                            .any(|database| database.name == "rewrite_unrelated")
                     );
                 }
             }

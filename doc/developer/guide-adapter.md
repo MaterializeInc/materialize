@@ -51,6 +51,15 @@ enactment. Creator birth grants stay live through implications and transfer into
 timeline holds during transaction completion. A retryable acquisition must not
 turn a committed statement's completion into a reason to replay that statement.
 
+Prepared DDL may retain selected plans and input holds across a definitive
+metadata conflict, but not an unfinished protection publication. Recheck the
+planning revision and protection incarnation before reuse, and rebuild creator
+protection for each commit attempt. A DROP cascade requires the full structural
+revision, not merely continued existence of its named dependencies. A same-statement
+replan releases its DDL guard and wakes queued statements before reacquiring it.
+Queued continuations must reject terminated connections even after their cancel
+watches have been removed.
+
 #### Legacy paths being migrated away from
 
 The migration into the implications framework is incremental and unfinished.
