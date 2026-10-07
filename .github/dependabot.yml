@@ -144,6 +144,22 @@ updates:
       update-types:
         - minor
         - patch
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: pip
   directory: /ci/builder
   schedule:
