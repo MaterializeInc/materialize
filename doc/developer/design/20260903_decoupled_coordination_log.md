@@ -37,8 +37,10 @@ staged metadata-conflict retries. Reuse checks the full preparation revision and
 incarnation, and each attempt owns and resolves its publication barrier.
 Local invalidation replans the original statement after releasing its DDL lock
 and waking waiters. The existing fixture now exercises repeated-conflict
-cancellation. This slice still needs CI verification.
-Next finish APPLY REPLACEMENT, ordinary DDL and explicit DDL COMMIT resumption,
+cancellation. APPLY REPLACEMENT retains preparation in its existing cancellable
+watch context and invalidates cache entries only after a definitive commit.
+These slices still need CI verification.
+Next finish ordinary DDL and explicit DDL COMMIT resumption,
 plus direct preparation acquisition. Preserve cancellation and commit-once
 completion. Do not trade CAS spinning for repeated optimization.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,

@@ -809,7 +809,7 @@ pub struct DropObjectsStage {
     // A DROP cascade depends on the full structural snapshot, even when its
     // explicit dependencies still exist after an intervening local DDL.
     planning_revision: u64,
-    ops: Vec<catalog::Op>,
+    ops: Vec<crate::catalog::Op>,
     prepared: Option<ddl::PreparedCatalogTransaction>,
     object_type: mz_sql::catalog::ObjectType,
     dropped_active_db: bool,
