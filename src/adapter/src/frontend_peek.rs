@@ -1603,9 +1603,9 @@ impl PeekClient {
                 // On success the `Subscribing` response carries the
                 // coordinator-side logging guard and the protocol layer logs
                 // the end when the subscribe terminates. On error the
-                // coordinator logs nothing (see the `ExecuteSubscribe`
-                // handler), so the guard stays armed and the caller logs the
-                // error.
+                // coordinator logs nothing (`implement_subscribe` creates its
+                // guard only for the response), so the guard stays armed and
+                // the caller logs the error.
                 logging.defuse();
                 Ok(Some(response))
             }
