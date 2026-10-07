@@ -69,7 +69,7 @@ use crate::durable::objects::{
     SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
     UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
 };
-use crate::durable::objects::{NameIndex, NameIndexes, NameScope, NamedCatalogValue};
+use crate::durable::objects::{NameIndex, NameIndexes, NameScope, NamedCatalogValue, OidIndex};
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
@@ -100,6 +100,7 @@ pub struct Transaction<'a> {
     /// content, so CAS rebasing cannot silently retain a stale authority decision.
     prewarming_plan_build: Option<String>,
     read_protection_index: ReadProtectionIndex,
+    oid_index: OidIndex,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -179,6 +180,7 @@ impl DryRunTransaction<'static> {
     /// Constructs non-committable state from an owned snapshot and its opening context.
     /// The snapshot's derived indexes must match its tables. After manual name or
     /// scope edits, call [`Snapshot::rebuild_name_indexes`] before importing it.
+    /// After OID or OID-bearing table membership edits, call [`Snapshot::rebuild_oid_index`].
     pub fn from_snapshot(
         snapshot: Snapshot,
         upper: mz_repr::Timestamp,
@@ -222,6 +224,7 @@ impl<'a> Transaction<'a> {
     fn from_snapshot(
         Snapshot {
             name_indexes,
+            oid_index,
             read_protection_index,
             databases,
             schemas,
@@ -283,6 +286,7 @@ impl<'a> Transaction<'a> {
             deployment_generation,
             prewarming_plan_build: None,
             read_protection_index,
+            oid_index,
             databases: TableTransaction::new_with_uniqueness_fn(
                 databases,
                 database_unique_fn,
@@ -1290,36 +1294,8 @@ impl<'a> Transaction<'a> {
             return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
         }
 
-        // This is potentially slow to do everytime we allocate an OID. A faster approach might be
-        // to have an ID allocator that is updated everytime an OID is allocated or de-allocated.
-        // However, benchmarking shows that this doesn't make a noticeable difference and the other
-        // approach requires making sure that allocator always stays in-sync which can be
-        // error-prone. If DDL starts slowing down, this is a good place to try and optimize.
-        let mut allocated_oids = HashSet::with_capacity(
-            self.databases.len()
-                + self.schemas.len()
-                + self.roles.len()
-                + self.items.len()
-                + self.introspection_sources.len()
-                + temporary_oids.len(),
-        );
-        self.databases.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.schemas.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.roles.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.items.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.introspection_sources.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-
-        let is_allocated = |oid| allocated_oids.contains(&oid) || temporary_oids.contains(&oid);
+        let allocated_oids = self.current_oid_index();
+        let is_allocated = |oid| allocated_oids.contains(oid) || temporary_oids.contains(&oid);
 
         let start_oid: u32 = self
             .id_allocator
@@ -1366,6 +1342,32 @@ impl<'a> Transaction<'a> {
         Ok(oids)
     }
 
+    /// Shares committed occupancy and overlays only changed rows. Deriving from
+    /// the table overlays also respects failed mutations that restore pending rows.
+    fn current_oid_index(&self) -> OidIndex {
+        fn overlay<K: Ord + Clone + Debug, V: Ord + Clone + Debug>(
+            index: &mut OidIndex,
+            table: &TableTransaction<K, V>,
+            oid: impl Fn(&V) -> u32,
+        ) {
+            for key in table.changed_keys() {
+                if let Some(value) = table.initial.get(key) {
+                    index.update(oid(value), -1);
+                }
+                if let Some(value) = table.get(key) {
+                    index.update(oid(value), 1);
+                }
+            }
+        }
+        let mut index = self.oid_index.clone();
+        overlay(&mut index, &self.databases, |v| v.oid);
+        overlay(&mut index, &self.schemas, |v| v.oid);
+        overlay(&mut index, &self.roles, |v| v.oid);
+        overlay(&mut index, &self.items, |v| v.oid);
+        overlay(&mut index, &self.introspection_sources, |v| v.oid);
+        index
+    }
+
     /// Allocates a single OID. OIDs can be recycled if they aren't currently assigned to any
     /// object.
     pub fn allocate_oid(&mut self, temporary_oids: &HashSet<u32>) -> Result<u32, CatalogError> {
@@ -1395,6 +1397,7 @@ impl<'a> Transaction<'a> {
                     .current_name_index(),
             },
             read_protection_index: self.current_read_protection_index(),
+            oid_index: self.current_oid_index(),
             databases: self.databases.current_items(),
             schemas: self.schemas.current_items(),
             roles: self.roles.current_items(),
@@ -5276,6 +5279,227 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn oid_allocation_overlays_duplicates_and_failed_mutations() {
+        let key = |id| DatabaseKey {
+            id: DatabaseId::User(id),
+        };
+        let value = |name: &str, oid| DatabaseValue {
+            name: name.into(),
+            owner_id: RoleId::User(1),
+            privileges: Vec::new(),
+            oid,
+        };
+        let mut txn =
+            Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+        txn.insert_id_allocator(OID_ALLOC_KEY.into(), FIRST_USER_OID.into())
+            .unwrap();
+        txn.databases
+            .insert(key(1), value("a", FIRST_USER_OID), 0)
+            .unwrap();
+        txn.databases
+            .insert(key(2), value("b", FIRST_USER_OID), 0)
+            .unwrap();
+        let base = txn.current_snapshot();
+        let mut dry =
+            DryRunTransaction::from_snapshot(base.clone(), 0.into(), false, false, 0).unwrap();
+        let txn = dry.transaction_mut();
+        txn.databases.set(key(1), None, 0).unwrap();
+        assert_eq!(
+            txn.allocate_oid(&HashSet::new()).unwrap(),
+            FIRST_USER_OID + 1
+        );
+        // A uniqueness failure must restore both the row and its occupancy.
+        txn.databases
+            .set(key(2), Some(value("collision", FIRST_USER_OID + 3)), 0)
+            .unwrap();
+        txn.databases
+            .insert(key(3), value("other", FIRST_USER_OID + 2), 0)
+            .unwrap();
+        assert!(
+            txn.databases
+                .update_by_key(key(2), value("other", FIRST_USER_OID + 4), 0)
+                .is_err()
+        );
+        assert_eq!(
+            txn.allocate_oid(&HashSet::new()).unwrap(),
+            FIRST_USER_OID + 4
+        );
+        txn.databases.set(key(2), None, 0).unwrap();
+        txn.databases
+            .insert(key(2), value("reinserted", FIRST_USER_OID + 5), 0)
+            .unwrap();
+        let exported = dry.current_snapshot();
+        let mut rebuilt = exported.clone();
+        rebuilt.rebuild_oid_index();
+        assert_eq!(exported.oid_index, rebuilt.oid_index);
+        let mut imported =
+            DryRunTransaction::from_snapshot(exported, 0.into(), false, false, 0).unwrap();
+        assert_eq!(
+            imported
+                .transaction_mut()
+                .allocate_oid(&HashSet::new())
+                .unwrap(),
+            FIRST_USER_OID + 6
+        );
+        // The final holder of the original OID was replaced, so it is reusable.
+        imported
+            .transaction_mut()
+            .id_allocator
+            .set(
+                IdAllocKey {
+                    name: OID_ALLOC_KEY.into(),
+                },
+                Some(IdAllocValue {
+                    next_id: FIRST_USER_OID.into(),
+                }),
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            imported
+                .transaction_mut()
+                .allocate_oid(&HashSet::new())
+                .unwrap(),
+            FIRST_USER_OID
+        );
+        let mut retry =
+            DryRunTransaction::from_snapshot(base.clone(), 0.into(), false, false, 0).unwrap();
+        assert_eq!(
+            retry
+                .transaction_mut()
+                .allocate_oid(&HashSet::new())
+                .unwrap(),
+            FIRST_USER_OID + 1
+        );
+        // Manual edits require explicit rebuilding before import, just like names.
+        let mut edited = base;
+        edited.databases.clear();
+        edited.rebuild_name_indexes();
+        edited.rebuild_oid_index();
+        let mut imported =
+            DryRunTransaction::from_snapshot(edited, 0.into(), false, false, 0).unwrap();
+        assert_eq!(
+            imported
+                .transaction_mut()
+                .allocate_oid(&HashSet::new())
+                .unwrap(),
+            FIRST_USER_OID
+        );
+    }
+
+    #[mz_ore::test]
+    fn oid_allocation_five_tables_temporary_oids_and_wraparound() {
+        let mut txn =
+            Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+        txn.insert_id_allocator(OID_ALLOC_KEY.into(), u32::MAX.into())
+            .unwrap();
+        txn.databases
+            .insert(
+                DatabaseKey {
+                    id: DatabaseId::User(1),
+                },
+                DatabaseValue {
+                    name: "db".into(),
+                    owner_id: RoleId::User(1),
+                    privileges: Vec::new(),
+                    oid: u32::MAX,
+                },
+                0,
+            )
+            .unwrap();
+        txn.schemas
+            .insert(
+                SchemaKey {
+                    id: SchemaId::User(1),
+                },
+                SchemaValue {
+                    database_id: None,
+                    name: "schema".into(),
+                    owner_id: RoleId::User(1),
+                    privileges: Vec::new(),
+                    oid: FIRST_USER_OID,
+                },
+                0,
+            )
+            .unwrap();
+        txn.roles
+            .insert(
+                RoleKey {
+                    id: RoleId::User(1),
+                },
+                RoleValue {
+                    name: "role".into(),
+                    attributes: mz_sql::catalog::RoleAttributes::new(),
+                    membership: RoleMembership::new(),
+                    vars: Default::default(),
+                    oid: FIRST_USER_OID + 1,
+                },
+                0,
+            )
+            .unwrap();
+        txn.items
+            .insert(
+                ItemKey {
+                    id: CatalogItemId::User(1),
+                },
+                ItemValue {
+                    schema_id: SchemaId::User(1),
+                    name: "item".into(),
+                    ephemeral_owner_session: Some(Uuid::new_v4()),
+                    create_sql: "CREATE TABLE item".into(),
+                    owner_id: RoleId::User(1),
+                    privileges: Vec::new(),
+                    oid: FIRST_USER_OID + 2,
+                    global_id: GlobalId::User(1),
+                    extra_versions: BTreeMap::new(),
+                },
+                0,
+            )
+            .unwrap();
+        txn.introspection_sources
+            .insert(
+                ClusterIntrospectionSourceIndexKey {
+                    cluster_id: ClusterId::User(1),
+                    name: "index".into(),
+                },
+                ClusterIntrospectionSourceIndexValue {
+                    catalog_id: CatalogItemId::IntrospectionSourceIndex(1)
+                        .try_into()
+                        .unwrap(),
+                    global_id: GlobalId::IntrospectionSourceIndex(1).try_into().unwrap(),
+                    oid: FIRST_USER_OID + 3,
+                },
+                0,
+            )
+            .unwrap();
+        let snapshot = txn.current_snapshot();
+        let mut rebuilt = snapshot.clone();
+        rebuilt.rebuild_oid_index();
+        assert_eq!(snapshot.oid_index, rebuilt.oid_index);
+        let temporary = HashSet::from([FIRST_USER_OID + 4]);
+        assert_eq!(
+            txn.allocate_oids(2, &temporary).unwrap(),
+            vec![FIRST_USER_OID + 5, FIRST_USER_OID + 6]
+        );
+        let mut reopened = Transaction::from_snapshot(snapshot, 0.into(), false, false, 0).unwrap();
+        assert_eq!(
+            reopened.allocate_oids(2, &temporary).unwrap(),
+            vec![FIRST_USER_OID + 5, FIRST_USER_OID + 6]
+        );
+        let before = reopened.current_snapshot();
+        assert!(matches!(
+            reopened.allocate_oids(u64::from(u32::MAX) + 1, &temporary),
+            Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion))
+        ));
+        assert_eq!(reopened.current_snapshot(), before);
+        assert_eq!(
+            reopened.allocate_oids(0, &temporary).unwrap(),
+            Vec::<u32>::new()
+        );
+        assert_eq!(reopened.current_snapshot(), before);
+    }
+
+    #[mz_ore::test]
     fn indexed_item_scopes_and_snapshot_overlays() {
         let key = |id| ItemKey {
             id: CatalogItemId::User(id),
@@ -5335,6 +5559,12 @@ mod tests {
         reopened.items.insert(key(7), ty, 0).unwrap();
         // Snapshot derivation must not mutate a shared base or leave retracted keys.
         assert_eq!(before.items.len(), 4);
+        // Explicit OIDs below the user range can be shared by distinct item types.
+        for snapshot in [&before, &after, &reopened.current_snapshot()] {
+            let mut rebuilt = snapshot.clone();
+            rebuilt.rebuild_oid_index();
+            assert_eq!(snapshot.oid_index, rebuilt.oid_index);
+        }
         assert_eq!(
             after.name_indexes.items.candidates[&table.name_scope(&key(5))],
             [key(5)].into_iter().collect::<imbl::OrdSet<_>>()

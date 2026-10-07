@@ -408,7 +408,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ///
     /// The snapshot may include changes accumulated by earlier incremental dry runs.
     /// Its derived indexes must match its tables. Manual name or scope edits require
-    /// [`Snapshot::rebuild_name_indexes`] before import.
+    /// [`Snapshot::rebuild_name_indexes`] before import. OID or OID-bearing table
+    /// membership edits require [`Snapshot::rebuild_oid_index`].
     fn transaction_from_snapshot(
         &mut self,
         snapshot: Snapshot,

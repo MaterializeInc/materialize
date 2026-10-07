@@ -1825,15 +1825,56 @@ pub struct NameIndexes {
     pub(crate) cluster_replica_declarations: NameIndex<ClusterReplicaDeclarationKey>,
 }
 
+/// Structurally shared OID occupancy across databases, schemas, roles, items,
+/// and introspection-source indexes. Explicit OIDs may occur in multiple rows.
+/// This index is derived, never persisted.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OidIndex {
+    counts: imbl::OrdMap<u32, i64>,
+}
+
+impl OidIndex {
+    pub(crate) fn update(&mut self, oid: u32, diff: i64) {
+        let count = self.counts.get(&oid).copied().unwrap_or(0) + diff;
+        if count == 0 {
+            self.counts.remove(&oid);
+        } else {
+            self.counts.insert(oid, count);
+        }
+    }
+
+    pub(crate) fn contains(&self, oid: u32) -> bool {
+        self.counts.get(&oid).is_some_and(|count| *count > 0)
+    }
+
+    /// Applies each committed update exactly once. Counts permit either order
+    /// of replacement additions and retractions within a replay timestamp.
+    pub(crate) fn apply_update(&mut self, update: &state_update::StateUpdate) {
+        use state_update::StateUpdateKind;
+        let oid = match &update.kind {
+            StateUpdateKind::Database(_, value) => value.oid,
+            StateUpdateKind::Schema(_, value) => value.oid,
+            StateUpdateKind::Role(_, value) => value.oid,
+            StateUpdateKind::Item(_, value) => value.oid,
+            StateUpdateKind::IntrospectionSourceIndex(_, value) => value.oid,
+            _ => return,
+        };
+        self.update(oid, update.diff.into_inner());
+    }
+}
+
 /// A typed snapshot of catalog state.
 ///
 /// Tables share unchanged records across transaction candidates. Persist encoding
 /// remains at the committed-update boundary, rather than transaction opening.
 /// Transaction imports require tables and derived indexes to describe the same
-/// state. Manual name or scope edits require [`Self::rebuild_name_indexes`].
+/// state. Manual name or scope edits require [`Self::rebuild_name_indexes`],
+/// and edits to OIDs or membership of OID-bearing tables require
+/// [`Self::rebuild_oid_index`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
     pub name_indexes: NameIndexes,
+    pub oid_index: OidIndex,
     pub read_protection_index: ReadProtectionIndex,
     pub databases: imbl::OrdMap<DatabaseKey, DatabaseValue>,
     pub schemas: imbl::OrdMap<SchemaKey, SchemaValue>,
@@ -1878,6 +1919,26 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn empty() -> Snapshot {
         Snapshot::default()
+    }
+
+    /// Rebuilds OID occupancy after manually editing OIDs or adding/removing rows
+    /// in databases, schemas, roles, items, or introspection-source indexes.
+    /// Other derived indexes must still match any edits to their input fields.
+    /// Committed snapshots and transaction exports maintain this incrementally.
+    pub fn rebuild_oid_index(&mut self) {
+        let mut index = OidIndex::default();
+        for oid in self
+            .databases
+            .values()
+            .map(|v| v.oid)
+            .chain(self.schemas.values().map(|v| v.oid))
+            .chain(self.roles.values().map(|v| v.oid))
+            .chain(self.items.values().map(|v| v.oid))
+            .chain(self.introspection_sources.values().map(|v| v.oid))
+        {
+            index.update(oid, 1);
+        }
+        self.oid_index = index;
     }
 
     /// Rebuilds name lookups after manually editing named tables.

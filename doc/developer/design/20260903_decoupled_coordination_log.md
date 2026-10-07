@@ -27,14 +27,18 @@ adapter and replica owners. Waiting for new protection keeps the requesting
 operation pending, not the coordinator occupied. Revalidate against refreshed
 state rather than retrying stale bounds or blindly reusing candidates.
 
-Shared typed snapshots, storage metadata sharing and scoped uniqueness lookups
-are implemented. Replica retries, adapter protection maintenance (including
-timeline windows) and frontend protection requests yield between attempts.
+Shared typed snapshots, storage metadata sharing, scoped uniqueness lookups and
+incremental OID occupancy are implemented. Temporary item OIDs are covered by
+durable rows without an extra catalog-wide scan. Replica retries, adapter
+protection maintenance (including timeline windows) and frontend protection
+requests yield between attempts.
 Maintenance is staggered. Next finish DDL preparation/acquisition and commit
 resumption. Keep prepared rewrite identities and read holds across metadata-only
 retry waits, but never carry an unfinished publication barrier.
 Check the preparation revision before reuse and preserve cancellation and explicit
 DDL transaction completion. Do not trade CAS spinning for repeated optimization.
+Password-bearing role creation still repeats SCRAM hashing on candidate retries.
+Keep that preparation cost distinct from OID scans and coordinator resumption.
 
 Keep the 1s publication default while making contention cheap and nonblocking.
 Defer the 5s comparison until that repair is measured. Preserve heartbeat/grace,

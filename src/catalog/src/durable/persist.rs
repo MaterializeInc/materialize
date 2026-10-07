@@ -2129,6 +2129,7 @@ impl CatalogStateInner {
             }
         }
         let snapshot = &mut self.snapshot;
+        snapshot.oid_index.apply_update(update);
         let kind = &update.kind;
         let diff = update.diff;
         match kind {
@@ -3223,5 +3224,80 @@ impl UnopenedPersistCatalogState {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         }))
+    }
+}
+
+#[cfg(test)]
+mod oid_tests {
+    use super::*;
+    use crate::durable::objects::{DatabaseKey, DatabaseValue, SchemaKey, SchemaValue};
+    use mz_repr::role_id::RoleId;
+    use mz_sql::names::{DatabaseId, SchemaId};
+
+    #[mz_ore::test]
+    fn snapshot_replay_preserves_duplicate_oid_occupancy() {
+        let db = |id, oid| {
+            StateUpdateKind::Database(
+                DatabaseKey {
+                    id: DatabaseId::User(id),
+                }
+                .into_proto(),
+                DatabaseValue {
+                    name: format!("db{id}"),
+                    owner_id: RoleId::User(1),
+                    privileges: Vec::new(),
+                    oid,
+                }
+                .into_proto(),
+            )
+        };
+        let schema = StateUpdateKind::Schema(
+            SchemaKey {
+                id: SchemaId::User(1),
+            }
+            .into_proto(),
+            SchemaValue {
+                database_id: None,
+                name: "schema".into(),
+                owner_id: RoleId::User(1),
+                privileges: Vec::new(),
+                oid: 42,
+            }
+            .into_proto(),
+        );
+        let mut state = CatalogStateInner::new();
+        let mut replay = CatalogStateInner::new();
+        let mut history = Vec::new();
+        for (kind, diff) in [
+            (db(1, 42), Diff::ONE),
+            (schema.clone(), Diff::ONE),
+            (db(1, 42), Diff::MINUS_ONE),
+            (db(1, 43), Diff::ONE),
+            (schema, Diff::MINUS_ONE),
+            (db(1, 43), Diff::MINUS_ONE),
+            (db(1, 42), Diff::ONE),
+        ] {
+            let retained = state.snapshot.clone();
+            let update = StateUpdate {
+                kind,
+                ts: 0.into(),
+                diff,
+            };
+            state.apply_snapshot_update(&update);
+            history.push(update);
+            let mut rebuilt = state.snapshot.clone();
+            rebuilt.rebuild_oid_index();
+            assert_eq!(state.snapshot.oid_index, rebuilt.oid_index);
+            // Updating a derived index must not alter an already exported snapshot.
+            let mut rebuilt = retained.clone();
+            rebuilt.rebuild_oid_index();
+            assert_eq!(retained.oid_index, rebuilt.oid_index);
+        }
+        for update in &history {
+            replay.apply_snapshot_update(update);
+        }
+        assert_eq!(state.snapshot, replay.snapshot);
+        assert!(replay.snapshot.oid_index.contains(42));
+        assert!(!replay.snapshot.oid_index.contains(43));
     }
 }

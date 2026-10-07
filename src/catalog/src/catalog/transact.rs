@@ -1467,6 +1467,10 @@ impl Catalog {
     /// Performs the transaction operation described by `op`. This function prepares the changes in
     /// `tx`, but does not update `state`. `state` will be updated when applying the durable
     /// changes.
+    ///
+    /// OID allocation needs no additional in-memory exclusions: temporary items
+    /// are durable rows, including pending creates in this transaction. Temporary
+    /// schemas use INVALID_OID, outside the user allocation range.
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
@@ -1860,19 +1864,19 @@ impl Catalog {
                 )
                 .collect();
 
-                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let additional_oids: HashSet<_> = HashSet::new();
                 let (database_id, _) = tx.insert_user_database(
                     &name,
                     owner_id,
                     database_privileges.clone(),
-                    &temporary_oids,
+                    &additional_oids,
                 )?;
                 let (schema_id, _) = tx.insert_user_schema(
                     database_id,
                     DEFAULT_SCHEMA,
                     owner_id,
                     schema_privileges.clone(),
-                    &temporary_oids,
+                    &additional_oids,
                 )?;
                 add_to_audit_log(
                     &state.system_configuration,
@@ -1943,7 +1947,7 @@ impl Catalog {
                     &schema_name,
                     owner_id,
                     privileges.clone(),
-                    &state.get_temporary_oids().collect(),
+                    &HashSet::new(),
                 )?;
                 add_to_audit_log(
                     &state.system_configuration,
@@ -1973,7 +1977,7 @@ impl Catalog {
                     attributes.clone(),
                     membership.clone(),
                     vars.clone(),
-                    &state.get_temporary_oids().collect(),
+                    &HashSet::new(),
                 )?;
                 add_to_audit_log(
                     &state.system_configuration,
@@ -2046,7 +2050,7 @@ impl Catalog {
                     owner_id,
                     privileges.clone(),
                     config.clone().into(),
-                    &state.get_temporary_oids().collect(),
+                    &HashSet::new(),
                 )?;
                 add_to_audit_log(
                     &state.system_configuration,
@@ -2383,7 +2387,7 @@ impl Catalog {
                 )
                 .collect();
 
-                let temporary_oids = state.get_temporary_oids().collect();
+                let additional_oids = HashSet::new();
 
                 if item.is_temporary() {
                     if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
@@ -2407,7 +2411,7 @@ impl Catalog {
                         create_sql,
                         owner_id,
                         privileges.clone(),
-                        &temporary_oids,
+                        &additional_oids,
                         versions,
                         Some(owner_session),
                     )?;
@@ -2453,7 +2457,7 @@ impl Catalog {
                         create_sql,
                         owner_id,
                         privileges.clone(),
-                        &temporary_oids,
+                        &additional_oids,
                         versions,
                         None,
                     )?;
@@ -2577,13 +2581,13 @@ impl Catalog {
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
 
-                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let additional_oids: HashSet<_> = HashSet::new();
                 let id = tx.insert_user_network_policy(
                     name.clone(),
                     rules,
                     privileges,
                     owner_id,
-                    &temporary_oids,
+                    &additional_oids,
                 )?;
 
                 add_to_audit_log(
