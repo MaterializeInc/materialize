@@ -846,21 +846,13 @@ impl Catalog {
     pub async fn committed_replica_memberships(
         &self,
     ) -> Result<Vec<crate::durable::ClusterReplica>, CatalogError> {
-        use crate::durable::objects::serialization::RustType;
         use crate::durable::objects::{ClusterReplica, DurableType};
         let snapshot = self.storage().await.snapshot().await?;
-        snapshot
+        Ok(snapshot
             .cluster_replicas
             .into_iter()
-            .map(|(key, value)| {
-                let replica = ClusterReplica::from_key_value(
-                    RustType::from_proto(key)?,
-                    RustType::from_proto(value)?,
-                );
-                Ok(replica)
-            })
-            .collect::<Result<_, mz_proto::TryFromProtoError>>()
-            .map_err(|error| CatalogError::Unstructured(error.into()))
+            .map(|(key, value)| ClusterReplica::from_key_value(key, value))
+            .collect())
     }
 
     /// Returns the catalog-owned transaction WAL identity established at bootstrap.
@@ -875,10 +867,7 @@ impl Catalog {
                 "transaction WAL has not been initialized",
             )
         })?;
-        value
-            .shard
-            .parse()
-            .map_err(|error| CatalogError::internal("transaction WAL identity", error))
+        Ok(value.shard)
     }
 
     /// Certifies a durable prefix while the caller serializes catalog snapshot capture.

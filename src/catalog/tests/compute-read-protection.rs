@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::{
-    ClusterConfig, ClusterVariant, CollectionCompactionBound, DurableType, SystemObjectDescription,
-    SystemObjectMapping, SystemObjectUniqueIdentifier,
+    self, ClusterConfig, ClusterVariant, CollectionCompactionBound, DurableType,
+    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{
     CatalogError, DurableCatalogError, Snapshot, TestCatalogStateBuilder, Transaction,
@@ -650,7 +650,8 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     commit(tx).await;
     assert_eq!(
         pending.snapshot().await.unwrap().client_incarnations
-            [&ClientIncarnationKey { id: warm_client }]
+            [&objects::ClientIncarnationKey::from_proto(ClientIncarnationKey { id: warm_client })
+                .unwrap()]
             .deployment_generation,
         8
     );
@@ -715,7 +716,9 @@ async fn deployment_cannot_publish_another_deployments_protection() {
         before.client_read_requirements
     );
     assert_eq!(
-        snapshot.client_incarnations[&ClientIncarnationKey { id: old }].deployment_generation,
+        snapshot.client_incarnations
+            [&objects::ClientIncarnationKey::from_proto(ClientIncarnationKey { id: old }).unwrap()]
+            .deployment_generation,
         7
     );
     let mut txn = state.transaction().await.unwrap();
@@ -731,7 +734,9 @@ async fn deployment_cannot_publish_another_deployments_protection() {
     commit(txn).await;
     let snapshot = state.snapshot().await.unwrap();
     assert_eq!(
-        snapshot.client_incarnations[&ClientIncarnationKey { id: own }].deployment_generation,
+        snapshot.client_incarnations
+            [&objects::ClientIncarnationKey::from_proto(ClientIncarnationKey { id: own }).unwrap()]
+            .deployment_generation,
         8
     );
     let mut txn = state.transaction().await.unwrap();
@@ -811,14 +816,20 @@ async fn client_publication_reopen_and_reclamation() {
     txn.commit(ts).await.unwrap();
     let snapshot = state.snapshot().await.unwrap();
     assert_eq!(
-        snapshot.client_incarnations[&ClientIncarnationKey { id: a }].heartbeat,
+        snapshot.client_incarnations
+            [&objects::ClientIncarnationKey::from_proto(ClientIncarnationKey { id: a }).unwrap()]
+            .heartbeat,
         2
     );
     assert_eq!(
-        snapshot.client_read_requirements[&ClientReadRequirementKey {
-            incarnation: a,
-            id: id.into_proto()
-        }]
+        snapshot.client_read_requirements[&objects::ClientReadRequirementKey::from_proto(
+            ClientReadRequirementKey {
+                incarnation: a,
+                id: id.into_proto()
+            }
+        )
+        .unwrap()]
+            .into_proto()
             .frontier,
         20
     );
@@ -997,8 +1008,7 @@ fn bounds(snapshot: Snapshot) -> BTreeMap<GlobalId, Option<Timestamp>> {
     snapshot
         .collection_compaction_bounds
         .into_iter()
-        .map(|entry| {
-            let (key, value) = RustType::from_proto(entry).unwrap();
+        .map(|(key, value)| {
             let bound = CollectionCompactionBound::from_key_value(key, value);
             (bound.id, bound.frontier)
         })

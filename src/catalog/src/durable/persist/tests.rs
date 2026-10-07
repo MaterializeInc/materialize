@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::UnopenedPersistCatalogState;
 use crate::durable::objects::Snapshot;
+use crate::durable::objects::serialization::RustType;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::persist::{CATALOG_SEED, fetch_catalog_shard_version, shard_id};
 use crate::durable::{
@@ -245,11 +246,13 @@ async fn seed_legacy_v94() -> TestCatalogStateBuilder {
 }
 
 fn assert_legacy_snapshot(snapshot: &Snapshot, generation: u64) {
-    fn assert_collection<K: serde::Serialize, V: serde::Serialize>(
-        kind: &str,
-        actual: &BTreeMap<K, V>,
-        generation: u64,
-    ) {
+    fn assert_collection<K, V, PK, PV>(kind: &str, actual: &imbl::OrdMap<K, V>, generation: u64)
+    where
+        K: Ord + Clone + RustType<PK>,
+        V: Clone + RustType<PV>,
+        PK: serde::Serialize,
+        PV: serde::Serialize,
+    {
         let expected: BTreeSet<_> = legacy_v94_rows()
             .into_iter()
             .filter(|row| row.kind() == kind)
@@ -271,7 +274,7 @@ fn assert_legacy_snapshot(snapshot: &Snapshot, generation: u64) {
             .iter()
             .map(|(key, value)| {
                 StateUpdateKindJson::from_serde(serde_json::json!({
-                    "kind": kind, "key": key, "value": value
+                    "kind": kind, "key": key.into_proto(), "value": value.into_proto()
                 }))
             })
             .collect();

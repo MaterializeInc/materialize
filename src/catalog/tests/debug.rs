@@ -13,7 +13,8 @@ use std::fmt::{Debug, Formatter};
 
 use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingCollection, Trace};
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
-use mz_catalog::durable::objects::serialization::proto;
+use mz_catalog::durable::objects::ConfigKey;
+use mz_catalog::durable::objects::serialization::{RustType, proto};
 use mz_catalog::durable::{
     BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, DurableCatalogError,
     EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, MOCK_AUTHENTICATION_NONCE_KEY,
@@ -476,8 +477,14 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
         generation
     );
     assert_eq!(
-        state.snapshot().await.unwrap().configs.get(&key),
-        Some(&initial)
+        state
+            .snapshot()
+            .await
+            .unwrap()
+            .configs
+            .get(&ConfigKey::from_proto(key.clone()).unwrap())
+            .map(RustType::into_proto),
+        Some(initial.clone())
     );
     assert_eq!(state.current_upper().await, upper);
     assert_ok!(state.transaction().await);
@@ -490,8 +497,14 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
         Some(initial)
     );
     assert_eq!(
-        state.snapshot().await.unwrap().configs.get(&key),
-        Some(&edited)
+        state
+            .snapshot()
+            .await
+            .unwrap()
+            .configs
+            .get(&ConfigKey::from_proto(key.clone()).unwrap())
+            .map(RustType::into_proto),
+        Some(edited.clone())
     );
     assert_ok!(state.transaction().await);
     assert_eq!(observer.epoch().await.unwrap(), epoch);
@@ -504,7 +517,14 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
         .delete::<ConfigCollection>(key.clone(), true)
         .await
         .unwrap();
-    assert_none!(state.snapshot().await.unwrap().configs.get(&key));
+    assert_none!(
+        state
+            .snapshot()
+            .await
+            .unwrap()
+            .configs
+            .get(&ConfigKey::from_proto(key.clone()).unwrap())
+    );
     // The serving writer can still commit after both foreign mutations.
     let mut txn = state.transaction().await.unwrap();
     txn.set_config("serving-writer".into(), Some(7)).unwrap();
@@ -687,8 +707,16 @@ async fn test_persist_concurrent_debugs() {
         assert_none!(a.unwrap());
         assert_none!(b.unwrap());
         let configs = state.snapshot().await.unwrap().configs;
-        assert_eq!(configs.get(&left_key), Some(&value));
-        assert_eq!(configs.get(&right_key), Some(&value));
+        let left_snapshot_key = ConfigKey::from_proto(left_key.clone()).unwrap();
+        let right_snapshot_key = ConfigKey::from_proto(right_key.clone()).unwrap();
+        assert_eq!(
+            configs.get(&left_snapshot_key).map(RustType::into_proto),
+            Some(value.clone())
+        );
+        assert_eq!(
+            configs.get(&right_snapshot_key).map(RustType::into_proto),
+            Some(value.clone())
+        );
         let (a, b, ()) = tokio::join!(
             left.delete::<ConfigCollection>(left_key.clone(), true),
             right.edit::<ConfigCollection>(
@@ -705,19 +733,24 @@ async fn test_persist_concurrent_debugs() {
         a.unwrap();
         assert_eq!(b.unwrap(), Some(value));
         let configs = state.snapshot().await.unwrap().configs;
-        assert_none!(configs.get(&left_key));
+        assert_none!(configs.get(&left_snapshot_key));
         assert_eq!(
-            configs.get(&right_key),
-            Some(&proto::ConfigValue { value: i + 1 })
+            configs.get(&right_snapshot_key).map(RustType::into_proto),
+            Some(proto::ConfigValue { value: i + 1 })
         );
     }
     let configs = state.snapshot().await.unwrap().configs;
     for i in 0..16 {
         assert_eq!(
-            configs.get(&proto::ConfigKey {
-                key: format!("right-{i}")
-            }),
-            Some(&proto::ConfigValue { value: i + 1 })
+            configs
+                .get(
+                    &ConfigKey::from_proto(proto::ConfigKey {
+                        key: format!("right-{i}")
+                    })
+                    .unwrap()
+                )
+                .map(RustType::into_proto),
+            Some(proto::ConfigValue { value: i + 1 })
         );
     }
     assert_ok!(state.transaction().await);

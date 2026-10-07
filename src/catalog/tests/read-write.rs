@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use insta::assert_debug_snapshot;
-use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
@@ -117,10 +116,8 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .id_allocator
         .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| IdAlloc::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
+        .map(|(k, v)| IdAlloc::from_key_value(k, v))
+        .collect();
     assert!(snapshot_id_allocs.contains(&IdAlloc {
         name: id_type.to_string(),
         next_id: start_id + 3,
@@ -580,10 +577,8 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .items
         .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| Item::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
+        .map(|(k, v)| Item::from_key_value(k, v))
+        .collect();
     for item in &items {
         assert!(snapshot_items.contains(item));
     }
@@ -719,10 +714,8 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .items
         .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| Item::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
+        .map(|(k, v)| Item::from_key_value(k, v))
+        .collect();
 
     // Nothing ephemeral survives, and the normal item is untouched.
     assert!(
@@ -749,10 +742,8 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .comments
         .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| Comment::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
+        .map(|(k, v)| Comment::from_key_value(k, v))
+        .collect();
     assert_eq!(
         snapshot_comments
             .iter()
@@ -901,10 +892,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
 
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
-            .get(&proto::RoleKey {
-                id: role_id.into_proto(),
-            })
+            .get(
+                &mz_catalog::durable::objects::RoleKey::from_proto(proto::RoleKey {
+                    id: role_id.into_proto(),
+                })
+                .unwrap(),
+            )
             .unwrap();
+        let role: proto::RoleValue = role.into_proto();
         assert_eq!(role_name, &role.name);
 
         role_id
@@ -930,17 +925,24 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // Savepoint catalogs do not yet know how to update themselves in response to concurrent
         // writes from writer catalogs, so it should not see the new role.
         let roles = snapshot.roles;
-        let role = roles.get(&proto::RoleKey {
-            id: role_id.into_proto(),
-        });
+        let role = roles.get(
+            &mz_catalog::durable::objects::RoleKey::from_proto(proto::RoleKey {
+                id: role_id.into_proto(),
+            })
+            .unwrap(),
+        );
         assert_eq!(None, role);
 
         let dbs = snapshot.databases;
         let db = dbs
-            .get(&proto::DatabaseKey {
-                id: proto::DatabaseId::User(db_id),
-            })
+            .get(
+                &mz_catalog::durable::objects::DatabaseKey::from_proto(proto::DatabaseKey {
+                    id: proto::DatabaseId::User(db_id),
+                })
+                .unwrap(),
+            )
             .unwrap();
+        let db: proto::DatabaseValue = db.into_proto();
         assert_eq!(db_name, &db.name);
     }
 
@@ -1227,109 +1229,13 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
     Box::new(state).expire().await;
 }
 
-/// Regression test for incident-970: quadratic consolidation during catalog sync.
-///
-/// When a reader syncs through K timestamps, apply_updates() was calling
-/// consolidate() on the entire snapshot for each timestamp, resulting in
-/// O(K * N log N) work instead of O(N log N). This test verifies that syncing
-/// through many timestamps only consolidates the snapshot a constant number of
-/// times, not once per timestamp.
+/// A captured snapshot remains immutable while its reader follows peer updates.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn test_persist_sync_consolidation_not_quadratic() {
+async fn test_persist_snapshot_isolation_during_peer_updates() {
     let persist_client = PersistClient::new_for_tests().await;
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let state_builder =
         TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
-    // Share metrics between writer and reader so we can observe consolidation counts.
-    let state_builder = state_builder.with_metrics(Arc::clone(&metrics));
-
-    // Open a writer catalog.
-    let mut writer = state_builder
-        .clone()
-        .unwrap_build()
-        .await
-        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
-        .await
-        .unwrap();
-    let _ = writer.sync_to_current_updates().await.unwrap();
-
-    // Open a read-only catalog, caught up to the current upper.
-    let mut reader = state_builder
-        .clone()
-        .unwrap_build()
-        .await
-        .open_read_only(&test_bootstrap_args())
-        .await
-        .unwrap();
-    let _ = reader.sync_to_current_updates().await.unwrap();
-
-    // Writer creates many databases, each in its own transaction at a distinct
-    // timestamp. This mirrors the incident scenario where DDL happened across
-    // many timestamps while a read-only envd was restarting.
-    let num_timestamps: u64 = 100;
-    for i in 0..num_timestamps {
-        let mut txn = writer.transaction().await.unwrap();
-        txn.insert_user_database(
-            &format!("db_{i}"),
-            RoleId::User(1),
-            Vec::new(),
-            &HashSet::new(),
-        )
-        .unwrap();
-        let _ = txn.get_and_commit_op_updates();
-        let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
-    }
-
-    // Record the consolidation counter before the reader syncs.
-    let consolidations_before = metrics.snapshot_consolidations.get();
-
-    // Reader syncs through all timestamps. With the quadratic bug, this would
-    // call consolidate() once per timestamp (num_timestamps times). With the
-    // fix, it should consolidate only once after processing all timestamps.
-    let updates = reader.sync_to_current_updates().await.unwrap();
-    let consolidations_after = metrics.snapshot_consolidations.get();
-    let consolidations_during_sync = consolidations_after - consolidations_before;
-
-    // Verify correctness: reader received updates and can see all databases.
-    assert!(
-        !updates.is_empty(),
-        "reader should have received updates from writer"
-    );
-    let snapshot = reader.snapshot().await.unwrap();
-    for i in 0..num_timestamps {
-        let db_name = format!("db_{i}");
-        let found = snapshot.databases.values().any(|db| db.name == db_name);
-        assert!(found, "database {db_name} not found in reader snapshot");
-    }
-
-    // The key assertion: consolidation should happen O(log N) times during
-    // the sync (from the doubling strategy), NOT once per timestamp (which
-    // would be num_timestamps = 100). We allow a generous bound here.
-    assert!(
-        consolidations_during_sync < 10,
-        "sync through {num_timestamps} timestamps triggered {consolidations_during_sync} \
-         snapshot consolidations, suggesting quadratic behavior (expected < 10)"
-    );
-
-    Box::new(writer).expire().await;
-    Box::new(reader).expire().await;
-}
-
-/// Verify that the reader's snapshot stays bounded during sync catch-up, even
-/// when the writer churns the same object many times across timestamps. Without
-/// the doubling consolidation in `sync_inner`, the snapshot would grow with
-/// every retract+insert pair; with it, the snapshot stays within ~3x the live
-/// catalog size.
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)]
-async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
-    let persist_client = PersistClient::new_for_tests().await;
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    let state_builder = TestCatalogStateBuilder::new(persist_client)
-        .with_default_deploy_generation()
-        .with_metrics(Arc::clone(&metrics));
 
     // Open writer, create one database to churn.
     let mut writer = state_builder
@@ -1357,7 +1263,7 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
         .await
         .unwrap();
     let _ = reader.sync_to_current_updates().await.unwrap();
-    let peak_before = metrics.snapshot_max_entries.get();
+    let before = reader.snapshot().await.unwrap();
 
     // Rename the same database 200 times, each in its own transaction.
     let num_renames: u64 = 200;
@@ -1380,32 +1286,18 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
     // Reader syncs through all 200 renames.
     let _ = reader.sync_to_current_updates().await.unwrap();
 
-    // Verify correctness: only one database, with the final name.
-    let snapshot = reader.snapshot().await.unwrap();
-    let churn_dbs: Vec<_> = snapshot
-        .databases
-        .values()
-        .filter(|d| d.name.starts_with("churn_db"))
-        .collect();
-    assert_eq!(churn_dbs.len(), 1, "{churn_dbs:#?}");
-    assert_eq!(churn_dbs[0].name, format!("churn_db_{}", num_renames - 1));
-
-    // The key assertion: the snapshot high-water mark should stay bounded,
-    // not grow proportionally to num_renames. The doubling consolidation
-    // keeps it within ~3x the live catalog size.
-    let peak_after = metrics.snapshot_max_entries.get();
-    let peak_delta = peak_after - peak_before;
-    // With doubling consolidation, the snapshot stays bounded. Without
-    // consolidation this would grow by ~387 for 200 renames; with it, the
-    // delta should be much smaller. We use 3x to allow headroom for
-    // variance in how persist batches deliveries.
-    let bounded = peak_before * 3;
-    assert!(
-        peak_delta < bounded,
-        "peak unconsolidated snapshot grew by {peak_delta} over {num_renames} \
-         renames (peak_before={peak_before}, peak_after={peak_after}); \
-         expected < {bounded}"
-    );
+    let current = reader.snapshot().await.unwrap();
+    let read_db = |snapshot: &mz_catalog::durable::Snapshot| {
+        snapshot
+            .databases
+            .iter()
+            .map(|(key, value)| Database::from_key_value(key.clone(), value.clone()))
+            .find(|database| database.id == db_id)
+            .expect("database retained")
+    };
+    assert_eq!(read_db(&before).name, "churn_db");
+    assert_eq!(read_db(&current), db);
+    assert_eq!(before.databases.len(), current.databases.len());
 
     Box::new(writer).expire().await;
     Box::new(reader).expire().await;
@@ -1716,10 +1608,8 @@ async fn test_persist_read_protection() {
     let bounds: Vec<CollectionCompactionBound> = snapshot
         .collection_compaction_bounds
         .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| DurableType::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
+        .map(|(k, v)| DurableType::from_key_value(k, v))
+        .collect();
     assert_eq!(
         bounds,
         vec![CollectionCompactionBound {
@@ -1730,10 +1620,8 @@ async fn test_persist_read_protection() {
     let requirements: Vec<MaintainedReadRequirement> = snapshot
         .maintained_read_requirements
         .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| DurableType::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
+        .map(|(k, v)| DurableType::from_key_value(k, v))
+        .collect();
     assert_eq!(
         requirements,
         vec![MaintainedReadRequirement {

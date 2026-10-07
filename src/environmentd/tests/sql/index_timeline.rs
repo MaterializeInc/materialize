@@ -10,6 +10,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use mz_catalog::durable::objects::{
+    ClientIncarnation, ClientReadRequirement, CollectionCompactionBound, DurableType, Item,
+};
 use mz_catalog::durable::persist_backed_catalog_join_active;
 use mz_environmentd::test_util::TestHarness;
 use mz_postgres_util::{batch_execute, sql};
@@ -50,7 +53,8 @@ async fn index_creation_protects_timeline_before_installation() {
         let item_id = |name| {
             snapshot
                 .items
-                .values()
+                .iter()
+                .map(|(key, value)| Item::from_key_value(key.clone(), value.clone()))
                 .find(|item| item.name == name)
                 .unwrap()
                 .global_id
@@ -59,22 +63,28 @@ async fn index_creation_protects_timeline_before_installation() {
         let input = item_id("timeline_input");
         // This observer creates no incarnation or grants. With no reads and no
         // replicas in the index's cluster, its non-replica grant is the creator's.
-        let (grant_key, _) = snapshot
+        let grant = snapshot
             .client_read_requirements
             .iter()
-            .find(|(key, _)| {
-                key.id == index
+            .map(|(key, value)| ClientReadRequirement::from_key_value(key.clone(), value.clone()))
+            .find(|grant| {
+                grant.id == index
                     && snapshot
                         .client_incarnations
                         .iter()
-                        .any(|(id, value)| id.id == key.incarnation && value.replica_id.is_none())
+                        .map(|(key, value)| {
+                            ClientIncarnation::from_key_value(key.clone(), value.clone())
+                        })
+                        .any(|client| client.id == grant.incarnation && client.replica_id.is_none())
             })
             .expect("SQL creation must durably protect the index before installation");
-        let (creator_key, creator) = snapshot
+        let creator = snapshot
             .client_incarnations
             .iter()
-            .find(|(key, _)| key.id == grant_key.incarnation)
+            .map(|(key, value)| ClientIncarnation::from_key_value(key.clone(), value.clone()))
+            .find(|client| client.id == grant.incarnation)
             .unwrap();
+        let creator_id = creator.id;
         let initial_heartbeat = creator.heartbeat;
 
         // Drive timeline advancement with a blind write rather than waiting for
@@ -85,28 +95,36 @@ async fn index_creation_protects_timeline_before_installation() {
         loop {
             peer.sync_to_current_updates().await.unwrap();
             let current = peer.snapshot().await.unwrap();
-            let grant = current
+            let requirements: Vec<_> = current
                 .client_read_requirements
-                .get(grant_key)
+                .into_iter()
+                .map(|(key, value)| ClientReadRequirement::from_key_value(key, value))
+                .collect();
+            let grant = requirements
+                .iter()
+                .find(|grant| grant.incarnation == creator_id && grant.id == index)
                 .expect("metadata publication must retain the creator's index grant");
             let bound = current
                 .collection_compaction_bounds
-                .iter()
-                .find(|(key, _)| key.id == index)
-                .and_then(|(_, value)| value.frontier)
+                .into_iter()
+                .map(|(key, value)| CollectionCompactionBound::from_key_value(key, value))
+                .find(|bound| bound.id == index)
+                .and_then(|bound| bound.frontier)
                 .expect("the live index must retain its creation bound");
             assert!(bound <= grant.frontier, "grant must remain readable");
             assert!(
-                current.client_read_requirements.iter().any(|(key, value)| {
-                    key.incarnation == grant_key.incarnation
-                        && key.id == input
-                        && value.frontier <= grant.frontier
+                requirements.iter().any(|requirement| {
+                    requirement.incarnation == creator_id
+                        && requirement.id == input
+                        && requirement.frontier <= grant.frontier
                 }),
                 "the creator must also protect the index's logical input"
             );
             let creator = current
                 .client_incarnations
-                .get(creator_key)
+                .into_iter()
+                .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
+                .find(|client| client.id == creator_id)
                 .expect("the creator must remain live");
             // Heartbeats advance only with complete requirement publications.
             // Observe that event rather than assuming a sleep caused publication.

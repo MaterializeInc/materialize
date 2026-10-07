@@ -11,23 +11,21 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use std::time::Duration;
 
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, Snapshot};
+use mz_catalog::durable::objects::{self, DurableType, Snapshot};
 use mz_catalog::durable::{
     BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
     DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
-    MOCK_AUTHENTICATION_NONCE_KEY, Metrics, Schema, TestCatalogStateBuilder, Transaction,
+    MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, Transaction,
     test_bootstrap_args,
 };
 use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
-use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
@@ -44,8 +42,11 @@ use uuid::Uuid;
 struct StableSnapshot<'a>(&'a Snapshot);
 
 impl StableSnapshot<'_> {
-    fn user_version(&self) -> Option<&proto::ConfigValue> {
-        self.0.configs.get(&Self::user_version_key())
+    fn user_version(&self) -> Option<proto::ConfigValue> {
+        self.0
+            .configs
+            .get(&objects::ConfigKey::from_proto(Self::user_version_key()).unwrap())
+            .map(RustType::into_proto)
     }
 
     fn user_version_key() -> proto::ConfigKey {
@@ -54,8 +55,11 @@ impl StableSnapshot<'_> {
         }
     }
 
-    fn builtin_migration_shard(&self) -> Option<&proto::SettingValue> {
-        self.0.settings.get(&Self::builtin_migration_shard_key())
+    fn builtin_migration_shard(&self) -> Option<proto::SettingValue> {
+        self.0
+            .settings
+            .get(&objects::SettingKey::from_proto(Self::builtin_migration_shard_key()).unwrap())
+            .map(RustType::into_proto)
     }
 
     fn builtin_migration_shard_key() -> proto::SettingKey {
@@ -64,8 +68,11 @@ impl StableSnapshot<'_> {
         }
     }
 
-    fn expression_cache_shard(&self) -> Option<&proto::SettingValue> {
-        self.0.settings.get(&Self::expression_cache_shard_key())
+    fn expression_cache_shard(&self) -> Option<proto::SettingValue> {
+        self.0
+            .settings
+            .get(&objects::SettingKey::from_proto(Self::expression_cache_shard_key()).unwrap())
+            .map(RustType::into_proto)
     }
 
     fn expression_cache_shard_key() -> proto::SettingKey {
@@ -79,6 +86,19 @@ impl StableSnapshot<'_> {
             name: MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
         }
     }
+}
+
+/// Render the encoded records, including their protobuf ordering, for golden comparisons.
+fn encoded<K, V, PK, PV>(entries: &imbl::OrdMap<K, V>) -> BTreeMap<PK, PV>
+where
+    K: Ord + Clone + RustType<PK>,
+    V: Clone + RustType<PV>,
+    PK: Ord,
+{
+    entries
+        .iter()
+        .map(|(key, value)| (key.into_proto(), value.into_proto()))
+        .collect()
 }
 
 impl Debug for StableSnapshot<'_> {
@@ -116,49 +136,64 @@ impl Debug for StableSnapshot<'_> {
             unfinalized_shards,
             txn_wal_shard,
         } = self.0;
-        let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
+        let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = encoded(configs);
         configs.remove(&Self::user_version_key());
-        let mut settings: BTreeMap<proto::SettingKey, proto::SettingValue> = settings.clone();
+        let mut settings: BTreeMap<proto::SettingKey, proto::SettingValue> = encoded(settings);
         settings.remove(&Self::builtin_migration_shard_key());
         settings.remove(&Self::expression_cache_shard_key());
         settings.remove(&Self::mock_authentication_nonce_key());
         f.debug_struct("Snapshot")
-            .field("databases", databases)
-            .field("schemas", schemas)
-            .field("roles", roles)
-            .field("role_auth", role_auth)
-            .field("items", items)
-            .field("comments", comments)
-            .field("clusters", clusters)
-            .field("network_policies", network_policies)
-            .field("cluster_replicas", cluster_replicas)
-            .field("cluster_replica_declarations", cluster_replica_declarations)
-            .field("cluster_runtimes", cluster_runtimes)
-            .field("introspection_sources", introspection_sources)
-            .field("id_allocator", id_allocator)
+            .field("databases", &encoded(databases))
+            .field("schemas", &encoded(schemas))
+            .field("roles", &encoded(roles))
+            .field("role_auth", &encoded(role_auth))
+            .field("items", &encoded(items))
+            .field("comments", &encoded(comments))
+            .field("clusters", &encoded(clusters))
+            .field("network_policies", &encoded(network_policies))
+            .field("cluster_replicas", &encoded(cluster_replicas))
+            .field(
+                "cluster_replica_declarations",
+                &encoded(cluster_replica_declarations),
+            )
+            .field("cluster_runtimes", &encoded(cluster_runtimes))
+            .field("introspection_sources", &encoded(introspection_sources))
+            .field("id_allocator", &encoded(id_allocator))
             .field("configs", &configs)
             .field("settings", &settings)
-            .field("source_references", source_references)
-            .field("system_object_mappings", system_object_mappings)
-            .field("system_configurations", system_configurations)
+            .field("source_references", &encoded(source_references))
+            .field("system_object_mappings", &encoded(system_object_mappings))
+            .field("system_configurations", &encoded(system_configurations))
             .field(
                 "cluster_system_configurations",
-                cluster_system_configurations,
+                &encoded(cluster_system_configurations),
             )
             .field(
                 "replica_system_configurations",
-                replica_system_configurations,
+                &encoded(replica_system_configurations),
             )
-            .field("default_privileges", default_privileges)
-            .field("system_privileges", system_privileges)
-            .field("storage_collection_metadata", storage_collection_metadata)
-            .field("collection_compaction_bounds", collection_compaction_bounds)
-            .field("maintained_read_requirements", maintained_read_requirements)
-            .field("client_incarnations", client_incarnations)
-            .field("written_plans", written_plans)
-            .field("client_read_requirements", client_read_requirements)
-            .field("unfinalized_shards", unfinalized_shards)
-            .field("txn_wal_shard", txn_wal_shard)
+            .field("default_privileges", &encoded(default_privileges))
+            .field("system_privileges", &encoded(system_privileges))
+            .field(
+                "storage_collection_metadata",
+                &encoded(storage_collection_metadata),
+            )
+            .field(
+                "collection_compaction_bounds",
+                &encoded(collection_compaction_bounds),
+            )
+            .field(
+                "maintained_read_requirements",
+                &encoded(maintained_read_requirements),
+            )
+            .field("client_incarnations", &encoded(client_incarnations))
+            .field("written_plans", &encoded(written_plans))
+            .field(
+                "client_read_requirements",
+                &encoded(client_read_requirements),
+            )
+            .field("unfinalized_shards", &encoded(unfinalized_shards))
+            .field("txn_wal_shard", &encoded(txn_wal_shard))
             .finish()
     }
 }
@@ -355,11 +390,11 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         let snapshot = state.snapshot().await.unwrap();
         for (db, schema) in &db_schemas {
             let (db_key, db_value) = db.clone().into_key_value();
-            let db_found = snapshot.databases.get(&db_key.into_proto()).unwrap();
-            assert_eq!(&db_value.into_proto(), db_found);
+            let db_found = snapshot.databases.get(&db_key).unwrap();
+            assert_eq!(&db_value, db_found);
             let (schema_key, schema_value) = schema.clone().into_key_value();
-            let schema_found = snapshot.schemas.get(&schema_key.into_proto()).unwrap();
-            assert_eq!(&schema_value.into_proto(), schema_found);
+            let schema_found = snapshot.schemas.get(&schema_key).unwrap();
+            assert_eq!(&schema_value, schema_found);
         }
 
         // Perform updates.
@@ -383,11 +418,11 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         let snapshot = state.snapshot().await.unwrap();
         for (db, schema) in &db_schemas {
             let (db_key, db_value) = db.clone().into_key_value();
-            let db_found = snapshot.databases.get(&db_key.into_proto()).unwrap();
-            assert_eq!(&db_value.into_proto(), db_found);
+            let db_found = snapshot.databases.get(&db_key).unwrap();
+            assert_eq!(&db_value, db_found);
             let (schema_key, schema_value) = schema.clone().into_key_value();
-            let schema_found = snapshot.schemas.get(&schema_key.into_proto()).unwrap();
-            assert_eq!(&schema_value.into_proto(), schema_found);
+            let schema_found = snapshot.schemas.get(&schema_key).unwrap();
+            assert_eq!(&schema_value, schema_found);
         }
 
         Box::new(state).expire().await;
@@ -409,7 +444,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .unwrap()
             .databases
             .into_iter()
-            .find(|(_k, v)| v.name == "db");
+            .find(|(_k, v)| v.into_proto().name == "db");
         assert_eq!(db, None, "database should not exist");
         Box::new(state).expire().await;
     }
@@ -493,10 +528,13 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
     txn.commit(commit_ts).await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
-    let role = snapshot.roles.get(&proto::RoleKey {
-        id: role_id.into_proto(),
-    });
-    assert_eq!(&role.unwrap().name, "joe");
+    let role = snapshot.roles.get(
+        &objects::RoleKey::from_proto(proto::RoleKey {
+            id: role_id.into_proto(),
+        })
+        .unwrap(),
+    );
+    assert_eq!(&role.unwrap().into_proto().name, "joe");
 
     Box::new(read_only_state).expire().await;
     Box::new(state).expire().await;
@@ -507,7 +545,7 @@ fn item_ids(snapshot: &Snapshot) -> Vec<CatalogItemId> {
     snapshot
         .items
         .keys()
-        .map(|key| CatalogItemId::from_proto(key.gid.clone()).unwrap())
+        .map(|key| CatalogItemId::from_proto(key.into_proto().gid).unwrap())
         .collect()
 }
 
@@ -822,17 +860,15 @@ async fn test_fenced_ephemeral_item_write(state_builder: TestCatalogStateBuilder
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_sync_of_upper_progress_skips_consolidation() {
+async fn test_persist_sync_of_upper_progress_preserves_snapshot() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_sync_of_upper_progress_skips_consolidation(state_builder).await;
+    test_sync_of_upper_progress_preserves_snapshot(state_builder).await;
 }
 
-/// The incoming generation's fence loop in `open_inner` syncs before every compare-and-append,
-/// while the serving leader advances the catalog upper on every group commit. If each of those
-/// syncs consolidated the whole snapshot, an attempt on a large catalog would outlast the
-/// leader's next advance, and the fence would starve until the leader stalled.
-async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCatalogStateBuilder) {
+/// Upper-only progress changes neither the reader's snapshot nor its update stream,
+/// and must not prevent subsequent content updates from becoming visible.
+async fn test_sync_of_upper_progress_preserves_snapshot(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let mut leader = state_builder
         .clone()
@@ -847,9 +883,7 @@ async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCata
         .await
         .expect("unable to sync");
 
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let mut reader = state_builder
-        .with_metrics(Arc::clone(&metrics))
         .unwrap_build()
         .await
         .open_read_only(&test_bootstrap_args())
@@ -861,7 +895,7 @@ async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCata
         .await
         .expect("unable to sync");
 
-    let consolidations = metrics.snapshot_consolidations.get();
+    let before = reader.snapshot().await.unwrap();
     for _ in 0..3 {
         let upper = leader.current_upper().await;
         leader.advance_upper(upper.step_forward()).await.unwrap();
@@ -875,13 +909,10 @@ async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCata
         Vec::new(),
         "the leader's upper advances carried no content"
     );
-    assert_eq!(
-        metrics.snapshot_consolidations.get(),
-        consolidations,
-        "a sync that applied no updates consolidated the snapshot"
-    );
+    assert_eq!(reader.snapshot().await.unwrap(), before);
+    assert_eq!(reader.current_upper().await, leader.current_upper().await);
 
-    // A sync that does apply an update still consolidates.
+    // A later write must become visible without altering the retained snapshot.
     let mut txn = leader.transaction().await.unwrap();
     insert_view(
         &mut txn,
@@ -898,10 +929,10 @@ async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCata
         .await
         .expect("unable to sync");
     assert_ne!(updates, Vec::new());
-    assert!(
-        metrics.snapshot_consolidations.get() > consolidations,
-        "a sync that applied updates did not consolidate the snapshot"
-    );
+    let after = reader.snapshot().await.unwrap();
+    assert_eq!(after, leader.snapshot().await.unwrap());
+    assert!(item_ids(&after).contains(&CatalogItemId::User(300)));
+    assert!(!item_ids(&before).contains(&CatalogItemId::User(300)));
 
     Box::new(reader).expire().await;
     Box::new(leader).expire().await;
@@ -964,12 +995,14 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
         // change this version currently.
         // TODO: remove this once we only support upgrades from version >= 0.164
         snapshot.settings.insert(
-            SettingKey {
+            RustType::from_proto(SettingKey {
                 name: "migration_version".into(),
-            },
-            SettingValue {
+            })
+            .unwrap(),
+            RustType::from_proto(SettingValue {
                 value: "0.0.0".into(),
-            },
+            })
+            .unwrap(),
         );
 
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
@@ -1556,7 +1589,10 @@ async fn test_admin_admission_and_unprotected_join_refusal() {
             .await
             .unwrap();
         let mut expected = snapshot;
-        expected.configs.insert(key, value);
+        expected.configs.insert(
+            RustType::from_proto(key).unwrap(),
+            RustType::from_proto(value).unwrap(),
+        );
         assert_eq!(state.snapshot().await.unwrap(), expected);
         assert_eq!(state.get_deployment_generation().await.unwrap(), 0);
         assert_eq!(state.epoch(), epoch);

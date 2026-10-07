@@ -76,6 +76,7 @@ async fn promotion_cleanup_is_scoped_to_admitted_owners() {
     use std::collections::BTreeMap;
 
     use mz_catalog::durable::Transaction;
+    use mz_catalog::durable::objects::{DurableType, Item};
     use mz_persist_client::ShardId;
     use mz_repr::role_id::RoleId;
     use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
@@ -189,7 +190,8 @@ async fn promotion_cleanup_is_scoped_to_admitted_owners() {
     let snapshot = promoted.snapshot().await.unwrap();
     let owners: Vec<_> = snapshot
         .items
-        .values()
+        .into_iter()
+        .map(|(key, value)| Item::from_key_value(key, value))
         .filter_map(|item| item.ephemeral_owner_session)
         .collect();
     assert_eq!(owners.len(), 2);

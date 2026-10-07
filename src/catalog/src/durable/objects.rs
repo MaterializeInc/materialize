@@ -1714,51 +1714,51 @@ impl ReadProtectionIndex {
     }
 }
 
-/// A snapshot of the current on-disk state.
+/// A typed snapshot of committed catalog state.
+///
+/// Tables share unchanged records across transaction candidates. Persist encoding
+/// remains at the committed-update boundary, rather than transaction opening.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
     pub read_protection_index: ReadProtectionIndex,
-    pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
-    pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
-    pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
-    pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
-    pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
-    pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
-    pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
-    pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
-    pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+    pub databases: imbl::OrdMap<DatabaseKey, DatabaseValue>,
+    pub schemas: imbl::OrdMap<SchemaKey, SchemaValue>,
+    pub roles: imbl::OrdMap<RoleKey, RoleValue>,
+    pub role_auth: imbl::OrdMap<RoleAuthKey, RoleAuthValue>,
+    pub items: imbl::OrdMap<ItemKey, ItemValue>,
+    pub comments: imbl::OrdMap<CommentKey, CommentValue>,
+    pub clusters: imbl::OrdMap<ClusterKey, ClusterValue>,
+    pub network_policies: imbl::OrdMap<NetworkPolicyKey, NetworkPolicyValue>,
+    pub cluster_replicas: imbl::OrdMap<ClusterReplicaKey, ClusterReplicaValue>,
     pub cluster_replica_declarations:
-        BTreeMap<proto::ClusterReplicaDeclarationKey, proto::ClusterReplicaDeclarationValue>,
-    pub cluster_runtimes: BTreeMap<proto::ClusterRuntimeKey, proto::ClusterRuntimeValue>,
-    pub introspection_sources: BTreeMap<
-        proto::ClusterIntrospectionSourceIndexKey,
-        proto::ClusterIntrospectionSourceIndexValue,
-    >,
-    pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
-    pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
-    pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
-    pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
-    pub system_configurations:
-        BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+        imbl::OrdMap<ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue>,
+    pub cluster_runtimes: imbl::OrdMap<ClusterRuntimeKey, ClusterRuntimeValue>,
+    pub introspection_sources:
+        imbl::OrdMap<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
+    pub id_allocator: imbl::OrdMap<IdAllocKey, IdAllocValue>,
+    pub configs: imbl::OrdMap<ConfigKey, ConfigValue>,
+    pub settings: imbl::OrdMap<SettingKey, SettingValue>,
+    pub system_object_mappings: imbl::OrdMap<GidMappingKey, GidMappingValue>,
+    pub system_configurations: imbl::OrdMap<ServerConfigurationKey, ServerConfigurationValue>,
     pub cluster_system_configurations:
-        BTreeMap<proto::ClusterSystemConfigurationKey, proto::ClusterSystemConfigurationValue>,
+        imbl::OrdMap<ClusterSystemConfigurationKey, ClusterSystemConfigurationValue>,
     pub replica_system_configurations:
-        BTreeMap<proto::ReplicaSystemConfigurationKey, proto::ReplicaSystemConfigurationValue>,
-    pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
-    pub source_references: BTreeMap<proto::SourceReferencesKey, proto::SourceReferencesValue>,
-    pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+        imbl::OrdMap<ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue>,
+    pub default_privileges: imbl::OrdMap<DefaultPrivilegesKey, DefaultPrivilegesValue>,
+    pub source_references: imbl::OrdMap<SourceReferencesKey, SourceReferencesValue>,
+    pub system_privileges: imbl::OrdMap<SystemPrivilegesKey, SystemPrivilegesValue>,
     pub storage_collection_metadata:
-        BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
+        imbl::OrdMap<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     pub collection_compaction_bounds:
-        BTreeMap<proto::CollectionCompactionBoundKey, proto::CollectionCompactionBoundValue>,
+        imbl::OrdMap<CollectionCompactionBoundKey, CollectionCompactionBoundValue>,
     pub maintained_read_requirements:
-        BTreeMap<proto::MaintainedReadRequirementKey, proto::MaintainedReadRequirementValue>,
-    pub client_incarnations: BTreeMap<proto::ClientIncarnationKey, proto::ClientIncarnationValue>,
-    pub written_plans: BTreeMap<proto::WrittenPlanKey, proto::WrittenPlanValue>,
+        imbl::OrdMap<MaintainedReadRequirementKey, MaintainedReadRequirementValue>,
+    pub client_incarnations: imbl::OrdMap<ClientIncarnationKey, ClientIncarnationValue>,
+    pub written_plans: imbl::OrdMap<WrittenPlanKey, WrittenPlanValue>,
     pub client_read_requirements:
-        BTreeMap<proto::ClientReadRequirementKey, proto::ClientReadRequirementValue>,
-    pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
-    pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
+        imbl::OrdMap<ClientReadRequirementKey, ClientReadRequirementValue>,
+    pub unfinalized_shards: imbl::OrdMap<UnfinalizedShardKey, ()>,
+    pub txn_wal_shard: imbl::OrdMap<(), TxnWalShardValue>,
 }
 
 impl Snapshot {

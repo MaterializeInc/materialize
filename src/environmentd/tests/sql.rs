@@ -67,8 +67,7 @@ mod prepared_rewrites;
 /// after DROP.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_peer_index_pending_installation() {
-    use mz_catalog::durable::objects::serialization::{ProtoType, RustType};
-    use mz_catalog::durable::objects::{CollectionCompactionBound, DurableType};
+    use mz_catalog::durable::objects::{CollectionCompactionBound, DurableType, WrittenPlan};
     use mz_catalog::durable::{
         CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
     };
@@ -231,10 +230,7 @@ async fn test_peer_index_pending_installation() {
                 .collection_compaction_bounds
                 .into_iter()
                 .map(|(key, value)| {
-                    let bound = CollectionCompactionBound::from_key_value(
-                        key.into_rust().unwrap(),
-                        value.into_rust().unwrap(),
-                    );
+                    let bound = CollectionCompactionBound::from_key_value(key, value);
                     (bound.id, bound.frontier)
                 })
                 .collect();
@@ -393,21 +389,17 @@ async fn test_peer_index_pending_installation() {
             assert_eq!(
                 snapshot
                     .written_plans
-                    .keys()
-                    .filter(|key| key.id == pending_id.into_proto())
-                    .map(|key| key.build_version.as_str())
+                    .into_iter()
+                    .map(|(key, value)| WrittenPlan::from_key_value(key, value))
+                    .filter(|plan| plan.id == pending_id)
+                    .map(|plan| plan.build_version)
                     .collect::<Vec<_>>(),
                 [pending_build.as_str()]
             );
             let bound = snapshot
                 .collection_compaction_bounds
                 .into_iter()
-                .map(|(key, value)| {
-                    CollectionCompactionBound::from_key_value(
-                        key.into_rust().unwrap(),
-                        value.into_rust().unwrap(),
-                    )
-                })
+                .map(|(key, value)| CollectionCompactionBound::from_key_value(key, value))
                 .find(|bound| bound.id == selected_id)
                 .expect("selected index retains its bound");
             if bound.frontier.expect("live selected index bound") > initial_bound {
