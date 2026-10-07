@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: 6056c86333
+revision: 56b1bb68fc
 ---
 
 # `adapter::coord::hydration_history`
@@ -25,7 +25,7 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 `Coordinator::schedule_hydration_history_collection` aligns sweep fires to interval boundaries, shifted per-environment by a SHA-256-derived offset so a fleet-wide interval does not create a fleet-wide burst. Each sleep is capped at `SCHEDULE_RECHECK_CAP` (5 s) so dynamic configuration changes take effect promptly. Sweeps do not overlap: the next one is scheduled only after the previous completes or fails.
 
-`Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops.
+`Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops. The `PeekClient` for the sweep is obtained via `Coordinator::background_peek_client` rather than being constructed inline.
 
 ## Collection Queries
 

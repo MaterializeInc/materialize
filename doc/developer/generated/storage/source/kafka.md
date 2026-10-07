@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/kafka.rs
-revision: 1718310c06
+revision: 491235bf91
 ---
 
 # mz-storage::source::kafka
@@ -10,3 +10,4 @@ Uses librdkafka's `BaseConsumer` with per-partition queues, distributing partiti
 Handles metadata fetching, offset seeking, SSH tunnel health monitoring, Kafka statistics reporting, and optional metadata extraction (offset, partition, timestamp, headers).
 When the `KAFKA_LOW_WATERMARK_CHECK` dyncfg flag is enabled, the reader fetches partition low watermarks at rehydration time. If the fetch itself fails (e.g. a transient connection error), the reader logs a warning, emits `HealthStatusUpdate::stalled` for all outputs, and proceeds with an empty watermark map rather than failing fatally. If the fetch succeeds but reveals that the start offset or resume upper has been compacted away by Kafka, the reader stalls with a definite `SourceError`; stalling (rather than halting) prevents the healthcheck operator from issuing a restart that would advance the resume upper past the compacted region and produce a zombie source.
 The upstream frontier is probed via the `Ticker` and pushed as `Probe` events for reclocking.
+`KafkaResumeUpperProcessor` processes `ResumeUppers<KafkaTimestamp>` values: it reports each export's `offset_committed` from its per-export frontier, and commits the source-wide upstream offsets to Kafka when they differ from the last successful commit (tracked in `committed_offsets`). A periodic refresh driven by `KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL` retries the last commit so that a failed commit is not lost when no new upper arrives.

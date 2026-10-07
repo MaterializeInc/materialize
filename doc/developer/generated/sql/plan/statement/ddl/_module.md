@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 8941c49828
+revision: 6cc702e2e6
 ---
 
 # mz-sql::plan::statement::ddl
@@ -15,7 +15,7 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `plan_create_connection` dispatches on `CreateConnectionType::GlueSchemaRegistry` to plan `CREATE CONNECTION ... FOR AWS GLUE SCHEMA REGISTRY`, guarded by the `ENABLE_GLUE_SCHEMA_REGISTRY` feature flag.
 `plan_alter_connection` maps `Connection::Gcp(_)` to `CreateConnectionType::Gcp`.
 `AvroSchema::Glue { connection, seed, .. }` in a source format is fully planned: the connection is resolved (must be a `Connection::GlueSchemaRegistry` item) and the seed (populated by purification) is required. In a sink format (`kafka_sink_builder`), `AvroSchema::Glue` is handled separately: it resolves the connection, uses per-side `KEY`/`VALUE` schema name and compatibility-level options (rejecting the source-only `SCHEMA NAME`), generates the Avro schema via `AvroSchemaGenerator`, and produces `WireFormat::Glue { registry: Some(glue_connection_id) }`.
-`plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on.
+`plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `REPLICATION FACTOR`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: `WAIT` applies to replica shape changes and RF retargets of an in-flight reconfiguration, so accepting it with no such change would be a no-op.
 `plan_alter_network_policy` and the `resolve_network_policy` helper use `normalize::ident_ref(&name)` to extract the bare identifier string before calling `catalog.resolve_network_policy`, so that quoted identifiers (e.g. `"hyphenated-name"`) resolve correctly.
 `plan_auto_scaling_strategy` converts a `ClusterAutoScalingStrategyOptionValue` into an `Option<AutoScalingStrategy>`: an empty block (no sub-policies) maps to `None` (autoscaling disabled). `validate_auto_scaling_strategy` checks cross-config invariants: it rejects a `HYDRATION SIZE` equal to the cluster `SIZE` (producing `PlanError::HydrationSizeEqualsClusterSize`), and rejects combining `AUTO SCALING STRATEGY` with a non-`MANUAL` `SCHEDULE`. `unplan_auto_scaling_strategy` is the reverse, converting an `AutoScalingStrategy` back to a `ClusterAutoScalingStrategyOptionValue` for `SHOW CREATE CLUSTER`. `AUTO SCALING STRATEGY` is gated by the `ENABLE_AUTO_SCALING_STRATEGY` feature flag for new DDL, but `RESET (AUTO SCALING STRATEGY)` is intentionally not gated so a cluster can shed an autoscaling policy after a flag rollback. `AUTO SCALING STRATEGY` is rejected for unmanaged clusters.
 `plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected.

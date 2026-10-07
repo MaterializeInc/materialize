@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/cfg.rs
-revision: 5a4a36c4fd
+revision: 988f05416f
 ---
 
 # persist-client::cfg
@@ -14,3 +14,4 @@ Static fields cover build version, hostname, compaction concurrency/queue limits
 The file also documents the trade-offs between each tunable dimension (write amplification, read amplification, memory usage, S3 operation count).
 Includes version-compatibility helpers `code_can_read_data` and `code_can_write_data` and CRDB connection pool configs.
 Two dynamic configs support the persist source operators: `SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES` (`persist_source_hydration_frontier_coalesce_bytes`, default 0) causes the persist source to coalesce frontier downgrades during hydration catch-up until the given number of encoded bytes have been emitted (0 disables coalescing); `SOURCE_FETCH_CONCURRENCY` (`persist_source_fetch_concurrency`, default 1) sets the maximum number of concurrent part fetches per worker in the persist source (1 preserves serial behavior).
+`SHARD_METRICS` (`persist_shard_metrics`) is a dynamic config controlling which per-shard metric families this process exports. Its values are parsed by `ShardMetricsExport`, an enum with variants `None`, `Summary`, `PerShard`, and `Both` (the default). `PerShard` exports the `mz_persist_shard_*` families with one series per shard; `Summary` exports their bounded `_percentile`, `_topk`, and per-version aggregates; `Both` exports both; `None` exports neither. Shard counts and process-level counters are always exported regardless of this setting.

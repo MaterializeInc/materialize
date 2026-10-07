@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/lib.rs
-revision: 88c883f3be
+revision: bbb56d46f3
 ---
 
 # compute-types
