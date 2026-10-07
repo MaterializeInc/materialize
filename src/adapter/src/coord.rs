@@ -6819,6 +6819,7 @@ pub struct AlterMaterializedViewReadyContext {
     otel_ctx: OpenTelemetryContext,
     plan: plan::AlterMaterializedViewApplyReplacementPlan,
     plan_validity: PlanValidity,
+    prepared: Option<ddl::PreparedCatalogTransaction>,
 }
 
 impl AlterMaterializedViewReadyContext {

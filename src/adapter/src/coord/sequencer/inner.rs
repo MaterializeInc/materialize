@@ -4331,6 +4331,7 @@ impl Coordinator {
                     otel_ctx: OpenTelemetryContext::obtain(),
                     plan,
                     plan_validity,
+                    prepared: None,
                 }),
                 async move {
                     // Sharing the target's Persist shard does not prove that the
@@ -4408,6 +4409,7 @@ impl Coordinator {
                 otel_ctx: OpenTelemetryContext::obtain(),
                 plan,
                 plan_validity,
+                prepared: None,
             }),
         )
         .expect("target collection exists");
@@ -4420,6 +4422,11 @@ impl Coordinator {
         mut ctx: AlterMaterializedViewReadyContext,
     ) {
         ctx.otel_ctx.attach_as_parent();
+        let conn_id = ctx.ctx().session().conn_id().clone();
+        if !self.active_conns.contains_key(&conn_id) {
+            ctx.retire(Err(AdapterError::Canceled));
+            return;
+        }
 
         let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = ctx.plan;
 
@@ -4437,24 +4444,48 @@ impl Coordinator {
             "finishing materialized view replacement application",
         );
 
-        // Applying a replacement changes the target's definition while it
-        // keeps its GlobalIds, so the cached expressions under those ids are
-        // stale. Entries record the item's version and `ExpressionCache::open`
-        // drops them on the next boot; invalidating here only reclaims them
-        // eagerly.
-        let invalidate_ids = self.catalog().get_entry(&id).global_ids().collect();
-        self.catalog()
-            .update_expression_cache(Vec::new(), Vec::new(), invalidate_ids)
-            .await;
-
+        // IDs identify the replacement operation, but a structural change can
+        // alter its dependent rewrites. Reprepare those against the new state.
+        if ctx.prepared.as_ref().is_some_and(|prepared| {
+            prepared.planning_revision() != self.catalog().transient_revision()
+        }) {
+            ctx.prepared = None;
+        }
         let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
-        match self
-            .catalog_transact(Some(ctx.ctx().session_mut()), ops)
-            .await
-        {
-            Ok(()) => ctx.retire(Ok(ExecuteResponse::AlteredObject(
-                ObjectType::MaterializedView,
-            ))),
+        // APPLY replaces the CatalogItemId while retaining these GlobalIds.
+        // Capture them before commit, and invalidate only after success.
+        let invalidate_ids = self.catalog().get_entry(&id).global_ids().collect();
+        let result = self
+            .try_catalog_transact_with_context(
+                ctx.ctx
+                    .as_mut()
+                    .expect("context remains owned until retirement"),
+                &ops,
+                &mut ctx.prepared,
+            )
+            .await;
+        match result {
+            Ok(true) => {
+                // The target retains its GlobalIds with a different definition.
+                // Invalidate once, after the definitive committed replacement.
+                self.catalog()
+                    .update_expression_cache(Vec::new(), Vec::new(), invalidate_ids)
+                    .await;
+                ctx.retire(Ok(ExecuteResponse::AlteredObject(
+                    ObjectType::MaterializedView,
+                )));
+            }
+            Ok(false) => {
+                let delay = self.read_protection_conflict_delay();
+                self.install_query_watch_set(
+                    conn_id,
+                    WatchSetResponse::AlterMaterializedViewReady(ctx),
+                    async move {
+                        tokio::time::sleep(delay).await;
+                        Ok(())
+                    },
+                );
+            }
             Err(err) => ctx.retire(Err(err)),
         }
     }

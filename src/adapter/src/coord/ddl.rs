@@ -89,6 +89,12 @@ impl std::fmt::Debug for PreparedCatalogTransaction {
     }
 }
 
+impl PreparedCatalogTransaction {
+    pub(super) fn planning_revision(&self) -> u64 {
+        self.revision
+    }
+}
+
 // Expand around the awaited expression instead of owning another future. Catalog
 // implications can reenter transactions, so inline async wrappers can amplify stack use.
 macro_rules! trace_catalog_await {
