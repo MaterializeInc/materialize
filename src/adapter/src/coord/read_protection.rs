@@ -57,6 +57,10 @@ impl ReadProtectionRequest {
             upper: None,
         }
     }
+
+    pub(super) fn bundle(&self) -> &CollectionIdBundle {
+        &self.bundle
+    }
 }
 
 /// The frontend caller owns timeout and cancellation by retaining the receiver.

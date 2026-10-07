@@ -276,6 +276,7 @@ impl Coordinator {
                             validity,
                             optimizer,
                             global_mir_plan,
+                            read_protection: None,
                             cluster_id,
                             replica_id,
                         },
@@ -288,20 +289,51 @@ impl Coordinator {
 
     async fn sequence_introspection_subscribe_timestamp_optimize_lir(
         &mut self,
-        stage: IntrospectionSubscribeTimestampOptimizeLir,
+        mut stage: IntrospectionSubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
+        // A reconnect can replace the subscription without changing replica identity.
+        if !self
+            .introspection_subscribes
+            .contains_key(&stage.optimizer.sink_id())
+        {
+            return Err(AdapterError::internal(
+                "introspection",
+                "introspection subscribe has already been dropped",
+            ));
+        }
+        let id_bundle = stage.global_mir_plan.id_bundle(stage.cluster_id);
+        let read_holds = if let Some(client) = &self.query_client {
+            let request = stage.read_protection.get_or_insert_with(|| {
+                super::read_protection::ReadProtectionRequest::new(
+                    client.protection.incarnation(),
+                    id_bundle,
+                    None,
+                )
+            });
+            let Some((holds, _)) = self.try_client_read_protection(request, || false).await? else {
+                let delay = self.read_protection_conflict_delay();
+                return Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(IntrospectionSubscribeStage::TimestampOptimizeLir(
+                        stage,
+                    )))
+                })));
+            };
+            holds
+        } else {
+            self.acquire_query_read_holds(&id_bundle).await?
+        };
         let IntrospectionSubscribeTimestampOptimizeLir {
             catalog,
             validity,
             mut optimizer,
             global_mir_plan,
+            read_protection: _,
             cluster_id,
             replica_id,
         } = stage;
 
         // Timestamp selection.
-        let id_bundle = global_mir_plan.id_bundle(cluster_id);
-        let read_holds = self.acquire_query_read_holds(&id_bundle).await?;
         let as_of = read_holds.least_valid_read();
 
         let global_mir_plan = global_mir_plan.resolve(as_of);

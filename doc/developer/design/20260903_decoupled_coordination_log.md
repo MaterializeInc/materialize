@@ -51,8 +51,12 @@ Written-plan preparation retains its candidate, immutable selections, current
 optimized replacement and earlier holds across single-attempt acquisition retries.
 The existing SQL continuations yield and revalidate revision/incarnation on resume.
 Only fallback to different imports repeats optimization. This slice needs CI
-verification. Finish remaining demonstrated ordinary DDL stalls, preserving
-cancellation and commit-once completion without repeating preparation work.
+verification. Introspection SUBSCRIBE timestamp admission and initial MV admission
+also have demonstrated inline acquisition stalls. Their retained stages now yield
+single-attempt grants, keeping optimization and purification holds intact. Verify
+these paths before attributing later failures to the earlier ordinary-DDL stall.
+The source-table EXPLAIN timeout remains unlocalized between certification and
+grant acquisition. Keep its protection and deadline unchanged.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
 not per candidate. IDs, validation and audit effects remain candidate-owned.
 This removes repeated hashing, but aggregate candidate timings do not isolate

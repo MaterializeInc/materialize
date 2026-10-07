@@ -1129,6 +1129,7 @@ pub struct CreateMaterializedViewFinish {
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
     optimizer_features: OptimizerFeatures,
+    read_protection: Option<read_protection::ReadProtectionRequest>,
 }
 
 #[derive(Debug)]
@@ -1244,6 +1245,7 @@ pub struct IntrospectionSubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+    read_protection: Option<read_protection::ReadProtectionRequest>,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }

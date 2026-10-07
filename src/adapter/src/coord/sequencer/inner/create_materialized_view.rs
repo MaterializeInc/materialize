@@ -636,6 +636,7 @@ impl Coordinator {
                                     global_mir_plan,
                                     global_lir_plan,
                                     optimizer_features,
+                                    read_protection: None,
                                 })
                             }
                         }
@@ -678,8 +679,91 @@ impl Coordinator {
     async fn create_materialized_view_finish(
         &mut self,
         ctx: &mut ExecuteContext,
-        stage: CreateMaterializedViewFinish,
+        mut stage: CreateMaterializedViewFinish,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        // Validate the replacement target, if one is given.
+        if let Some(target_id) = stage.plan.materialized_view.replacement_target {
+            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
+                return Err(AdapterError::internal(
+                    "create materialized view",
+                    "replacement target not a materialized view",
+                ));
+            };
+
+            // For now, we don't support schema evolution for materialized views.
+            let schema_diff = target.desc.latest().diff(stage.global_lir_plan.desc());
+            if !schema_diff.is_empty() {
+                return Err(AdapterError::ReplacementSchemaMismatch(schema_diff));
+            }
+        }
+
+        let mv = &stage.plan.materialized_view;
+        let cluster_id = mv.cluster_id;
+        let logical_inputs = self.materialized_view_logical_inputs(
+            mv.query_ids
+                .collections()
+                .copied()
+                .chain(mv.expr.depends_on()),
+        )?;
+        // Admission promises logical history, not a candidate index's availability.
+        // Physical paths are selected at the admitted timestamp below.
+        let id_bundle = if self.catalog().state().catalog_read_protection_enabled() {
+            logical_inputs.clone()
+        } else {
+            dataflow_import_id_bundle(stage.global_lir_plan.df_desc(), cluster_id)
+        };
+        // Purification may have fixed REFRESH timestamps. Its grants stay owned
+        // by the transaction while the stage waits for any additional inputs.
+        let txn_reads = self.txn_read_holds.get(ctx.session().conn_id()).cloned();
+        let (read_holds, additional_read_holds) = if let Some(client) = &self.query_client {
+            let mut inputs = id_bundle.clone();
+            inputs.extend(&logical_inputs);
+            if let Some(holds) = &txn_reads {
+                inputs = inputs.difference(&holds.id_bundle());
+            }
+            // Dependency existence checks alone do not pin a view's logical scope.
+            // Do not use a retained request to certify a different set of inputs.
+            if stage
+                .read_protection
+                .as_ref()
+                .is_some_and(|request| request.bundle() != &inputs)
+            {
+                return Err(AdapterError::ChangedPlan(
+                    "the set of possible inputs changed during the creation of the materialized view"
+                        .to_string(),
+                ));
+            }
+            let request = stage.read_protection.get_or_insert_with(|| {
+                crate::coord::read_protection::ReadProtectionRequest::new(
+                    client.protection.incarnation(),
+                    inputs,
+                    None,
+                )
+            });
+            let Some((holds, _)) = self.try_client_read_protection(request, || false).await? else {
+                let delay = self.read_protection_conflict_delay();
+                return Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(CreateMaterializedViewStage::Finish(stage)))
+                })));
+            };
+            match txn_reads {
+                Some(txn_reads) => (txn_reads, holds),
+                None => (holds, crate::ReadHolds::new()),
+            }
+        } else {
+            let read_holds = match txn_reads {
+                Some(holds) => holds,
+                None => self.acquire_query_read_holds(&id_bundle).await?,
+            };
+            let mut additional_inputs = id_bundle.clone();
+            additional_inputs.extend(&logical_inputs);
+            let additional = self
+                .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
+                .await?;
+            (read_holds, additional)
+        };
+
         let CreateMaterializedViewFinish {
             item_id,
             global_id,
@@ -713,56 +797,6 @@ impl Coordinator {
             ..
         } = stage;
 
-        // Validate the replacement target, if one is given.
-        if let Some(target_id) = replacement_target {
-            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
-                return Err(AdapterError::internal(
-                    "create materialized view",
-                    "replacement target not a materialized view",
-                ));
-            };
-
-            // For now, we don't support schema evolution for materialized views.
-            let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
-            if !schema_diff.is_empty() {
-                return Err(AdapterError::ReplacementSchemaMismatch(schema_diff));
-            }
-        }
-
-        // Timestamp selection
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-        let logical_inputs = self.materialized_view_logical_inputs(
-            query_ids
-                .collections()
-                .copied()
-                .chain(raw_expr.depends_on()),
-        )?;
-        // Admission promises logical input history, not the availability of a
-        // candidate index. Physical paths are selected at that timestamp below.
-        let id_bundle = if self.catalog().state().catalog_read_protection_enabled() {
-            logical_inputs.clone()
-        } else {
-            id_bundle
-        };
-
-        let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
-            // In some cases, for example when REFRESH is used, the preparatory
-            // stages will already have acquired ReadHolds, we can re-use those.
-
-            txn_reads.clone()
-        } else {
-            // No one has acquired holds, make sure we can determine an as_of
-            // and commit a readable creation frontier.
-            self.acquire_query_read_holds(&id_bundle).await?
-        };
-
-        // Reuse purification's holds, whose timestamps may already be named by
-        // REFRESH AT. Planning can introduce reads absent from name resolution.
-        let mut additional_inputs = id_bundle.clone();
-        additional_inputs.extend(&logical_inputs);
-        let additional_read_holds = self
-            .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
-            .await?;
         let (dataflow_as_of, storage_as_of, until) = self
             .select_timestamps(
                 id_bundle,
