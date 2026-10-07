@@ -23,6 +23,8 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::IsolationLevel;
+use mz_storage_types::sources::Timeline;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use timely::progress::Antichain;
@@ -34,20 +36,21 @@ use uuid::Uuid;
 use crate::active_compute_sink::{
     ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner, SubscribeBacklogAccounting,
 };
+use crate::catalog::Catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{
     Coordinator, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
     SubscribeExplain, SubscribeFinish, SubscribeLinearizeTimestamp, SubscribeOptimizeMir,
-    SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
+    SubscribeStage, SubscribeTimestampOptimizeLir, SubscribeTimestampValidated, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
-use crate::session::{Session, TransactionOps};
 use crate::{
     AdapterNotice, ExecuteContext, ExecuteContextGuard, ReadHolds, TimelineContext, optimize,
 };
@@ -60,6 +63,7 @@ impl Staged for SubscribeStage {
             SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
             SubscribeStage::LinearizeTimestamp(stage) => &mut stage.validity,
             SubscribeStage::TimestampOptimizeLir(stage) => &mut stage.validity,
+            SubscribeStage::TimestampValidated(stage) => &mut stage.stage.validity,
             SubscribeStage::Finish(stage) => &mut stage.validity,
             SubscribeStage::Explain(stage) => &mut stage.validity,
         }
@@ -71,17 +75,18 @@ impl Staged for SubscribeStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(stage),
+            SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(ctx, stage),
             SubscribeStage::LinearizeTimestamp(stage) => {
-                coord
-                    .subscribe_linearize_timestamp(ctx.session(), stage)
-                    .await
+                coord.subscribe_linearize_timestamp(ctx, stage).await
             }
             SubscribeStage::TimestampOptimizeLir(stage) => {
                 coord.subscribe_timestamp_optimize_lir(ctx, stage).await
             }
+            SubscribeStage::TimestampValidated(stage) => {
+                coord.subscribe_timestamp_validated(ctx, stage)
+            }
             SubscribeStage::Finish(stage) => coord.subscribe_finish(ctx, stage).await,
-            SubscribeStage::Explain(stage) => coord.subscribe_explain(ctx.session(), stage).await,
+            SubscribeStage::Explain(stage) => coord.subscribe_explain(ctx, stage).await,
         }
     }
 
@@ -110,12 +115,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let stage = return_if_err!(
-            self.subscribe_validate(
-                ctx.session_mut(),
-                plan,
-                target_cluster,
-                ExplainContext::None
-            ),
+            self.subscribe_validate(&mut ctx, plan, target_cluster, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -163,7 +163,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.subscribe_validate(ctx.session_mut(), plan, target_cluster, explain_ctx),
+            self.subscribe_validate(&mut ctx, plan, target_cluster, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -172,16 +172,19 @@ impl Coordinator {
     #[instrument]
     fn subscribe_validate(
         &self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::SubscribePlan,
         target_cluster: TargetCluster,
         explain_ctx: ExplainContext,
     ) -> Result<SubscribeStage, AdapterError> {
         let plan::SubscribePlan { from, when, .. } = &plan;
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
+        let session = ctx.session();
 
-        let cluster = self
-            .catalog()
-            .resolve_target_cluster(target_cluster, session)?;
+        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
 
         // Only check cluster replicas if we're not in explain mode.
@@ -210,14 +213,15 @@ impl Coordinator {
         if explain_ctx.needs_cluster() && when == &QueryWhen::Immediately {
             // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Subscribe)?;
+            ctx.admit_subscribe()?;
         }
+        let session = ctx.session_mut();
 
         let depends_on = from.depends_on();
 
         // Run `check_log_reads` and emit notices.
         let notices = check_log_reads(
-            self.catalog(),
+            &catalog,
             cluster,
             &depends_on,
             &mut replica_id,
@@ -226,9 +230,7 @@ impl Coordinator {
         session.add_notices(notices);
 
         // Determine timeline.
-        let mut timeline = self
-            .catalog()
-            .validate_timeline_context(depends_on.iter().copied())?;
+        let mut timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
@@ -237,10 +239,10 @@ impl Coordinator {
 
         let dependencies = depends_on
             .iter()
-            .map(|id| self.catalog().resolve_item_id(id))
+            .map(|id| catalog.resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
-            self.catalog(),
+            &catalog,
             dependencies,
             Some(cluster_id),
             replica_id,
@@ -261,6 +263,7 @@ impl Coordinator {
     #[instrument]
     fn subscribe_optimize_mir(
         &self,
+        ctx: &ExecuteContext,
         SubscribeOptimizeMir {
             mut validity,
             plan,
@@ -277,21 +280,34 @@ impl Coordinator {
             ..
         } = &plan;
 
-        // Collect optimizer parameters.
-        let compute_instance = self
-            .instance_snapshot(cluster_id)
-            .expect("compute instance does not exist");
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
+
+        // Catalog declarations come from planning, while readability observations
+        // still come from the live query connections or controller.
+        let compute_instance = if let Some(client) = &self.query_client {
+            client.instance_snapshot(&catalog, cluster_id)
+        } else {
+            self.instance_snapshot(cluster_id)
+                .expect("compute instance does not exist")
+        };
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
         let debug_name = format!("subscribe-{}", sink_id);
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
+        let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
+            .override_from(&catalog.get_cluster(cluster_id).config.features())
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster_id),
+            )
             .override_from(&explain_ctx);
 
         // Build an optimizer for this SUBSCRIBE.
         let mut optimizer = optimize::subscribe::Optimizer::new(
-            self.owned_catalog(),
+            Arc::<Catalog>::clone(&catalog),
             compute_instance,
             view_id,
             sink_id,
@@ -301,7 +317,6 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
-        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -342,7 +357,7 @@ impl Coordinator {
     #[instrument]
     async fn subscribe_linearize_timestamp(
         &self,
-        session: &Session,
+        ctx: &ExecuteContext,
         SubscribeLinearizeTimestamp {
             validity,
             plan,
@@ -354,7 +369,13 @@ impl Coordinator {
             explain_ctx,
         }: SubscribeLinearizeTimestamp,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
+        let session = ctx.session();
         let oracle = self.linearized_read_ts_oracle(session, &timeline, &plan.when);
+        let catalog_timestamp = ctx.query_catalog_timestamp().filter(|_| {
+            oracle.is_some()
+                && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+                && Self::get_timeline(&timeline) == Some(Timeline::EpochMilliseconds)
+        });
 
         let build_stage = move |oracle_read_ts: Option<Timestamp>| {
             SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
@@ -370,6 +391,11 @@ impl Coordinator {
             })
         };
 
+        if let Some(timestamp) = catalog_timestamp {
+            return Ok(StageResult::Immediate(Box::new(build_stage(Some(
+                timestamp,
+            )))));
+        }
         Ok(spawn_linearized_read_ts(
             oracle,
             "subscribe linearize timestamp",
@@ -381,33 +407,71 @@ impl Coordinator {
     async fn subscribe_timestamp_optimize_lir(
         &mut self,
         ctx: &ExecuteContext,
-        SubscribeTimestampOptimizeLir {
-            validity,
-            plan,
-            timeline,
-            mut optimizer,
-            global_mir_plan,
-            dependency_ids,
-            replica_id,
-            oracle_read_ts,
-            explain_ctx,
-        }: SubscribeTimestampOptimizeLir,
+        stage: SubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let plan::SubscribePlan { when, .. } = &plan;
-
         // Timestamp selection. The linearized read timestamp was already
         // obtained off the coordinator loop in the preceding stage.
-        let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
-        let (determination, read_holds) = self.determine_timestamp(
-            ctx.session(),
-            bundle,
-            when,
-            optimizer.cluster_id(),
-            &timeline,
-            oracle_read_ts,
-            None,
-        )?;
+        let bundle = &stage
+            .global_mir_plan
+            .id_bundle(stage.optimizer.cluster_id());
+        let (determination, read_holds) = self
+            .determine_timestamp(
+                ctx.session(),
+                bundle,
+                &stage.plan.when,
+                stage.optimizer.cluster_id(),
+                &stage.timeline,
+                stage.oracle_read_ts,
+                None,
+            )
+            .await?;
 
+        let validation = self.validate_query_catalog(
+            ctx,
+            &determination,
+            &stage.plan.when,
+            true,
+            (&stage.explain_ctx).into(),
+        );
+        let next = Box::new(SubscribeStage::TimestampValidated(
+            SubscribeTimestampValidated {
+                stage,
+                determination,
+                read_holds,
+            },
+        ));
+        if let Some(validation) = validation {
+            // Keep holds request-owned until validation succeeds. Cancellation or
+            // replanning drops them without installing transaction state.
+            Ok(StageResult::Await(Box::pin(async move {
+                validation.await?;
+                Ok(next)
+            })))
+        } else {
+            Ok(StageResult::Immediate(next))
+        }
+    }
+
+    #[instrument]
+    fn subscribe_timestamp_validated(
+        &mut self,
+        ctx: &ExecuteContext,
+        SubscribeTimestampValidated {
+            stage:
+                SubscribeTimestampOptimizeLir {
+                    validity,
+                    plan,
+                    mut optimizer,
+                    global_mir_plan,
+                    dependency_ids,
+                    replica_id,
+                    explain_ctx,
+                    ..
+                },
+            determination,
+            read_holds,
+        }: SubscribeTimestampValidated,
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let as_of = determination.timestamp_context.timestamp_or_default();
 
         if let Some(id) = ctx.extra().contents() {
@@ -505,7 +569,11 @@ impl Coordinator {
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let (df_desc, df_meta) = global_lir_plan.unapply();
-        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
+        emit_optimizer_notices(&*catalog, ctx.session(), &df_meta.optimizer_notices);
         let conn_id = ctx.session.conn_id().clone();
         let session_uuid = ctx.session().uuid();
         let txn_read_holds = self
@@ -514,6 +582,7 @@ impl Coordinator {
             .expect("must have previously installed read holds");
         let (resp, write_notify) = self
             .implement_subscribe(
+                catalog,
                 ctx.extra_mut(),
                 df_desc,
                 dependency_ids,
@@ -542,6 +611,7 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn implement_subscribe(
         &mut self,
+        catalog: Arc<Catalog>,
         ctx_extra: &mut ExecuteContextGuard,
         df_desc: DataflowDescription<LirRelationExpr>,
         dependency_ids: BTreeSet<GlobalId>,
@@ -552,13 +622,27 @@ impl Coordinator {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        if self.query_client.is_some() {
+            // Frontend sequencing may have acquired holds before a concurrent
+            // DROP. Holds protect history, not object lifetime; checking only
+            // logical dependencies misses optimizer-selected index imports.
+            for id in df_desc.import_ids() {
+                if self.catalog().try_get_entry_by_global_id(&id).is_none() {
+                    return Err(AdapterError::ConcurrentDependencyDrop {
+                        dependency_kind: "collection",
+                        dependency_id: id.to_string(),
+                    });
+                }
+            }
+        }
         let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
         let backlog_accounting = Arc::new(Mutex::new(SubscribeBacklogAccounting::default()));
         let max_buffered_bytes =
-            SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
+            SUBSCRIBE_MAX_BUFFERED_BYTES.get(catalog.system_config().dyncfgs());
         let active_subscribe = ActiveSubscribe {
+            query_execution: None,
             owner: ActiveSubscribeOwner::Session {
                 conn_id: conn_id.clone(),
                 session_uuid,
@@ -600,21 +684,25 @@ impl Coordinator {
         // sequencing, a dependency can be dropped between sequencing (on the session
         // task) and here. The read holds acquired during sequencing don't prevent that:
         // they hold back compaction, not drops.
-        if let Err(e) = self
-            .try_ship_dataflow(df_desc, cluster_id, replica_id)
-            .await
-        {
+        let result = if self.query_client.is_some() {
+            self.start_query_sink(catalog, df_desc, cluster_id, replica_id, read_holds)
+        } else {
+            let result = self
+                .try_ship_dataflow(df_desc, cluster_id, replica_id)
+                .await
+                .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error);
+            drop(read_holds);
+            result
+        };
+        if let Err(e) = result {
             // Clean up the active compute sink that was added above, since the dataflow
             // was never created. If we don't do this, the sink_id remains in
             // `drop_sinks` but no collection exists in the compute controller, causing
             // a panic when the connection terminates. This also retracts the deferred
             // `mz_subscriptions` write, so `write_notify` can be dropped.
             self.remove_active_compute_sink(sink_id).await;
-            return Err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(e));
+            return Err(e);
         }
-
-        // Explicitly drop read holds, just to make it obvious what's happening.
-        drop(read_holds);
 
         // Wrap the receiver so draining a message releases its footprint from the
         // shared accounting. FIFO delivery keeps the queue aligned with the
@@ -646,7 +734,7 @@ impl Coordinator {
     #[instrument]
     async fn subscribe_explain(
         &self,
-        session: &Session,
+        ctx: &ExecuteContext,
         SubscribeExplain {
             optimizer,
             df_meta,
@@ -663,7 +751,11 @@ impl Coordinator {
             ..
         }: SubscribeExplain,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let session_catalog = self.catalog().for_session(session);
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
+        let session_catalog = catalog.for_session(ctx.session());
 
         let expr_humanizer = {
             let transient_items = btreemap! {
@@ -675,11 +767,15 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let target_cluster = self.catalog().get_cluster(cluster_id);
+        let target_cluster = catalog.get_cluster(cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
+        let features = OptimizerFeatures::from(catalog.system_config())
             .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster_id),
+            )
             .override_from(&config.features);
 
         let rows = optimizer_trace

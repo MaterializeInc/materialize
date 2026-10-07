@@ -531,19 +531,7 @@ size_heap as (
 -- since heap_limit is only discovered when the replica comes online.
 -- Prefer rows where heap_limit is known; discard rows without it
 -- rather than substituting usage metrics which are unrelated quantities.
-metrics_heap as (
-    select
-        replica_id,
-        sum(heap_limit) as heap_limit
-    from (
-        select distinct on (replica_id, process_id)
-            replica_id, process_id, heap_limit
-        from mz_internal.mz_cluster_replica_metrics_history
-        where heap_limit is not null
-        order by replica_id, process_id, occurred_at desc
-    ) t
-    group by replica_id
-)
+{metrics_heap}
 
 -- Aggregate daily usage, report daily footprint, and compute
 -- M.1 credit equivalency (53 GiB-hour = 1.5 credits), billed per second
@@ -567,6 +555,44 @@ order by s.usage_date;
         },
     },
 ];
+
+// A realization is a (deployment_generation, replica_id) pair. Keep legacy
+// NULL-generation samples and choose by observation time, not serving state.
+fn daily_replica_credit_usage_sql(template: &str, has_generation: bool) -> String {
+    let metrics_heap = if has_generation {
+        r#"metrics_heap as (
+    select distinct on (replica_id) replica_id, heap_limit
+    from (
+        select deployment_generation, replica_id,
+            sum(heap_limit) as heap_limit, max(occurred_at) as occurred_at
+        from (
+            select distinct on (deployment_generation, replica_id, process_id)
+                deployment_generation, replica_id, process_id, heap_limit, occurred_at
+            from mz_internal.mz_cluster_replica_metrics_history
+            where heap_limit is not null
+            order by deployment_generation, replica_id, process_id, occurred_at desc
+        ) processes
+        group by deployment_generation, replica_id
+    ) realizations
+    order by replica_id, occurred_at desc, deployment_generation desc nulls last
+)"#
+    } else {
+        r#"metrics_heap as (
+    select
+        replica_id,
+        sum(heap_limit) as heap_limit
+    from (
+        select distinct on (replica_id, process_id)
+            replica_id, process_id, heap_limit
+        from mz_internal.mz_cluster_replica_metrics_history
+        where heap_limit is not null
+        order by replica_id, process_id, occurred_at desc
+    ) t
+    group by replica_id
+)"#
+    };
+    template.replace("{metrics_heap}", metrics_heap)
+}
 
 static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for a query.
@@ -905,12 +931,29 @@ impl SystemCatalogDumper {
         // can treat them identically to basic relations.
         if let RelationCategory::Custom { sql: custom_sql } = &relation.category {
             let pg_client_lock = pg_client.lock().await;
+            let custom_sql = if relation.name == "daily_replica_credit_usage" {
+                let columns = query_column_names(
+                    &pg_client_lock,
+                    &Relation {
+                        name: "mz_cluster_replica_metrics_history",
+                        category: RelationCategory::Basic,
+                    },
+                )
+                .await?;
+                daily_replica_credit_usage_sql(
+                    custom_sql,
+                    columns.iter().any(|name| name == "deployment_generation"),
+                )
+            } else {
+                custom_sql.to_string()
+            };
             execute(
                 &*pg_client_lock,
                 sql!(
                     "CREATE OR REPLACE TEMPORARY VIEW {} AS {}",
                     Sql::ident(relation.name),
-                    Sql::new(*custom_sql)
+                    // Both variants are assembled solely from static query text.
+                    Sql::raw_unchecked(custom_sql)
                 ),
                 &[],
             )

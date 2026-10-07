@@ -189,8 +189,8 @@ where
         (removed_rollup_seqnos, maintenance)
     }
 
-    /// Attempt to upgrade the state to the latest version. If that's not possible, return the
-    /// actual data version of the shard.
+    /// Advances state to the authorized target, preserving a newer supported
+    /// format. Returns the shard's version if this binary cannot write it.
     pub async fn upgrade_version(&self) -> Result<RoutineMaintenance, Version> {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, upgrade_result, maintenance) = self
@@ -202,11 +202,17 @@ where
                     return Break(NoOpStateTransition(Ok(())));
                 }
 
-                if state.version <= cfg.build_version {
+                let target = cfg.state_version_target();
+                if state.version.cmp_precedence(&target).is_le() {
                     // This would be the place to remove any deprecated items from state, now
                     // that we're dropping compatibility with any previous versions.
-                    state.version = cfg.build_version.clone();
+                    state.version = target;
                     Continue(Ok(()))
+                } else if crate::cfg::code_can_write_data(&cfg.build_version, &state.version) {
+                    // Another participant may have observed newer authorization.
+                    // A lagging target cannot downgrade its state, but does not
+                    // prevent this binary from using an already-supported format.
+                    Break(NoOpStateTransition(Ok(())))
                 } else {
                     Break(NoOpStateTransition(Err(state.version.clone())))
                 }
@@ -2610,6 +2616,114 @@ pub mod tests {
         // this handle's upper now lags behind. if compare_and_append fails to update
         // state after an upper mismatch then this call would (incorrectly) fail
         write2.expect_compare_and_append(&data[1..2], 2, 3).await;
+    }
+
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)]
+    async fn authorized_state_version_target(dyncfgs: ConfigUpdates) {
+        async fn version(client: &PersistClient, shard: ShardId) -> Version {
+            let state = client.inspect_shard::<u64>(&shard).await.expect("state");
+            let state = serde_json::to_value(state).expect("serialize state");
+            serde_json::from_value(state["applier_version"].clone()).expect("state version")
+        }
+
+        let mut cache = new_test_client_cache(&dyncfgs);
+        let older = Version::new(26, 1, 0);
+        let binary = Version::new(27, 1, 0);
+        cache.cfg.build_version = binary.clone();
+        cache.cfg.require_state_version_target(None);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client");
+        // Admission completes after the cache and client have been constructed.
+        client
+            .set_state_version_target(older.clone())
+            .expect("supported target");
+        assert_eq!(cache.cfg.state_version_target(), older);
+        assert_eq!(client.cfg.build_version, binary);
+        let shard = ShardId::new();
+        client
+            .recent_upper::<String, (), u64, i64>(shard, Diagnostics::for_tests())
+            .await
+            .expect("metadata lookup initializes a shard");
+        assert_eq!(version(&client, shard).await, older);
+        client
+            .upgrade_version::<String, (), u64, i64>(shard, Diagnostics::for_tests())
+            .await
+            .expect("upgrade respects target");
+        assert_eq!(version(&client, shard).await, older);
+
+        // Independent versioned clients must exchange actual output while the
+        // catalog still requires the older format, not just read its metadata.
+        let mut old_client = client.clone();
+        old_client.cfg = new_test_client_cache(&dyncfgs).cfg.clone();
+        old_client.cfg.build_version = older.clone();
+        old_client
+            .cfg
+            .set_state_version_target(older.clone())
+            .expect("older client authorized target");
+        old_client.shared_states = Arc::new(StateCache::new_no_metrics());
+        let (mut old_write, mut old_read) =
+            old_client.expect_open::<String, (), u64, i64>(shard).await;
+        let (mut new_write, new_read) = client.expect_open::<String, (), u64, i64>(shard).await;
+        let updates = [
+            (("1".to_owned(), ()), 1, 1),
+            (("2".to_owned(), ()), 2, 1),
+            (("3".to_owned(), ()), 3, 1),
+        ];
+        old_write
+            .expect_compare_and_append(&updates[..1], 0, 2)
+            .await;
+        new_write
+            .expect_compare_and_append(&updates[1..2], 2, 3)
+            .await;
+        old_write
+            .expect_compare_and_append(&updates[2..], 3, 4)
+            .await;
+        assert_eq!(
+            old_read.expect_snapshot_and_fetch(3).await,
+            updates
+                .iter()
+                .map(|(kv, _, diff)| (kv.clone(), 3, *diff))
+                .collect::<Vec<_>>()
+        );
+        old_write.expire().await;
+        old_read.expire().await;
+        new_write.expire().await;
+        new_read.expire().await;
+
+        cache
+            .cfg
+            .set_state_version_target(binary.clone())
+            .expect("advance target");
+        client
+            .upgrade_version::<String, (), u64, i64>(shard, Diagnostics::for_tests())
+            .await
+            .expect("existing client observes authorization");
+        assert_eq!(version(&client, shard).await, binary);
+        let mut lagging = client.clone();
+        lagging.cfg = new_test_client_cache(&dyncfgs).cfg.clone();
+        lagging.cfg.build_version = binary.clone();
+        lagging
+            .set_state_version_target(older.clone())
+            .expect("lagging authorized target");
+        lagging
+            .upgrade_version::<String, (), u64, i64>(shard, Diagnostics::for_tests())
+            .await
+            .expect("supported newer state needs no upgrade");
+        assert_eq!(version(&client, shard).await, binary);
+        cache
+            .cfg
+            .set_state_version_target(older)
+            .expect("older committed observation cannot regress authorization");
+        assert!(
+            cache
+                .cfg
+                .set_state_version_target(Version::new(28, 0, 0))
+                .is_err()
+        );
+        assert_eq!(client.cfg.state_version_target(), binary);
     }
 
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]

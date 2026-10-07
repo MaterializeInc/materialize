@@ -505,7 +505,6 @@ name    comment
 > SHOW SOURCES FROM mz_catalog
 name                                         type    cluster  comment
 ---------------------------------------------------------------------
-mz_cluster_replica_frontiers                 source  <null>   ""
 
 > SHOW TABLES FROM mz_catalog
 name                           comment
@@ -527,6 +526,7 @@ mz_types                       ""
 > SHOW VIEWS FROM mz_catalog
 name                       comment
 -----------------------------------
+mz_cluster_replica_frontiers ""
 mz_objects                 ""
 mz_relations               ""
 mz_recent_storage_usage    ""
@@ -577,15 +577,16 @@ name                                         type    cluster    comment
 -----------------------------------------------------------------------
 mz_aws_privatelink_connection_status_history source  <null>     ""
 mz_catalog_raw                               source  <null>     ""
+mz_cluster_replica_frontiers_raw             source  <null>     ""
 mz_cluster_replica_metrics_history           source  <null>     ""
 mz_cluster_replica_status_history            source  <null>     ""
 mz_compute_dependencies                      source  <null>     ""
-mz_compute_error_counts_raw_unified          source  <null>     ""
-mz_compute_hydration_times                   source  <null>     ""
-mz_compute_operator_hydration_statuses       source  <null>     ""
+mz_compute_error_counts_by_deployment        source  <null>     ""
+mz_compute_hydration_times_raw               source  <null>     ""
+mz_compute_operator_hydration_statuses_raw   source  <null>     ""
 mz_frontiers                                 source  <null>     ""
 mz_materialized_view_refreshes               source  <null>     ""
-mz_object_arrangement_sizes                  source  <null>     ""
+mz_object_arrangement_sizes_raw              source  <null>     ""
 mz_prepared_statement_history                source  <null>     ""
 mz_session_history                           source  <null>     ""
 mz_sink_statistics_raw                       source  <null>     ""
@@ -632,7 +633,10 @@ mz_cluster_replica_name_history          ""
 mz_cluster_replica_statuses              ""
 mz_cluster_replica_utilization           ""
 mz_cluster_replica_utilization_history   ""
+mz_compute_error_counts_raw_unified      ""
 mz_compute_hydration_statuses            ""
+mz_compute_hydration_times               ""
+mz_compute_operator_hydration_statuses   ""
 mz_console_cluster_utilization_overview  ""
 mz_console_cluster_utilization_overview_24h  ""
 mz_console_cluster_utilization_overview_3h  ""
@@ -645,6 +649,7 @@ mz_mcp_data_product_details              ""
 mz_mcp_data_products                     ""
 mz_notices                               ""
 mz_notices_redacted                      ""
+mz_object_arrangement_sizes              ""
 mz_object_dependencies_raw               ""
 mz_object_fully_qualified_names          ""
 mz_object_graph_edges                    ""

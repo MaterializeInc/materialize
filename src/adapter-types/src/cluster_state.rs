@@ -84,6 +84,9 @@ impl ReplicaShape {
 /// only if the cluster's current config still projects to an equal witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExpectedClusterState {
+    /// Shared intent and this deployment's settlement authority, when separated
+    /// from its realization. Both must still hold when a decision commits.
+    pub intent: Option<ClusterIntent>,
     pub size: String,
     pub replication_factor: u32,
     pub availability_zones: AvailabilityZones,
@@ -98,6 +101,20 @@ pub struct ExpectedClusterState {
     pub auto_scaling_policy: Option<AutoScalingPolicy>,
     pub reconfiguration: Option<ReconfigurationRecord>,
     pub burst: Option<BurstRecord>,
+}
+
+/// Shared managed-cluster intent projected alongside one deployment's realization.
+/// This is in-memory context, not a durable deployment registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClusterIntent {
+    /// Accepted configuration, also the rollback baseline of an outstanding request.
+    pub accepted: ReconfigurationTarget,
+    /// The shared latest request and its authoritative outcome.
+    pub reconfiguration: Option<ReconfigurationRecord>,
+    /// Whether this deployment is active and may settle the shared request.
+    pub may_settle: bool,
+    /// Whether this deployment has recorded its initial realized state.
+    pub runtime_initialized: bool,
 }
 
 /// The status of the latest graceful reconfiguration record.
@@ -126,6 +143,13 @@ pub struct ReconfigurationRecord {
 }
 
 impl ReconfigurationRecord {
+    /// Whether two records describe the same request, irrespective of outcome.
+    pub fn same_request(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.deadline == other.deadline
+            && self.on_timeout == other.on_timeout
+    }
+
     /// Whether this record should still drive target-replica convergence.
     pub fn is_in_progress(&self) -> bool {
         matches!(self.status, ReconfigurationStatus::InProgress)

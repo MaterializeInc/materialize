@@ -48,7 +48,7 @@ use tracing::error;
 
 use crate::durable::debug::CollectionType;
 use crate::durable::objects::serialization::{ProtoType, RustType, proto};
-use crate::durable::objects::{DurableType, FenceToken};
+use crate::durable::objects::{DeploymentAdmission, DurableType, FenceToken};
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{DurableCatalogError, Epoch};
@@ -140,6 +140,8 @@ impl StateUpdate {
             role_auth,
             clusters,
             cluster_replicas,
+            cluster_replica_declarations,
+            cluster_runtimes,
             network_policies,
             introspection_sources,
             id_allocator,
@@ -152,6 +154,11 @@ impl StateUpdate {
             replica_system_configurations,
             default_privileges,
             system_privileges,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            written_plans,
+            client_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
@@ -167,6 +174,11 @@ impl StateUpdate {
         let role_auth = from_batch(role_auth, StateUpdateKind::RoleAuth);
         let clusters = from_batch(clusters, StateUpdateKind::Cluster);
         let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
+        let cluster_replica_declarations = from_batch(
+            cluster_replica_declarations,
+            StateUpdateKind::ClusterReplicaDeclaration,
+        );
+        let cluster_runtimes = from_batch(cluster_runtimes, StateUpdateKind::ClusterRuntime);
         let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
         let introspection_sources = from_batch(
             introspection_sources,
@@ -190,6 +202,21 @@ impl StateUpdate {
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let source_references = from_batch(source_references, StateUpdateKind::SourceReferences);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
+        let collection_compaction_bounds = from_batch(
+            collection_compaction_bounds,
+            StateUpdateKind::CollectionCompactionBound,
+        );
+        let maintained_read_requirements = from_batch(
+            maintained_read_requirements,
+            StateUpdateKind::MaintainedReadRequirement,
+        );
+        let client_incarnations =
+            from_batch(client_incarnations, StateUpdateKind::ClientIncarnation);
+        let written_plans = from_batch(written_plans, StateUpdateKind::WrittenPlan);
+        let client_read_requirements = from_batch(
+            client_read_requirements,
+            StateUpdateKind::ClientReadRequirement,
+        );
         let storage_collection_metadata = from_batch(
             storage_collection_metadata,
             StateUpdateKind::StorageCollectionMetadata,
@@ -206,6 +233,8 @@ impl StateUpdate {
             .chain(role_auth)
             .chain(clusters)
             .chain(cluster_replicas)
+            .chain(cluster_replica_declarations)
+            .chain(cluster_runtimes)
             .chain(network_policies)
             .chain(introspection_sources)
             .chain(id_allocators)
@@ -218,6 +247,11 @@ impl StateUpdate {
             .chain(replica_system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(collection_compaction_bounds)
+            .chain(maintained_read_requirements)
+            .chain(client_incarnations)
+            .chain(written_plans)
+            .chain(client_read_requirements)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
             .chain(txn_wal_shard)
@@ -235,10 +269,16 @@ pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),
     ClusterReplica(proto::ClusterReplicaKey, proto::ClusterReplicaValue),
+    ClusterReplicaDeclaration(
+        proto::ClusterReplicaDeclarationKey,
+        proto::ClusterReplicaDeclarationValue,
+    ),
+    ClusterRuntime(proto::ClusterRuntimeKey, proto::ClusterRuntimeValue),
     Comment(proto::CommentKey, proto::CommentValue),
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
     DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
+    DeploymentAdmission(DeploymentAdmission),
     FenceToken(FenceToken),
     IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
     IntrospectionSourceIndex(
@@ -266,6 +306,20 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    CollectionCompactionBound(
+        proto::CollectionCompactionBoundKey,
+        proto::CollectionCompactionBoundValue,
+    ),
+    MaintainedReadRequirement(
+        proto::MaintainedReadRequirementKey,
+        proto::MaintainedReadRequirementValue,
+    ),
+    ClientIncarnation(proto::ClientIncarnationKey, proto::ClientIncarnationValue),
+    WrittenPlan(proto::WrittenPlanKey, proto::WrittenPlanValue),
+    ClientReadRequirement(
+        proto::ClientReadRequirementKey,
+        proto::ClientReadRequirementValue,
+    ),
     StorageCollectionMetadata(
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
@@ -280,11 +334,15 @@ impl StateUpdateKind {
             StateUpdateKind::AuditLog(_, _) => Some(CollectionType::AuditLog),
             StateUpdateKind::Cluster(_, _) => Some(CollectionType::ComputeInstance),
             StateUpdateKind::ClusterReplica(_, _) => Some(CollectionType::ComputeReplicas),
+            StateUpdateKind::ClusterReplicaDeclaration(_, _) => {
+                Some(CollectionType::ClusterReplicaDeclaration)
+            }
+            StateUpdateKind::ClusterRuntime(_, _) => Some(CollectionType::ClusterRuntime),
             StateUpdateKind::Comment(_, _) => Some(CollectionType::Comments),
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
             StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
-            StateUpdateKind::FenceToken(_) => None,
+            StateUpdateKind::DeploymentAdmission(_) | StateUpdateKind::FenceToken(_) => None,
             StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
             StateUpdateKind::IntrospectionSourceIndex(_, _) => {
                 Some(CollectionType::ComputeIntrospectionSourceIndex)
@@ -305,6 +363,17 @@ impl StateUpdateKind {
             }
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::CollectionCompactionBound(_, _) => {
+                Some(CollectionType::CollectionCompactionBound)
+            }
+            StateUpdateKind::MaintainedReadRequirement(_, _) => {
+                Some(CollectionType::MaintainedReadRequirement)
+            }
+            StateUpdateKind::ClientIncarnation(_, _) => Some(CollectionType::ClientIncarnation),
+            StateUpdateKind::WrittenPlan(_, _) => Some(CollectionType::WrittenPlan),
+            StateUpdateKind::ClientReadRequirement(_, _) => {
+                Some(CollectionType::ClientReadRequirement)
+            }
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
                 Some(CollectionType::StorageCollectionMetadata)
             }
@@ -336,7 +405,7 @@ impl StateUpdateKindJson {
         serde_json::from_value::<D>(serde_value)
     }
 
-    fn kind(&self) -> &str {
+    pub(crate) fn kind(&self) -> &str {
         let row = self.0.row();
         let mut iter = row.unpack_first().unwrap_map().iter();
         let datum = iter
@@ -351,6 +420,10 @@ impl StateUpdateKindJson {
         // serialize as.
         static DESERIALIZABLE_KINDS: LazyLock<HashSet<String>> = LazyLock::new(|| {
             [
+                StateUpdateKind::DeploymentAdmission(DeploymentAdmission {
+                    members: Default::default(),
+                    persist_target: semver::Version::new(0, 0, 0),
+                }),
                 StateUpdateKind::FenceToken(FenceToken {
                     deploy_generation: 1,
                     epoch: Epoch::new(1).expect("non-zero"),
@@ -467,6 +540,14 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     cluster_replica,
                 ))
             }
+            StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                Some(memory::objects::StateUpdateKind::ClusterReplicaDeclaration(
+                    into_durable(key, value)?,
+                ))
+            }
+            StateUpdateKind::ClusterRuntime(key, value) => Some(
+                memory::objects::StateUpdateKind::ClusterRuntime(into_durable(key, value)?),
+            ),
             StateUpdateKind::Comment(key, value) => {
                 let comment = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Comment(comment))
@@ -511,6 +592,34 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let source_references = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SourceReferences(
                     source_references,
+                ))
+            }
+            StateUpdateKind::CollectionCompactionBound(key, value) => {
+                let collection_compaction_bounds = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::CollectionCompactionBound(
+                    collection_compaction_bounds,
+                ))
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                let maintained_read_requirements = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::MaintainedReadRequirement(
+                    maintained_read_requirements,
+                ))
+            }
+            StateUpdateKind::ClientIncarnation(key, value) => {
+                let client_incarnations = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClientIncarnation(
+                    client_incarnations,
+                ))
+            }
+            StateUpdateKind::WrittenPlan(key, value) => {
+                let written_plans = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::WrittenPlan(written_plans))
+            }
+            StateUpdateKind::ClientReadRequirement(key, value) => {
+                let client_read_requirements = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClientReadRequirement(
+                    client_read_requirements,
                 ))
             }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
@@ -559,9 +668,14 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     unfinalized_shard,
                 ))
             }
+            StateUpdateKind::FenceToken(token) => Some(
+                memory::objects::StateUpdateKind::ActiveDeploymentGeneration(
+                    token.deploy_generation,
+                ),
+            ),
             // Not exposed to higher layers.
-            StateUpdateKind::Config(_, _)
-            | StateUpdateKind::FenceToken(_)
+            StateUpdateKind::DeploymentAdmission(_)
+            | StateUpdateKind::Config(_, _)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,
@@ -626,6 +740,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::ClusterReplica(key, value) => {
                 proto::StateUpdateKind::ClusterReplica(proto::ClusterReplica { key, value })
             }
+            StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                proto::StateUpdateKind::ClusterReplicaDeclaration(
+                    proto::ClusterReplicaDeclaration { key, value },
+                )
+            }
+            StateUpdateKind::ClusterRuntime(key, value) => {
+                proto::StateUpdateKind::ClusterRuntime(proto::ClusterRuntime { key, value })
+            }
             StateUpdateKind::Comment(key, value) => {
                 proto::StateUpdateKind::Comment(proto::Comment { key, value })
             }
@@ -637,6 +759,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             StateUpdateKind::DefaultPrivilege(key, value) => {
                 proto::StateUpdateKind::DefaultPrivileges(proto::DefaultPrivileges { key, value })
+            }
+            StateUpdateKind::DeploymentAdmission(admission) => {
+                proto::StateUpdateKind::DeploymentAdmission(admission.into_proto_owned())
             }
             StateUpdateKind::FenceToken(fence_token) => {
                 proto::StateUpdateKind::FenceToken(proto::FenceToken {
@@ -695,6 +820,28 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::SystemPrivilege(key, value) => {
                 proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value })
             }
+            StateUpdateKind::CollectionCompactionBound(key, value) => {
+                proto::StateUpdateKind::CollectionCompactionBound(
+                    proto::CollectionCompactionBound { key, value },
+                )
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                proto::StateUpdateKind::MaintainedReadRequirement(
+                    proto::MaintainedReadRequirement { key, value },
+                )
+            }
+            StateUpdateKind::ClientIncarnation(key, value) => {
+                proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value })
+            }
+            StateUpdateKind::WrittenPlan(key, value) => {
+                proto::StateUpdateKind::WrittenPlan(proto::WrittenPlan { key, value })
+            }
+            StateUpdateKind::ClientReadRequirement(key, value) => {
+                proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
+                    key,
+                    value,
+                })
+            }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 proto::StateUpdateKind::StorageCollectionMetadata(
                     proto::StorageCollectionMetadata { key, value },
@@ -720,6 +867,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::ClusterReplica(proto::ClusterReplica { key, value }) => {
                 StateUpdateKind::ClusterReplica(key, value)
             }
+            proto::StateUpdateKind::ClusterReplicaDeclaration(
+                proto::ClusterReplicaDeclaration { key, value },
+            ) => StateUpdateKind::ClusterReplicaDeclaration(key, value),
+            proto::StateUpdateKind::ClusterRuntime(proto::ClusterRuntime { key, value }) => {
+                StateUpdateKind::ClusterRuntime(key, value)
+            }
             proto::StateUpdateKind::Comment(proto::Comment { key, value }) => {
                 StateUpdateKind::Comment(key, value)
             }
@@ -731,6 +884,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             proto::StateUpdateKind::DefaultPrivileges(proto::DefaultPrivileges { key, value }) => {
                 StateUpdateKind::DefaultPrivilege(key, value)
+            }
+            proto::StateUpdateKind::DeploymentAdmission(admission) => {
+                StateUpdateKind::DeploymentAdmission(DeploymentAdmission::from_proto(admission)?)
             }
             proto::StateUpdateKind::FenceToken(proto::FenceToken {
                 deploy_generation,
@@ -778,6 +934,22 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value }) => {
                 StateUpdateKind::SystemPrivilege(key, value)
             }
+            proto::StateUpdateKind::CollectionCompactionBound(
+                proto::CollectionCompactionBound { key, value },
+            ) => StateUpdateKind::CollectionCompactionBound(key, value),
+            proto::StateUpdateKind::MaintainedReadRequirement(
+                proto::MaintainedReadRequirement { key, value },
+            ) => StateUpdateKind::MaintainedReadRequirement(key, value),
+            proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value }) => {
+                StateUpdateKind::ClientIncarnation(key, value)
+            }
+            proto::StateUpdateKind::WrittenPlan(proto::WrittenPlan { key, value }) => {
+                StateUpdateKind::WrittenPlan(key, value)
+            }
+            proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
+                key,
+                value,
+            }) => StateUpdateKind::ClientReadRequirement(key, value),
             proto::StateUpdateKind::StorageCollectionMetadata(
                 proto::StorageCollectionMetadata { key, value },
             ) => StateUpdateKind::StorageCollectionMetadata(key, value),
@@ -835,6 +1007,77 @@ mod tests {
     use crate::durable::objects::FenceToken;
     use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
+
+    #[mz_ore::test]
+    fn deployment_admission_serialization() {
+        let json = serde_json::json!({
+            "kind": "DeploymentAdmission",
+            "members": [{"deployment_generation": 42, "build_version": "1.2.3-dev.4+build.5"}],
+            "persist_target": "1.2.0"
+        });
+        let raw = StateUpdateKindJson::from_serde(&json);
+        assert!(raw.is_always_deserializable());
+        let decoded = StateUpdateKind::try_from(raw).expect("valid admission");
+        assert_eq!(decoded.collection_type(), None);
+        let memory: Option<crate::memory::objects::StateUpdateKind> =
+            (&decoded).try_into().expect("singleton routing");
+        assert_eq!(memory, None);
+        let encoded: serde_json::Value = StateUpdateKindJson::from(decoded).to_serde();
+        assert_eq!(encoded, json);
+
+        for (field, invalid) in [
+            (
+                "members[42]",
+                serde_json::json!({
+                    "kind": "DeploymentAdmission",
+                    "members": [{"deployment_generation": 42, "build_version": "not-a-version"}],
+                    "persist_target": "1.2.0"
+                }),
+            ),
+            (
+                "persist_target",
+                serde_json::json!({
+                    "kind": "DeploymentAdmission",
+                    "members": [],
+                    "persist_target": "1.2"
+                }),
+            ),
+        ] {
+            let err = StateUpdateKind::try_from(StateUpdateKindJson::from_serde(invalid))
+                .expect_err("invalid semver must be rejected");
+            assert!(
+                err.contains(&format!("DeploymentAdmission.{field}:")),
+                "{err}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn written_plan_serialization() {
+        use crate::durable::objects::serialization::RustType;
+        use crate::durable::objects::{DurableType, WrittenPlan};
+
+        let plan = WrittenPlan {
+            id: mz_repr::GlobalId::User(42),
+            build_version: "26.43.0-dev (build hash)".into(),
+            revision: uuid::Uuid::new_v4(),
+            replica_owner: None,
+            imports: [mz_repr::GlobalId::User(41)].into_iter().collect(),
+        };
+        let (key, value) = plan.clone().into_key_value();
+        let update = StateUpdateKind::WrittenPlan(key.into_proto(), value.into_proto());
+        let raw = StateUpdateKindJson::from(update.clone());
+        assert_eq!(raw.kind(), "WrittenPlan");
+        let decoded = StateUpdateKind::try_from(raw).expect("decode written plan selection");
+        assert_eq!(decoded, update);
+        let memory: Option<crate::memory::objects::StateUpdateKind> = (&decoded)
+            .try_into()
+            .expect("convert written plan selection to memory update");
+        assert_eq!(
+            memory,
+            Some(crate::memory::objects::StateUpdateKind::WrittenPlan(plan))
+        );
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]

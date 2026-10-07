@@ -50,6 +50,42 @@ pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSou
     access: vec![],
     ontology: None,
 });
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
+        name: "mz_cluster_replica_frontiers_raw",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_RAW_OID,
+        data_source: IntrospectionType::ReplicaFrontiers.into(),
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "object_id",
+                "The ID of the source, sink, index, materialized view, or subscription.",
+            ),
+            ("replica_id", "The ID of a cluster replica."),
+            (
+                "write_frontier",
+                "The next timestamp at which the output may change.",
+            ),
+            (
+                "deployment_generation",
+                "The exact deployment generation of native execution, or NULL for legacy execution.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
 pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_postgres_sources",
@@ -965,6 +1001,7 @@ pub static MZ_CLUSTER_AUTO_SCALING_STRATEGIES: LazyLock<BuiltinMaterializedView>
             // Absent fields serialize as JSON `null`. `state` is keyed by
             // strategy so a future strategy's state is another key, not a
             // schema change.
+            // Shared policy is paired with the active deployment's realization.
             sql: "
 IN CLUSTER mz_catalog_server
 WITH (
@@ -981,12 +1018,25 @@ WITH
         WHERE
             data->>'kind' = 'Cluster' AND
             data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    ),
+    active_runtime AS (
+        SELECT
+            mz_internal.parse_catalog_id(r.data->'key'->'cluster_id') AS cluster_id,
+            r.data->'value'->'burst' AS burst
+        FROM (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterRuntime') r
+        JOIN (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken') f
+            ON (r.data->'key'->>'deployment_generation')::uint8 = (f.data->>'deploy_generation')::uint8
+    ),
+    visible AS (
+        SELECT m.cluster_id, m.strategy,
+            CASE WHEN r.cluster_id IS NULL THEN m.burst ELSE r.burst END AS burst
+        FROM managed m LEFT JOIN active_runtime r USING (cluster_id)
     )
 SELECT
     m.cluster_id,
     COALESCE(m.strategy, 'null'::jsonb) AS strategy,
     CASE WHEN m.burst != 'null' THEN jsonb_build_object('burst', m.burst) END AS state
-FROM managed m
+FROM visible m
 WHERE m.strategy != 'null' OR m.burst != 'null'",
             is_retained_metrics_object: false,
             access: vec![PUBLIC_SELECT],
@@ -1135,6 +1185,10 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
         data_source: IntrospectionType::ReplicaStatusHistory.into(),
         desc: REPLICA_STATUS_HISTORY_DESC.clone(),
         column_comments: BTreeMap::from_iter([
+            (
+                "deployment_generation",
+                "The deployment of the native replica event, or `NULL` for legacy execution.",
+            ),
             ("replica_id", "The ID of a cluster replica."),
             ("process_id", "The ID of a process within the replica."),
             (
@@ -1219,6 +1273,17 @@ SELECT
     occurred_at as updated_at
 FROM mz_internal.mz_cluster_replica_status_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -1252,6 +1317,10 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     data_source: IntrospectionType::SourceStatusHistory.into(),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
+        (
+            "deployment_generation",
+            "The deployment of the native replica event, or `NULL` for legacy execution and source/sink-global events with `NULL` replica ID.",
+        ),
         (
             "occurred_at",
             "Wall-clock timestamp of the source status change.",
@@ -2084,7 +2153,8 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
     }
 });
 
-pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SOURCE_STATUSES_OID,
@@ -2139,6 +2209,17 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
             s.error,
             s.details
         FROM mz_internal.mz_source_status_history s
+        WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    ))
     ),
     -- For getting the latest events, we first determine the latest per-replica
     -- events here and then apply precedence rules below.
@@ -2293,6 +2374,7 @@ WHERE id NOT LIKE 's%';",
             ]
         },
     }),
+}
 });
 
 pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -2302,6 +2384,10 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     data_source: IntrospectionType::SinkStatusHistory.into(),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
+        (
+            "deployment_generation",
+            "The deployment of the native replica event, or `NULL` for legacy execution and source/sink-global events with `NULL` replica ID.",
+        ),
         (
             "occurred_at",
             "Wall-clock timestamp of the sink status change.",
@@ -2366,7 +2452,8 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     }),
 });
 
-pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_sink_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SINK_STATUSES_OID,
@@ -2421,6 +2508,17 @@ uniform_status_history AS
         s.error,
         s.details
     FROM mz_internal.mz_sink_status_history s
+    WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    ))
 ),
 -- For getting the latest events, we first determine the latest per-replica
 -- events here and then apply precedence rules below.
@@ -2503,6 +2601,7 @@ WHERE
             ]
         },
     }),
+}
 });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2736,6 +2835,10 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
             ),
             ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
             ("swap_bytes", "Approximate swap usage, in bytes."),
+            (
+                "deployment_generation",
+                "The deployment of the native replica observation, or `NULL` for legacy execution.",
+            ),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -2786,6 +2889,17 @@ SELECT
     swap_bytes
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -2908,6 +3022,10 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
         (
             "occurred_at",
             "Wall-clock timestamp at which the event occurred.",
+        ),
+        (
+            "deployment_generation",
+            "The deployment of the native replica observation, or `NULL` for legacy execution and shared observations with `NULL` replica ID.",
         ),
     ]),
     is_retained_metrics_object: false,
@@ -3485,9 +3603,10 @@ pub static MZ_COMMENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         //
         // Schema and ClusterReplica are nested structs in `mz_catalog_raw`.
         // We reach one level deeper for them: Schema picks `schema.Id` and
-        // drops the database, ClusterReplica picks `replica_id` and drops
-        // the cluster. That matches what `mz_objects.id` holds for those
-        // rows.
+        // drops the database. Replica comments name the logical replica, with
+        // visibility matching the active membership in mz_cluster_replicas.
+        // FenceToken makes this projection shared and materializable rather than
+        // dependent on the deployment evaluating it.
         //
         // New variants on `proto::CommentObject` need branches in both CASE
         // expressions below.
@@ -3504,6 +3623,14 @@ WITH commented AS (
            data->'value'->>'comment' AS comment
     FROM mz_internal.mz_catalog_raw
     WHERE data->>'kind' = 'Comment'
+), active_replicas AS (
+    SELECT
+        mz_internal.parse_catalog_id(r.data->'key'->'id') AS id,
+        r.data->'value'->'cluster_id' AS cluster_id,
+        r.data->'key'->'id' AS comment_id
+    FROM (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica') r
+    JOIN (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken') f
+        ON COALESCE((r.data->'key'->>'deployment_generation')::uint8, 0) = (f.data->>'deploy_generation')::uint8
 )
 SELECT
     CASE
@@ -3521,7 +3648,7 @@ SELECT
         WHEN obj ? 'Database'         THEN mz_internal.parse_catalog_id(obj->'Database')
         WHEN obj ? 'Schema'           THEN mz_internal.parse_catalog_id(obj->'Schema'->'schema'->'Id')
         WHEN obj ? 'Cluster'          THEN mz_internal.parse_catalog_id(obj->'Cluster')
-        WHEN obj ? 'ClusterReplica'   THEN mz_internal.parse_catalog_id(obj->'ClusterReplica'->'replica_id')
+        WHEN obj ? 'ClusterReplica'   THEN active_replicas.id
         WHEN obj ? 'NetworkPolicy'    THEN mz_internal.parse_catalog_id(obj->'NetworkPolicy')
     END                                                              AS id,
     CASE
@@ -3544,7 +3671,11 @@ SELECT
     END                                                              AS object_type,
     (sub->'ColumnPos')::int4                                          AS object_sub_id,
     comment
-FROM commented",
+FROM commented
+LEFT JOIN active_replicas
+    ON obj->'ClusterReplica'->'replica_id' = active_replicas.comment_id
+    AND obj->'ClusterReplica'->'cluster_id' = active_replicas.cluster_id
+WHERE NOT (obj ? 'ClusterReplica') OR active_replicas.id IS NOT NULL",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
@@ -5033,9 +5164,36 @@ ON mz_internal.pg_attrdef_all_databases (oid, adrelid, adnum, adbin, adsrc)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
+pub static MZ_COMPUTE_ERROR_COUNTS_BY_DEPLOYMENT: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`.
+        name: "mz_compute_error_counts_by_deployment",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_BY_DEPLOYMENT_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "count",
+                SqlScalarType::Numeric { max_scale: None }.nullable(false),
+            )
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
+            .finish(),
+        data_source: IntrospectionType::ComputeErrorCounts.into(),
+        column_comments: BTreeMap::from_iter([(
+            "deployment_generation",
+            "The exact deployment generation of native execution, or NULL for legacy execution.",
+        )]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        // TODO(database-issues#8173): Rename this relation to `mz_compute_error_counts_raw`.
         // Currently this causes a naming conflict because the resolver stumbles over the
         // source with the same name in `mz_introspection` due to the automatic schema
         // translation.
@@ -5050,25 +5208,77 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
                 SqlScalarType::Numeric { max_scale: None }.nullable(false),
             )
             .finish(),
-        data_source: IntrospectionType::ComputeErrorCounts.into(),
         column_comments: BTreeMap::new(),
-        is_retained_metrics_object: false,
+        // Public observations follow shared catalog authority, not the querying
+        // process's deployment. Legacy execution has no deployment qualifier.
+        sql: "
+SELECT replica_id, object_id, count
+FROM mz_internal.mz_compute_error_counts_by_deployment
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
 
-pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+pub static MZ_COMPUTE_HYDRATION_TIMES_RAW: LazyLock<BuiltinSource> =
+    LazyLock::new(|| BuiltinSource {
+        name: "mz_compute_hydration_times_raw",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_TIMES_RAW_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
+            .finish(),
+        data_source: IntrospectionType::ComputeHydrationTimes.into(),
+        column_comments: BTreeMap::from_iter([(
+            "deployment_generation",
+            "The exact deployment generation of native execution, or NULL for legacy execution.",
+        )]),
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_times",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_TIMES_OID,
+    oid: oid::VIEW_MZ_COMPUTE_HYDRATION_TIMES_OID,
     desc: RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
         .finish(),
-    data_source: IntrospectionType::ComputeHydrationTimes.into(),
     column_comments: BTreeMap::new(),
-    is_retained_metrics_object: true,
+    // Public observations follow shared catalog authority, not the querying
+    // process's deployment. Legacy execution has no deployment qualifier.
+    sql: "
+SELECT replica_id, object_id, time_ns
+FROM mz_internal.mz_compute_hydration_times_raw
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "compute_hydration_time",
@@ -5093,18 +5303,26 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
-pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLock::new(|| {
+pub static MZ_OBJECT_ARRANGEMENT_SIZES_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| {
     BuiltinSource {
-        name: "mz_object_arrangement_sizes",
+        name: "mz_object_arrangement_sizes_raw",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::SOURCE_MZ_OBJECT_ARRANGEMENT_SIZES_OID,
+        oid: oid::SOURCE_MZ_OBJECT_ARRANGEMENT_SIZES_RAW_OID,
         desc: RelationDesc::builder()
             .with_column("replica_id", SqlScalarType::String.nullable(false))
             .with_column("object_id", SqlScalarType::String.nullable(false))
             .with_column("size", SqlScalarType::Int64.nullable(true))
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
             .finish(),
         data_source: IntrospectionType::ComputeObjectArrangementSizes.into(),
         column_comments: BTreeMap::from_iter([
+            (
+                "deployment_generation",
+                "The exact deployment generation of native execution, or NULL for legacy execution.",
+            ),
             (
                 "replica_id",
                 "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
@@ -5121,6 +5339,53 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLo
             ),
         ]),
         is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
+pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_object_arrangement_sizes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_OBJECT_ARRANGEMENT_SIZES_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::Int64.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            (
+                "object_id",
+                "The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "size",
+                "The total arrangement heap and batcher size in bytes for this object on this replica, \
+                 rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential \
+                 collection. Objects with less than 5 MiB of arrangements report a size of 0.",
+            ),
+        ]),
+        // Public observations follow shared catalog authority, not the querying
+        // process's deployment. Legacy execution has no deployment qualifier.
+        sql: "
+SELECT replica_id, object_id, size
+FROM mz_internal.mz_object_arrangement_sizes_raw
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
@@ -5150,6 +5415,10 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .with_column("hydration_complete", SqlScalarType::Bool.nullable(false))
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -5177,6 +5446,10 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock
                 "Whether the arrangement had finished its initial hydration on this replica when \
                  the snapshot was collected. Filter for `true` to consider only stable, post-build \
                  sizes.",
+            ),
+            (
+                "deployment_generation",
+                "The deployment in which the native measurement was collected, or NULL for legacy execution.",
             ),
         ]),
         is_retained_metrics_object: true,
@@ -5232,6 +5505,10 @@ pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
         )
         .with_column("status", SqlScalarType::String.nullable(false))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -5255,6 +5532,10 @@ pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|
         (
             "status",
             "The terminal status. Currently always `hydrated`.",
+        ),
+        (
+            "deployment_generation",
+            "The deployment in which native hydration occurred, or NULL for legacy execution.",
         ),
     ]),
     // Not a retained-metrics object: that would pin a 30 day compaction window,
@@ -5331,6 +5612,10 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         .with_column("peak_disk_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("process_id", SqlScalarType::UInt64.nullable(true))
+        .with_column(
+            "deployment_generation",
+            SqlScalarType::UInt64.nullable(true),
+        )
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -5365,6 +5650,10 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         (
             "process_id",
             "The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process.",
+        ),
+        (
+            "deployment_generation",
+            "The deployment in which native hydration occurred, or NULL for legacy execution.",
         ),
     ]),
     // Not a retained-metrics object: that would pin a 30 day compaction window,
@@ -5453,10 +5742,9 @@ WITH
             ((time_ns / 1000) || 'microseconds')::interval AS hydration_time
         FROM mz_internal.mz_compute_hydration_times
     ),
-    -- MVs that have advanced to the empty frontier don't have a dataflow installed anymore and
-    -- therefore don't show up in `mz_compute_hydration_times`. We still want to show them here to
-    -- avoid surprises for people joining `mz_materialized_views` against this relation (like the
-    -- blue-green readiness query does), so we include them as 'hydrated'.
+    -- Completed MVs are hydrated even without runtime measurements. Their status takes
+    -- precedence over any retained measurement for the same object and replica, so joins
+    -- against this relation (including blue-green readiness) see one completed status.
     complete_mvs AS (
         SELECT
             mv.id,
@@ -5468,6 +5756,11 @@ WITH
         WHERE f.write_frontier IS NULL
     )
 SELECT * FROM dataflows
+WHERE NOT EXISTS (
+    SELECT 1 FROM complete_mvs
+    WHERE complete_mvs.id = dataflows.object_id
+      AND complete_mvs.replica_id = dataflows.replica_id
+)
 UNION ALL
 SELECT * FROM complete_mvs",
     access: vec![PUBLIC_SELECT],
@@ -5484,11 +5777,11 @@ SELECT * FROM complete_mvs",
     }),
 });
 
-pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
-        name: "mz_compute_operator_hydration_statuses",
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_RAW: LazyLock<BuiltinSource> = LazyLock::new(
+    || BuiltinSource {
+        name: "mz_compute_operator_hydration_statuses_raw",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
+        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_RAW_OID,
         desc: RelationDesc::builder()
             .with_column("replica_id", SqlScalarType::String.nullable(false))
             .with_column("object_id", SqlScalarType::String.nullable(false))
@@ -5497,10 +5790,18 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = Laz
                 SqlScalarType::UInt64.nullable(false),
             )
             .with_column("hydrated", SqlScalarType::Bool.nullable(false))
-            .with_key(vec![0, 1, 2])
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
+            .with_key(vec![0, 1, 2, 4])
             .finish(),
         data_source: IntrospectionType::ComputeOperatorHydrationStatus.into(),
         column_comments: BTreeMap::from_iter([
+            (
+                "deployment_generation",
+                "The exact deployment generation of native execution, or NULL for legacy execution.",
+            ),
             ("replica_id", "The ID of a cluster replica."),
             (
                 "object_id",
@@ -5513,6 +5814,53 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = Laz
             ("hydrated", "Whether the node is hydrated on the replica."),
         ]),
         is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    },
+);
+
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_compute_operator_hydration_statuses",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "physical_plan_node_id",
+                SqlScalarType::UInt64.nullable(false),
+            )
+            .with_column("hydrated", SqlScalarType::Bool.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("replica_id", "The ID of a cluster replica."),
+            (
+                "object_id",
+                "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`.",
+            ),
+            (
+                "physical_plan_node_id",
+                "The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`.",
+            ),
+            ("hydrated", "Whether the node is hydrated on the replica."),
+        ]),
+        // Public observations follow shared catalog authority, not the querying
+        // process's deployment. Legacy execution has no deployment qualifier.
+        sql: "
+SELECT replica_id, object_id, physical_plan_node_id, hydrated
+FROM mz_internal.mz_compute_operator_hydration_statuses_raw
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "compute_hydration_status",
@@ -5615,10 +5963,18 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
                 "occurred_at",
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("replica_id", "The ID of a cluster replica."),
             ("process_id", "The ID of a process within the replica."),
+            (
+                "deployment_generation",
+                "The deployment of the native replica observation, or `NULL` for legacy execution.",
+            ),
             (
                 "cpu_percent",
                 "Approximate CPU usage, in percent of the total allocation.",
@@ -5653,7 +6009,8 @@ SELECT
     m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
     m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent,
     m.swap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS swap_percent,
-    m.occurred_at
+    m.occurred_at,
+    m.deployment_generation
 FROM
     mz_catalog.mz_cluster_replicas AS r
         JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -8125,6 +8482,7 @@ replica_metrics_history AS (
   SELECT
     m.occurred_at,
     m.replica_id,
+    m.deployment_generation,
     r.size,
     (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0) / NULLIF(s.processes, 0)) AS cpu_percent,
     (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)) AS memory_percent,
@@ -8150,6 +8508,7 @@ replica_metrics_history AS (
   GROUP BY
     m.occurred_at,
     m.replica_id,
+    m.deployment_generation,
     r.size,
     s.cpu_nano_cores,
     s.memory_bytes,
@@ -8323,12 +8682,14 @@ fn console_cluster_utilization_unbinned_3h_desc() -> RelationDesc {
             "memory_and_disk_percent",
             SqlScalarType::Float64.nullable(true),
         )
+        .with_key(vec![0, 1, 2, 4])
         .finish()
 }
 
 /// Builds the SQL for the un-binned 3-hour console cluster utilization base: one
-/// row per (replica, metric sample) over `retention`, with no `date_bin`/top-k,
-/// so the Console bins it client-side. The binned `_overview*` views handle the
+/// row per (replica, sample timestamp) over `retention`, collapsing coincident
+/// deployment samples to chart peaks so the Console can bin client-side without
+/// duplicate SUBSCRIBE keys. The binned `_overview*` views handle the
 /// longer windows. A temporal `mz_now()` filter bounds the maintained
 /// arrangement. Kept in sync with the Console
 /// (`buildConsoleClusterUtilizationUnbinned3hQuery` in
@@ -8338,8 +8699,7 @@ fn console_cluster_utilization_unbinned_3h_sql(retention: &str) -> String {
         r#"WITH replica_history AS (
   -- Dedup to one row per replica (prefer the current size). Size is fixed per
   -- replica so this is normally a no-op, but a stray duplicate size in history
-  -- would fan out the metrics join; with no Top-1 dedup here that would emit two
-  -- rows per (replica_id, occurred_at) and break the Console SUBSCRIBE upsert key.
+  -- would fan out the metrics join and inflate process sums.
   SELECT DISTINCT ON (replica_id) replica_id, size, cluster_id
   FROM (
     -- We union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters.
@@ -8355,6 +8715,7 @@ replica_metrics AS (
   SELECT
     m.occurred_at,
     m.replica_id,
+    m.deployment_generation,
     r.cluster_id,
     r.size,
     (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0) / NULLIF(s.processes, 0)) AS cpu_percent,
@@ -8373,19 +8734,34 @@ replica_metrics AS (
   FROM replica_history AS r
     INNER JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
     INNER JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
-  -- No aggregation over time: one row per (replica, sample) so the Console bins
-  -- client-side. The temporal mz_now() filter keeps the maintained arrangement
-  -- bounded to the retention window.
+  -- Sum processes only within a deployment, including legacy NULL generations.
+  -- The temporal mz_now() filter bounds the maintained arrangement.
   WHERE mz_now() <= m.occurred_at + INTERVAL '{retention}'
   GROUP BY
     m.occurred_at,
     m.replica_id,
+    m.deployment_generation,
     r.cluster_id,
     r.size,
     s.cpu_nano_cores,
     s.memory_bytes,
     s.disk_bytes,
     s.processes
+),
+-- Independent chart peaks at a timestamp, never sums across deployments.
+sample_peaks AS (
+  SELECT
+    replica_id, occurred_at, cluster_id, size,
+    MAX(cpu_percent) AS cpu_percent,
+    MAX(memory_percent) AS memory_percent,
+    MAX(disk_percent) AS disk_percent,
+    MAX(heap_percent) AS heap_percent,
+    MAX(ram_percent) AS ram_percent,
+    MAX(swap_of_ram_percent) AS swap_of_ram_percent,
+    MAX(heap_limit_percent) AS heap_limit_percent,
+    MAX(memory_and_disk_percent) AS memory_and_disk_percent
+  FROM replica_metrics
+  GROUP BY replica_id, occurred_at, cluster_id, size
 )
 SELECT
   m.replica_id,
@@ -8401,7 +8777,7 @@ SELECT
   m.swap_of_ram_percent,
   m.heap_limit_percent,
   m.memory_and_disk_percent
-FROM replica_metrics AS m
+FROM sample_peaks AS m
 /* Most recent replica name as of the sample time. */
 CROSS JOIN LATERAL (
   SELECT new_name
@@ -8882,7 +9258,11 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
             .with_column("snapshot_committed", SqlScalarType::Bool.nullable(false))
             .with_column("offset_known", SqlScalarType::UInt64.nullable(true))
             .with_column("offset_committed", SqlScalarType::UInt64.nullable(true))
-            .with_key(vec![0, 1])
+            .with_column(
+                "deployment_generation",
+                SqlScalarType::UInt64.nullable(true),
+            )
+            .with_key(vec![0, 1, 14])
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -8945,10 +9325,11 @@ SELECT
     bool_and(snapshot_committed) as snapshot_committed,
     -- Gauges
     MAX(offset_known)::uint8 AS offset_known,
-    MIN(offset_committed)::uint8 AS offset_committed
+    MIN(offset_committed)::uint8 AS offset_committed,
+    deployment_generation
 FROM mz_internal.mz_source_statistics_raw
     JOIN report_paths USING (id)
-GROUP BY report_paths.report_id, replica_id",
+GROUP BY report_paths.report_id, replica_id, deployment_generation",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
@@ -8994,7 +9375,8 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("snapshot_committed", SqlScalarType::Bool.nullable(false))
             .with_column("offset_known", SqlScalarType::UInt64.nullable(true))
             .with_column("offset_committed", SqlScalarType::UInt64.nullable(true))
-            .with_key(vec![0, 1])
+            // Projection hides the deployment qualifier of the input key. The
+            // optimizer does not infer uniqueness through the namespace selector.
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -9054,17 +9436,48 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
                 "The offset of the the data that Materialize has durably ingested. See below to learn what constitutes an offset.",
             ),
         ]),
-        sql: "SELECT * FROM mz_internal.mz_source_statistics_with_history WHERE length(id) > 0",
+        sql: "
+SELECT id, replica_id, messages_received, bytes_received, updates_staged,
+       updates_committed, records_indexed, bytes_indexed, rehydration_latency,
+       snapshot_records_known, snapshot_records_staged, snapshot_committed,
+       offset_known, offset_committed
+FROM mz_internal.mz_source_statistics_with_history
+WHERE length(id) > 0
+  AND deployment_generation IS NOT DISTINCT FROM CASE
+      WHEN replica_id IS NULL THEN NULL
+      ELSE (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+      )
+  END",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "source_statistics",
             description: "Aggregated source ingestion statistics",
             links: &const {
-                [OntologyLink {
-                    name: "statistics_of_source",
-                    target: "source",
-                    properties: LinkProperties::measures("id", "id", "ingestion_statistics"),
-                }]
+                [
+                    OntologyLink {
+                        name: "statistics_of_source",
+                        target: "source",
+                        properties: LinkProperties::measures("id", "id", "ingestion_statistics"),
+                    },
+                    OntologyLink {
+                        name: "on_replica",
+                        target: "replica",
+                        properties: LinkProperties::fk_nullable(
+                            "replica_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                ]
             },
             column_semantic_types: &const {
                 [
@@ -9141,6 +9554,17 @@ SELECT
     SUM(bytes_staged)::uint8 AS bytes_staged,
     SUM(bytes_committed)::uint8 AS bytes_committed
 FROM mz_internal.mz_sink_statistics_raw
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )
 GROUP BY id, replica_id",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {

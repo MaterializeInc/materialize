@@ -227,6 +227,15 @@ impl Coordinator {
                     Reset => *schedule = Default::default(),
                     Unchanged => {}
                 }
+                // DDL owns the shared scheduled RF, including for RESET. The
+                // scheduler owns deployment-local running replicas. Conversion
+                // must first validate adoption against the existing replica
+                // count and normalizes only after those checks succeed.
+                if matches!(config.variant, Managed(_))
+                    && !matches!(schedule, mz_sql::plan::ClusterSchedule::Manual)
+                {
+                    *replication_factor = 0;
+                }
                 match &options.auto_scaling_strategy {
                     Set(new_strategy) => auto_scaling_strategy.clone_from(new_strategy),
                     // The default is autoscaling disabled.
@@ -1604,7 +1613,7 @@ impl Coordinator {
             logging: _,
             arrangement_compression: _,
             optimizer_feature_overrides: _,
-            schedule: _,
+            schedule,
             auto_scaling_strategy: _,
             reconfiguration: _,
             burst: _,
@@ -1709,6 +1718,13 @@ impl Coordinator {
             );
         }
 
+        // Adoption checks use the actual replica count. Once validated, commit
+        // the shared scheduled RF without changing the adopted replicas. Each
+        // deployment's scheduler decides which replicas need to keep running.
+        if !matches!(schedule, mz_sql::plan::ClusterSchedule::Manual) {
+            *new_replication_factor = 0;
+        }
+
         let ops = vec![catalog::Op::UpdateClusterConfig {
             id: cluster_id,
             name: cluster_name,
@@ -1735,10 +1751,16 @@ impl Coordinator {
         // already created. Refuse instead: the user can cancel (ALTER back to
         // the realized size) or wait for the record to settle first.
         if let ClusterVariant::Managed(managed) = &cluster.config.variant {
+            // Check both the shared request and our deployment's realization.
+            // Peers reconcile their own replicas against the unmanaged declarations.
+            let runtime = self.catalog().state().cluster_runtime(cluster_id);
             if managed
                 .reconfiguration
                 .as_ref()
                 .is_some_and(|record| record.is_in_progress())
+                || runtime
+                    .and_then(|runtime| runtime.reconfiguration.as_ref())
+                    .is_some_and(|record| record.is_in_progress())
             {
                 return Err(AdapterError::AlterClusterUnmanagedWhileReconfiguring);
             }
@@ -1748,7 +1770,7 @@ impl Coordinator {
             // ordinary unmanaged replica nothing ever tears down. Absence of a
             // record means the burst has settled, so no in-progress check is
             // needed.
-            if managed.burst.is_some() {
+            if managed.burst.is_some() || runtime.is_some_and(|runtime| runtime.burst.is_some()) {
                 return Err(AdapterError::AlterClusterUnmanagedWhileBursting);
             }
         }

@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 import json
+from typing import TYPE_CHECKING
+from urllib.parse import unquote, urlsplit
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
@@ -15,11 +17,70 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
+if TYPE_CHECKING:
+    from materialize.mzcompose.composition import Composition
+
 # Arrangement merge effort (`arrangement_exert_proportionality`) for the compute
 # and storage timely clusters. Kept as named constants so other launchers (e.g.
 # the clusterd-test-driver local runner) reuse the same defaults.
 DEFAULT_COMPUTE_EXERT_PROPORTIONALITY = 16
 DEFAULT_STORAGE_EXERT_PROPORTIONALITY = 1337
+
+
+def native_catalog_options(
+    c: "Composition", mz_service: str = "materialized"
+) -> list[str]:
+    """Copy shared native catalog options for use outside the managed container.
+
+    Capture the JSON, generation and URL arguments without printing credentials.
+    Map PostgreSQL socket authorities to the supplying service's TCP hostname.
+    Fail if no running managed process provides all shared options.
+    """
+    result = c.exec(
+        mz_service,
+        "bash",
+        "-c",
+        r"""
+        for args in /proc/[0-9]*/cmdline; do
+            [[ -r "$args" ]] || continue
+            config= generation= blob= consensus= oracle=
+            while IFS= read -r -d '' argument; do
+                case "$argument" in
+                    --catalog-config=*) config="$argument" ;;
+                    --catalog-deploy-generation=*) generation="$argument" ;;
+                    --catalog-persist-blob-url=*) blob="$argument" ;;
+                    --catalog-persist-consensus-url=*) consensus="$argument" ;;
+                    --catalog-timestamp-oracle-url=*) oracle="$argument" ;;
+                esac
+            done < "$args"
+            if [[ -n "$config" && -n "$generation" && -n "$blob" && -n "$consensus" && -n "$oracle" ]]; then
+                printf '%s\0' "$config" "$generation" "$blob" "$consensus" "$oracle"
+                exit 0
+            fi
+        done
+        echo 'No managed clusterd with all shared native catalog options found' >&2
+        exit 1
+        """,
+        capture=True,
+    )
+    options = result.stdout.removesuffix("\0").split("\0")
+    for i, option in enumerate(options):
+        name, _, value = option.partition("=")
+        if name not in (
+            "--catalog-persist-consensus-url",
+            "--catalog-timestamp-oracle-url",
+        ):
+            continue
+        url = urlsplit(value)
+        userinfo, at, hostport = url.netloc.rpartition("@")
+        host, colon, port = hostport.partition(":")
+        if url.scheme in ("postgres", "postgresql") and unquote(host).startswith("/"):
+            # Materialized's bundled PostgreSQL listens on all TCP interfaces
+            # at the same port as its socket. Other containers cannot use that
+            # socket, but can reach the supplying service by its Compose name.
+            authority = f"{userinfo}{at}{mz_service}{colon}{port}"
+            options[i] = f"{name}={url._replace(netloc=authority).geturl()}"
+    return options
 
 
 class Clusterd(Service):

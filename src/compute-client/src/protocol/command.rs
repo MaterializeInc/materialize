@@ -36,12 +36,39 @@ use crate::logging::LoggingConfig;
 /// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand {
+    /// Opens an independent query connection. The nonce must be unique across connections.
+    HelloQuery {
+        /// Connection identity used for response routing and query ownership.
+        nonce: Uuid,
+    },
+    /// Sets the connection-local aggregation and execution result bound.
+    /// Required after HelloQuery and before query work. Does not change global configuration.
+    SetQueryMaxResultSize {
+        /// Maximum result bytes, including aggregation across partitions.
+        max_result_size: u64,
+    },
+    /// Creates a query-owned dataflow and acknowledges admission on every worker.
+    CreateQueryDataflow {
+        /// Unique creation request within this connection.
+        request_id: Uuid,
+        /// Validated catalog context. Native replicas require this position.
+        /// Boxed to keep the shared command enum small.
+        catalog_position: Option<Box<mz_cluster_client::CatalogPosition>>,
+        /// Dataflow to admit and render.
+        dataflow: Box<DataflowDescription<RenderPlan, CollectionMetadata>>,
+    },
+    /// Certifies a catalog prefix after the replica owner has enqueued its
+    /// configuration and retirement effects in this lane. Query connections
+    /// cannot send this command. Import readiness remains a separate check.
+    /// Broadcast to every worker, including across processes.
+    ApplyCatalogPosition(Box<mz_cluster_client::CatalogPosition>),
     /// `Hello` is the first command sent to a replica after a connection was established. It
     /// provides the replica with meta information about the connection.
     ///
     /// This command is special in that it is broadcast to all workers of a multi-worker replica.
-    /// All subsequent commands, except `UpdateConfiguration`, are only sent to the first worker,
-    /// which then distributes them to the other workers using a dataflow.
+    /// Subsequent lifecycle commands, except `UpdateConfiguration` and `ApplyCatalogPosition`,
+    /// are only sent to the first worker, which then distributes them to the other workers
+    /// using a dataflow.
     Hello {
         /// A nonce unique to the current iteration of the compute protocol.
         ///
@@ -265,11 +292,13 @@ pub enum ComputeCommand {
     },
 }
 
-/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
-/// if the controller attempt to reconcile them with different values
-/// for anything in this struct.
+/// Configuration for a replica, passed with `CreateInstance`.
+/// Reconciliation requires compatibility as defined by [`InstanceConfig::compatible_with`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstanceConfig {
+    /// Authorized Persist state-format target, installed before instance setup.
+    /// `None` leaves the process target unchanged.
+    pub persist_state_version: Option<semver::Version>,
     /// Specification of introspection logging.
     pub logging: LoggingConfig,
     /// The offset relative to the replica startup at which it should expire. None disables feature.
@@ -309,10 +338,12 @@ impl InstanceConfig {
     ///
     /// The initial config snapshot is likewise excluded: it carries dyncfg values that apply
     /// globally and are kept current through `UpdateConfiguration`, so a difference across
-    /// reconnects is expected and does not require a restart.
+    /// reconnects is expected and does not require a restart. The Persist target is
+    /// also live configuration and does not constrain compatibility.
     pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
         // Destructure to protect against adding fields in the future.
         let InstanceConfig {
+            persist_state_version: _,
             logging: self_logging,
             expiration_offset: self_offset,
             peek_stash_persist_location: self_peek_stash_persist_location,
@@ -322,6 +353,7 @@ impl InstanceConfig {
             initial_config: _,
         } = self;
         let InstanceConfig {
+            persist_state_version: _,
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
@@ -351,6 +383,8 @@ impl InstanceConfig {
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ComputeParameters {
+    /// Authorized Persist state-format target. `None` leaves the target unchanged.
+    pub persist_state_version: Option<semver::Version>,
     /// An optional arbitrary string that describes the class of the workload
     /// this compute instance is running (e.g., `production` or `staging`).
     ///
@@ -381,6 +415,7 @@ impl ComputeParameters {
     /// Update the parameter values with the set ones from `other`.
     pub fn update(&mut self, other: ComputeParameters) {
         let ComputeParameters {
+            persist_state_version,
             workload_class,
             max_result_size,
             tracing,
@@ -388,6 +423,9 @@ impl ComputeParameters {
             dyncfg_updates,
         } = other;
 
+        if persist_state_version.is_some() {
+            self.persist_state_version = persist_state_version;
+        }
         if workload_class.is_some() {
             self.workload_class = workload_class;
         }
@@ -449,6 +487,9 @@ impl PeekTarget {
 /// correctly answer the `Peek`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peek {
+    /// Validated definitions/configuration context for the independent query
+    /// protocol. Legacy controller peeks do not require a catalog position.
+    pub catalog_position: Option<mz_cluster_client::CatalogPosition>,
     /// Target-specific metadata.
     pub target: PeekTarget,
     /// The relation description for the rows returned by this peek, before
@@ -486,6 +527,25 @@ impl TryIntoProtocolNonce for ComputeCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn persist_target_is_live_instance_configuration() {
+        let initial = InstanceConfig {
+            persist_state_version: Some(semver::Version::new(0, 100, 0)),
+            logging: Default::default(),
+            expiration_offset: None,
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
+            arrangement_dictionary_compression: false,
+            initial_config: Default::default(),
+        };
+        let encoded = bincode::serialize(&initial).unwrap();
+        let decoded: InstanceConfig = bincode::deserialize(&encoded).unwrap();
+        assert_eq!(decoded, initial);
+
+        let mut advanced = initial.clone();
+        advanced.persist_state_version = Some(semver::Version::new(0, 101, 0));
+        assert!(initial.compatible_with(&advanced));
+    }
 
     /// Test to ensure the size of the `ComputeCommand` enum doesn't regress.
     #[mz_ore::test]

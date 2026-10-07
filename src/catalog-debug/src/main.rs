@@ -31,10 +31,13 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
-    AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection, CollectionTrace,
-    CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
-    DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
+    AuditLogCollection, ClientIncarnationCollection, ClientReadRequirementCollection,
+    ClusterCollection, ClusterIntrospectionSourceIndexCollection, ClusterReplicaCollection,
+    ClusterReplicaDeclarationCollection, ClusterRuntimeCollection,
+    ClusterSystemConfigurationCollection, Collection, CollectionCompactionBoundCollection,
+    CollectionTrace, CollectionType, CommentCollection, ConfigCollection, DatabaseCollection,
+    DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection,
+    MaintainedReadRequirementCollection, NetworkPolicyCollection,
     ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
     SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
     SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
@@ -88,6 +91,9 @@ pub struct Args {
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: SensitiveUrl,
+    /// Shared EpochMilliseconds oracle URL. Required for edit and delete.
+    #[clap(long, env = "TIMESTAMP_ORACLE_URL")]
+    timestamp_oracle_url: Option<SensitiveUrl>,
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -139,6 +145,8 @@ enum Action {
         target: Option<PathBuf>,
     },
     /// Edits a single item in a collection in the catalog.
+    /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
+    /// Refuses with a reason if client heartbeats or recent publication indicate a live environment.
     Edit {
         /// The name of the catalog collection to edit.
         collection: String,
@@ -148,14 +156,24 @@ enum Action {
         /// The new JSON-encoded value for the item.
         #[clap(value_parser = parse_json)]
         value: serde_json::Value,
+        /// Override advisory liveness safety, without fencing writers or promoting.
+        /// Live writers apply foreign changes or halt and rebuild if they cannot.
+        #[clap(long)]
+        force: bool,
     },
     /// Deletes a single item in a collection in the catalog
+    /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
+    /// Refuses with a reason if client heartbeats or recent publication indicate a live environment.
     Delete {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
         #[clap(value_parser = parse_json)]
         key: serde_json::Value,
+        /// Override advisory liveness safety, without fencing writers or promoting.
+        /// Live writers apply foreign changes or halt and rebuild if they cannot.
+        #[clap(long)]
+        force: bool,
     },
     /// Checks if the specified catalog could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
@@ -200,6 +218,26 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
+    let timestamp_oracle = if matches!(&args.action, Action::Edit { .. } | Action::Delete { .. }) {
+        let url = args
+            .timestamp_oracle_url
+            .as_ref()
+            .context("catalog writes require an explicit --timestamp-oracle-url")?;
+        let config = mz_timestamp_oracle::TimestampOracleConfig::from_url(url, &metrics_registry)?;
+        Some(mz_catalog::durable::CatalogTimestampOracle::new(
+            config
+                .open(
+                    mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                    Timestamp::MIN,
+                    SYSTEM_TIME.clone(),
+                    false,
+                )
+                .await,
+            SYSTEM_TIME.clone(),
+        ))
+    } else {
+        None
+    };
     let start = Instant::now();
     // It's important that the version in this `BUILD_INFO` is kept in sync with the build
     // info used to write data to the persist catalog.
@@ -220,6 +258,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         BUILD_INFO.semver_version(),
         args.deploy_generation,
         metrics,
+        timestamp_oracle,
     )
     .await?;
 
@@ -259,8 +298,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             collection,
             key,
             value,
-        } => edit(openable_state, collection, key, value).await,
-        Action::Delete { collection, key } => delete(openable_state, collection, key).await,
+            force,
+        } => edit(openable_state, collection, key, value, force).await,
+        Action::Delete {
+            collection,
+            key,
+            force,
+        } => delete(openable_state, collection, key, force).await,
         Action::UpgradeCheck {
             secrets,
             cluster_replica_sizes,
@@ -292,6 +336,10 @@ macro_rules! for_collection {
                 $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?
             }
             CollectionType::ComputeReplicas => $fn::<ClusterReplicaCollection>($($arg),*).await?,
+            CollectionType::ClusterReplicaDeclaration => {
+                $fn::<ClusterReplicaDeclarationCollection>($($arg),*).await?
+            }
+            CollectionType::ClusterRuntime => $fn::<ClusterRuntimeCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
@@ -321,6 +369,21 @@ macro_rules! for_collection {
             CollectionType::SystemPrivileges => {
                 $fn::<SystemPrivilegeCollection>($($arg),*).await?
             }
+            CollectionType::CollectionCompactionBound => {
+                $fn::<CollectionCompactionBoundCollection>($($arg),*).await?
+            }
+            CollectionType::MaintainedReadRequirement => {
+                $fn::<MaintainedReadRequirementCollection>($($arg),*).await?
+            }
+            CollectionType::WrittenPlan => {
+                $fn::<mz_catalog::durable::debug::WrittenPlanCollection>($($arg),*).await?
+            }
+            CollectionType::ClientIncarnation => {
+                $fn::<ClientIncarnationCollection>($($arg),*).await?
+            }
+            CollectionType::ClientReadRequirement => {
+                $fn::<ClientReadRequirementCollection>($($arg),*).await?
+            }
             CollectionType::StorageCollectionMetadata => {
                 $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
             }
@@ -337,11 +400,13 @@ async fn edit(
     collection: String,
     key: serde_json::Value,
     value: serde_json::Value,
+    force: bool,
 ) -> Result<(), anyhow::Error> {
     async fn edit_col<T: Collection>(
         mut debug_state: DebugCatalogState,
         key: serde_json::Value,
         value: serde_json::Value,
+        force: bool,
     ) -> Result<serde_json::Value, anyhow::Error>
     where
         for<'a> T::Key: PartialEq + Eq + Debug + Clone + Deserialize<'a>,
@@ -349,13 +414,15 @@ async fn edit(
     {
         let key: T::Key = serde_json::from_value(key)?;
         let value: T::Value = serde_json::from_value(value)?;
-        let prev = debug_state.edit::<T>(key.clone(), value.clone()).await?;
+        let prev = debug_state
+            .edit::<T>(key.clone(), value.clone(), force)
+            .await?;
         Ok(serde_json::to_value(prev)?)
     }
 
     let collection_type: CollectionType = collection.parse()?;
     let debug_state = openable_state.open_debug().await?;
-    let prev = for_collection!(collection_type, edit_col, debug_state, key, value);
+    let prev = for_collection!(collection_type, edit_col, debug_state, key, value, force);
     println!("previous value: {prev:?}");
     Ok(())
 }
@@ -364,23 +431,25 @@ async fn delete(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     collection: String,
     key: serde_json::Value,
+    force: bool,
 ) -> Result<(), anyhow::Error> {
     async fn delete_col<T: Collection>(
         mut debug_state: DebugCatalogState,
         key: serde_json::Value,
+        force: bool,
     ) -> Result<(), anyhow::Error>
     where
         for<'a> T::Key: PartialEq + Eq + Debug + Clone + Deserialize<'a>,
         T::Value: Debug,
     {
         let key: T::Key = serde_json::from_value(key)?;
-        debug_state.delete::<T>(key.clone()).await?;
+        debug_state.delete::<T>(key.clone(), force).await?;
         Ok(())
     }
 
     let collection_type: CollectionType = collection.parse()?;
     let debug_state = openable_state.open_debug().await?;
-    for_collection!(collection_type, delete_col, debug_state, key);
+    for_collection!(collection_type, delete_col, debug_state, key, force);
     Ok(())
 }
 
@@ -456,6 +525,8 @@ async fn dump(
         clusters,
         introspection_sources,
         cluster_replicas,
+        cluster_replica_declarations,
+        cluster_runtimes,
         comments,
         configs,
         databases,
@@ -473,6 +544,11 @@ async fn dump(
         cluster_system_configurations,
         replica_system_configurations,
         system_privileges,
+        collection_compaction_bounds,
+        maintained_read_requirements,
+        client_incarnations,
+        written_plans,
+        client_read_requirements,
         storage_collection_metadata,
         unfinalized_shards,
         txn_wal_shard,
@@ -501,6 +577,20 @@ async fn dump(
         consolidate,
     );
     dump_col(&mut data, comments, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        cluster_replica_declarations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        cluster_runtimes,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(&mut data, configs, &ignore, stats_only, consolidate);
     dump_col(&mut data, databases, &ignore, stats_only, consolidate);
     dump_col(
@@ -561,6 +651,35 @@ async fn dump(
     dump_col(
         &mut data,
         system_privileges,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        collection_compaction_bounds,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        maintained_read_requirements,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(&mut data, written_plans, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        client_incarnations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        client_read_requirements,
         &ignore,
         stats_only,
         consolidate,
@@ -636,6 +755,7 @@ async fn upgrade_check(
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
         state,
+        catalog_updates: _,
         migrated_storage_collections_0dt: _,
         new_builtin_collections: _,
         builtin_table_updates: _,
@@ -843,5 +963,39 @@ struct UnescapedDebug(String);
 impl std::fmt::Debug for UnescapedDebug {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "'{}'", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Action;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Command {
+        #[clap(subcommand)]
+        action: Action,
+    }
+
+    #[mz_ore::test]
+    fn mutations_require_explicit_force() {
+        for mutation in ["edit", "delete"] {
+            for force in [false, true] {
+                let mut args = vec!["catalog-debug", mutation, "config", "{}"];
+                if mutation == "edit" {
+                    args.push("{}");
+                }
+                if force {
+                    args.push("--force");
+                }
+                let command = Command::try_parse_from(args).expect("valid mutation command");
+                match command.action {
+                    Action::Edit { force: actual, .. } | Action::Delete { force: actual, .. } => {
+                        assert_eq!(actual, force);
+                    }
+                    action => panic!("unexpected action: {action:?}"),
+                }
+            }
+        }
     }
 }

@@ -1258,3 +1258,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17126  mz_object_dependencies_raw
 17127  mz_avg_promotion
 17128  mz_avg_promotion_internal_v1
+17129  mz_object_arrangement_sizes_raw
+17130  mz_compute_error_counts_by_deployment
+17131  mz_compute_operator_hydration_statuses_raw
+17132  mz_cluster_replica_frontiers_raw
+17133  mz_compute_hydration_times_raw

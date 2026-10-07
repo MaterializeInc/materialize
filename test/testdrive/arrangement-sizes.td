@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test the live `mz_object_arrangement_sizes` introspection source and the
+# Test the live `mz_object_arrangement_sizes` introspection view and the
 # periodically-snapshotted `mz_object_arrangement_size_history` table.
 #
 # Relies on testdrive's retry behavior since both relations are populated
@@ -34,6 +34,7 @@ object_id            text
 size                 bigint
 collection_timestamp "timestamp with time zone"
 hydration_complete   boolean
+deployment_generation uint8
 
 # Set up a cluster with two replicas and arrangements large enough that
 # `mz_object_arrangement_sizes` reports a nonzero quantized size.

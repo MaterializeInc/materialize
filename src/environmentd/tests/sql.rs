@@ -55,6 +55,375 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
 
+#[path = "sql/comment_id_collision.rs"]
+mod comment_id_collision;
+#[path = "sql/prepared_rewrites.rs"]
+mod prepared_rewrites;
+
+/// A peer index selected only in another build must not block unrelated compute
+/// installation or SQL. Both indexes are admitted at birth, and retention advances
+/// after DROP.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_peer_index_pending_installation() {
+    use mz_catalog::durable::objects::serialization::{ProtoType, RustType};
+    use mz_catalog::durable::objects::{CollectionCompactionBound, DurableType};
+    use mz_catalog::durable::{
+        CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
+    };
+    use mz_catalog::expr_cache::ExpressionCacheHandle;
+    use mz_postgres_util::{batch_execute, query, query_one, sql};
+
+    let test_case = async {
+        let server = test_util::TestHarness::default().start().await;
+        let client = server.connect().await.unwrap();
+        let internal = server.connect().internal().await.unwrap();
+        batch_execute(&internal, sql!("SET CLUSTER = default"))
+            .await
+            .unwrap();
+        for statement in [
+            sql!("CREATE TABLE peer_input (a int)"),
+            sql!("INSERT INTO peer_input VALUES (1), (2), (3)"),
+            sql!("CREATE INDEX peer_template ON peer_input (a)"),
+        ] {
+            batch_execute(&client, statement).await.unwrap();
+        }
+
+        let catalog_version = mz_environmentd::BUILD_INFO.semver_version();
+        let persist = server
+            .persist_clients
+            .open(server.persist_location.clone())
+            .await
+            .unwrap();
+        let mut peer = persist_backed_catalog_join_active(
+            persist.clone(),
+            server.environment_id.organization_id(),
+            catalog_version,
+            Arc::new(mz_catalog::durable::Metrics::new(
+                &mz_ore::metrics::MetricsRegistry::new(),
+            )),
+            Some(server.catalog_timestamp_oracle().await),
+        )
+        .await
+        .unwrap();
+        let (template, input, selection, shard) = loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("peer template snapshot: {error}"),
+            };
+            let template = txn
+                .get_items()
+                .find(|item| item.name == "peer_template")
+                .unwrap();
+            let input = txn
+                .get_items()
+                .find(|item| item.name == "peer_input")
+                .unwrap();
+            let mut selections = txn
+                .get_written_plans()
+                .filter(|plan| plan.id == template.global_id);
+            let selection = selections
+                .next()
+                .expect("SQL must select its immutable plan");
+            assert!(selections.next().is_none(), "fresh fixture has one build");
+            let shard = txn.get_expression_cache_shard().unwrap();
+            break (template, input, selection, shard);
+        };
+        let build: semver::Version = selection
+            .build_version
+            .parse()
+            .expect("valid selected build version");
+        assert_eq!(
+            build,
+            mz_catalog::expr_cache::expression_build_version(&mz_environmentd::BUILD_INFO)
+        );
+        // Keep semantic compatibility and the development namespace prefix, but
+        // model a peer build for which this replica has no selected plan.
+        let mut pending_build = build.clone();
+        pending_build.build = semver::BuildMetadata::new(&if build.build.is_empty() {
+            "peer-pending-test".to_owned()
+        } else {
+            format!("{}.peer-pending-test", build.build)
+        })
+        .unwrap();
+        let pending_store =
+            ExpressionCacheHandle::open_plan_store(pending_build.clone(), &persist, shard).await;
+        let pending_build = pending_build.to_string();
+        let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        let mut plans = store
+            .read_plans(vec![(selection.id, selection.revision)])
+            .await
+            .unwrap();
+        let plan = plans.remove(&(selection.id, selection.revision)).unwrap();
+
+        // Reserve fresh identities durably before writing immutable bytes. No dropped
+        // SQL object's identity is recycled, even if the item transaction loses a CAS.
+        let ids = peer.allocate_user_ids(2, Timestamp::MIN).await.unwrap();
+        let (pending_item, pending_id) = ids[0];
+        let (selected_item, selected_id) = ids[1];
+        assert!(plan.dataflow_metainfos.optimizer_notices.is_empty());
+        assert!(plan.dataflow_metainfos.index_usage_types.is_empty());
+        // The first index on a table needs no internal-ID remapper. Assert that
+        // both SQL-produced plans are a single source-only export before cloning.
+        macro_rules! rename_export {
+            ($df:expr, $id:expr, $name:expr) => {{
+                let df = &mut $df;
+                assert!(df.index_imports.is_empty());
+                assert!(df.sink_exports.is_empty());
+                assert_eq!(
+                    df.source_imports.keys().copied().collect::<Vec<_>>(),
+                    vec![input.global_id]
+                );
+                assert_eq!(df.index_exports.len(), 1);
+                assert_eq!(df.objects_to_build.len(), 1);
+                assert_eq!(df.objects_to_build[0].id, template.global_id);
+                assert_eq!(
+                    df.depends_on(template.global_id),
+                    [template.global_id, input.global_id].into()
+                );
+                let export = df.index_exports.remove(&template.global_id).unwrap();
+                assert_eq!(export.0.on_id, input.global_id);
+                df.index_exports.insert($id, export);
+                df.objects_to_build[0].id = $id;
+                df.debug_name = $name.into();
+                assert_eq!(df.depends_on($id), [$id, input.global_id].into());
+            }};
+        }
+        assert_eq!(selection.imports, [input.global_id].into());
+        assert!(selection.replica_owner.is_none());
+        let revision = uuid::Uuid::new_v4();
+        let pending_revision = uuid::Uuid::new_v4();
+        // Each build durably writes its real plan before selecting it. The
+        // pending index lacks an own-build selection, not the selected bytes.
+        for (store, id, name, revision) in [
+            (&pending_store, pending_id, "peer_pending", pending_revision),
+            (&store, selected_id, "peer_selected", revision),
+        ] {
+            let mut plan = plan.clone();
+            rename_export!(plan.global_mir, id, name);
+            rename_export!(plan.physical_plan, id, name);
+            store.write_plans(vec![(id, revision, plan)]).await.unwrap();
+        }
+        let initial_bound = loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let mut txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("peer transaction: {error}"),
+            };
+            assert_eq!(txn.get_item(&template.id).unwrap(), template);
+            assert_eq!(txn.get_item(&input.id).unwrap(), input);
+            assert_eq!(
+                txn.get_written_plans()
+                    .find(|plan| plan.id == template.global_id)
+                    .unwrap(),
+                selection
+            );
+            let bounds: BTreeMap<_, _> = txn
+                .current_snapshot()
+                .collection_compaction_bounds
+                .into_iter()
+                .map(|(key, value)| {
+                    let bound = CollectionCompactionBound::from_key_value(
+                        key.into_rust().unwrap(),
+                        value.into_rust().unwrap(),
+                    );
+                    (bound.id, bound.frontier)
+                })
+                .collect();
+            let initial_bound = bounds[&template.global_id].expect("live template bound");
+            let input_bound = bounds[&input.global_id].expect("live input bound");
+            assert!(input_bound <= initial_bound);
+            // The SQL template protects this table at its current bound. The
+            // asserted source-only plans have exactly that logical and actual
+            // input. Copying the bound and imports in this snapshot preserves
+            // that protection: set_collection_compaction_bound establishes each
+            // index frontier, and set_written_plan_with_owner records imports
+            // for Catalog::transact's constrain_plan_inputs. Commit's catalog
+            // CAS prevents racing input compaction. No fixed maintained read
+            // requirement is needed for an index's advancing retention.
+            for (item_id, global_id, name, revision, build) in [
+                (
+                    pending_item,
+                    pending_id,
+                    "peer_pending",
+                    pending_revision,
+                    &pending_build,
+                ),
+                (
+                    selected_item,
+                    selected_id,
+                    "peer_selected",
+                    revision,
+                    &selection.build_version,
+                ),
+            ] {
+                let oid = txn.allocate_oid(&Default::default()).unwrap();
+                txn.insert_item(
+                    item_id,
+                    oid,
+                    global_id,
+                    template.schema_id,
+                    name,
+                    template.create_sql.replace("peer_template", name),
+                    template.owner_id,
+                    template.privileges.clone(),
+                    BTreeMap::new(),
+                    None,
+                )
+                .unwrap();
+                txn.set_written_plan_with_owner(
+                    global_id,
+                    build,
+                    Some(revision),
+                    None,
+                    selection.imports.clone(),
+                )
+                .unwrap();
+                txn.set_collection_compaction_bound(global_id, Some(initial_bound))
+                    .unwrap();
+            }
+            let ts = txn.upper();
+            let _ = txn.get_and_commit_op_updates();
+            match txn.commit(ts).await {
+                Ok(()) => break initial_bound,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("peer commit: {error}"),
+            }
+        };
+
+        // Name resolution must see acknowledged peer definitions without a
+        // refresh-triggering DDL, including one that has no installable plan.
+        let pending_name: String = query_one(&client, sql!("SHOW CREATE INDEX peer_pending"), &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(pending_name, "materialize.public.peer_pending");
+        let names: Vec<String> = query(
+            &client,
+            sql!(
+                "SELECT name FROM mz_indexes
+                  WHERE name IN ('peer_pending', 'peer_selected') ORDER BY name"
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+        assert_eq!(names, ["peer_pending", "peer_selected"]);
+
+        loop {
+            let ready: bool = query_one(
+                &internal,
+                sql!(
+                    "SELECT EXISTS (SELECT 1 FROM mz_introspection.mz_compute_frontiers
+                      WHERE export_id = $1 AND time > 0)"
+                ),
+                &[&selected_id.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+            if ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let absent: bool = query_one(
+            &internal,
+            sql!(
+                "SELECT NOT EXISTS (SELECT 1 FROM mz_introspection.mz_compute_exports
+                  WHERE export_id = $1)"
+            ),
+            &[&pending_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+        assert!(
+            absent,
+            "index without an own-build selection must not enter compute"
+        );
+        let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(sum, 6);
+
+        // Other catalog keys have different ID shapes. CASE guards the fallible
+        // decoder without relying on the evaluation order of WHERE conjuncts.
+        let bound_sql = sql!(
+            "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_catalog_raw \
+                         WHERE CASE WHEN data->>'kind' = 'CollectionCompactionBound' \
+                         THEN mz_internal.parse_catalog_id(data->'key'->'id') = $1 \
+                         ELSE false END)"
+        );
+        for id in [pending_id, selected_id] {
+            let admitted: bool = query_one(&internal, bound_sql.clone(), &[&id.to_string()])
+                .await
+                .unwrap()
+                .get(0);
+            assert!(admitted, "both indexes must have creation-time bounds");
+        }
+        batch_execute(&client, sql!("DROP INDEX peer_pending"))
+            .await
+            .unwrap();
+        let pending_bound: bool = query_one(&internal, bound_sql, &[&pending_id.to_string()])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!pending_bound, "DROP must remove the pending index's bound");
+        loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let snapshot = peer.snapshot().await.unwrap();
+            // DROP retires this writer's selections, not another build's
+            // metadata. A selection with no live catalog owner grants no
+            // protection and cannot install an export.
+            assert_eq!(
+                snapshot
+                    .written_plans
+                    .keys()
+                    .filter(|key| key.id == pending_id.into_proto())
+                    .map(|key| key.build_version.as_str())
+                    .collect::<Vec<_>>(),
+                [pending_build.as_str()]
+            );
+            let bound = snapshot
+                .collection_compaction_bounds
+                .into_iter()
+                .map(|(key, value)| {
+                    CollectionCompactionBound::from_key_value(
+                        key.into_rust().unwrap(),
+                        value.into_rust().unwrap(),
+                    )
+                })
+                .find(|bound| bound.id == selected_id)
+                .expect("selected index retains its bound");
+            if bound.frontier.expect("live selected index bound") > initial_bound {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(sum, 6);
+    };
+    tokio::time::timeout(Duration::from_secs(180), test_case)
+        .await
+        .expect("peer pending-installation test timed out");
+}
+
 /// An HTTP server whose responses can be controlled from another thread.
 struct MockHttpServer {
     _task: AbortOnDropHandle<()>,
@@ -1331,16 +1700,28 @@ binding constraints:
 lower:
   (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
-    let row = client
-        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
-        .unwrap();
-    let explain: String = row.get(0);
-    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     // The storage inputs constraint appears non-deterministically depending on
     // whether the storage frontier has advanced before the query runs.
     let storage_inputs_re = Regex::new(r"  \(Storage inputs: \[.*\]\): \[<TIMESTAMP>\]\n").unwrap();
-    let explain = storage_inputs_re.replace_all(&explain, "");
-    assert_eq!(explain, expect, "{explain}\n\n{expect}");
+    // Catalog publications can advance the oracle before the table keepalive
+    // completes. Preserve the ready output assertion without assuming those
+    // independent writes complete together.
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let row = client
+                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
+                .unwrap();
+            let explain: String = row.get(0);
+            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+            let explain = storage_inputs_re.replace_all(&explain, "");
+            if explain == expect {
+                Ok(())
+            } else {
+                Err(format!("{explain}\n\nexpected:\n{expect}"))
+            }
+        })
+        .unwrap();
 }
 
 // Test `EXPLAIN TIMESTAMP AS JSON`
@@ -1428,6 +1809,8 @@ fn test_transactional_explain_timestamps() {
             .first()
             .unwrap()
             .read_frontier
+            .as_ref()
+            .expect("physical since is observed")
             .first()
             .unwrap();
 
@@ -2047,13 +2430,22 @@ async fn test_session_linearizability(isolation_level: &str) {
         .await
         .unwrap();
 
-    let source_ts = test_util::get_explain_timestamp(pg_table_name, &mz_client).await;
+    // A completed read establishes the session's timestamp floor. EXPLAIN
+    // selects a hypothetical timestamp without advancing the session oracle.
+    let row = mz_client
+        .query_one(
+            &format!("SELECT count(*), mz_now()::text FROM {pg_table_name}"),
+            &[],
+        )
+        .await
+        .unwrap();
+    let source_ts: u64 = row.get::<_, String>(1).parse().unwrap();
     let join_ts =
         test_util::get_explain_timestamp(&format!("{pg_table_name}, t"), &mz_client).await;
 
-    // Since the query on the join was done after the query on the view, it should have a higher or
-    // equal timestamp in strict serializable mode.
-    assert!(join_ts >= source_ts);
+    // Both strict and strong-session serializability preserve the completed
+    // read's timestamp floor when selecting a timestamp for another input set.
+    assert!(join_ts >= source_ts, "{join_ts} >= {source_ts}");
 
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
@@ -3545,6 +3937,24 @@ fn test_peek_on_dropped_indexed_view() {
         .unwrap();
     ddl_client.batch_execute("CREATE INDEX i ON v (a)").unwrap();
 
+    // DDL completion does not imply that a replica has a readable index yet.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let ready: bool = ddl_client
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                     JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                     JOIN mz_indexes i ON i.id = g.id \
+                     WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            ready.then_some(()).ok_or("Index not readable")
+        })
+        .unwrap();
+
     // Asynchronously query an indexed view.
     let handle = thread::spawn(move || {
         peek_client.query(
@@ -3554,7 +3964,11 @@ fn test_peek_on_dropped_indexed_view() {
     });
 
     let index_id: String = ddl_client
-        .query_one("SELECT id FROM mz_indexes WHERE name = 'i'", &[])
+        .query_one(
+            "SELECT g.global_id FROM mz_indexes i \
+             JOIN mz_internal.mz_object_global_ids g ON g.id = i.id WHERE i.name = 'i'",
+            &[],
+        )
         .unwrap()
         .get(0);
 
@@ -3733,8 +4147,14 @@ async fn test_retain_history() {
             .retry_async(|_| async {
                 let ts = get_explain_timestamp_determination(name, &client).await?;
                 let source = ts.sources.into_element();
-                let upper = source.write_frontier.into_element();
-                let since = source.read_frontier.into_element();
+                let upper = source
+                    .write_frontier
+                    .expect("upper is observed")
+                    .into_element();
+                let since = source
+                    .read_frontier
+                    .expect("physical since is observed")
+                    .into_element();
                 if upper.saturating_sub(since) < Timestamp::from(2000u64) {
                     anyhow::bail!("{upper} - {since} should be at least 2s apart")
                 }
@@ -3944,6 +4364,15 @@ async fn test_explain_timestamp_blocking() {
         .unwrap();
 
     let mv_timestamp = get_explain_timestamp("const_mv", &client).await;
+
+    // A plan's hypothetical timestamp must not make EXPLAIN wait for the refresh.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        client.query("EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM const_mv", &[]),
+    )
+    .await
+    .expect("EXPLAIN must not wait for a future refresh")
+    .unwrap();
 
     let row = client
         .query_one("SELECT mz_now()::text;", &[])

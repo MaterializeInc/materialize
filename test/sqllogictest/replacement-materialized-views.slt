@@ -171,9 +171,9 @@ query TT
 SELECT id, name FROM mz_materialized_views
 WHERE id LIKE 'u%'
 ----
-u13  mv
-u14  rp
-u15  mv2
+u29  mv
+u30  rp
+u31  mv2
 
 query TT
 SELECT d.object_id, d.referenced_object_id
@@ -181,8 +181,8 @@ FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 WHERE m.id LIKE 'u%'
 ----
-u14  u13
-u15  u13
+u30  u29
+u31  u29
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
@@ -191,8 +191,8 @@ query TT
 SELECT id, name FROM mz_materialized_views
 WHERE id LIKE 'u%'
 ----
-u14  mv
-u15  mv2
+u30  mv
+u31  mv2
 
 query TT
 SELECT d.object_id, d.referenced_object_id
@@ -200,7 +200,7 @@ FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 WHERE m.id LIKE 'u%'
 ----
-u15  u14
+u31  u30
 
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE

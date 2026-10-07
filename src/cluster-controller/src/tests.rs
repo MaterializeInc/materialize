@@ -28,8 +28,8 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::ClusterController;
 use crate::ctx::{
     ApplyOutcome, AutoScalingPolicy, AvailabilityZones, BurstAudit, ClusterControllerCtx,
-    ClusterSchedule, ClusterState, CreateReason, Decision, ObservedReplica, ReconfigurationAudit,
-    ReconfigurationStatus, RefreshWindowClusterInputs, RefreshWindowInputs,
+    ClusterIntent, ClusterSchedule, ClusterState, CreateReason, Decision, ObservedReplica,
+    ReconfigurationAudit, ReconfigurationStatus, RefreshWindowClusterInputs, RefreshWindowInputs,
     RefreshWindowInputsBatch, ReplicaShape, StateWrite,
 };
 use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
@@ -101,6 +101,7 @@ fn state(
 ) -> ClusterState {
     ClusterState {
         cluster_id,
+        intent: None,
         size: size.to_string(),
         replication_factor,
         availability_zones: Vec::new(),
@@ -112,6 +113,40 @@ fn state(
         burst: None,
         replicas,
     }
+}
+
+#[mz_ore::test]
+fn required_replicas_present_manual_inventory() {
+    let controller = controller();
+    let now = Timestamp::from(1000u64);
+    let mut s = state(cluster(1), "100cc", 2, Vec::new());
+    assert!(!controller.required_replicas_present(&s, None, now));
+    s.replicas.push(observed(replica(1), "r0", "100cc"));
+    assert!(!controller.required_replicas_present(&s, None, now));
+    s.replicas.push(observed(replica(2), "r1", "100cc"));
+    assert!(controller.required_replicas_present(&s, None, now));
+    s.replicas.push(observed(replica(3), "extra", "200cc"));
+    assert!(controller.required_replicas_present(&s, None, now));
+
+    let zero = state(cluster(2), "100cc", 0, Vec::new());
+    assert!(controller.required_replicas_present(&zero, None, now));
+}
+
+#[mz_ore::test]
+fn required_replicas_present_waits_for_intent_normalization() {
+    let controller = controller();
+    let now = Timestamp::from(1000u64);
+    let mut s = state(cluster(1), "100cc", 0, Vec::new());
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 1, 5000).target,
+        reconfiguration: None,
+        may_settle: false,
+        runtime_initialized: true,
+    });
+    assert!(!controller.required_replicas_present(&s, None, now));
+    s.replication_factor = 1;
+    s.replicas.push(observed(replica(1), "r0", "100cc"));
+    assert!(controller.required_replicas_present(&s, None, now));
 }
 
 /// A fake [`ClusterControllerCtx`] over an in-memory map of cluster states. It
@@ -402,6 +437,9 @@ impl FakeCtx {
                 let Some(state) = self.states.get_mut(cluster_id) else {
                     return;
                 };
+                if let Some(intent) = &mut state.intent {
+                    intent.runtime_initialized = true;
+                }
                 // Exhaustive destructure (no `..`): keeps this fake mirror of the
                 // adapter's `build_update_cluster_config_op` from silently
                 // forgetting a field added to `StateWrite`.
@@ -927,6 +965,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
         assert_eq!(
             expected,
             &ExpectedClusterState {
+                intent: None,
                 size: "100cc".to_string(),
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(Vec::new()),
@@ -1027,6 +1066,7 @@ async fn create_drop_is_caa_guarded_and_recovers() {
         assert_eq!(
             expected,
             &ExpectedClusterState {
+                intent: None,
                 size: "100cc".to_string(),
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(Vec::new()),
@@ -1305,6 +1345,7 @@ fn reconfiguring_state(
     ready: BTreeSet<ReplicaId>,
 ) -> (ClusterState, LiveSignals) {
     let state = ClusterState {
+        intent: None,
         cluster_id,
         size: size.to_string(),
         replication_factor: rf,
@@ -1338,6 +1379,276 @@ fn written_reconfiguration_status(write: &StateWrite) -> Option<ReconfigurationS
 
 fn written_reconfiguration_audit(write: &StateWrite) -> Option<ReconfigurationAudit> {
     write.reconfiguration.as_ref().and_then(|w| w.audit)
+}
+
+#[mz_ore::test(tokio::test)]
+async fn zero_replica_runtime_is_initialized_once() {
+    let c = cluster(1);
+    let mut s = state(c, "100cc", 0, vec![]);
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 0, 5000).target,
+        reconfiguration: None,
+        may_settle: false,
+        runtime_initialized: false,
+    });
+    let mut ctx = FakeCtx::new(vec![s]);
+    ctx.witness_check = true;
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.states[&c].intent.as_ref().unwrap().runtime_initialized);
+    assert!(ctx.states[&c].replicas.is_empty());
+    ctx.applied.clear();
+    controller.reconcile(&mut ctx).await;
+    assert!(
+        ctx.applied.is_empty(),
+        "an empty roster is not fresh enrollment"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn shared_request_contract_is_normalized_and_cas_guarded() {
+    let c = cluster(1);
+    let request = record_on_timeout("200cc", 1, 5000, OnTimeout::Commit);
+    let mut s = state(c, "200cc", 1, vec![observed(replica(1), "r0", "200cc")]);
+    // Equal targets do not make requests equal when the timeout action differs.
+    s.reconfiguration = Some(ReconfigurationRecord {
+        status: ReconfigurationStatus::Finalized,
+        ..record("200cc", 1, 5000)
+    });
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 1, 5000).target,
+        reconfiguration: Some(request.clone()),
+        may_settle: false,
+        runtime_initialized: true,
+    });
+    let mut ctx = FakeCtx::new(vec![s]);
+    ctx.witness_check = true;
+    ctx.reject_next = 1;
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.applied.len(), 1, "rejected normalization skips phase 2");
+    let decisions = ctx.applied[0].clone();
+    let original = ctx.states[&c].intent.clone();
+
+    // Neither a promotion nor a shared settlement can leave an old local
+    // decision authorized. Both are part of the commit-time witness.
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .may_settle = true;
+    assert_eq!(ctx.apply(decisions.clone()).await, ApplyOutcome::Rejected);
+    ctx.states.get_mut(&c).unwrap().intent = original;
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .reconfiguration
+        .as_mut()
+        .unwrap()
+        .status = ReconfigurationStatus::TimedOut;
+    assert_eq!(ctx.apply(decisions).await, ApplyOutcome::Rejected);
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .reconfiguration = Some(request.clone());
+
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].size, "100cc");
+    assert_eq!(ctx.states[&c].reconfiguration.as_ref(), Some(&request));
+}
+
+#[mz_ore::test(tokio::test)]
+async fn shared_rollback_overrides_pending_success() {
+    let c = cluster(1);
+    let request = record("200cc", 1, 5000);
+    let mut s = state(c, "200cc", 1, vec![observed(replica(1), "r0", "200cc")]);
+    s.reconfiguration = Some(ReconfigurationRecord {
+        status: ReconfigurationStatus::Finalized,
+        ..request.clone()
+    });
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 1, 5000).target,
+        reconfiguration: Some(request),
+        may_settle: false,
+        runtime_initialized: true,
+    });
+    let mut ctx = FakeCtx::new(vec![s]);
+    ctx.witness_check = true;
+    let controller = controller();
+
+    // A pending deployment retains its own completed realization while the
+    // active deployment is still deciding the same request.
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.applied.is_empty());
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .reconfiguration
+        .as_mut()
+        .unwrap()
+        .status = ReconfigurationStatus::TimedOut;
+    controller.reconcile(&mut ctx).await;
+
+    let s = &ctx.states[&c];
+    assert_eq!(s.size, "100cc");
+    assert!(s.reconfiguration.is_none());
+    assert_eq!(s.replicas.len(), 1);
+    assert_eq!(s.replicas[0].shape.as_ref().unwrap().size, "100cc");
+    let Decision::UpdateClusterState { write, .. } = &ctx.applied[0][0] else {
+        panic!("rollback must normalize before diffing replicas");
+    };
+    assert_eq!(written_reconfiguration_audit(write), None);
+    assert_eq!(ctx.creates().len(), 1);
+    assert_eq!(ctx.drops().len(), 1);
+
+    // Promotion after shared settlement cannot resurrect the abandoned target.
+    ctx.applied.clear();
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .may_settle = true;
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.applied.is_empty());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn promotion_rechecks_private_success_with_original_deadline() {
+    let c = cluster(1);
+    let request = record("200cc", 1, 5000);
+    let mut s = state(c, "200cc", 1, vec![observed(replica(1), "r0", "200cc")]);
+    s.reconfiguration = Some(ReconfigurationRecord {
+        status: ReconfigurationStatus::Finalized,
+        ..request.clone()
+    });
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 1, 5000).target,
+        reconfiguration: Some(request.clone()),
+        may_settle: false,
+        runtime_initialized: true,
+    });
+    let mut ctx = FakeCtx::new(vec![s]);
+    ctx.witness_check = true;
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.applied.is_empty());
+
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .may_settle = true;
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].size, "200cc");
+    assert_eq!(ctx.states[&c].reconfiguration.as_ref(), Some(&request));
+    let Decision::UpdateClusterState { write, .. } = &ctx.applied[0][0] else {
+        panic!("promotion must normalize before strategies settle");
+    };
+    assert_eq!(written_reconfiguration_audit(write), None);
+    assert!(write.burst.is_none());
+    assert!(!ctx.readiness_references.is_empty());
+    assert!(ctx.drops().is_empty(), "the warmed target remains usable");
+    assert!(
+        ctx.creates().is_empty(),
+        "promotion must not provision a cold rollback baseline before checking readiness"
+    );
+
+    // Private success is not readiness now. Before the original deadline the
+    // normal strategy waits, then rolls back exactly at that deadline.
+    ctx.applied.clear();
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.applied.is_empty());
+    ctx.now = request.deadline;
+    controller.reconcile(&mut ctx).await;
+    let s = &ctx.states[&c];
+    assert_eq!(s.size, "200cc");
+    assert_eq!(
+        reconfiguration_status(s),
+        Some(ReconfigurationStatus::TimedOut)
+    );
+    assert_eq!(
+        s.reconfiguration.as_ref().unwrap().deadline,
+        request.deadline
+    );
+    let Decision::UpdateClusterState { write, .. } = &ctx.applied[0][0] else {
+        panic!("normal strategy must settle the reactivated request");
+    };
+    assert_eq!(
+        written_reconfiguration_audit(write),
+        Some(ReconfigurationAudit::TimedOut)
+    );
+    // The active catalog writer settles shared intent with this outcome. Only
+    // that rollback withdraws the target and restores the accepted baseline.
+    ctx.states
+        .get_mut(&c)
+        .unwrap()
+        .intent
+        .as_mut()
+        .unwrap()
+        .reconfiguration
+        .as_mut()
+        .unwrap()
+        .status = ReconfigurationStatus::TimedOut;
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].size, "100cc");
+    assert!(ctx.states[&c].reconfiguration.is_none());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn shared_success_converges_after_private_failure() {
+    let c = cluster(1);
+    let request = record("200cc", 1, 5000);
+    let mut s = state(c, "100cc", 1, vec![observed(replica(1), "r0", "100cc")]);
+    s.reconfiguration = Some(ReconfigurationRecord {
+        status: ReconfigurationStatus::ResourceExhausted,
+        ..request.clone()
+    });
+    s.intent = Some(ClusterIntent {
+        accepted: record("100cc", 1, 5000).target,
+        reconfiguration: Some(request.clone()),
+        may_settle: false,
+        runtime_initialized: true,
+    });
+    let mut ctx = FakeCtx::new(vec![s]);
+    ctx.witness_check = true;
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+    assert!(
+        ctx.applied.is_empty(),
+        "private failure is retained while pending"
+    );
+
+    let intent = ctx.states.get_mut(&c).unwrap().intent.as_mut().unwrap();
+    intent.accepted = request.target.clone();
+    intent.reconfiguration.as_mut().unwrap().status = ReconfigurationStatus::Finalized;
+    controller.reconcile(&mut ctx).await;
+    let s = &ctx.states[&c];
+    assert_eq!(s.size, "200cc");
+    assert!(s.reconfiguration.is_none());
+    assert_eq!(s.replicas.len(), 1);
+    assert_eq!(s.replicas[0].shape.as_ref().unwrap().size, "200cc");
+    let Decision::UpdateClusterState { write, .. } = &ctx.applied[0][0] else {
+        panic!("shared success must normalize before diffing replicas");
+    };
+    assert_eq!(written_reconfiguration_audit(write), None);
+    ctx.applied.clear();
+    controller.reconcile(&mut ctx).await;
+    assert!(ctx.applied.is_empty());
 }
 
 fn written_burst_record(write: &StateWrite) -> Option<crate::ctx::BurstRecord> {
@@ -1864,6 +2175,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
     // separately from the baseline's realized-shape replica.
     let c = cluster(1);
     let state = ClusterState {
+        intent: None,
         cluster_id: c,
         size: "100cc".to_string(),
         replication_factor: 1,
@@ -2558,6 +2870,7 @@ fn scheduled_state(
     refresh_window: Option<RefreshWindowInputs>,
 ) -> (ClusterState, LiveSignals) {
     let state = ClusterState {
+        intent: None,
         cluster_id,
         size: size.to_string(),
         replication_factor,
@@ -2614,6 +2927,24 @@ fn refresh_mv(id: u64, write_frontier: Option<u64>, schedule: RefreshSchedule) -
         write_frontier,
         refresh_schedule: schedule,
     }
+}
+
+#[mz_ore::test]
+fn required_replicas_present_on_refresh_window() {
+    let controller = controller();
+    let now = Timestamp::from(1000u64);
+    let (mut s, _) = scheduled_state(cluster(1), "100cc", 0, 0, Vec::new(), None);
+    assert!(!controller.required_replicas_present(&s, None, now));
+
+    let open = window_inputs(100, 0, Some(50), refresh_at(1000));
+    assert!(!controller.required_replicas_present(&s, Some(open.clone()), now));
+    let closed = window_inputs(100, 0, Some(200), refresh_at(50));
+    assert!(controller.required_replicas_present(&s, Some(closed.clone()), now));
+
+    s.replicas.push(observed(replica(1), "r0", "100cc"));
+    assert!(controller.required_replicas_present(&s, Some(open), now));
+    assert!(controller.required_replicas_present(&s, Some(closed), now));
+    assert!(!controller.required_replicas_present(&s, None, now));
 }
 
 #[mz_ore::test]

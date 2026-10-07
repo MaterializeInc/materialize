@@ -354,9 +354,55 @@ impl Coordinator {
                     drop(retire_notify);
                 }
 
-                Command::CatalogSnapshot { tx } => {
+                Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper,
+                    through,
+                } => {
+                    let durable_upper = if let Some(through) = through {
+                        let result = async {
+                            if self
+                                .catalog()
+                                .observed_position()
+                                .is_none_or(|p| p.upper <= through)
+                            {
+                                self.catalog().advance_upper(through.step_forward()).await?;
+                                self.refresh_catalog(Some(through.step_forward())).await?;
+                            }
+                            Ok::<_, AdapterError>(
+                                self.catalog()
+                                    .observed_position()
+                                    .ok_or_else(|| {
+                                        AdapterError::Internal(
+                                            "query certification requires a committed catalog"
+                                                .into(),
+                                        )
+                                    })?
+                                    .upper,
+                            )
+                        }
+                        .await;
+                        Some(result)
+                    } else if include_durable_upper {
+                        let mut upper = self.catalog().current_upper_if_in_sync().await;
+                        if upper
+                            .as_ref()
+                            .is_err_and(|error| error.is_catalog_out_of_sync())
+                        {
+                            // Catch up once in this turn. Further contention retries
+                            // belong to the caller, not an on-loop retry loop.
+                            upper = match self.refresh_catalog(None).await {
+                                Ok(()) => self.catalog().current_upper_if_in_sync().await,
+                                Err(error) => Err(error),
+                            };
+                        }
+                        Some(upper)
+                    } else {
+                        None
+                    };
                     let _ = tx.send(CatalogSnapshot {
                         catalog: self.owned_catalog(),
+                        durable_upper,
                     });
                 }
 
@@ -370,6 +416,18 @@ impl Coordinator {
 
                 Command::GetComputeInstanceClient { instance_id, tx } => {
                     let _ = tx.send(self.controller.compute.instance_client(instance_id));
+                }
+
+                Command::AcquireClientReadProtection {
+                    incarnation,
+                    bundle,
+                    read_ts,
+                    tx,
+                } => {
+                    let result = self
+                        .acquire_client_read_protection(incarnation, bundle, |_| Ok(read_ts))
+                        .await;
+                    let _ = tx.send(result);
                 }
 
                 Command::GetOracle { timeline, tx } => {
@@ -430,6 +488,7 @@ impl Coordinator {
                 }
 
                 Command::ExecuteSlowPathPeek {
+                    catalog,
                     dataflow_plan,
                     determination,
                     finishing,
@@ -445,6 +504,7 @@ impl Coordinator {
                 } => {
                     let result = self
                         .implement_slow_path_peek(
+                            catalog,
                             *dataflow_plan,
                             determination,
                             finishing,
@@ -462,6 +522,7 @@ impl Coordinator {
                 }
 
                 Command::ExecuteSubscribe {
+                    catalog,
                     df_desc,
                     dependency_ids,
                     cluster_id,
@@ -479,6 +540,7 @@ impl Coordinator {
                     );
                     match self
                         .implement_subscribe(
+                            catalog,
                             &mut ctx_extra,
                             df_desc,
                             dependency_ids,
@@ -522,7 +584,7 @@ impl Coordinator {
                     let connection_context = self.connection_context().clone();
                     let enforce_external_addresses =
                         mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                            .get(self.controller.storage.config().config_set());
+                            .get(self.storage_configuration.config_set());
                     task::spawn(|| "copy_to_preflight", async move {
                         let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
@@ -539,6 +601,7 @@ impl Coordinator {
                 }
 
                 Command::ExecuteCopyTo {
+                    catalog,
                     df_desc,
                     compute_instance,
                     target_replica,
@@ -551,6 +614,7 @@ impl Coordinator {
                     // through tx when the COPY TO completes (or immediately if setup fails).
                     // We just call it and let it handle all response sending.
                     self.implement_copy_to(
+                        catalog,
                         *df_desc,
                         compute_instance,
                         target_replica,
@@ -617,20 +681,18 @@ impl Coordinator {
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
-                Command::RegisterConnectionCancelWatch { conn_id, tx } => {
-                    // Always replace any existing entry. Another code path
-                    // (e.g. `sequence_staged`) may have left a stale watch
-                    // here, possibly already signaled `true` from a prior
-                    // cancel. Reusing it via `or_insert_with` would hand out
-                    // a `Receiver` that already reads `true`, causing the new
-                    // operation to immediately return `Canceled` even though
-                    // it hasn't been cancelled.
-                    let (watch_tx, watch_rx) = watch::channel(false);
-                    self.connection_cancel_watches
-                        .insert(conn_id, (watch_tx, watch_rx.clone()));
-                    let _ = tx.send(watch_rx);
+                Command::RegisterConnectionCancelWatch { conn_id, reset, tx } => {
+                    if reset {
+                        self.connection_cancel_watches.remove(&conn_id);
+                    }
+                    let (_, watch_rx) = self
+                        .connection_cancel_watches
+                        .entry(conn_id)
+                        .or_insert_with(|| watch::channel(false));
+                    let _ = tx.send(watch_rx.clone());
                 }
                 Command::CreateInternalSubscribe {
+                    catalog,
                     df_desc,
                     cluster_id,
                     replica_id,
@@ -644,8 +706,8 @@ impl Coordinator {
                     tx,
                 } => {
                     self.handle_create_internal_subscribe(
-                        *df_desc, cluster_id, replica_id, depends_on, as_of, arity, sink_id, owner,
-                        start_time, read_holds, tx,
+                        catalog, *df_desc, cluster_id, replica_id, depends_on, as_of, arity,
+                        sink_id, owner, start_time, read_holds, tx,
                     )
                     .await;
                 }
@@ -892,7 +954,7 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                let update = self.catalog().state().pack_session_update(&conn, Diff::ONE);
+                let update = crate::catalog::pack_session_update(&conn, Diff::ONE);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
@@ -942,7 +1004,11 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog,
-                    storage_collections: Arc::clone(&self.controller.storage_collections),
+                    storage_collections: self
+                        .query_client
+                        .is_none()
+                        .then(|| Arc::clone(&self.controller.storage_collections)),
+                    query_client: self.query_client.clone(),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
@@ -950,7 +1016,7 @@ impl Coordinator {
                     superuser_attribute,
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
                     group_commit_notifier: self.group_commit_tx.clone(),
-                    read_only: self.controller.read_only(),
+                    read_only: self.read_only_controllers,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -1141,11 +1207,12 @@ impl Coordinator {
     }
 
     /// Handles an execute command.
+    #[allow(clippy::unused_async)] // Preserve the command/reentry interface while work is spawned.
     #[instrument(name = "coord::handle_execute", fields(session = session.uuid().to_string()))]
     pub(crate) async fn handle_execute(
         &mut self,
         portal_name: String,
-        mut session: Session,
+        session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
         // If this command was part of another execute command
         // (for example, executing a `FETCH` statement causes an execute to be
@@ -1162,18 +1229,8 @@ impl Coordinator {
         let outer_context = outer_context
             .map(|extra| ExecuteContextGuard::new(extra.retire(), self.internal_cmd_tx.clone()));
 
-        // A new statement is starting, so discard any cancellation that was signaled while no
-        // statement was running. Such a cancellation targeted an earlier statement and must not
-        // cancel the new one. (Like in PostgreSQL, a cancel request that arrives when nothing is
-        // running has no effect.) The watch would otherwise retain a stale `true` within an
-        // explicit transaction, because it is removed only when the transaction is cleared, not
-        // at statement end.
-        //
-        // Don't do this for nested executes (e.g., FETCH executing its cursor's statement): the
-        // outer statement is still running and a pending cancellation may target it.
-        if outer_context.is_none() {
-            self.connection_cancel_watches.remove(session.conn_id());
-        }
+        // SessionClient establishes cancellation admission before frontend
+        // planning. Retain that watch through fallback and nested execution.
 
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
@@ -1188,10 +1245,34 @@ impl Coordinator {
             }
         }
 
-        if let Err(err) = Self::verify_portal(self.catalog(), &mut session, &portal_name) {
-            // If statement logging hasn't started yet, we don't need
-            // to add any "end" event, so just make up a no-op
-            // `ExecuteContextExtra` here, via `Default::default`.
+        let nested = outer_context.is_some();
+        let ctx = ExecuteContext::from_parts(
+            tx,
+            self.internal_cmd_tx.clone(),
+            session,
+            outer_context.unwrap_or_default(),
+        );
+        self.start_execute_catalog_read(
+            ctx,
+            super::catalog_reads::ExecuteCatalogContinuation::Portal {
+                portal_name,
+                nested,
+            },
+        );
+    }
+
+    /// Continue a portal execution without resetting cancellation or repeating
+    /// the catalog read. Logging starts only once portal verification succeeds.
+    pub(crate) async fn handle_execute_certified(
+        &mut self,
+        portal_name: String,
+        mut ctx: ExecuteContext,
+        nested: bool,
+    ) {
+        let catalog = Arc::clone(ctx.query_catalog().expect("certified before verification"));
+        if let Err(err) = Self::verify_portal(&catalog, ctx.session_mut(), &portal_name) {
+            // The context carries either the outer statement's logging obligation
+            // or a no-op guard, because this portal has not started logging yet.
             //
             // It's a bit unfortunate because the edge case of failed
             // portal verifications won't show up in statement
@@ -1200,16 +1281,13 @@ impl Coordinator {
             //
             // Another option would be to log a begin and end event, but just fill in NULLs
             // for everything we get from the portal (prepared statement id, params).
-            let extra = outer_context.unwrap_or_else(Default::default);
-            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
             return ctx.retire(Err(err));
         }
 
-        // The reference to `portal` can't outlive `session`, which we
-        // use to construct the context, so scope the reference to this block where we
-        // get everything we need from the portal for later.
-        let (stmt, ctx, params) = {
-            let portal = session
+        ctx.query_portal = Some(portal_name.clone());
+        let (stmt, params) = {
+            let portal = ctx
+                .session()
                 .get_portal_unverified(&portal_name)
                 .expect("known to exist");
             let params = portal.parameters.clone();
@@ -1217,24 +1295,19 @@ impl Coordinator {
             let logging = Arc::clone(&portal.logging);
             let lifecycle_timestamps = portal.lifecycle_timestamps.clone();
 
-            let extra = if let Some(extra) = outer_context {
-                // We are executing in the context of another SQL statement, so we don't
-                // want to begin statement logging anew. The context of the actual statement
-                // being executed is the one that should be retired once this finishes.
-                extra
-            } else {
-                // This is a new statement, log it and return the context
+            // Nested executes retain the outer statement's logging obligation.
+            if !nested {
                 let maybe_uuid = self.begin_statement_execution(
-                    &mut session,
+                    ctx.session_mut(),
                     &params,
                     &logging,
                     lifecycle_timestamps,
                 );
 
-                ExecuteContextGuard::new(maybe_uuid, self.internal_cmd_tx.clone())
-            };
-            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
-            (stmt, ctx, params)
+                *ctx.extra_mut() =
+                    ExecuteContextGuard::new(maybe_uuid, self.internal_cmd_tx.clone());
+            }
+            (stmt, params)
         };
 
         let stmt = match stmt {
@@ -1265,9 +1338,10 @@ impl Coordinator {
             _ => {}
         }
 
-        self.handle_execute_inner(stmt, params, ctx).await
+        self.handle_execute_inner_certified(stmt, params, ctx).await
     }
 
+    #[allow(clippy::unused_async)] // Direct callers share the async sequencing interface.
     #[instrument(
         name = "coord::handle_execute_inner",
         fields(stmt = truncate_sql_for_logging(stmt.to_ast_string_redacted())),
@@ -1276,8 +1350,46 @@ impl Coordinator {
         &mut self,
         stmt: Arc<Statement<Raw>>,
         params: Params,
+        ctx: ExecuteContext,
+    ) {
+        self.start_execute_catalog_read(
+            ctx,
+            super::catalog_reads::ExecuteCatalogContinuation::Statement { stmt, params },
+        );
+    }
+
+    pub(crate) async fn handle_execute_inner_certified(
+        &mut self,
+        stmt: Arc<Statement<Raw>>,
+        params: Params,
         mut ctx: ExecuteContext,
     ) {
+        ctx.query_replan = Some(Arc::new((Arc::clone(&stmt), params.clone())));
+        let query_catalog = Arc::clone(ctx.query_catalog().expect("certified before preplanning"));
+        // DDL relies on the live revision when taking the serialization guard.
+        // MV REFRESH input discovery also consults live controller/catalog state,
+        // including when explaining a CREATE MATERIALIZED VIEW.
+        // If another statement changed it while certification was in flight,
+        // refresh before transaction-state checks or name resolution. Deferred
+        // DDL also enters through handle_execute_inner and obtains a new anchor.
+        let needs_current_revision = StatementClassification::from(&*stmt).is_ddl()
+            || matches!(
+                &*stmt,
+                Statement::ExplainPlan(ExplainPlanStatement {
+                    explainee: Explainee::CreateMaterializedView(..),
+                    ..
+                })
+            );
+        if needs_current_revision
+            && query_catalog.transient_revision() != self.catalog().transient_revision()
+        {
+            self.start_execute_catalog_read(
+                ctx,
+                super::catalog_reads::ExecuteCatalogContinuation::Statement { stmt, params },
+            );
+            return;
+        }
+
         // This comment describes the various ways DDL can execute (the ordered operations: name
         // resolve, purify, plan, sequence), all of which are managed by this function. DDL has
         // three notable properties that all partially interact.
@@ -1413,8 +1525,8 @@ impl Coordinator {
                     | Statement::AlterObjectSwap(_)
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
-                        let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        let state = query_catalog.for_session(ctx.session()).state().clone();
+                        let transient_revision = query_catalog.transient_revision();
 
                         // Initialize our transaction with a set of empty ops, or return an error
                         // if we can't run a DDL transaction
@@ -1422,7 +1534,7 @@ impl Coordinator {
                         if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
                             ops: vec![],
                             state,
-                            revision,
+                            transient_revision,
                             side_effects: vec![],
                             snapshot: None,
                         }) {
@@ -1567,8 +1679,7 @@ impl Coordinator {
             }
         }
 
-        let catalog = self.catalog();
-        let catalog = catalog.for_session(ctx.session());
+        let catalog = query_catalog.for_session(ctx.session());
         let original_stmt = Arc::clone(&stmt);
         // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
         // IDs, then `resolved_ids` should be updated to also remove/add those IDs.
@@ -1587,10 +1698,10 @@ impl Coordinator {
             stmt if Self::must_spawn_purification(&stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
-                let catalog = self.owned_catalog();
+                let catalog = Arc::clone(&query_catalog);
                 let now = self.now();
                 let otel_ctx = OpenTelemetryContext::obtain();
-                let current_storage_configuration = self.controller.storage.config().clone();
+                let current_storage_configuration = self.storage_configuration.clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let conn_catalog = catalog.for_session(ctx.session());
 
@@ -1669,9 +1780,9 @@ impl Coordinator {
 
                 let mz_now = match self
                     .resolve_mz_now_for_create_materialized_view(
+                        &query_catalog,
                         &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
+                        ctx.session(),
                         true,
                     )
                     .await
@@ -1680,7 +1791,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e)),
                 };
 
-                let catalog = self.catalog().for_session(ctx.session());
+                let catalog = query_catalog.for_session(ctx.session());
 
                 purify_create_materialized_view_options(
                     catalog,
@@ -1716,9 +1827,9 @@ impl Coordinator {
                 let mut cmvs = *box_cmvs;
                 let mz_now = match self
                     .resolve_mz_now_for_create_materialized_view(
+                        &query_catalog,
                         &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
+                        ctx.session(),
                         false,
                     )
                     .await
@@ -1727,7 +1838,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e)),
                 };
 
-                let catalog = self.catalog().for_session(ctx.session());
+                let catalog = query_catalog.for_session(ctx.session());
 
                 purify_create_materialized_view_options(
                     catalog,
@@ -1750,12 +1861,19 @@ impl Coordinator {
             _ => (stmt, resolved_ids),
         };
 
-        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+        let catalog = query_catalog.for_session(ctx.session());
+        match mz_sql::plan::plan(
+            Some(ctx.session().pcx()),
+            &catalog,
+            stmt,
+            &params,
+            &resolved_ids,
+        ) {
             Ok((plan, sql_impl_ids)) => {
                 self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
                     .await
             }
-            Err(e) => ctx.retire(Err(e)),
+            Err(e) => ctx.retire(Err(e.into())),
         }
     }
 
@@ -1877,8 +1995,8 @@ impl Coordinator {
     /// unfortunately.)
     async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
+        query_catalog: &catalog::Catalog,
         cmvs: &CreateMaterializedViewStatement<Aug>,
-        resolved_ids: &ResolvedIds,
         session: &Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
@@ -1887,11 +2005,20 @@ impl Coordinator {
             .iter()
             .any(|wo| matches!(wo.value, Some(WithOptionValue::Refresh(..))))
         {
-            let catalog = self.catalog().for_session(session);
+            let catalog = query_catalog.for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-            let ids = self
-                .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.collections().copied());
+            let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &cmvs.query);
+            let logical_inputs =
+                self.materialized_view_logical_inputs(resolved_ids.collections().copied())?;
+            let ids = if self.query_client.is_some() {
+                logical_inputs.clone()
+            } else {
+                let mut ids = self
+                    .index_oracle(cluster)
+                    .sufficient_collections(resolved_ids.collections().copied());
+                ids.extend(&logical_inputs);
+                ids
+            };
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1902,7 +2029,7 @@ impl Coordinator {
             // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            let read_holds = self.acquire_read_holds(&ids);
+            let read_holds = self.acquire_query_read_holds(&ids).await?;
 
             // Does `mz_now()` occur?
             let mz_now_ts = if cmvs
@@ -1910,9 +2037,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self
-                    .catalog()
-                    .validate_timeline_context(resolved_ids.collections().copied())?;
+                let timeline_context =
+                    query_catalog.validate_timeline_context(resolved_ids.collections().copied())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.
@@ -1941,7 +2067,12 @@ impl Coordinator {
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
                 // VIEW statement returned.
                 let oracle_timestamp = timestamp;
-                let least_valid_read = read_holds.least_valid_read();
+                let least_valid_read =
+                    read_holds
+                        .least_valid_read()
+                        .join(&self.materialized_view_input_permission(
+                            logical_inputs.storage_ids.iter().copied(),
+                        )?);
                 timestamp.advance_by(least_valid_read.borrow());
 
                 if oracle_timestamp != timestamp {
@@ -2118,10 +2249,7 @@ impl Coordinator {
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
-        let update = self
-            .catalog()
-            .state()
-            .pack_session_update(&conn, Diff::MINUS_ONE);
+        let update = crate::catalog::pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
@@ -2222,14 +2350,12 @@ impl Coordinator {
 
             // Get a channel so we can queue updates to be written.
             let row_tx = coord
-                .controller
-                .storage
+                .adapter_storage
                 .monotonic_appender(global_id)
                 .map_err(|_| name.clone())?;
             let stats = coord
-                .controller
-                .storage
-                .webhook_statistics(global_id)
+                .adapter_storage
+                .statistics(global_id)
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks

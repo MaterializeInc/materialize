@@ -107,10 +107,29 @@ impl Coordinator {
         sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
         async move {
+            let query_catalog = match &plan {
+                Plan::Select(_)
+                | Plan::Subscribe(_)
+                | Plan::ShowColumns(_)
+                | Plan::ShowCreate(_)
+                | Plan::CopyFrom(_)
+                | Plan::ReadThenWrite(_)
+                | Plan::Insert(_)
+                | Plan::ExplainPlan(_)
+                | Plan::ExplainPushdown(_)
+                | Plan::ExplainTimestamp(_)
+                | Plan::Prepare(_)
+                | Plan::Declare(_)
+                | Plan::Execute(_) => ctx
+                    .query_catalog()
+                    .cloned()
+                    .unwrap_or_else(|| self.owned_catalog()),
+                _ => self.owned_catalog(),
+            };
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
-            if self.controller.read_only() && !plan.allowed_in_read_only() {
+            if self.read_only_controllers && !plan.allowed_in_read_only() {
                 ctx.retire(Err(AdapterError::ReadOnly));
                 return;
             }
@@ -118,14 +137,14 @@ impl Coordinator {
             // Check if we're still waiting for any of the builtin table appends from when we
             // started the Session to complete.
             if let Some((dependencies, wait_future)) =
-                super::appends::waiting_on_startup_appends(self.catalog(), ctx.session_mut(), &plan)
+                super::appends::waiting_on_startup_appends(&query_catalog, ctx.session_mut(), &plan)
             {
                 let conn_id = ctx.session().conn_id();
                 tracing::debug!(%conn_id, "deferring plan for startup appends");
 
                 let role_metadata = ctx.session().role_metadata().clone();
                 let validity =
-                    PlanValidity::new(&self.catalog, dependencies, None, None, role_metadata);
+                    PlanValidity::new(&query_catalog, dependencies, None, None, role_metadata);
                 let deferred_plan = DeferredPlan {
                     ctx,
                     plan,
@@ -146,7 +165,7 @@ impl Coordinator {
                 Some(cluster_id) => TargetCluster::Transaction(cluster_id),
                 // If there isn't a current cluster set for a transaction, then try to auto route.
                 None => {
-                    let session_catalog = self.catalog.for_session(ctx.session());
+                    let session_catalog = query_catalog.for_session(ctx.session());
                     catalog_serving::auto_run_on_catalog_server(
                         &session_catalog,
                         ctx.session(),
@@ -154,13 +173,11 @@ impl Coordinator {
                     )
                 }
             };
-            let (target_cluster_id, target_cluster_name) = match self
-                .catalog()
-                .resolve_target_cluster(target_cluster, ctx.session())
-            {
-                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
-                Err(_) => (None, None),
-            };
+            let (target_cluster_id, target_cluster_name) =
+                match query_catalog.resolve_target_cluster(target_cluster, ctx.session()) {
+                    Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+                    Err(_) => (None, None),
+                };
 
             if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
                 target_cluster_id,
@@ -170,7 +187,7 @@ impl Coordinator {
                 self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
             }
 
-            let session_catalog = self.catalog.for_session(ctx.session());
+            let session_catalog = query_catalog.for_session(ctx.session());
 
             if let Some(cluster_name) = &target_cluster_name {
                 if let Err(e) = catalog_serving::check_cluster_restrictions(
@@ -430,7 +447,8 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CopyFrom(plan) => {
-                    self.sequence_copy_from(ctx, plan, target_cluster).await;
+                    self.sequence_copy_from(ctx, plan, target_cluster, Arc::clone(&query_catalog))
+                        .await;
                 }
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
@@ -603,7 +621,7 @@ impl Coordinator {
                         ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                     } else {
                         let state_revision = StateRevision {
-                            catalog_revision: self.catalog().transient_revision(),
+                            catalog_revision: query_catalog.transient_revision(),
                             session_state_revision: ctx.session().state_revision(),
                         };
                         ctx.session_mut().set_prepared_statement(
@@ -618,7 +636,7 @@ impl Coordinator {
                     }
                 }
                 Plan::Execute(plan) => {
-                    match self.sequence_execute(ctx.session_mut(), plan) {
+                    match self.sequence_execute(&query_catalog, ctx.session_mut(), plan) {
                         Ok(portal_name) => {
                             let (tx, _, session, extra, response_barriers) = ctx.into_parts();
                             // The obligation travels as data and
@@ -712,7 +730,7 @@ impl Coordinator {
                     let connection = plan
                         .connection
                         .into_inline_connection(self.catalog().state());
-                    let current_storage_configuration = self.controller.storage.config().clone();
+                    let current_storage_configuration = self.storage_configuration.clone();
                     mz_ore::task::spawn(|| "coord::validate_connection", async move {
                         let res = match connection
                             .validate(plan.id, &current_storage_configuration)
@@ -1112,7 +1130,8 @@ pub(crate) async fn explain_pushdown_future_inner<
 >(
     session: &Session,
     catalog: &Catalog,
-    storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
+    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
+    query_client: Option<&Arc<crate::query_client::QueryClient>>,
     as_of: Antichain<Timestamp>,
     mz_now: ResultSpec<'static>,
     imports: I,
@@ -1133,9 +1152,28 @@ pub(crate) async fn explain_pushdown_future_inner<
             .relation_desc()
             .expect("source should have a proper desc")
             .into_owned();
-        let stats_future = storage_collections
-            .snapshot_parts_stats(id, as_of.clone())
-            .await;
+        let stats_future = if let Some(client) = query_client {
+            let metadata = client.collection_metadata(catalog, id);
+            let client = Arc::clone(client);
+            let as_of = as_of.clone();
+            async move {
+                let metadata = metadata?;
+                client
+                    .collection_reader()
+                    .await
+                    .snapshot_parts_stats(id, metadata, as_of)
+                    .await
+                    .map_err(AdapterError::from)
+            }
+            .boxed()
+        } else {
+            storage_collections
+                .expect("unprotected pushdown explanations require storage collections")
+                .snapshot_parts_stats(id, as_of.clone())
+                .await
+                .map(|result| result.map_err(AdapterError::from))
+                .boxed()
+        };
 
         let mz_now = mz_now.clone();
         // These futures may block if the source is not yet readable at the as-of;
@@ -1200,7 +1238,7 @@ pub(crate) async fn explain_pushdown_future_inner<
             Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
                 rows: Box::new(rows.into_row_iter()),
             }),
-            Ok(Err(err)) => Err(err.into()),
+            Ok(Err(err)) => Err(err),
             Err(_) => Err(AdapterError::StatementTimeout),
         }
     };
@@ -1276,7 +1314,8 @@ pub(crate) async fn statistics_oracle(
     query_as_of: &Antichain<Timestamp>,
     is_oneshot: bool,
     system_config: &vars::SystemVars,
-    storage_collections: &dyn StorageCollections,
+    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
+    query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
         let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
@@ -1292,7 +1331,7 @@ pub(crate) async fn statistics_oracle(
 
     let cached_stats = mz_ore::future::timeout(
         timeout,
-        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections),
+        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections, query_client),
     )
     .await;
 
@@ -1307,7 +1346,7 @@ pub(crate) async fn statistics_oracle(
 
             Ok(Box::new(EmptyStatisticsOracle))
         }
-        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(e),
     }
 }
 
@@ -1320,18 +1359,40 @@ impl CachedStatisticsOracle {
     pub async fn new(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<Timestamp>,
-        storage_collections: &dyn StorageCollections,
-    ) -> Result<Self, StorageError> {
+        storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
+        query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
+    ) -> Result<Self, AdapterError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = storage_collections.snapshot_stats(*id, as_of.clone()).await;
+            let stats = if let Some((client, catalog)) = query_client {
+                match client.collection_metadata(catalog, *id) {
+                    Ok(metadata) => client
+                        .collection_reader()
+                        .await
+                        .snapshot_stats(*id, metadata, as_of.clone())
+                        .await
+                        .map_err(AdapterError::from),
+                    // Non-storage catalog items have no statistics, just like
+                    // collections absent from the legacy storage inventory.
+                    Err(AdapterError::CollectionUnreadable { .. }) => {
+                        Err(AdapterError::Storage(StorageError::IdentifierMissing(*id)))
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                storage_collections
+                    .expect("unprotected statistics require storage collections")
+                    .snapshot_stats(*id, as_of.clone())
+                    .await
+                    .map_err(AdapterError::from)
+            };
 
             match stats {
                 Ok(stats) => {
                     cache.insert(*id, stats.num_updates);
                 }
-                Err(StorageError::IdentifierMissing(id)) => {
+                Err(AdapterError::Storage(StorageError::IdentifierMissing(id))) => {
                     ::tracing::debug!("no statistics for {id}")
                 }
                 Err(e) => return Err(e),

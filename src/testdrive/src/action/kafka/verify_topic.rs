@@ -87,6 +87,9 @@ pub async fn run_verify_topic(
 
     Retry::default()
         .max_duration(state.default_timeout)
+        // Sink takeover can take minutes. Keep observing readiness throughout
+        // that wait instead of spending the remaining deadline in one backoff.
+        .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_state| async {
             let meta = client
                 .inner()

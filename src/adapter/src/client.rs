@@ -294,13 +294,14 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
-        // Build the PeekClient with controller handles returned from startup.
+        // Build the PeekClient with query or legacy storage access returned from startup.
         let StartupResponse {
             role_id,
             write_notify,
             session_defaults,
             catalog,
             storage_collections,
+            query_client,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
@@ -315,6 +316,7 @@ impl Client {
             CoordinatorClient::Session(self.clone()),
             &catalog,
             storage_collections,
+            query_client,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
@@ -586,13 +588,17 @@ Issue a SQL query to get started. Need help?
 
     /// Returns a snapshot of the catalog.
     ///
-    /// Does a Coordinator round-trip. Session-bound callers should
-    /// prefer [`SessionClient::catalog_snapshot`], which serves from the
-    /// session's snapshot cache.
+    /// Does a Coordinator round-trip. Session-bound callers that only need
+    /// planning-visible state should prefer [`SessionClient::catalog_snapshot`],
+    /// which serves from the session's snapshot cache.
     pub async fn catalog_snapshot_expensive(&self) -> Arc<Catalog> {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::CatalogSnapshot { tx });
-        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        self.send(Command::CatalogSnapshot {
+            tx,
+            include_durable_upper: false,
+            through: None,
+        });
+        let CatalogSnapshot { catalog, .. } = rx.await.expect("coordinator unexpectedly gone");
         catalog
     }
 
@@ -721,7 +727,10 @@ impl SessionClient {
         &mut self,
         name: &str,
     ) -> Result<&PreparedStatement, AdapterError> {
-        let catalog = self.catalog_snapshot("get_prepared_statement").await;
+        let (catalog, _) = self
+            .peek_client
+            .fresh_catalog_snapshot("get_prepared_statement")
+            .await?;
         Coordinator::verify_prepared_statement(&catalog, self.session(), name)?;
         Ok(self
             .session()
@@ -740,7 +749,7 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<SqlScalarType>>,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot("prepare").await;
+        let (catalog, _) = self.peek_client.fresh_catalog_snapshot("prepare").await?;
 
         // Note: This failpoint is used to simulate a request outliving the external connection
         // that made it.
@@ -773,7 +782,7 @@ impl SessionClient {
         stmt: Statement<Raw>,
         sql: String,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot("declare").await;
+        let (catalog, _) = self.peek_client.fresh_catalog_snapshot("declare").await?;
         let param_types = vec![];
         let desc =
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
@@ -812,15 +821,23 @@ impl SessionClient {
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
         let cancel_future = cancel_future.map(|_| ()).shared();
+        let new_statement = outer_ctx_extra.is_none();
 
         // Owning the end-of-execution obligation in this frame is what lets
         // cancellation report an error: the inner future can be dropped without
         // the obligation going with it. See `ExecutionLogging`.
         let mut logging = ExecutionLogging::adopt(outer_ctx_extra, &self.peek_client);
 
-        let result = self
-            .execute_attempts(portal_name, &mut logging, cancel_future)
-            .await;
+        // Frontend sequencing carries a large future. Keep that state out of
+        // callers' connection futures and the stack frames used to poll them.
+        let result = Box::pin(self.execute_attempts(
+            portal_name,
+            &mut logging,
+            cancel_future,
+            execute_started,
+            new_statement,
+        ))
+        .await;
 
         logging.retire(&result);
 
@@ -835,7 +852,39 @@ impl SessionClient {
         portal_name: String,
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send + Clone,
+        execute_started: Instant,
+        new_statement: bool,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // All execution paths share this admission boundary. Only a new outer
+        // statement discards an earlier cancellation. Replanning, fallback, and
+        // cursor execution inside FETCH must retain an in-flight request.
+        let conn_id = self.session().conn_id().clone();
+        // Admission is cancellable, but statement_timeout belongs to the
+        // operations that enforce it, not to every statement entering here.
+        let mut connection_cancel = crate::util::run_cancellable(
+            cancel_future.clone(),
+            None,
+            self.peek_client
+                .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
+                    conn_id,
+                    reset: new_statement,
+                    tx,
+                }),
+        )
+        .await?;
+        let cancel_future = async move {
+            tokio::select! {
+                _ = cancel_future => (),
+                _ = async {
+                    if connection_cancel.wait_for(|canceled| *canceled).await.is_err() {
+                        futures::future::pending::<()>().await;
+                    }
+                } => (),
+            }
+        }
+        .boxed()
+        .shared();
+
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
         // flows through `try_frontend_peek` /
         // `try_frontend_read_then_write` below, rather than being
@@ -852,8 +901,16 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // TODO(peek-seq): wire up cancel_future
-        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
+        // Pre-execution waits observe disconnects and connection cancellation.
+        // Dispatch paths retain their own execution and cleanup boundaries.
+        let peek_result = self
+            .try_frontend_peek(
+                &portal_name,
+                logging,
+                cancel_future.clone(),
+                execute_started,
+            )
+            .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             return Ok(resp);
@@ -929,7 +986,10 @@ impl SessionClient {
             return Ok(portal_name);
         }
 
-        let catalog = self.catalog_snapshot("unroll_sql_execute").await;
+        let (catalog, _) = self
+            .peek_client
+            .fresh_catalog_snapshot("unroll_sql_execute")
+            .await?;
 
         // Validate the outer EXECUTE portal against the (possibly newer)
         // catalog: ensures the recorded portal description still matches
@@ -1093,7 +1153,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog, served from the session-side snapshot cache when
-    /// the catalog is unchanged since the cached snapshot was taken. See
+    /// planning-visible state is unchanged since the cached snapshot was taken. See
     /// [`PeekClient::catalog_snapshot`].
     #[instrument(level = "debug")]
     pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
@@ -1116,27 +1176,79 @@ impl SessionClient {
             .enable_extended_protocol_implicit_transaction()
     }
 
-    /// Dumps the catalog to a JSON string.
-    ///
-    /// No authorization is performed, so access to this function must be limited to internal
-    /// servers or superusers.
+    /// Dumps the catalog to JSON. Access must be limited to internal servers or superusers.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
-        let catalog = self.catalog_snapshot("dump_catalog").await;
-        catalog.dump().map_err(AdapterError::from)
+        let snapshot = self
+            .send_without_session(|tx| Command::CatalogSnapshot {
+                tx,
+                include_durable_upper: false,
+                through: None,
+            })
+            .await;
+        Ok(snapshot.catalog.dump()?)
     }
 
-    /// Checks the catalog for internal consistency, returning a JSON object describing the
-    /// inconsistencies, if there are any.
-    ///
-    /// No authorization is performed, so access to this function must be limited to internal
-    /// servers or superusers.
-    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
-        let catalog = self.catalog_snapshot("check_catalog").await;
-        catalog.check_consistency()
+    /// Checks internal invariants, optionally reconstructing the durable catalog independently.
+    /// Access must be limited to internal servers or superusers.
+    pub async fn check_catalog(&mut self, durable: bool) -> Result<(), serde_json::Value> {
+        if !durable {
+            let snapshot = self
+                .send_without_session(|tx| Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper: false,
+                    through: None,
+                })
+                .await;
+            return snapshot.catalog.check_consistency();
+        }
+        let result = async {
+            let initial = self
+                .send_without_session(|tx| Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper: false,
+                    through: None,
+                })
+                .await;
+            let reader = initial.catalog.open_diagnostic_reader().await?;
+            // Capture uncached state after acquiring the continuous durable reader.
+            // Only acquisition retries. Reconstruction and comparison must use
+            // one certified prefix and must not hide a genuine inconsistency.
+            let acquired = mz_ore::retry::Retry::default()
+                .max_tries(5)
+                .retry_async(|_| async {
+                    use mz_ore::retry::RetryResult;
+                    let snapshot = self
+                        .send_without_session(|tx| Command::CatalogSnapshot {
+                            tx,
+                            include_durable_upper: true,
+                            through: None,
+                        })
+                        .await;
+                    match snapshot.durable_upper.expect("requested durable prefix") {
+                        Ok(upper) => RetryResult::Ok((snapshot.catalog, upper)),
+                        Err(error) if error.is_catalog_out_of_sync() => {
+                            RetryResult::RetryableErr(error)
+                        }
+                        Err(error) => RetryResult::FatalErr(error),
+                    }
+                })
+                .await;
+            let (catalog, upper) = match acquired {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    reader.expire().await;
+                    return Err(error);
+                }
+            };
+            let input = reader.into_snapshot_at(upper).await?;
+            catalog.check_durable_consistency(input).await
+        }
+        .await;
+        result.map_err(|error: AdapterError| serde_json::json!(error.to_string()))
     }
 
-    /// Checks the coordinator for internal consistency, returning a JSON object describing the
-    /// inconsistencies, if there are any. This is a superset of checks that check_catalog performs,
+    /// Checks coordinator and in-memory catalog invariants, without durable reconstruction.
+    /// Returns a JSON object describing any inconsistencies.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
@@ -1356,6 +1468,7 @@ impl SessionClient {
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. }
                 | Command::GetComputeInstanceClient { .. }
+                | Command::AcquireClientReadProtection { .. }
                 | Command::GetOracle { .. }
                 | Command::DetermineRealTimeRecentTimestamp { .. }
                 | Command::GetTransactionReadHoldsBundle { .. }
@@ -1455,11 +1568,19 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
+        diagnostic_cancel: impl Future<Output = ()> + Send,
+        execute_started: Instant,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek(portal_name, session, logging)
+                .try_frontend_peek(
+                    portal_name,
+                    session,
+                    logging,
+                    diagnostic_cancel,
+                    execute_started,
+                )
                 .await
         } else {
             Ok(None)
@@ -1470,9 +1591,8 @@ impl SessionClient {
     ///
     /// The gate is deliberately cheap, a portal lookup, because
     /// every statement that reaches `execute_attempts` without being handled by
-    /// the peek path is tested against it. Everything expensive, including the
-    /// coordinator round-trip that registers the connection cancel watch, sits
-    /// behind it.
+    /// the peek path is tested against it. Unsupported statements must not enter
+    /// write planning or allocate write-attempt state.
     fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
         let session = self.session.as_ref().expect("SessionClient invariant");
         match session.get_portal_unverified(portal_name) {
@@ -1500,10 +1620,8 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        // Bail out before the cancel-watch registration below, which is a
-        // synchronous round-trip through the coordinator's command loop. A
-        // statement this path will not take over must not pay for it, and must
-        // not add queueing latency for other sessions either.
+        // Only statements this path takes over need a write attempt and its
+        // submission-aware cancellation boundary.
         if !self.frontend_read_then_write_applies(portal_name) {
             return Ok(None);
         }
@@ -1523,45 +1641,6 @@ impl SessionClient {
         };
         tokio::pin!(statement_timeout);
 
-        // Registering installs a fresh channel, so this cannot observe a
-        // cancellation aimed at an earlier statement. The entry it leaves behind
-        // is replaced by the next registration and removed when a statement
-        // reaches the coordinator or the connection's state is cleared, so there
-        // is nothing to unregister here.
-        let mut connection_cancel_rx = {
-            let register =
-                self.peek_client
-                    .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
-                        conn_id: conn_id.clone(),
-                        tx,
-                    });
-            tokio::pin!(register);
-            tokio::select! {
-                rx = &mut register => rx?,
-                _ = &mut cancel_future => {
-                    inner_client.try_send(Command::PrivilegedCancelRequest {
-                        conn_id: conn_id.clone(),
-                    });
-                    return Err(AdapterError::Canceled);
-                }
-                _ = &mut statement_timeout => {
-                    inner_client.try_send(Command::PrivilegedCancelRequest {
-                        conn_id: conn_id.clone(),
-                    });
-                    return Err(AdapterError::StatementTimeout);
-                }
-            }
-        };
-        if *connection_cancel_rx.borrow() {
-            return Err(AdapterError::Canceled);
-        }
-        let connection_cancel = async move {
-            if connection_cancel_rx.wait_for(|v| *v).await.is_err() {
-                futures::future::pending::<()>().await;
-            }
-        };
-        tokio::pin!(connection_cancel);
-
         let frontend_read_then_write =
             self.try_frontend_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
         tokio::pin!(frontend_read_then_write);
@@ -1569,7 +1648,6 @@ impl SessionClient {
         let requested = tokio::select! {
             response = &mut frontend_read_then_write => return response,
             _ = &mut cancel_future => FrontendWriteCancellation::Canceled,
-            _ = &mut connection_cancel => FrontendWriteCancellation::Canceled,
             _ = &mut statement_timeout => FrontendWriteCancellation::StatementTimeout,
         };
 
@@ -1599,7 +1677,10 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
+        let (mut catalog, _) = self
+            .peek_client
+            .fresh_catalog_snapshot("try_frontend_read_then_write")
+            .await?;
 
         let stmt = {
             let session = self.session.as_ref().expect("SessionClient invariant");
@@ -1658,319 +1739,340 @@ impl SessionClient {
             TakeOver::StatementToRun,
         );
 
-        // Mirror the coordinator's transaction-state gate in `handle_execute`:
-        // in a multi-statement transaction (an implicit batch or an explicit
-        // block), the only DML allowed is an AST-constant INSERT without
-        // RETURNING, which joins the transaction's write ops and commits at
-        // transaction end. All other DML is prohibited because writes on this
-        // path commit immediately and cannot be rolled back at transaction
-        // end. `Failed` transactions pass through, pgwire only admits
-        // COMMIT/ROLLBACK in that state.
-        //
-        // An AST-constant source can still plan to a read, so the check on the
-        // planned selection further down narrows this.
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            // `Started` does not mean "single statement" on its own. An
-            // extended-protocol pipeline keeps the transaction `Started` across
-            // statements until `Sync`, so once it holds write ops this
-            // statement runs alongside them and belongs with the
-            // multi-statement cases. Committing here would commit against a
-            // snapshot that lacks those ops, reordering this statement before
-            // writes that a later pipeline error would roll back.
-            let contains_ops = session.transaction().contains_ops();
-            match session.transaction() {
-                TransactionStatus::Default | TransactionStatus::Failed(_) => {}
-                TransactionStatus::Started(_) if !contains_ops => {}
-                TransactionStatus::Started(_)
-                | TransactionStatus::InTransactionImplicit(_)
-                | TransactionStatus::InTransaction(_) => {
-                    let constant_insert = matches!(
-                        &*stmt,
-                        Statement::Insert(InsertStatement {
-                            source, returning, ..
-                        }) if returning.is_empty() && ConstantVisitor::insert_source(source)
-                    );
-                    if !constant_insert {
-                        return Err(prohibited_in_transaction(&stmt));
+        loop {
+            // Mirror the coordinator's transaction-state gate in `handle_execute`:
+            // in a multi-statement transaction (an implicit batch or an explicit
+            // block), the only DML allowed is an AST-constant INSERT without
+            // RETURNING, which joins the transaction's write ops and commits at
+            // transaction end. All other DML is prohibited because writes on this
+            // path commit immediately and cannot be rolled back at transaction
+            // end. `Failed` transactions pass through, pgwire only admits
+            // COMMIT/ROLLBACK in that state.
+            //
+            // An AST-constant source can still plan to a read, so the check on the
+            // planned selection further down narrows this.
+            {
+                let session = self.session.as_ref().expect("SessionClient invariant");
+                // `Started` does not mean "single statement" on its own. An
+                // extended-protocol pipeline keeps the transaction `Started` across
+                // statements until `Sync`, so once it holds write ops this
+                // statement runs alongside them and belongs with the
+                // multi-statement cases. Committing here would commit against a
+                // snapshot that lacks those ops, reordering this statement before
+                // writes that a later pipeline error would roll back.
+                let contains_ops = session.transaction().contains_ops();
+                match session.transaction() {
+                    TransactionStatus::Default | TransactionStatus::Failed(_) => {}
+                    TransactionStatus::Started(_) if !contains_ops => {}
+                    TransactionStatus::Started(_)
+                    | TransactionStatus::InTransactionImplicit(_)
+                    | TransactionStatus::InTransaction(_) => {
+                        let constant_insert = matches!(
+                            &*stmt,
+                            Statement::Insert(InsertStatement {
+                                source, returning, ..
+                            }) if returning.is_empty() && ConstantVisitor::insert_source(source)
+                        );
+                        if !constant_insert {
+                            return Err(prohibited_in_transaction(&stmt));
+                        }
                     }
                 }
             }
-        }
 
-        let (plan, target_cluster, resolved_ids, sql_impl_ids) = {
-            let session = self.session.as_mut().expect("SessionClient invariant");
-            let conn_catalog = catalog.for_session(session);
-            let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
-            let pcx = session.pcx();
-            let (plan, sql_impl_ids) =
-                mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+            let (plan, target_cluster, resolved_ids, sql_impl_ids) = {
+                let session = self.session.as_mut().expect("SessionClient invariant");
+                let conn_catalog = catalog.for_session(session);
+                let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
+                let pcx = session.pcx();
+                let (plan, sql_impl_ids) =
+                    mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
 
-            let target_cluster = match session.transaction().cluster() {
-                Some(cluster_id) => crate::coord::TargetCluster::Transaction(cluster_id),
-                None => crate::coord::catalog_serving::auto_run_on_catalog_server(
-                    &conn_catalog,
-                    session,
-                    &plan,
-                ),
+                let target_cluster = match session.transaction().cluster() {
+                    Some(cluster_id) => crate::coord::TargetCluster::Transaction(cluster_id),
+                    None => crate::coord::catalog_serving::auto_run_on_catalog_server(
+                        &conn_catalog,
+                        session,
+                        &plan,
+                    ),
+                };
+
+                (plan, target_cluster, resolved_ids, sql_impl_ids)
             };
 
-            (plan, target_cluster, resolved_ids, sql_impl_ids)
-        };
-
-        // Reject mutations in read-only mode (e.g. during 0dt upgrades). Placed
-        // where the coordinator has it, in `sequence_plan`: after planning, so a
-        // statement that does not plan reports the planning error, and before
-        // the cluster and RBAC checks below, which the coordinator also reports
-        // second. Every sub-path from here on writes (constant INSERT and the
-        // OCC INSERT/UPDATE/DELETE), so one check covers them all.
-        if self.peek_client.read_only {
-            return Err(AdapterError::ReadOnly);
-        }
-
-        // Cluster restrictions and RBAC, mirroring the coordinator's checks
-        // in sequencer.rs. Resolution may fail if the target cluster doesn't
-        // exist. That gets reported later (with the correct error) by
-        // `validate_read_then_write`. For the purposes of these checks we
-        // treat it as "no cluster known", consistent with the coordinator.
-        let (target_cluster_id, target_cluster_name) = {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            match catalog.resolve_target_cluster(target_cluster.clone(), session) {
-                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
-                Err(_) => (None, None),
+            // Reject mutations in read-only mode (e.g. during 0dt upgrades). Placed
+            // where the coordinator has it, in `sequence_plan`: after planning, so a
+            // statement that does not plan reports the planning error, and before
+            // the cluster and RBAC checks below, which the coordinator also reports
+            // second. Every sub-path from here on writes (constant INSERT and the
+            // OCC INSERT/UPDATE/DELETE), so one check covers them all.
+            if self.peek_client.read_only {
+                return Err(AdapterError::ReadOnly);
             }
-        };
 
-        // Record the cluster before the checks below can fail, so that their
-        // error rows carry it, as the coordinator's do.
-        if let (Some(logging_id), Some(cluster_id), Some(cluster_name)) =
-            (logging.id(), target_cluster_id, target_cluster_name.clone())
-        {
-            self.peek_client
-                .log_set_cluster(logging_id, cluster_id, cluster_name);
-        }
+            // Cluster restrictions and RBAC, mirroring the coordinator's checks
+            // in sequencer.rs. Resolution may fail if the target cluster doesn't
+            // exist. That gets reported later (with the correct error) by
+            // `validate_read_then_write`. For the purposes of these checks we
+            // treat it as "no cluster known", consistent with the coordinator.
+            let (target_cluster_id, target_cluster_name) = {
+                let session = self.session.as_ref().expect("SessionClient invariant");
+                match catalog.resolve_target_cluster(target_cluster.clone(), session) {
+                    Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+                    Err(_) => (None, None),
+                }
+            };
 
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            let conn_catalog = catalog.for_session(session);
-            if let Some(cluster_name) = &target_cluster_name {
-                crate::coord::catalog_serving::check_cluster_restrictions(
-                    cluster_name,
+            // Record the cluster before the checks below can fail, so that their
+            // error rows carry it, as the coordinator's do.
+            if let (Some(logging_id), Some(cluster_id), Some(cluster_name)) =
+                (logging.id(), target_cluster_id, target_cluster_name.clone())
+            {
+                self.peek_client
+                    .log_set_cluster(logging_id, cluster_id, cluster_name);
+            }
+
+            {
+                let session = self.session.as_ref().expect("SessionClient invariant");
+                let conn_catalog = catalog.for_session(session);
+                if let Some(cluster_name) = &target_cluster_name {
+                    crate::coord::catalog_serving::check_cluster_restrictions(
+                        cluster_name,
+                        &conn_catalog,
+                        &plan,
+                    )?;
+                }
+                if let Err(e) = mz_sql::rbac::check_plan(
                     &conn_catalog,
+                    None,
+                    session,
                     &plan,
-                )?;
+                    target_cluster_id,
+                    &resolved_ids,
+                    &sql_impl_ids,
+                ) {
+                    return Err(e.into());
+                }
             }
-            if let Err(e) = mz_sql::rbac::check_plan(
-                &conn_catalog,
-                None,
-                session,
-                &plan,
-                target_cluster_id,
-                &resolved_ids,
-                &sql_impl_ids,
-            ) {
-                return Err(e.into());
-            }
-        }
 
-        // Wait for any in-flight startup builtin-table appends that this plan
-        // depends on. Mirrors the frontend_peek and coordinator sequencer
-        // paths, and is a no-op for plans that don't depend on builtin tables.
-        {
-            let session = self.session.as_mut().expect("SessionClient invariant");
-            if let Some((_, wait_future)) =
-                crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
+            // Wait for any in-flight startup builtin-table appends that this plan
+            // depends on. Mirrors the frontend_peek and coordinator sequencer
+            // paths, and is a no-op for plans that don't depend on builtin tables.
             {
-                wait_future.await;
+                let session = self.session.as_mut().expect("SessionClient invariant");
+                if let Some((_, wait_future)) =
+                    crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
+                {
+                    wait_future.await;
+                }
             }
-        }
 
-        // `allows_writes` is only defined inside a transaction, which is also
-        // the only place it can be false: outside one the session task opens a
-        // fresh transaction with no ops. Autocommit statements therefore rely on
-        // the check in `PeekClient::frontend_read_then_write` instead.
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            if session.transaction().is_in_multi_statement_transaction()
-                && !session.transaction().allows_writes()
+            // `allows_writes` is only defined inside a transaction, which is also
+            // the only place it can be false: outside one the session task opens a
+            // fresh transaction with no ops. Autocommit statements therefore rely on
+            // the check in `PeekClient::frontend_read_then_write` instead.
             {
-                return Err(AdapterError::ReadOnlyTransaction);
+                let session = self.session.as_ref().expect("SessionClient invariant");
+                if session.transaction().is_in_multi_statement_transaction()
+                    && !session.transaction().allows_writes()
+                {
+                    return Err(AdapterError::ReadOnlyTransaction);
+                }
+                if session
+                    .vars()
+                    .transaction_isolation()
+                    .is_bounded_staleness()
+                {
+                    return Err(AdapterError::BoundedStalenessReadOnly);
+                }
             }
-            if session
-                .vars()
-                .transaction_isolation()
-                .is_bounded_staleness()
-            {
-                return Err(AdapterError::BoundedStalenessReadOnly);
-            }
-        }
 
-        // Handle ReadThenWrite plans or Insert plans.
-        let rtw_plan = match plan {
-            Plan::ReadThenWrite(rtw_plan) => rtw_plan,
-            Plan::Insert(insert_plan) => {
-                // A constant INSERT without RETURNING is a blind write, handled
-                // here through the coordinator's `insert_constant` helper, which
-                // buffers the rows as session write ops.
-                //
-                // Deciding that needs HIR lowered to MIR, because a VALUES list
-                // is planned as a `Wrap` call at the HIR level.
-                //
-                // Only take that path when the HIR names no persisted
-                // collections (no `Get` nodes on tables or MVs). The MIR
-                // optimizer can fold an MV reference into a literal when the
-                // MV's plan happens to be constant, but "plan is constant" is
-                // NOT the same as "content is visible at the current
-                // oracle_ts". A `REFRESH AT year 30000` MV has a constant plan
-                // but no durable content until the refresh fires. Folding it
-                // and blind-writing the literal would skip timestamp selection
-                // and linearization, producing data that was never observable.
-                // Preserving the HIR-level `Get` nodes routes the INSERT through
-                // the RTW path, where timestamp selection handles REFRESH and
-                // other time-dependent reads correctly.
-                let has_read_deps = !insert_plan.values.depends_on().is_empty();
+            // Handle ReadThenWrite plans or Insert plans.
+            let rtw_plan = match plan {
+                Plan::ReadThenWrite(rtw_plan) => rtw_plan,
+                Plan::Insert(insert_plan) => {
+                    // A constant INSERT without RETURNING is a blind write, handled
+                    // here through the coordinator's `insert_constant` helper, which
+                    // buffers the rows as session write ops.
+                    //
+                    // Deciding that needs HIR lowered to MIR, because a VALUES list
+                    // is planned as a `Wrap` call at the HIR level.
+                    //
+                    // Only take that path when the HIR names no persisted
+                    // collections (no `Get` nodes on tables or MVs). The MIR
+                    // optimizer can fold an MV reference into a literal when the
+                    // MV's plan happens to be constant, but "plan is constant" is
+                    // NOT the same as "content is visible at the current
+                    // oracle_ts". A `REFRESH AT year 30000` MV has a constant plan
+                    // but no durable content until the refresh fires. Folding it
+                    // and blind-writing the literal would skip timestamp selection
+                    // and linearization, producing data that was never observable.
+                    // Preserving the HIR-level `Get` nodes routes the INSERT through
+                    // the RTW path, where timestamp selection handles REFRESH and
+                    // other time-dependent reads correctly.
+                    let has_read_deps = !insert_plan.values.depends_on().is_empty();
 
-                if !has_read_deps {
-                    let optimized_mir = if insert_plan.values.as_const().is_some() {
-                        // Already constant at HIR level - just lower without optimization
-                        let expr = insert_plan
-                            .values
-                            .clone()
-                            .lower(catalog.system_config(), None)?;
-                        mz_expr::OptimizedMirRelationExpr(expr)
-                    } else {
-                        // Need to optimize to check if it becomes constant.
-                        // Use one-shot expression prep so unmaterializable
-                        // functions like current_user() are resolved before we
-                        // decide whether this can use the blind-write path.
-                        let optimizer_config =
-                            optimize::OptimizerConfig::from(catalog.system_config());
-                        let session = self.session.as_ref().expect("SessionClient invariant");
-                        let prep = ExprPrepOneShot {
-                            logical_time: EvalTime::NotAvailable,
-                            session,
-                            catalog_state: catalog.state(),
-                        };
-                        let mut optimizer =
-                            optimize::view::Optimizer::new_with_prep(optimizer_config, None, prep);
-                        match optimizer.optimize(insert_plan.values.clone()) {
-                            Ok(expr) => expr,
-                            Err(OptimizerError::UncallableFunction {
-                                func: UnmaterializableFunc::MzNow,
-                                ..
-                            }) => {
-                                // Preserve the established user-facing `mz_now()`
-                                // error by falling back to the RTW validator.
-                                let expr = insert_plan
-                                    .values
-                                    .clone()
-                                    .lower(catalog.system_config(), None)?;
-                                mz_expr::OptimizedMirRelationExpr(expr)
+                    if !has_read_deps {
+                        let optimized_mir = if insert_plan.values.as_const().is_some() {
+                            // Already constant at HIR level - just lower without optimization
+                            let expr = insert_plan
+                                .values
+                                .clone()
+                                .lower(catalog.system_config(), None)?;
+                            mz_expr::OptimizedMirRelationExpr(expr)
+                        } else {
+                            // Need to optimize to check if it becomes constant.
+                            // Use one-shot expression prep so unmaterializable
+                            // functions like current_user() are resolved before we
+                            // decide whether this can use the blind-write path.
+                            let optimizer_config =
+                                optimize::OptimizerConfig::from(catalog.system_config());
+                            let session = self.session.as_ref().expect("SessionClient invariant");
+                            let prep = ExprPrepOneShot {
+                                logical_time: EvalTime::NotAvailable,
+                                session,
+                                catalog_state: catalog.state(),
+                            };
+                            let mut optimizer = optimize::view::Optimizer::new_with_prep(
+                                optimizer_config,
+                                None,
+                                prep,
+                            );
+                            match optimizer.optimize(insert_plan.values.clone()) {
+                                Ok(expr) => expr,
+                                Err(OptimizerError::UncallableFunction {
+                                    func: UnmaterializableFunc::MzNow,
+                                    ..
+                                }) => {
+                                    // Preserve the established user-facing `mz_now()`
+                                    // error by falling back to the RTW validator.
+                                    let expr = insert_plan
+                                        .values
+                                        .clone()
+                                        .lower(catalog.system_config(), None)?;
+                                    mz_expr::OptimizedMirRelationExpr(expr)
+                                }
+                                Err(e) => return Err(e.into()),
                             }
-                            Err(e) => return Err(e.into()),
+                        };
+
+                        let inner_mir = optimized_mir.into_inner();
+                        if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
+                            let session = self.session.as_mut().expect("SessionClient invariant");
+                            let result = Coordinator::insert_constant(
+                                &catalog,
+                                session,
+                                insert_plan.id,
+                                inner_mir,
+                            );
+
+                            return Ok(Some(result?));
+                        }
+                    }
+
+                    let desc_arity = match catalog.try_get_entry(&insert_plan.id) {
+                        Some(table) => {
+                            let desc = table.relation_desc_latest().ok_or_else(|| {
+                                AdapterError::Internal("table has no desc".into())
+                            })?;
+                            desc.arity()
+                        }
+                        None => {
+                            return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                                kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                    mz_sql::catalog::CatalogError::UnknownItem(
+                                        insert_plan.id.to_string(),
+                                    ),
+                                ),
+                            }));
                         }
                     };
 
-                    let inner_mir = optimized_mir.into_inner();
-                    if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
-                        let session = self.session.as_mut().expect("SessionClient invariant");
-                        let result = Coordinator::insert_constant(
-                            &catalog,
-                            session,
-                            insert_plan.id,
-                            inner_mir,
-                        );
+                    let finishing = RowSetFinishing {
+                        order_by: vec![],
+                        limit: None,
+                        offset: 0,
+                        project: (0..desc_arity).collect(),
+                    };
 
-                        return Ok(Some(result?));
+                    ReadThenWritePlan {
+                        id: insert_plan.id,
+                        selection: insert_plan.values,
+                        finishing,
+                        assignments: BTreeMap::new(),
+                        kind: MutationKind::Insert,
+                        returning: insert_plan.returning,
                     }
                 }
-
-                let desc_arity = match catalog.try_get_entry(&insert_plan.id) {
-                    Some(table) => {
-                        let desc = table
-                            .relation_desc_latest()
-                            .ok_or_else(|| AdapterError::Internal("table has no desc".into()))?;
-                        desc.arity()
-                    }
-                    None => {
-                        return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                            kind: mz_catalog::memory::error::ErrorKind::Sql(
-                                mz_sql::catalog::CatalogError::UnknownItem(
-                                    insert_plan.id.to_string(),
-                                ),
-                            ),
-                        }));
-                    }
-                };
-
-                let finishing = RowSetFinishing {
-                    order_by: vec![],
-                    limit: None,
-                    offset: 0,
-                    project: (0..desc_arity).collect(),
-                };
-
-                ReadThenWritePlan {
-                    id: insert_plan.id,
-                    selection: insert_plan.values,
-                    finishing,
-                    assignments: BTreeMap::new(),
-                    kind: MutationKind::Insert,
-                    returning: insert_plan.returning,
-                }
-            }
-            _ => {
-                return Err(AdapterError::Internal(
-                    "unexpected plan type for mutation".into(),
-                ));
-            }
-        };
-
-        // The syntactic predicate for "reads persisted state", see the module
-        // docs on `frontend_read_then_write`. Inside a transaction, only a write
-        // that reads nothing can run on this path.
-        //
-        // The AST gate above is not enough to establish this. It admits
-        // INSERTs whose source is constant in the AST, and such a statement can
-        // still plan to a selection with `Get` nodes, because SQL-implemented
-        // builtins (`pg_get_viewdef`, `text` to `reg*` casts, ...) read system
-        // relations. So decide on the planned selection, and do it before we
-        // execute a dataflow for a statement we would then refuse.
-        {
-            let session = self.session.as_ref().expect("SessionClient invariant");
-            let in_transaction = session
-                .transaction()
-                .may_share_transaction_with_other_statements();
-            let depends_on = rtw_plan.selection.depends_on();
-            if in_transaction && !depends_on.is_empty() {
-                // Report the reasons that hold wherever the statement runs
-                // before the one that holds only here. A statement carrying
-                // `mz_now`, or reading a system table, never works anywhere.
-                // Answering with the transaction state names the one condition
-                // the caller could remove, which tells them to retry outside a
-                // transaction and get the same refusal again.
-                if contains_mz_now(&rtw_plan) {
-                    return Err(AdapterError::Unsupported(
-                        "calls to mz_now in write statements",
+                _ => {
+                    return Err(AdapterError::Internal(
+                        "unexpected plan type for mutation".into(),
                     ));
                 }
-                validate_selection_dependencies(&catalog, &depends_on, DependencyPolicy::UserDml)?;
-                return Err(prohibited_in_transaction(&stmt));
-            }
-        }
+            };
 
-        let session = self.session.as_mut().expect("SessionClient invariant");
-        self.peek_client
-            .frontend_read_then_write(
-                session,
-                rtw_plan,
-                target_cluster,
+            // The syntactic predicate for "reads persisted state", see the module
+            // docs on `frontend_read_then_write`. Inside a transaction, only a write
+            // that reads nothing can run on this path.
+            //
+            // The AST gate above is not enough to establish this. It admits
+            // INSERTs whose source is constant in the AST, and such a statement can
+            // still plan to a selection with `Get` nodes, because SQL-implemented
+            // builtins (`pg_get_viewdef`, `text` to `reg*` casts, ...) read system
+            // relations. So decide on the planned selection, and do it before we
+            // execute a dataflow for a statement we would then refuse.
+            {
+                let session = self.session.as_ref().expect("SessionClient invariant");
+                let in_transaction = session
+                    .transaction()
+                    .may_share_transaction_with_other_statements();
+                let depends_on = rtw_plan.selection.depends_on();
+                if in_transaction && !depends_on.is_empty() {
+                    // Report the reasons that hold wherever the statement runs
+                    // before the one that holds only here. A statement carrying
+                    // `mz_now`, or reading a system table, never works anywhere.
+                    // Answering with the transaction state names the one condition
+                    // the caller could remove, which tells them to retry outside a
+                    // transaction and get the same refusal again.
+                    if contains_mz_now(&rtw_plan) {
+                        return Err(AdapterError::Unsupported(
+                            "calls to mz_now in write statements",
+                        ));
+                    }
+                    validate_selection_dependencies(
+                        &catalog,
+                        &depends_on,
+                        DependencyPolicy::UserDml,
+                    )?;
+                    return Err(prohibited_in_transaction(&stmt));
+                }
+            }
+
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            let response = self
+                .peek_client
+                .frontend_read_then_write(
+                    session,
+                    rtw_plan,
+                    target_cluster,
+                    &catalog,
+                    logging.id(),
+                    Arc::clone(&attempt_state),
+                )
+                .await?;
+            if response.is_some() {
+                return Ok(response);
+            }
+            (catalog, _) = self
+                .peek_client
+                .fresh_catalog_snapshot("replan frontend write")
+                .await?;
+            Coordinator::verify_portal(
                 &catalog,
-                logging.id(),
-                attempt_state,
-            )
-            .await
-            .map(Some)
+                self.session.as_mut().expect("SessionClient invariant"),
+                portal_name,
+            )?;
+        }
     }
 }
 

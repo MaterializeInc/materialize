@@ -16,4 +16,5 @@ pub mod controller;
 pub mod logging;
 pub mod metrics;
 pub mod protocol;
+pub mod sequential_hydration;
 pub mod service;

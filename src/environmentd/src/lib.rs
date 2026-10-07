@@ -465,18 +465,47 @@ impl Listeners {
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)().into();
 
+        // Open the catalog before accessing other Persist shards. Its initial sync
+        // installs the protected environment's committed format target in this
+        // shared client configuration, including for read-like shard initialization.
         let persist_client = config
             .catalog_config
             .persist_clients
             .open(config.controller.persist_location.clone())
             .await
             .context("opening persist client")?;
+        let timestamp_oracle_url = config.timestamp_oracle_url.as_ref().context(
+            "catalog writes require a timestamp oracle URL (--timestamp-oracle-url or --metadata-backend-url)",
+        )?;
+        let oracle_config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
+            timestamp_oracle_url,
+            &config.metrics_registry,
+        )?;
+        let timestamp_oracle_now = match &config.controller.timestamp_oracle_clock_file {
+            Some(path) => mz_timestamp_oracle::fixture_clock::open(path.clone())
+                .context("opening fixture timestamp clock")?,
+            None => config.now.clone(),
+        };
+        // Protection writes and deployment promotion need a writable oracle even
+        // when the main controllers are starting in read-only mode.
+        let catalog_timestamp_oracle = mz_catalog::durable::CatalogTimestampOracle::new(
+            oracle_config
+                .open(
+                    mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                    mz_repr::Timestamp::MIN,
+                    timestamp_oracle_now.clone(),
+                    false,
+                )
+                .await,
+            timestamp_oracle_now.clone(),
+        );
         let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
             persist_client.clone(),
             config.environment_id.organization_id(),
             BUILD_INFO.semver_version(),
             Some(config.controller.deploy_generation),
             Arc::clone(&config.catalog_config.metrics),
+            Some(catalog_timestamp_oracle.clone()),
         )
         .await?;
 
@@ -669,6 +698,11 @@ impl Listeners {
         )
         .await?;
 
+        let protected_prewarming = read_only
+            && openable_adapter_storage
+                .catalog_read_protection_enabled()
+                .await?;
+
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
@@ -682,10 +716,12 @@ impl Listeners {
             let catchup_config = CatchupConfig {
                 boot_ts,
                 environment_id: config.environment_id.clone(),
-                persist_client,
+                persist_client: persist_client.clone(),
                 deploy_generation: config.controller.deploy_generation,
                 deployment_state: deployment_state.clone(),
                 catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+                timestamp_oracle: catalog_timestamp_oracle.clone(),
+                native_prewarming: protected_prewarming,
                 caught_up_max_wait: with_0dt_deployment_max_wait,
                 panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
                 bootstrap_args: bootstrap_args.clone(),
@@ -706,7 +742,11 @@ impl Listeners {
         info!("startup: envd serve: durable catalog open beginning");
 
         // Load the adapter durable storage.
-        let mut adapter_storage = if read_only {
+        let mut adapter_storage = if protected_prewarming {
+            let build =
+                mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
+            openable_adapter_storage.join_prewarming(&build).await?
+        } else if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
@@ -722,9 +762,8 @@ impl Listeners {
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
-            // Once we have successfully opened the adapter storage in
-            // read/write mode, we can announce we are the leader, as we've
-            // fenced out all other environments using the adapter storage.
+            // Catalog admission succeeded for this deployment. Protected
+            // components can share its generation without fencing one another.
             deployment_state.set_is_leader();
 
             adapter_storage
@@ -734,6 +773,10 @@ impl Listeners {
             Some(tx) => Some((tx, preflight::get_user_ids(adapter_storage.as_mut()).await?)),
             None => None,
         };
+
+        // Native prewarming follows committed metadata through its own joined
+        // handle, including read protection. It does not borrow active authority.
+        let compaction_bound_subscriber = None;
 
         // Enable Persist compaction if we're not in read only.
         if !read_only {
@@ -755,8 +798,6 @@ impl Listeners {
         {
             return Err(anyhow!("bootstrap default cluster replica size is unknown").into());
         }
-        let envd_epoch = adapter_storage.epoch();
-
         // Initialize storage usage client.
         let storage_usage_client = StorageUsageClient::open(
             config
@@ -781,13 +822,37 @@ impl Listeners {
             connection_limiter.update_superuser_reserved(superuser_reserved);
         });
 
+        let client_protection_storage = if protected_prewarming {
+            Some(
+                mz_catalog::durable::persist_backed_catalog_state(
+                    persist_client.clone(),
+                    config.environment_id.organization_id(),
+                    config.controller.build_info.semver_version(),
+                    Some(config.controller.deploy_generation),
+                    Arc::clone(&config.catalog_config.metrics),
+                    Some(catalog_timestamp_oracle.clone()),
+                )
+                .await?
+                .join_prewarming(
+                    &mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO)
+                        .to_string(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let envd_epoch = adapter_storage.epoch();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
-            timestamp_oracle_url: config.timestamp_oracle_url,
+            client_protection_storage,
+            compaction_bound_subscriber,
+            timestamp_oracle_config: Some(oracle_config),
+            timestamp_oracle_now,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,

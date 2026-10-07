@@ -100,7 +100,7 @@ use futures::StreamExt;
 use iceberg::ErrorKind;
 use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
 use iceberg::spec::{
-    DataFile, FormatVersion, NestedField, PrimitiveType, Snapshot, StructType, Type,
+    DataFile, FormatVersion, NestedField, PrimitiveType, StructType, TableMetadata, Type,
     read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
@@ -842,7 +842,10 @@ async fn do_commit(
         .map_err(CommitError::Request)
 }
 
-/// Attempt a single commit of a batch of data files to an Iceberg table.
+/// Attempt to publish prepared files. Every attempt reloads before admission,
+/// including after an uncertain outcome. Overlap stops the operator, whose halting
+/// health status requests reconstruction. Do not rewrite batch bounds, publish a
+/// subset of these files, or delete files whose commit outcome is unknown.
 async fn try_commit_batch(
     table: Table,
     snapshot_properties: Vec<(String, String)>,
@@ -875,10 +878,11 @@ async fn try_commit_batch(
         }
     };
 
-    let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-    let last = match retrieve_upper_from_snapshots(&mut snapshots) {
+    let last = match retrieve_upper_from_snapshots(table.metadata()) {
         Ok(last) => last,
-        Err(e) => return (table, RetryResult::RetryableErr(anyhow!(e))),
+        // The reload succeeded, but durable progress is missing or invalid.
+        // Retrying prepared files cannot establish a safe frontier.
+        Err(e) => return (table, RetryResult::FatalErr(anyhow!(e))),
     };
     if let Some((last_frontier, last_id, last_version)) = last {
         // Just in case the sink was recreated, check both sink ID and version to see if it was us.
@@ -910,23 +914,26 @@ async fn try_commit_batch(
             );
         }
 
-        if PartialOrder::less_equal(batch_upper, &last_frontier)
-            || PartialOrder::less_than(batch_lower, &last_frontier)
-        {
-            // This batch contains records someone else has already written.
+        // Prepared files may only extend exactly the durable Materialize upper.
+        // A mismatch requires reconstruction, not rebasing or publishing a subset.
+        if last_frontier != *batch_lower {
             return (
                 table,
                 RetryResult::FatalErr(anyhow!(
                     "Iceberg table '{}' has been modified by another writer. \
-                    Current frontier: {:?}, last frontier: {:?}.",
+                    Iceberg commit requires reconstruction from committed upper {}: prepared lower {}",
                     conn_table,
-                    batch_upper,
-                    last_frontier,
+                    last_frontier.pretty(),
+                    batch_lower.pretty(),
                 )),
             );
         }
     }
 
+    // Admission and RowDelta's main-snapshot CAS (including None) and UUID
+    // requirement use the same metadata. Progress-bearing snapshots belong to
+    // main, not independent branches. A table without snapshot history permits
+    // a nonzero initial as_of.
     match do_commit(
         &table,
         catalog,
@@ -1081,10 +1088,12 @@ async fn load_or_create_table(
 ///
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
-/// The input slice will be sorted by sequence number in descending order.
+/// Returns None only when metadata contains no evidence of prior snapshots.
+/// Missing progress after snapshot expiration is an error, not an initial frontier.
 fn retrieve_upper_from_snapshots(
-    snapshots: &mut [Arc<Snapshot>],
+    metadata: &TableMetadata,
 ) -> anyhow::Result<Option<(Antichain<Timestamp>, GlobalId, u64)>> {
+    let mut snapshots = metadata.snapshots().collect::<Vec<_>>();
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
@@ -1121,6 +1130,17 @@ fn retrieve_upper_from_snapshots(
         }
     }
 
+    // Sequence numbers survive snapshot expiration in v2+ tables. Retained
+    // snapshots and the snapshot log also establish history, including in v1.
+    // The metadata log alone is not evidence of writes (e.g. property changes).
+    if metadata.snapshots().len() != 0
+        || !metadata.history().is_empty()
+        || metadata.last_sequence_number() != 0
+    {
+        anyhow::bail!(
+            "Iceberg table has prior snapshot history but no retained Materialize progress ('mz-frontier', 'mz-sink-id', and 'mz-sink-version'). Cannot safely recover or commit."
+        );
+    }
     Ok(None)
 }
 
@@ -1288,8 +1308,7 @@ fn mint_batch_descriptions<'scope>(
 
             *table_ready_capset = CapabilitySet::new();
 
-            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-            let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
+            let resume = retrieve_upper_from_snapshots(table.metadata())?;
             let (resume_upper, resume_version) = match resume {
                 Some((f, _, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
@@ -2072,6 +2091,9 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod commit_tests;
 
 #[cfg(test)]
 mod tests {

@@ -69,9 +69,11 @@ Field          | Type       | Meaning
 
 {{< warn-if-unreleased "v0.118" >}}
 
-The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
+The `mz_cluster_replica_frontiers` view describes the per-replica frontiers of
 sources, sinks, materialized views, indexes, and subscriptions in the system,
-as observed from the coordinator.
+as observed from the coordinator. For native execution, it reports observations
+from the catalog's active deployment, including when queried through a prewarming
+deployment.
 
 [`mz_compute_frontiers`](../mz_introspection/#mz_compute_frontiers) is similar to
 `mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the

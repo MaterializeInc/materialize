@@ -86,6 +86,15 @@ those drops before the creates. An orchestrator can retry a failed create
 indefinitely. Queuing the drop behind it would deadlock a replacement against
 the same physical quota that catalog accounting correctly considered available.
 
+### Frontend sequencing and worker stacks
+
+`SessionClient::execute` heap-allocates its large execution-attempt future so it
+does not inflate every caller's connection state machine. Inline async state can
+produce multiple stack copies at each level of a poll chain, including tracing
+wrappers. A stack overflow in a leaf planner function need not mean recursive
+planning. Keep large sequencing state behind this boundary rather than increasing
+worker stack sizes or moving the allocation burden into each frontend protocol.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds
@@ -288,15 +297,54 @@ append / register / forget -> FIFO group committer -> table-write worker -> txns
 FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
 the only local exception because it runs before the process serves.
 
-Each runtime command uses this protocol:
+Runtime commands use this protocol. Ordinary writes allocate T from the shared
+oracle, while OCC writes supply a target chosen by the session task:
 
 ```text
-shared oracle write timestamp -> advance catalog upper -> compare-and-append txns shard
-                                                       | conflict -> retry
-                                                       ` success  -> apply write to oracle
+target T -> advance catalog upper to T+1 -> compare-and-append txns shard at T
+                                          | conflict -> report actual txns upper, retry
+                                          ` success  -> apply_write(T) -> acknowledge
 ```
 
-The successful timestamp is applied to the oracle only after the txns write is durable.
+OCC chooses `T = max(retry_lower_bound, min(F, W+1))`, where F is the subscribe
+frontier and W the shared oracle write timestamp. Below, R is the oracle read
+timestamp and U the txns-shard upper. The initial lower bound is
+`as_of+1`. A conflict raises it to the actual txns upper. Each attempt waits for
+`F >= T` and refolds all diffs strictly below the new T. The cap `T <= W+1`
+holds at choice time unless a reported txns upper raises the lower bound above
+it. Oracle allocations alone are not conflicts and must not reject an otherwise
+valid target. Persist's compare-and-append decides whether T is still writable.
+
+The successful timestamp is applied only after the txns write is durable.
+`apply_write(T)` sets `R' = max(R, T)`, not necessarily `R' = T`. Advancing the
+catalog upper to `T+1` preserves its bound above R because runtime paths that
+raise R already make the catalog upper exceed their argument. Bootstrap's
+`apply_write(catalog_upper)` can temporarily leave R equal to the catalog upper.
+
+#### OCC real-time ordering and completion before acknowledgement
+
+Txns writes and catalog content commits apply their timestamps to the shared
+oracle before acknowledging, and strict serializable reads wait for R to reach
+their chosen timestamp. Catalog content commits follow durability, completion
+(including `apply_write`), then acknowledgement. Heartbeats carry no user-visible
+DDL and do not need to apply a timestamp.
+
+OCC selects `as_of >= R_s`, where `R_s` is read from the shared oracle after the
+statement begins, and writes at `T > as_of`. Thus every operation acknowledged
+before the statement began has timestamp `<= R_s < T`. This is the real-time
+ordering proof, not an assumption that T exceeds the current R or W. Without
+catalog completion before acknowledgement, an UPDATE following an acknowledged
+ALTER could be ordered before that ALTER.
+
+Concurrent reads may have `X >= T`. Reads depending on the txns write wait for
+`U > X >= T`, so Persist decides the write before those reads are served. Reads
+below T exclude it. Reads not gated by U have content independent of the write,
+including a REFRESH view between refreshes whose last refresh is below T.
+Linearizing `as_of` before the loop still matters for zero-row answers and for
+the initial bound `as_of+1 <= W+1`. This does not eliminate waits for lagging
+inputs or for the initial snapshot after catalog progress outpaces the txns WAL.
+
+#### Generation barrier
 
 On `environmentd` bootstrap in read/write mode:
 
@@ -305,17 +353,54 @@ catalog fence -> set up and register tables -> txns write advances table uppers
               -> snapshot and reset system tables -> start serving
 ```
 
+Bootstrap snapshots use the table-fence timestamp, not a subsequent oracle read.
+Catalog publishers can advance the shared oracle without advancing the table WAL.
+Waiting for that newer timestamp can deadlock bootstrap before normal table
+progress starts.
+
 The snapshots cannot complete until the txns write has advanced the table uppers. Therefore:
 
 ```text
-pre-fence write before barrier -> ordered before the snapshot
-pre-fence write after barrier  -> `InvalidUppers` -> retry at a fresh timestamp
-                                -> catalog advance observes the fence -> old generation exits
+stale-generation target T <= B -> may land before barrier, never after it
+stale-generation target T > B  -> catalog advance observes fence before txns CAS
 ```
 
 A system-table write before the barrier is included in the reset. A user-table write remains
-visible to later reads. The retry's `advance_to` is above the stale catalog handle's cached upper,
-so its catalog check is durable. An `advance_upper` no-op only checks an already-observed fence.
+visible to later reads. Let `C_f` be the new generation's catalog fence commit
+and B its barrier write. Bootstrap applies the catalog upper to the oracle
+before allocating B, so `B > C_f`. After the barrier, a stale generation could
+land only at `T >= B+1`. Its cached catalog upper is `<= C_f`, hence
+`T+1 > C_f >= cached upper`. Its preceding `advance_upper(T+1)` cannot be a
+no-op and must observe the fence durably before the txns compare-and-append.
+This proof is independent of W and does not require T to become the new R.
+
+### Durable sink progress can precede controller observations
+
+A sink commits external output before advancing its Persist progress shard, then
+reports that progress to the controller. A query client can observe the durable
+upper before the controller processes the report. Sink alteration must establish
+input overlap against durable progress, not reject committed desired state using
+a lagging controller observation. Waiting for that report on the coordinator loop
+can also block the loop that must process it.
+
+This applies to the sink's output-progress shard, not a source remap shard. Remap
+progress alone does not establish completion of source output.
+
+### Planning eligibility is not execution readability
+
+The catalog determines index candidates and transaction eligibility, even
+before replica installation. Runtime observations must not change that logical
+domain without DDL. Index creation commits a justified initial `as_of` and
+compaction bound with protection for both logical inputs and the selected plan's
+actual imports. Read acquisition uses that committed protection before fixing a
+transaction timestamp, without requiring an installed trace. Neither a bare
+catalog entry nor an assumed `MIN` establishes a valid frontier.
+
+SELECT and nonexecuting EXPLAIN share read-hold acquisition and preserve their
+transaction effects. EXPLAIN does not wait for hypothetical execution, including
+on zero-replica clusters. Actual execution separately checks import readability
+and waits for required progress. Installation and plan changes must honor valid
+protection, not skip required history because a chosen import compacted further.
 
 ## Rejected Optimizations
 

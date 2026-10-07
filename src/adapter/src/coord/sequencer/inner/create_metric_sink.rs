@@ -10,7 +10,7 @@
 //! `CREATE METRIC SINK` sequencing.
 //!
 //! Staged like `CREATE INDEX`: optimization runs off the coordinator thread, then the finish stage
-//! writes the durable catalog item and ships the dataflow inside one catalog transaction.
+//! writes the durable catalog item. Committed implications install the dataflow.
 
 use anyhow::anyhow;
 use mz_catalog::memory::error::ErrorKind;
@@ -22,6 +22,7 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_transform::notice::OptimizerNoticeApi;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -31,7 +32,6 @@ use crate::coord::{
     PlanValidity, StageResult, Staged,
 };
 use crate::error::AdapterError;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, ExecuteContext, catalog};
@@ -125,7 +125,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(cluster_id)
+            .candidate_instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = self.allocate_user_id().await?;
         // A transient id for the view the optimizer builds over `from` to shape its rows (see
@@ -206,7 +206,6 @@ impl Coordinator {
             ..
         } = stage;
         let cluster_id = metric_sink.cluster_id;
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         // Run the authoritative prefix-free check here in the finish stage, not in optimize:
         // optimize runs off the coordinator thread, so another sink could commit between the two
@@ -214,7 +213,7 @@ impl Coordinator {
         self.ensure_metric_sink_prefix_is_free(&name, cluster_id, &metric_sink.prefix)?;
 
         let owner_id = *ctx.session().current_role_id();
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id: item_id,
             name: name.clone(),
             item: CatalogItem::MetricSink(MetricSink {
@@ -234,19 +233,17 @@ impl Coordinator {
         // Render optimizer notices before the catalog transaction: this way notice text resolves
         // the new sink's own `global_id` to its intended human-readable name rather than a bare
         // transient id.
-        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let from_entry = self.catalog().get_entry_by_global_id(&metric_sink.from);
         let from_desc = from_entry
             .relation_desc()
             .expect("can only create a metric sink on items with a valid description");
         let df_meta = self.render_create_item_notices(&name, global_id, &from_desc, &raw_df_meta);
 
-        // Populate the durable expression cache before the catalog transaction and await the
-        // write. This way any other envd (or a subsequent bootstrap here) will observe the cached
-        // plans + rendered notices as soon as the item becomes visible. Metric sinks have no local
-        // MIR (the pipeline starts from a `GlobalId`), so there is no local expression to cache.
-        self.catalog()
-            .cache_expressions(
+        // Write the plan before committing the object and its selection together.
+        let selection = self
+            .catalog()
+            .prepare_item_plan(
                 global_id,
                 None,
                 global_mir_plan.df_desc().clone(),
@@ -254,38 +251,22 @@ impl Coordinator {
                 df_meta.clone(),
                 optimizer_features,
             )
-            .await;
+            .await?;
+        ops.extend(selection);
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    coord
-                        .ship_new_dataflow(
-                            &id_bundle,
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                        )
-                        .await;
-                    // No `allow_writes` here: metric sinks write to the in-process metrics
-                    // registry, not to external/persist state.
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
             Ok(_) => {
+                // A cache rejection may reflect an optimizer-only dependency dropped in this batch.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice
+                        .dependencies()
+                        .iter()
+                        .all(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink))
             }

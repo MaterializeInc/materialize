@@ -46,6 +46,8 @@ pub const DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT: Option<Duration> = None;
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageParameters {
+    /// Authorized Persist state-format target. `None` leaves the target unchanged.
+    pub persist_state_version: Option<semver::Version>,
     pub pg_source_connect_timeout: Option<Duration>,
     pub pg_source_tcp_keepalives_retries: Option<u32>,
     pub pg_source_tcp_keepalives_idle: Option<Duration>,
@@ -114,6 +116,7 @@ pub const REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT: Duration =
 impl Default for StorageParameters {
     fn default() -> Self {
         Self {
+            persist_state_version: None,
             pg_source_connect_timeout: Some(DEFAULT_PG_SOURCE_CONNECT_TIMEOUT),
             pg_source_tcp_keepalives_retries: Some(DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES),
             pg_source_tcp_keepalives_idle: Some(DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE),
@@ -177,6 +180,7 @@ impl StorageParameters {
     pub fn update(
         &mut self,
         StorageParameters {
+            persist_state_version,
             pg_source_connect_timeout,
             pg_source_tcp_keepalives_retries,
             pg_source_tcp_keepalives_idle,
@@ -206,6 +210,9 @@ impl StorageParameters {
             dyncfg_updates,
         }: StorageParameters,
     ) {
+        if persist_state_version.is_some() {
+            self.persist_state_version = persist_state_version;
+        }
         self.pg_source_connect_timeout = pg_source_connect_timeout;
         self.pg_source_tcp_keepalives_retries = pg_source_tcp_keepalives_retries;
         self.pg_source_tcp_keepalives_idle = pg_source_tcp_keepalives_idle;
@@ -266,5 +273,32 @@ impl PgSourceSnapshotConfig {
 impl Default for PgSourceSnapshotConfig {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn persist_target_survives_sparse_updates_and_serialization() {
+        let mut parameters = StorageParameters::default();
+        for target in [
+            Some(semver::Version::new(0, 100, 0)),
+            Some(semver::Version::new(0, 101, 0)),
+            None,
+        ] {
+            parameters.update(StorageParameters {
+                persist_state_version: target,
+                ..Default::default()
+            });
+        }
+        assert_eq!(
+            parameters.persist_state_version,
+            Some(semver::Version::new(0, 101, 0))
+        );
+        let encoded = serde_json::to_vec(&parameters).unwrap();
+        let decoded: StorageParameters = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, parameters);
     }
 }

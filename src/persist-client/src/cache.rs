@@ -233,6 +233,22 @@ impl PersistClientCache {
         Ok(consensus)
     }
 
+    /// Wraps a cached blob backend for tests. Install before opening clients that
+    /// should use the wrapper, without concurrent opens. Existing clients retain
+    /// their blob handles. The cache's RTT task and other wrappers are preserved.
+    #[cfg(any(test, feature = "test"))]
+    pub async fn intercept_blob_for_tests(
+        &self,
+        blob_uri: SensitiveUrl,
+        wrap: impl FnOnce(Arc<dyn Blob>) -> Arc<dyn Blob>,
+    ) -> Result<(), ExternalError> {
+        self.open_blob(blob_uri.clone()).await?;
+        let mut blobs = self.blob_by_uri.lock().await;
+        let (_, blob) = blobs.get_mut(&blob_uri).expect("opened above");
+        *blob = wrap(Arc::clone(blob));
+        Ok(())
+    }
+
     async fn open_blob(&self, blob_uri: SensitiveUrl) -> Result<Arc<dyn Blob>, ExternalError> {
         let mut blob_by_uri = self.blob_by_uri.lock().await;
         let blob = match blob_by_uri.entry(blob_uri) {

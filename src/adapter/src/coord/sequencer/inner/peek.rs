@@ -24,6 +24,8 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::IsolationLevel;
+use mz_storage_types::sources::Timeline;
 use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
 use tracing::warn;
@@ -36,12 +38,15 @@ use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices, eval_copy_to_uri};
 use crate::coord::timeline::{TimelineContext, timedomain_for};
-use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::timestamp_selection::{
+    TimestampContext, TimestampDetermination, TimestampProvider,
+};
 use crate::coord::{
     Coordinator, CopyToContext, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
     PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageExplainPushdown, PeekStageFinish,
     PeekStageLinearizeTimestamp, PeekStageOptimize, PeekStageRealTimeRecency,
-    PeekStageTimestampReadHold, PlanValidity, StageResult, Staged, TargetCluster,
+    PeekStageTimestampReadHold, PeekStageTimestampValidated, PlanValidity, StageResult, Staged,
+    TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
@@ -60,8 +65,10 @@ impl Staged for PeekStage {
             PeekStage::LinearizeTimestamp(stage) => &mut stage.validity,
             PeekStage::RealTimeRecency(stage) => &mut stage.validity,
             PeekStage::TimestampReadHold(stage) => &mut stage.validity,
+            PeekStage::TimestampValidated(stage) => &mut stage.stage.validity,
             PeekStage::Optimize(stage) => &mut stage.validity,
             PeekStage::Finish(stage) => &mut stage.validity,
+            PeekStage::FinishWithTimestampNotice(stage, _) => &mut stage.validity,
             PeekStage::ExplainPlan(stage) => &mut stage.validity,
             PeekStage::ExplainPushdown(stage) => &mut stage.validity,
             PeekStage::CopyToPreflight(stage) => &mut stage.validity,
@@ -76,16 +83,41 @@ impl Staged for PeekStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             PeekStage::LinearizeTimestamp(stage) => {
-                coord.peek_linearize_timestamp(ctx.session(), stage).await
+                coord.peek_linearize_timestamp(ctx, stage).await
             }
             PeekStage::RealTimeRecency(stage) => {
                 coord.peek_real_time_recency(ctx.session(), stage).await
             }
-            PeekStage::TimestampReadHold(stage) => {
-                coord.peek_timestamp_read_hold(ctx.session_mut(), stage)
+            PeekStage::TimestampReadHold(stage) => coord.peek_timestamp_read_hold(ctx, stage).await,
+            PeekStage::TimestampValidated(stage) => coord.peek_timestamp_validated(ctx, stage),
+            PeekStage::Optimize(stage) => coord.peek_optimize(ctx, stage).await,
+            PeekStage::Finish(stage) => {
+                if coord.query_client.is_some() && ctx.session().vars().emit_timestamp_notice() {
+                    // Finish observations before dispatch so timeout cannot leave
+                    // an executing peek without a consumer for its response.
+                    let explanation = coord.timestamp_explanation(
+                        ctx.session(),
+                        stage.cluster_id,
+                        stage.id_bundle.clone(),
+                        stage.determination.clone(),
+                        ctx.statement_deadline(),
+                    );
+                    Ok(StageResult::Handle(mz_ore::task::spawn(
+                        || "peek timestamp observations",
+                        async move {
+                            Ok(Box::new(PeekStage::FinishWithTimestampNotice(
+                                stage,
+                                explanation.await?,
+                            )))
+                        },
+                    )))
+                } else {
+                    coord.peek_finish(ctx, stage, None).await
+                }
             }
-            PeekStage::Optimize(stage) => coord.peek_optimize(ctx.session(), stage).await,
-            PeekStage::Finish(stage) => coord.peek_finish(ctx, stage).await,
+            PeekStage::FinishWithTimestampNotice(stage, explanation) => {
+                coord.peek_finish(ctx, stage, Some(explanation)).await
+            }
             PeekStage::ExplainPlan(stage) => coord.peek_explain_plan(ctx.session(), stage).await,
             PeekStage::ExplainPushdown(stage) => {
                 coord.peek_explain_pushdown(ctx.session(), stage).await
@@ -132,6 +164,9 @@ impl Coordinator {
 
         let stage = return_if_err!(
             self.peek_validate(
+                ctx.query_catalog()
+                    .cloned()
+                    .unwrap_or_else(|| self.owned_catalog()),
                 ctx.session(),
                 plan,
                 target_cluster,
@@ -160,12 +195,19 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let uri = return_if_err!(
-            eval_copy_to_uri(to, ctx.session(), self.catalog().state()),
+            eval_copy_to_uri(
+                to,
+                ctx.session(),
+                ctx.query_catalog().unwrap_or(&self.catalog).state()
+            ),
             ctx
         );
 
         let stage = return_if_err!(
             self.peek_validate(
+                ctx.query_catalog()
+                    .cloned()
+                    .unwrap_or_else(|| self.owned_catalog()),
                 ctx.session(),
                 select_plan,
                 target_cluster,
@@ -216,6 +258,9 @@ impl Coordinator {
 
         let stage = return_if_err!(
             self.peek_validate(
+                ctx.query_catalog()
+                    .cloned()
+                    .unwrap_or_else(|| self.owned_catalog()),
                 ctx.session(),
                 plan,
                 target_cluster,
@@ -240,6 +285,7 @@ impl Coordinator {
     #[instrument]
     pub fn peek_validate(
         &self,
+        catalog: Arc<crate::catalog::Catalog>,
         session: &Session,
         plan: mz_sql::plan::SelectPlan,
         target_cluster: TargetCluster,
@@ -248,14 +294,20 @@ impl Coordinator {
         max_query_result_size: Option<u64>,
     ) -> Result<PeekStage, AdapterError> {
         // Collect optimizer parameters.
-        let catalog = self.owned_catalog();
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
-        let compute_instance = self
-            .instance_snapshot(cluster.id())
-            .expect("compute instance does not exist");
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster.id()))
+        let compute_instance = if explain_ctx.needs_cluster() {
+            self.query_instance_snapshot(cluster.id())
+                .expect("compute instance does not exist")
+        } else {
+            optimize::dataflows::ComputeInstanceSnapshot::new_without_collections(cluster.id())
+        };
+        let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
+            .override_from(&cluster.config.features())
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster.id()),
+            )
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
@@ -326,9 +378,7 @@ impl Coordinator {
             .transpose()?;
 
         let source_ids = plan.source.depends_on();
-        let mut timeline_context = self
-            .catalog()
-            .validate_timeline_context(source_ids.iter().copied())?;
+        let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && plan.source.contains_temporal()
         {
@@ -349,10 +399,10 @@ impl Coordinator {
 
         let dependencies = source_ids
             .iter()
-            .map(|id| self.catalog.resolve_item_id(id))
+            .map(|id| catalog.resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
-            &self.catalog,
+            &catalog,
             dependencies,
             Some(cluster.id()),
             target_replica,
@@ -375,7 +425,7 @@ impl Coordinator {
     #[instrument]
     async fn peek_linearize_timestamp(
         &self,
-        session: &Session,
+        ctx: &ExecuteContext,
         PeekStageLinearizeTimestamp {
             validity,
             source_ids,
@@ -387,7 +437,16 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageLinearizeTimestamp,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        let session = ctx.session();
         let oracle = self.linearized_read_ts_oracle(session, &timeline_context, &plan.when);
+        let catalog_timestamp = ctx.query_catalog_timestamp().filter(|_| {
+            oracle.is_some()
+                // Lock-based writes need a read timestamp acquired after their
+                // write locks. Their catalog certificate predates lock admission.
+                && !plan.when.must_advance_to_timeline_ts()
+                && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+                && Self::get_timeline(&timeline_context) == Some(Timeline::EpochMilliseconds)
+        });
 
         let build_stage = move |oracle_read_ts: Option<Timestamp>| PeekStageRealTimeRecency {
             validity,
@@ -401,6 +460,11 @@ impl Coordinator {
             explain_ctx,
         };
 
+        if let Some(timestamp) = catalog_timestamp {
+            return Ok(StageResult::Immediate(Box::new(
+                PeekStage::RealTimeRecency(build_stage(Some(timestamp))),
+            )));
+        }
         Ok(spawn_linearized_read_ts(
             oracle,
             "linearize timestamp",
@@ -410,9 +474,9 @@ impl Coordinator {
 
     /// Determine a read timestamp and create appropriate read holds.
     #[instrument]
-    fn peek_timestamp_read_hold(
+    async fn peek_timestamp_read_hold(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         PeekStageTimestampReadHold {
             mut validity,
             plan,
@@ -427,47 +491,107 @@ impl Coordinator {
         }: PeekStageTimestampReadHold,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let cluster_id = optimizer.cluster_id();
-        let id_bundle = self
-            .dataflow_builder(cluster_id)
-            .sufficient_collections(source_ids.iter().copied());
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
+        let id_bundle = optimize::dataflows::DataflowBuilder::new(
+            catalog.state(),
+            self.query_instance_snapshot(cluster_id).map_err(|_| {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: cluster_id.to_string(),
+                }
+            })?,
+        )
+        .sufficient_collections(source_ids.iter().copied());
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        let item_ids = id_bundle
-            .iter()
-            .map(|id| self.catalog().resolve_item_id(&id));
-        validity.extend_dependencies(self.catalog(), item_ids);
+        let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
+        validity.extend_dependencies(&catalog, item_ids);
 
-        let determination = self.sequence_peek_timestamp(
-            session,
+        let fixed_timestamp = ctx
+            .session()
+            .transaction()
+            .in_immediate_multi_stmt_txn(&plan.when)
+            && ctx
+                .session()
+                .get_transaction_timestamp_determination()
+                .is_some_and(|d| d.timestamp_context.contains_timestamp());
+        let (determination, read_holds) = self
+            .prepare_peek_timestamp(
+                ctx.session_mut(),
+                &catalog,
+                &plan.when,
+                cluster_id,
+                timeline_context,
+                oracle_read_ts,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+            )
+            .await?;
+
+        let validation = self.validate_query_catalog(
+            ctx,
+            &determination,
             &plan.when,
-            cluster_id,
-            timeline_context,
-            oracle_read_ts,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
+            !fixed_timestamp,
             (&explain_ctx).into(),
-        )?;
+        );
+        let stage = Box::new(PeekStage::TimestampValidated(PeekStageTimestampValidated {
+            read_holds,
+            stage: PeekStageOptimize {
+                validity,
+                plan,
+                max_query_result_size,
+                source_ids,
+                id_bundle,
+                target_replica,
+                determination,
+                optimizer,
+                explain_ctx,
+            },
+        }));
+        match validation {
+            Some(validation) => Ok(StageResult::Await(Box::pin(async move {
+                validation.await?;
+                Ok(stage)
+            }))),
+            None => Ok(StageResult::Immediate(stage)),
+        }
+    }
 
-        let stage = PeekStage::Optimize(PeekStageOptimize {
-            validity,
-            plan,
-            max_query_result_size,
-            source_ids,
-            id_bundle,
-            target_replica,
-            determination,
-            optimizer,
-            explain_ctx,
-        });
-        Ok(StageResult::Immediate(Box::new(stage)))
+    fn peek_timestamp_validated(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        PeekStageTimestampValidated {
+            mut stage,
+            read_holds,
+        }: PeekStageTimestampValidated,
+    ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
+        stage.determination = self.finish_peek_timestamp(
+            ctx.session_mut(),
+            &catalog,
+            &stage.plan.when,
+            stage.optimizer.cluster_id(),
+            &stage.id_bundle,
+            stage.determination,
+            read_holds,
+            (&stage.explain_ctx).into(),
+        )?;
+        Ok(StageResult::Immediate(Box::new(PeekStage::Optimize(stage))))
     }
 
     #[instrument]
     async fn peek_optimize(
         &self,
-        session: &Session,
+        ctx: &ExecuteContext,
         PeekStageOptimize {
             validity,
             plan,
@@ -480,6 +604,11 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageOptimize,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        let session = ctx.session();
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
@@ -488,15 +617,15 @@ impl Coordinator {
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
         let session = session.meta();
-        let now = self.catalog().config().now.clone();
-        let catalog = self.owned_catalog();
+        let now = catalog.config().now.clone();
         let mut compute_instances = BTreeMap::new();
         if explain_ctx.needs_plan_insights() {
             // There's a chance for index skew (indexes were created/deleted between stages) from the
             // original plan, but that seems acceptable for insights.
-            for cluster in self.catalog().user_clusters() {
-                let snapshot = self.instance_snapshot(cluster.id).expect("must exist");
-                compute_instances.insert(cluster.name.clone(), snapshot);
+            for cluster in catalog.user_clusters() {
+                if let Ok(snapshot) = self.query_instance_snapshot(cluster.id) {
+                    compute_instances.insert(cluster.name.clone(), snapshot);
+                }
             }
         }
 
@@ -757,6 +886,7 @@ impl Coordinator {
             optimization_finished_at,
             insights_ctx,
         }: PeekStageFinish,
+        timestamp_notice: Option<crate::TimestampExplanation>,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
             self.record_statement_lifecycle_event(
@@ -766,23 +896,31 @@ impl Coordinator {
             );
         }
 
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
         let session = ctx.session_mut();
         let conn_id = session.conn_id().clone();
 
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
 
-        emit_optimizer_notices(&*self.catalog, &*session, &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*catalog, &*session, &df_meta.optimizer_notices);
 
         if let Some(trace) = plan_insights_optimizer_trace {
-            let target_cluster = self.catalog().get_cluster(cluster_id);
-            let features = OptimizerFeatures::from(self.catalog().system_config())
+            let target_cluster = catalog.get_cluster(cluster_id);
+            let features = OptimizerFeatures::from(catalog.system_config())
                 .override_from(&target_cluster.config.features())
-                .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+                .override_from(
+                    &catalog
+                        .state()
+                        .cluster_scoped_optimizer_overrides(cluster_id),
+                );
             let insights = trace
                 .into_plan_insights(
                     &features,
-                    &self.catalog().for_session(session),
+                    &catalog.for_session(session),
                     Some(plan.finishing),
                     Some(target_cluster),
                     df_meta,
@@ -793,6 +931,7 @@ impl Coordinator {
         }
 
         let planned_peek = PlannedPeek {
+            catalog: Arc::clone(&catalog),
             plan: peek_plan,
             determination: determination.clone(),
             conn_id: conn_id.clone(),
@@ -813,14 +952,14 @@ impl Coordinator {
         if let Some(logging_id) = ctx.extra().contents() {
             let watch_set = WatchSetCreation::new(
                 logging_id,
-                self.catalog.state(),
+                catalog.state(),
                 &id_bundle,
                 determination.timestamp_context.timestamp_or_default(),
             );
             self.install_peek_watch_sets(conn_id.clone(), watch_set).expect("the old peek sequencing re-verifies the dependencies' existence before installing the new watch sets");
         }
 
-        let max_result_size = self.catalog().system_config().max_result_size();
+        let max_result_size = catalog.system_config().max_result_size();
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -836,13 +975,15 @@ impl Coordinator {
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation = self.explain_timestamp(
-                ctx.session().conn_id(),
-                ctx.session().pcx().wall_time,
-                cluster_id,
-                &id_bundle,
-                determination,
-            );
+            let explanation = timestamp_notice.unwrap_or_else(|| {
+                self.explain_timestamp(
+                    ctx.session().conn_id(),
+                    ctx.session().pcx().wall_time,
+                    cluster_id,
+                    &id_bundle,
+                    determination,
+                )
+            });
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
@@ -864,7 +1005,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let connection_context = self.connection_context().clone();
         let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-            .get(self.controller.storage.config().config_set());
+            .get(self.storage_configuration.config_set());
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "peek copy to preflight",
             async move {
@@ -911,6 +1052,10 @@ impl Coordinator {
             source_ids,
         }: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
         if let Some(id) = ctx.extra.contents() {
             self.record_statement_lifecycle_event(
                 &id,
@@ -924,11 +1069,12 @@ impl Coordinator {
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Callback for the active copy to.
         let (tx, rx) = oneshot::channel();
         let active_copy_to = ActiveCopyTo {
+            query_execution: None,
             conn_id: ctx.session().conn_id().clone(),
             tx,
             cluster_id,
@@ -937,9 +1083,31 @@ impl Coordinator {
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
         drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
-        // Ship dataflow.
-        self.ship_dataflow(df_desc, cluster_id, target_replica)
-            .await;
+        if self.query_client.is_some() {
+            let imports = CollectionIdBundle {
+                storage_ids: df_desc.source_imports.keys().copied().collect(),
+                compute_ids: [(cluster_id, df_desc.index_imports.keys().copied().collect())]
+                    .into_iter()
+                    .collect(),
+            };
+            let result = match self.acquire_query_read_holds(&imports).await {
+                Ok(holds) => self.start_query_sink(
+                    Arc::clone(&catalog),
+                    df_desc,
+                    cluster_id,
+                    target_replica,
+                    holds,
+                ),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                self.remove_active_compute_sink(sink_id).await;
+                return Err(error);
+            }
+        } else {
+            self.ship_dataflow(df_desc, cluster_id, target_replica)
+                .await;
+        }
 
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
@@ -1003,10 +1171,7 @@ impl Coordinator {
         )))
     }
 
-    /// Determines the query timestamp and acquires read holds on dependent sources
-    /// if necessary.
-    #[instrument]
-    pub(super) fn sequence_peek_timestamp(
+    pub(super) async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
         when: &QueryWhen,
@@ -1018,6 +1183,47 @@ impl Coordinator {
         real_time_recency_ts: Option<Timestamp>,
         requires_linearization: RequireLinearization,
     ) -> Result<TimestampDetermination, AdapterError> {
+        let catalog = self.owned_catalog();
+        let (determination, read_holds) = self
+            .prepare_peek_timestamp(
+                session,
+                &catalog,
+                when,
+                cluster_id,
+                timeline_context,
+                oracle_read_ts,
+                source_bundle,
+                source_ids,
+                real_time_recency_ts,
+            )
+            .await?;
+        self.finish_peek_timestamp(
+            session,
+            &catalog,
+            when,
+            cluster_id,
+            source_bundle,
+            determination,
+            read_holds,
+            requires_linearization,
+        )
+    }
+
+    /// Determines the query timestamp and acquires read holds on dependent sources
+    /// if necessary.
+    #[instrument]
+    async fn prepare_peek_timestamp(
+        &mut self,
+        session: &Session,
+        catalog: &crate::catalog::Catalog,
+        when: &QueryWhen,
+        cluster_id: ClusterId,
+        timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
+        source_bundle: &CollectionIdBundle,
+        source_ids: &BTreeSet<GlobalId>,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<(TimestampDetermination, Option<crate::ReadHolds>), AdapterError> {
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when);
         let timedomain_bundle;
 
@@ -1036,8 +1242,16 @@ impl Coordinator {
                     // In a transaction, determine a timestamp that will be valid for anything in
                     // any schema referenced by the first query.
                     timedomain_bundle = timedomain_for(
-                        self.catalog(),
-                        &self.index_oracle(cluster_id),
+                        catalog,
+                        &optimize::dataflows::DataflowBuilder::new(
+                            catalog.state(),
+                            self.query_instance_snapshot(cluster_id).map_err(|_| {
+                                AdapterError::ConcurrentDependencyDrop {
+                                    dependency_kind: "cluster",
+                                    dependency_id: cluster_id.to_string(),
+                                }
+                            })?,
+                        ),
                         source_ids,
                         &timeline_context,
                         session.conn_id(),
@@ -1049,15 +1263,17 @@ impl Coordinator {
                     // If not in a transaction, use the source.
                     source_bundle
                 };
-                let (determination, read_holds) = self.determine_timestamp(
-                    session,
-                    determine_bundle,
-                    when,
-                    cluster_id,
-                    &timeline_context,
-                    oracle_read_ts,
-                    real_time_recency_ts,
-                )?;
+                let (determination, read_holds) = self
+                    .determine_timestamp(
+                        session,
+                        determine_bundle,
+                        when,
+                        cluster_id,
+                        &timeline_context,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                    )
+                    .await?;
                 // We only need read holds if the read depends on a timestamp.
                 let read_holds = match determination.timestamp_context.timestamp() {
                     Some(_ts) => Some(read_holds),
@@ -1074,6 +1290,20 @@ impl Coordinator {
             }
         };
 
+        Ok((determination, read_holds))
+    }
+
+    fn finish_peek_timestamp(
+        &mut self,
+        session: &mut Session,
+        catalog: &crate::catalog::Catalog,
+        when: &QueryWhen,
+        cluster_id: ClusterId,
+        source_bundle: &CollectionIdBundle,
+        determination: TimestampDetermination,
+        read_holds: Option<crate::ReadHolds>,
+        requires_linearization: RequireLinearization,
+    ) -> Result<TimestampDetermination, AdapterError> {
         // Always either verify the current statement ids are within the existing
         // transaction's read hold set (timedomain), or create the read holds if this is the
         // first statement in a transaction (or this is a single statement transaction).
@@ -1095,9 +1325,8 @@ impl Coordinator {
             let outside = source_bundle.difference(&allowed_id_bundle);
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
-                let valid_names =
-                    allowed_id_bundle.resolve_names(self.catalog(), session.conn_id());
-                let invalid_names = outside.resolve_names(self.catalog(), session.conn_id());
+                let valid_names = allowed_id_bundle.resolve_names(catalog, session.conn_id());
+                let invalid_names = outside.resolve_names(catalog, session.conn_id());
                 return Err(AdapterError::RelationOutsideTimeDomain {
                     relations: invalid_names,
                     names: valid_names,

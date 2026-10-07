@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Native catalog reconstruction uses deeply nested async types.
+#![recursion_limit = "256"]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -43,6 +46,7 @@ use tokio::runtime::Handle;
 use tower::Service;
 use tracing::{Instrument, debug, error, info, info_span};
 
+mod catalog_follower;
 mod usage_metrics;
 
 const BUILD_INFO: BuildInfo = build_info!();
@@ -107,6 +111,35 @@ struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+
+    /// TestHarness-only Persist version simulation. Does not change written-plan identity.
+    #[clap(long, env = "TEST_PERSIST_BUILD_VERSION", hide = true)]
+    test_persist_build_version: Option<String>,
+
+    /// The cluster whose committed catalog state this replica follows.
+    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_timestamp_oracle_url", "catalog_config"])]
+    catalog_cluster_id: Option<mz_controller_types::ClusterId>,
+    /// Serialized non-runtime configuration for catalog reconstruction.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_config: Option<String>,
+    /// The replica identity within the declared cluster.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_replica_id: Option<mz_controller_types::ReplicaId>,
+    /// The deployment generation this replica may join, never inferred from the leader.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_deploy_generation: Option<u64>,
+    /// Persist blob location for committed catalog and written plans.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_persist_blob_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Persist consensus location for committed catalog and written plans.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_persist_consensus_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Shared EpochMilliseconds oracle for catalog publications.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_timestamp_oracle_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Fixture-owned clock file for catalog timestamp allocation and policy checks only.
+    #[clap(long, hide = true, requires = "catalog_cluster_id")]
+    timestamp_oracle_clock_file: Option<PathBuf>,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -389,6 +422,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .unwrap_or_default();
     let mut persist_cfg =
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
+    if let Some(version) = args.test_persist_build_version {
+        persist_cfg.build_version = version
+            .parse()
+            .context("invalid test Persist build version")?;
+    }
     persist_cfg.is_cc_active = args.is_cc;
     persist_cfg.announce_memory_limit = args.announce_memory_limit;
     // Start with compaction disabled, will get enabled once a cluster receives AllowWrites.
@@ -417,6 +455,74 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
+    if args.catalog_cluster_id.is_some() {
+        let environment_id: mz_sql::catalog::EnvironmentId =
+            connection_context.environment_id.parse()?;
+        persist_clients.cfg().require_state_version_target(Some(
+            mz_catalog::durable::catalog_shard_id(environment_id.organization_id()),
+        ));
+    }
+
+    // Catalog following is replica-wide, not independently sampled per process.
+    let follower_config = if args.process == 0
+        && let Some(cluster_id) = args.catalog_cluster_id
+    {
+        let environment_id = connection_context.environment_id.parse()?;
+        let reconstruction: mz_catalog::config::ReplicaCatalogConfig = serde_json::from_str(
+            args.catalog_config
+                .as_deref()
+                .expect("required with cluster identity"),
+        )?;
+        // Reject incompatible plan namespaces before opening network backends.
+        reconstruction.plan_build_version(&BUILD_INFO)?;
+        let oracle_config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
+            args.catalog_timestamp_oracle_url
+                .as_ref()
+                .expect("required with cluster identity"),
+            &metrics_registry,
+        )?;
+        let timestamp_oracle_now = match args.timestamp_oracle_clock_file {
+            Some(path) => mz_timestamp_oracle::fixture_clock::open(path)?,
+            None => SYSTEM_TIME.clone(),
+        };
+        let timestamp_oracle = mz_catalog::durable::CatalogTimestampOracle::new(
+            oracle_config
+                .open(
+                    mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                    mz_repr::Timestamp::MIN,
+                    timestamp_oracle_now.clone(),
+                    false,
+                )
+                .await,
+            timestamp_oracle_now,
+        );
+        let config = catalog_follower::Config {
+            timestamp_oracle,
+            reconstruction,
+            environment_id,
+            connection_context: connection_context.clone(),
+            cluster_id,
+            replica_id: args
+                .catalog_replica_id
+                .expect("required with cluster identity"),
+            deploy_generation: args
+                .catalog_deploy_generation
+                .expect("required with cluster identity"),
+            persist_location: mz_persist_client::PersistLocation {
+                blob_uri: args
+                    .catalog_persist_blob_url
+                    .expect("required with cluster identity"),
+                consensus_uri: args
+                    .catalog_persist_consensus_url
+                    .expect("required with cluster identity"),
+            },
+            build_info: &BUILD_INFO,
+        };
+        Some(config)
+    } else {
+        None
+    };
+
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
 
@@ -425,20 +531,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    // We assume each storage worker has a corresponding compute worker that can process its logs.
-    assert_eq!(
-        storage_timely_config.workers, compute_timely_config.workers,
-        "storage and compute must have equal workers-per-process",
-    );
-
-    if args.unified_cluster {
+    let replica_owned =
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
+    let (mut compute_server, storage_endpoint, storage_client_builder): (
+        _,
+        _,
+        Box<dyn Fn() -> Box<dyn mz_storage_client::client::StorageClient> + Send + Sync>,
+    ) = if args.unified_cluster {
         info!("running with a unified timely cluster");
-
-        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+        let (server, endpoint, builder) = mz_compute::server::serve_unified(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
+            replica_owned,
             &metrics_registry,
-            persist_clients,
+            Arc::clone(&persist_clients),
             txns_ctx,
             tracing_handle,
             ComputeInstanceContext {
@@ -451,64 +557,50 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
         )
         .await?;
+        (server, endpoint, Box::new(builder))
+    } else {
+        let mut storage_server = mz_storage::server::serve_with_replica(
+            storage_timely_config,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            SYSTEM_TIME.clone(),
+            connection_context.clone(),
+            StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        )
+        .await?;
+        let compute_server = mz_compute::server::serve(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory,
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context,
+            },
+        )
+        .await?;
+        let endpoint = storage_server.take_replica();
+        (
+            compute_server,
+            endpoint,
+            Box::new(storage_server.client_builder()),
+        )
+    };
 
-        info!(
-            "listening for storage controller connections on {}",
-            args.storage_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "storage_server",
-            transport::serve(
-                args.storage_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host.clone(),
-                Duration::MAX,
-                storage_client_builder,
-                cluster_server_metrics.for_server("storage"),
-            )
-            .instrument(info_span!("ctp", name = "storage")),
-        );
-
-        info!(
-            "listening for compute controller connections on {}",
-            args.compute_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "compute_server",
-            transport::serve(
-                args.compute_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host,
-                Duration::MAX,
-                compute_client_builder,
-                cluster_server_metrics.for_server("compute"),
-            )
-            .instrument(info_span!("ctp", name = "compute")),
-        );
-
-        // Block forever.
-        return future::pending().await;
-    }
-
-    // Start storage server.
-    let storage_client_builder = mz_storage::serve(
-        storage_timely_config,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
-        SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
-    )
-    .await?;
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
     );
     mz_ore::task::spawn(
         || "storage_server",
-        transport::serve(
+        transport::serve_concurrent(
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
@@ -519,28 +611,44 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "storage")),
     );
 
-    // Start compute server.
-    let compute_client_builder = mz_compute::server::serve(
-        compute_timely_config,
-        ComputeRuntimeRole::Solo,
-        &metrics_registry,
-        persist_clients,
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
-            connection_context,
-        },
-    )
-    .await?;
+    if let Some(config) = follower_config {
+        let endpoint = compute_server.take_replica();
+        let replica_owned = endpoint.is_some();
+        let registry = metrics_registry.clone();
+        mz_ore::task::spawn(|| "catalog_follower", async move {
+            let mut owner = catalog_follower::NativeOwner::new(endpoint, storage_endpoint);
+            if let Err(error) =
+                catalog_follower::run(config, persist_clients, registry, &mut owner).await
+            {
+                if replica_owned {
+                    if error.is::<catalog_follower::ReplicaRemoved>() {
+                        // Catalog deletion must stop execution immediately, but
+                        // it is not an operational fault. Keep the halt exit code
+                        // so supervisor behavior is independent of log severity.
+                        info!("replica removed from catalog, stopping native execution");
+                        mz_ore::process::exit_thread_safe(166);
+                    }
+                    if is_deployment_fence(&error) {
+                        info!(%error, "deployment superseded, stopping native execution");
+                        mz_ore::process::exit_thread_safe(166);
+                    }
+                    mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
+                }
+                error!(%error, "catalog follower stopped");
+            }
+            if replica_owned {
+                mz_ore::halt!("execution-critical catalog follower returned unexpectedly");
+            }
+        });
+    }
+    let compute_client_builder = compute_server.client_builder();
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
     );
     mz_ore::task::spawn(
         || "compute_server",
-        transport::serve(
+        transport::serve_concurrent(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
@@ -555,6 +663,40 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Block forever.
     future::pending().await
+}
+
+/// A newer deployment is expected retirement, not an execution fault. Other
+/// fencing causes remain errors because they need not imply authorized handover.
+fn is_deployment_fence(error: &anyhow::Error) -> bool {
+    use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError};
+    error.chain().any(|source| {
+        let durable = source
+            .downcast_ref::<DurableCatalogError>()
+            .or_else(|| match source.downcast_ref::<CatalogError>() {
+                Some(CatalogError::Durable(error)) => Some(error),
+                _ => None,
+            })
+            .or_else(
+                || match source.downcast_ref::<mz_catalog::catalog::CatalogError>() {
+                    Some(mz_catalog::catalog::CatalogError::Catalog(error)) => match &error.kind {
+                        mz_catalog::memory::error::ErrorKind::Durable(error) => Some(error),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            );
+        let fence = source.downcast_ref::<FenceError>().or(match durable {
+            Some(DurableCatalogError::Fence(error)) => Some(error),
+            _ => None,
+        });
+        matches!(
+            fence,
+            Some(FenceError::DeployGeneration {
+                current_generation,
+                fence_generation,
+            }) if fence_generation > current_generation
+        )
+    })
 }
 
 /// Per-connection errors from `accept()` that can be skipped immediately.
@@ -572,6 +714,36 @@ fn is_connection_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn deployment_fence_retirement_is_typed() {
+        use mz_catalog::durable::{DurableCatalogError, FenceError};
+
+        let fence = FenceError::DeployGeneration {
+            current_generation: 0,
+            fence_generation: 1,
+        };
+        for error in [
+            anyhow::Error::new(DurableCatalogError::from(fence.clone())),
+            anyhow::Error::new(mz_catalog::durable::CatalogError::from(fence.clone())),
+            anyhow::Error::new(mz_catalog::catalog::CatalogError::from(
+                mz_catalog::durable::CatalogError::from(fence),
+            )),
+        ] {
+            assert!(is_deployment_fence(
+                &error.context("following committed catalog")
+            ));
+        }
+        assert!(!is_deployment_fence(&anyhow::anyhow!(
+            "current catalog deployment generation 0 fenced by new catalog deployment generation 1"
+        )));
+        assert!(!is_deployment_fence(&anyhow::Error::new(
+            FenceError::MigrationUpper {
+                expected_upper: 1.into(),
+                actual_upper: 2.into(),
+            }
+        )));
+    }
 
     #[mz_ore::test]
     fn test_process_ordinal_from_hostname() {

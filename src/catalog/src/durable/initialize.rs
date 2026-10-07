@@ -17,7 +17,7 @@ use base64::prelude::*;
 use ipnet::IpNet;
 use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
-use mz_controller::clusters::ReplicaLogging;
+use mz_controller_types::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;

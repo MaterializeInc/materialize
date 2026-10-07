@@ -206,8 +206,14 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":6},"time":4,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[4],"upper":[5],"counts":[{"time":4,"count":2}]}}
 
-# Data from older transactions should be immediately compacted to the timestamp
-# of the latest transaction (i.e., 4).
+# Wait for compaction to the latest transaction without acquiring historical
+# read protection. Retrying AS OF reads can keep that history admissible.
+> SELECT f.read_frontier = 4
+  FROM mz_internal.mz_frontiers AS f
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+  JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+  WHERE i.name = 'nums_tbl_primary_idx';
+true
 
 # (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums_tbl AS OF 2
@@ -242,6 +248,14 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 7
 > SELECT * FROM nums_tbl AS OF 6
 8
+
+# Observe the shorter-retention index without protecting its older timestamps.
+> SELECT f.read_frontier = 6
+  FROM mz_internal.mz_frontiers AS f
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+  JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+  WHERE i.name = 'nums_compacted_primary_idx';
+true
 
 # (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums_compacted AS OF 4

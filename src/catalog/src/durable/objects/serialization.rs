@@ -14,18 +14,22 @@ use mz_proto::TryFromProtoError;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
-    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
+    ClientReadRequirementValue, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaDeclarationKey,
+    ClusterReplicaDeclarationValue, ClusterReplicaKey, ClusterReplicaValue, ClusterRuntimeKey,
+    ClusterRuntimeValue, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey,
+    CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey,
+    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
+    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -430,16 +434,86 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
     }
 }
 
+impl RustType<proto::ClusterReplicaDeclarationKey> for ClusterReplicaDeclarationKey {
+    fn into_proto(&self) -> proto::ClusterReplicaDeclarationKey {
+        proto::ClusterReplicaDeclarationKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaDeclarationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaDeclarationKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaDeclarationValue> for ClusterReplicaDeclarationValue {
+    fn into_proto(&self) -> proto::ClusterReplicaDeclarationValue {
+        proto::ClusterReplicaDeclarationValue {
+            cluster_id: self.cluster_id.into_proto(),
+            name: self.name.to_string(),
+            config: self.config.into_proto(),
+            owner_id: self.owner_id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaDeclarationValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaDeclarationValue {
+            cluster_id: proto.cluster_id.into_rust()?,
+            name: proto.name,
+            config: proto.config.into_rust()?,
+            owner_id: proto.owner_id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterRuntimeKey> for ClusterRuntimeKey {
+    fn into_proto(&self) -> proto::ClusterRuntimeKey {
+        proto::ClusterRuntimeKey {
+            cluster_id: self.cluster_id.into_proto(),
+            deployment_generation: self.deployment_generation,
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterRuntimeKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterRuntimeKey {
+            cluster_id: proto.cluster_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
+        })
+    }
+}
+
+impl RustType<proto::ClusterRuntimeValue> for ClusterRuntimeValue {
+    fn into_proto(&self) -> proto::ClusterRuntimeValue {
+        proto::ClusterRuntimeValue {
+            realized_config: self.realized_config.into_proto(),
+            reconfiguration: self.reconfiguration.into_proto(),
+            burst: self.burst.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterRuntimeValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterRuntimeValue {
+            realized_config: proto.realized_config.into_rust()?,
+            reconfiguration: proto.reconfiguration.into_rust()?,
+            burst: proto.burst.into_rust()?,
+        })
+    }
+}
+
 impl RustType<proto::ClusterReplicaKey> for ClusterReplicaKey {
     fn into_proto(&self) -> proto::ClusterReplicaKey {
         proto::ClusterReplicaKey {
             id: self.id.into_proto(),
+            deployment_generation: self.deployment_generation,
         }
     }
 
     fn from_proto(proto: proto::ClusterReplicaKey) -> Result<Self, TryFromProtoError> {
         Ok(ClusterReplicaKey {
             id: proto.id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
         })
     }
 }
@@ -780,6 +854,118 @@ impl RustType<proto::AuditLogKey> for AuditLogKey {
     }
 }
 
+impl RustType<proto::CollectionCompactionBoundKey> for CollectionCompactionBoundKey {
+    fn into_proto(&self) -> proto::CollectionCompactionBoundKey {
+        proto::CollectionCompactionBoundKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::CollectionCompactionBoundKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::CollectionCompactionBoundValue> for CollectionCompactionBoundValue {
+    fn into_proto(&self) -> proto::CollectionCompactionBoundValue {
+        proto::CollectionCompactionBoundValue {
+            frontier: self.frontier.map(u64::from),
+        }
+    }
+
+    fn from_proto(proto: proto::CollectionCompactionBoundValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            frontier: proto.frontier.map(mz_repr::Timestamp::new),
+        })
+    }
+}
+
+impl RustType<proto::MaintainedReadRequirementKey> for MaintainedReadRequirementKey {
+    fn into_proto(&self) -> proto::MaintainedReadRequirementKey {
+        proto::MaintainedReadRequirementKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::MaintainedReadRequirementKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::MaintainedReadRequirementValue> for MaintainedReadRequirementValue {
+    fn into_proto(&self) -> proto::MaintainedReadRequirementValue {
+        proto::MaintainedReadRequirementValue {
+            inputs: self.inputs.into_proto(),
+            frontier: self.frontier.map(u64::from),
+        }
+    }
+
+    fn from_proto(proto: proto::MaintainedReadRequirementValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            inputs: proto.inputs.into_rust()?,
+            frontier: proto.frontier.map(mz_repr::Timestamp::new),
+        })
+    }
+}
+
+impl RustType<proto::ClientIncarnationKey> for ClientIncarnationKey {
+    fn into_proto(&self) -> proto::ClientIncarnationKey {
+        proto::ClientIncarnationKey { id: self.id }
+    }
+    fn from_proto(proto: proto::ClientIncarnationKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self { id: proto.id })
+    }
+}
+
+impl RustType<proto::ClientIncarnationValue> for ClientIncarnationValue {
+    fn into_proto(&self) -> proto::ClientIncarnationValue {
+        proto::ClientIncarnationValue {
+            heartbeat: self.heartbeat,
+            deployment_generation: self.deployment_generation,
+            replica_id: self.replica_id.into_proto(),
+        }
+    }
+    fn from_proto(proto: proto::ClientIncarnationValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            heartbeat: proto.heartbeat,
+            deployment_generation: proto.deployment_generation,
+            replica_id: proto.replica_id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClientReadRequirementKey> for ClientReadRequirementKey {
+    fn into_proto(&self) -> proto::ClientReadRequirementKey {
+        proto::ClientReadRequirementKey {
+            incarnation: self.incarnation,
+            id: self.id.into_proto(),
+        }
+    }
+    fn from_proto(proto: proto::ClientReadRequirementKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            incarnation: proto.incarnation,
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClientReadRequirementValue> for ClientReadRequirementValue {
+    fn into_proto(&self) -> proto::ClientReadRequirementValue {
+        proto::ClientReadRequirementValue {
+            frontier: u64::from(self.frontier),
+        }
+    }
+    fn from_proto(proto: proto::ClientReadRequirementValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            frontier: mz_repr::Timestamp::new(proto.frontier),
+        })
+    }
+}
+
 impl RustType<proto::StorageCollectionMetadataKey> for StorageCollectionMetadataKey {
     fn into_proto(&self) -> proto::StorageCollectionMetadataKey {
         proto::StorageCollectionMetadataKey {
@@ -894,6 +1080,7 @@ impl RustType<proto::ReplicaSystemConfigurationKey> for ReplicaSystemConfigurati
     fn into_proto(&self) -> proto::ReplicaSystemConfigurationKey {
         proto::ReplicaSystemConfigurationKey {
             replica_id: self.replica_id.into_proto(),
+            deployment_generation: self.deployment_generation,
             name: self.name.clone(),
         }
     }
@@ -901,6 +1088,7 @@ impl RustType<proto::ReplicaSystemConfigurationKey> for ReplicaSystemConfigurati
     fn from_proto(proto: proto::ReplicaSystemConfigurationKey) -> Result<Self, TryFromProtoError> {
         Ok(ReplicaSystemConfigurationKey {
             replica_id: proto.replica_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
             name: proto.name,
         })
     }
@@ -1102,5 +1290,55 @@ mod tests {
 
             prop_assert_eq!(event, roundtrip);
         }
+    }
+}
+
+impl RustType<proto::WrittenPlanKey> for super::WrittenPlanKey {
+    fn into_proto(&self) -> proto::WrittenPlanKey {
+        proto::WrittenPlanKey {
+            id: self.id.into_proto(),
+            build_version: self.build_version.clone(),
+        }
+    }
+    fn from_proto(proto: proto::WrittenPlanKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+            build_version: proto.build_version,
+        })
+    }
+}
+
+impl RustType<proto::ReplicaPlanOwner> for super::ReplicaPlanOwner {
+    fn into_proto(&self) -> proto::ReplicaPlanOwner {
+        proto::ReplicaPlanOwner {
+            replica_id: self.replica_id.into_proto(),
+            deployment_generation: self.deployment_generation,
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaPlanOwner) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            replica_id: proto.replica_id.into_rust()?,
+            deployment_generation: proto.deployment_generation,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
+    fn into_proto(&self) -> proto::WrittenPlanValue {
+        proto::WrittenPlanValue {
+            revision: self.revision,
+            replica_owner: self.replica_owner.into_proto(),
+            imports: self.imports.into_proto(),
+        }
+    }
+    fn from_proto(proto: proto::WrittenPlanValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            revision: proto.revision,
+            replica_owner: proto.replica_owner.into_rust()?,
+            imports: proto.imports.into_rust()?,
+        })
     }
 }

@@ -79,6 +79,7 @@ mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
+mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-tracing = { path = "../tracing", optional = true }
 nix.workspace = true
 num_cpus.workspace = true
@@ -132,6 +133,7 @@ mz-environmentd = { path = "../environmentd", default-features = false, features
 mz-oidc-mock = { path = "../oidc-mock", default-features = false }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 postgres.workspace = true

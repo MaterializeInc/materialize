@@ -189,7 +189,7 @@ COMPLETE 0
 simple
 COMMIT
 ----
-db error: ERROR: unknown catalog item 'u1'
+db error: ERROR: unknown catalog item 'u17'
 
 # Verify SUBSCRIBE must be only read statement in a transaction.
 # We use FETCH 0 with SUBSCRIBE below so that we don't need to worry about
@@ -432,7 +432,7 @@ COMPLETE 0
 simple conn=t1
 COMMIT;
 ----
-db error: ERROR: unknown catalog item 'u8'
+db error: ERROR: unknown catalog item 'u24'
 
 # Test transaction syntax that we don't support.
 

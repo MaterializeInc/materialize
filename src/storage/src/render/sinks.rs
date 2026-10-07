@@ -24,7 +24,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
-use timely::dataflow::operators::Leave;
+use timely::dataflow::operators::{Leave, Probe};
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
 
@@ -73,7 +73,7 @@ pub(crate) fn render_sink<'scope>(
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
-        let (ok_collection, err_collection, persist_tokens) =
+        let (mut ok_collection, mut err_collection, persist_tokens) =
             persist_source::persist_source::<_, persist_source::RowVecBuilder<Timestamp>>(
                 scope,
                 sink.from,
@@ -90,6 +90,19 @@ pub(crate) fn render_sink<'scope>(
                 error_handler,
             );
         tokens.extend(persist_tokens);
+
+        if let Some(executions) = &mut storage_state.executions {
+            // These outputs are downstream of fetching AND decoding. Observe
+            // both, since an error-only batch still consumes protected input.
+            let probe = timely::dataflow::operators::probe::Handle::new();
+            ok_collection = ok_collection.probe_with(&probe);
+            err_collection = err_collection.probe_with(&probe);
+            executions.observe(
+                sink_id,
+                sink.from,
+                Box::new(move || probe.with_frontier(|frontier| frontier.to_owned())),
+            );
+        }
 
         let batches = arrange_sink_input(&*sink_render, ok_collection.as_collection());
         let key_is_synthetic = sink_render.get_key_indices().is_none()

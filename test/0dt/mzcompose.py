@@ -8,24 +8,32 @@
 # by the Apache License, Version 2.0.
 
 """
-Explicit deterministic tests for read-only mode and zero downtime deploys (same
-version, no upgrade).
+Explicit deterministic tests for read-only mode and zero downtime deploys.
+Deployments use the same version unless a workflow selects a compatible image.
 """
 
 import json
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from textwrap import dedent
 from threading import Thread
 
 import psycopg
 import pymysql
+import requests
 from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -41,7 +49,7 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.ui import CommandFailureCausedUIError
+from materialize.ui import CommandFailureCausedUIError, env_is_truthy
 
 DEFAULT_TIMEOUT = "300s"
 
@@ -1032,8 +1040,327 @@ def workflow_basic(c: Composition) -> None:
             """))
 
 
-def workflow_kafka_source_rehydration(c: Composition) -> None:
+def workflow_index_read_protection(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Follow committed index permissions beyond a readonly catalog savepoint."""
+    parser.add_argument(
+        "--index-count",
+        type=int,
+        default=1,
+        help="Stable live cohort including keep (default: 1), plus one live drop index",
+    )
+    parser.add_argument("--publication-interval-ms", type=int, default=1000)
+    args = parser.parse_args()
+    if args.index_count < 1 or args.publication_interval_ms < 1:
+        parser.error("index count and publication interval must be positive")
+    c.down(destroy_volumes=True)
+    c.up("mz_old", Service("testdrive", idle=True))
+    setup(c)
+
+    def query(sql: str, service: str = "mz_old") -> list[tuple]:
+        with c.sql_connection(
+            service=service,
+            port=6877,
+            user="mz_system",
+            startup_params={"statement_timeout": "5s", "cluster": "cluster"},
+        ) as conn:
+            cursor = conn.execute(sql.encode())
+            return cursor.fetchall() if cursor.description is not None else []
+
+    query("ALTER SYSTEM SET enable_logical_compaction_window = true")
+    query("ALTER SYSTEM SET enable_index_options = true")
+    query(f"ALTER SYSTEM SET max_objects_per_schema = {args.index_count + 100}")
+    query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+    unpublished_start = time.monotonic()
+    c.testdrive(dedent("""
+        > CREATE CLUSTER permission_suspended SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        > CREATE TABLE permission_suspended_input (a int);
+        > INSERT INTO permission_suspended_input VALUES (1);
+        > CREATE TABLE permission_input (a int);
+        > INSERT INTO permission_input VALUES (1);
+        > CREATE VIEW permission_keep AS SELECT a + 1 AS a FROM permission_input;
+        > CREATE VIEW permission_drop AS SELECT a + 2 AS a FROM permission_input;
+        > CREATE INDEX permission_keep_idx ON permission_keep (a)
+          WITH (RETAIN HISTORY = FOR '1s');
+        > CREATE INDEX permission_drop_idx ON permission_drop (a)
+          WITH (RETAIN HISTORY = FOR '1s');
+        > CREATE INDEX permission_suspended_idx IN CLUSTER permission_suspended
+          ON permission_suspended_input (a) WITH (RETAIN HISTORY = FOR '1s');
+        > CREATE INDEX permission_bootstrap_drop_idx IN CLUSTER permission_suspended
+          ON permission_suspended_input (a) WITH (RETAIN HISTORY = FOR '1s');
+    """))
+    extra_names = [f"permission_cohort_{i}_idx" for i in range(1, args.index_count)]
+    if extra_names:
+        c.testdrive(
+            "\n".join(
+                f"> CREATE INDEX {name} IN CLUSTER cluster ON permission_input (a) "
+                "WITH (RETAIN HISTORY = FOR '1s');"
+                for name in extra_names
+            )
+        )
+    names = [
+        "permission_keep_idx",
+        "permission_drop_idx",
+        "permission_suspended_idx",
+        "permission_bootstrap_drop_idx",
+        *extra_names,
+    ]
+    names_sql = ", ".join(f"'{name}'" for name in names)
+    ids = dict(query(f"""
+        SELECT o.name, g.global_id FROM mz_objects o
+        JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+        WHERE o.name IN ({names_sql})
+    """))
+    assert set(ids) == set(names), ids
+    assert len(set(ids.values())) == len(names), ids
+    stable_ids = [ids[name] for name in ["permission_keep_idx", *extra_names]]
+
+    def catalog_bounds(service: str) -> dict:
+        # mz_catalog_raw tails the writer even in readonly mode. The memory dump,
+        # not a SQL query over that live collection, exposes the frozen savepoint.
+        response = requests.get(
+            f"http://localhost:{c.port(service, 6878)}/api/catalog/dump", timeout=30
+        )
+        response.raise_for_status()
+        return response.json()["collection_compaction_bounds"]
+
+    def frozen_bounds() -> dict:
+        bounds = catalog_bounds("mz_new")
+        return {name: bounds.get(gid) for name, gid in ids.items()}
+
+    bounds = catalog_bounds("mz_old")
+    assert all(gid not in bounds for gid in ids.values())
+    # Starting without the health wait overlaps DDL with boot, but does not prove
+    # whether the savepoint includes this index. Both schedules must boot.
+    c.up("mz_new", wait=False)
+    query("DROP INDEX permission_bootstrap_drop_idx")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    bounds = catalog_bounds("mz_old")
+    assert all(gid not in bounds for gid in ids.values())
+    assert time.monotonic() - unpublished_start < 300
+    frozen = frozen_bounds()
+    assert all(bound is None for bound in frozen.values()), frozen
+    assert (
+        query(
+            """
+        SELECT count(*) FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id
+        WHERE c.name = 'permission_suspended'
+    """,
+            "mz_new",
+        )
+        == [(0,)]
+    )
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up(Service("testdrive", idle=True))
+        c.testdrive(dedent("""
+            > SET statement_timeout = '5s';
+            > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+            ! INSERT INTO permission_input VALUES (99);
+            contains: cannot write in read-only mode
+            > SELECT DISTINCT name, hydrated
+              FROM mz_internal.mz_hydration_statuses
+              JOIN mz_indexes ON (id = object_id)
+              WHERE name IN ('permission_keep_idx', 'permission_drop_idx');
+            permission_drop_idx true
+            permission_keep_idx true
+            > SELECT * FROM permission_keep;
+            2
+            > SELECT * FROM permission_drop;
+            3
+        """))
+        assert frozen_bounds() == frozen
+        bounds = catalog_bounds("mz_old")
+        assert all(gid not in bounds for gid in ids.values())
+        assert time.monotonic() - unpublished_start < 300
+        query(
+            "ALTER SYSTEM SET catalog_read_protection_publish_interval = "
+            f"'{args.publication_interval_ms}ms'"
+        )
+
+        # The subscriber follows permissions, not SQL schema changes. A removed
+        # writer index must not prevent delivery for another stable global ID.
+        for value in (2, 3):
+            if value == 3:
+                query("DROP INDEX permission_drop_idx")
+            query(f"INSERT INTO permission_input VALUES ({value})")
+            keep = ids["permission_keep_idx"]
+            cohort = stable_ids + ([ids["permission_drop_idx"]] if value == 2 else [])
+            bounds = catalog_bounds("mz_old")
+            baseline = {
+                gid: bounds.get(gid, {"elements": [0]})["elements"][0] for gid in cohort
+            }
+            deadline = time.monotonic() + 300
+            publication_start = time.monotonic()
+            while True:
+                writer_request_start = time.monotonic()
+                bounds = catalog_bounds("mz_old")
+                committed_observed = time.monotonic()
+                targets = {
+                    gid: bounds.get(gid, {"elements": [0]})["elements"][0]
+                    for gid in cohort
+                }
+                if all(targets[gid] > baseline[gid] for gid in cohort):
+                    break
+                assert time.monotonic() < deadline, (baseline, targets)
+                time.sleep(0.5)
+            committed = targets[keep]
+            assert committed > 0
+            # Freeze the writer snapshot. One aggregate query checks every target
+            # without installing execution read holds on the governed indexes.
+            targets_sql = ", ".join(
+                f"('{gid}', {permission})" for gid, permission in targets.items()
+            )
+            follower_requests = 0
+            follower_request_seconds = 0.0
+            while True:
+                follower_request_start = time.monotonic()
+                [(observed_count,)] = query(
+                    f"""
+                    SELECT count(*) FROM (VALUES {targets_sql}) AS targets(gid, permission)
+                    JOIN mz_internal.mz_frontiers f ON f.object_id = targets.gid
+                    WHERE f.read_frontier::text::numeric >= targets.permission
+                    """,
+                    "mz_new",
+                )
+                follower_observed = time.monotonic()
+                follower_requests += 1
+                follower_request_seconds += follower_observed - follower_request_start
+                if observed_count == len(cohort):
+                    break
+                assert time.monotonic() < deadline, (
+                    len(cohort),
+                    observed_count,
+                    targets,
+                )
+                time.sleep(0.5)
+            c.testdrive(dedent(f"""
+                > SELECT read_frontier::text::numeric >= {committed}
+                  FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
+                true
+                > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+                > SELECT count(*), sum(a) FROM permission_keep;
+                {value} {sum(range(2, value + 2))}
+            """))
+            print(
+                json.dumps(
+                    {
+                        "workflow": "index-read-protection",
+                        "publication_interval_ms": args.publication_interval_ms,
+                        "index_count": args.index_count,
+                        "initial_live_index_count": len(stable_ids) + 1,
+                        "cohort_index_count": len(cohort),
+                        "follower_observed_index_count": observed_count,
+                        "observer": "writer catalog dump and follower SQL frontier polling at 500ms",
+                        "measurement_scope": "snapshot observation to all-complete read frontier observation, not isolated subscriber CPU or unobserved commit-to-poll latency",
+                        "committed_permission": committed,
+                        "writer_permission_observation_seconds": committed_observed
+                        - publication_start,
+                        "writer_observed_to_follower_frontier_seconds": follower_observed
+                        - committed_observed,
+                        "max_all_complete_observation_lag_seconds": follower_observed
+                        - committed_observed,
+                        "writer_snapshot_request_seconds": committed_observed
+                        - writer_request_start,
+                        "follower_frontier_request_count": follower_requests,
+                        "follower_frontier_request_seconds": follower_request_seconds,
+                        "follower_final_frontier_request_seconds": follower_observed
+                        - follower_request_start,
+                        "follower_read_check_seconds": time.monotonic()
+                        - follower_observed,
+                        "writer_index_dropped": value == 3,
+                    },
+                    sort_keys=True,
+                )
+            )
+            assert frozen_bounds() == frozen
+            plan = query("EXPLAIN SELECT * FROM permission_keep", "mz_new")[0][0]
+            assert "permission_keep_idx" in plan, plan
+
+        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+        capped_start = time.monotonic()
+        cap = catalog_bounds("mz_old")[keep]["elements"][0]
+        for value in (4, 5, 6):
+            query(f"INSERT INTO permission_input VALUES ({value})")
+            [(upper,)] = query(
+                "SELECT write_frontier::text::numeric FROM mz_internal.mz_frontiers "
+                f"WHERE object_id = '{keep}'",
+                "mz_new",
+            )
+            c.testdrive(dedent(f"""
+                > SELECT write_frontier::text::numeric > {max(upper, cap + 1000)},
+                         read_frontier::text::numeric <= {cap}
+                  FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
+                true true
+            """))
+            assert catalog_bounds("mz_old")[keep]["elements"] == [cap]
+            assert time.monotonic() - capped_start < 300
+
+        query(
+            "ALTER SYSTEM SET catalog_read_protection_publish_interval = "
+            f"'{args.publication_interval_ms}ms'"
+        )
+        c.testdrive(dedent(f"""
+            > SELECT read_frontier::text::numeric > {cap}
+              FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
+            true
+        """))
+        assert frozen_bounds() == frozen
+
+
+def workflow_kafka_source_rehydration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Verify Kafka source rehydration in 0dt deployment"""
+    parser.add_argument(
+        "--ci-compatible-image-artifact",
+        help="Use a build-native-compatible artifact in ordinary CI, retaining same-version instrumented runs",
+    )
+    args = parser.parse_args()
+    artifact = None
+    new_image = None
+    if args.ci_compatible_image_artifact and (
+        sanitizer_enabled() or env_is_truthy("CI_COVERAGE_ENABLED")
+    ):
+        print("Instrumented native warm promotion uses the current same-version images")
+    elif args.ci_compatible_image_artifact:
+        with TemporaryDirectory() as directory:
+            subprocess.run(
+                [
+                    "buildkite-agent",
+                    "artifact",
+                    "download",
+                    args.ci_compatible_image_artifact,
+                    directory,
+                    "--step",
+                    "build-native-compatible",
+                ],
+                check=True,
+            )
+            artifact = json.loads(
+                (Path(directory) / args.ci_compatible_image_artifact).read_text()
+            )
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+        assert artifact["source_revision"] == revision, artifact
+        assert artifact["old_version"] != artifact["new_version"], artifact
+        new_image = artifact["image"]
+        assert isinstance(new_image, str) and new_image, artifact
+        print(f"Compatible-version image: {new_image}, source: {revision}")
+
+    print(f"mz_old image: {c.compose['services']['mz_old']['image']}")
     c.down(destroy_volumes=True)
     c.up(
         "kafka",
@@ -1041,6 +1368,10 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         "mz_old",
         Service("testdrive", idle=True),
     )
+    old_version = c.query_mz_version(service="mz_old")
+    print(f"mz_old SQL binary version: {old_version}")
+    if artifact:
+        assert old_version.split()[0] == f"v{artifact['old_version']}", artifact
     setup(c)
 
     count = 1000000
@@ -1084,6 +1415,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            image=new_image,
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1103,17 +1435,55 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     ):
         c.up("mz_new")
         start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        try:
+            c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        except Exception:
+            # Capture the limiting imports without masking the readiness failure.
+            try:
+                with c.sql_cursor(service="mz_new", user="mz_system", port=6877) as cur:
+                    cur.execute("SET statement_timeout = '10s'")
+                    cur.execute("SET auto_route_catalog_queries = false")
+                    cur.execute("SET cluster = mz_catalog_server")
+                    cur.execute("SET cluster_replica = r1")
+                    cur.execute("""
+                        SELECT i.name, f.export_id, f.import_id, f.worker_id, f.time
+                        FROM mz_introspection.mz_compute_import_frontiers_per_worker f
+                        JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.export_id
+                        JOIN mz_catalog.mz_indexes i ON i.id = g.id
+                        WHERE i.name IN ('mz_source_statistics_with_history_ind',
+                                         'mz_object_arrangement_sizes_ind',
+                                         'mz_compute_hydration_times_ind')
+                        ORDER BY i.name, f.import_id, f.worker_id
+                    """)
+                    print(f"Prewarming import frontiers: {cur.fetchall()}")
+            except Exception as diagnostic_error:
+                print(f"Prewarming frontier diagnostic failed: {diagnostic_error}")
+            raise
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
         # Retire mz_old only after timing the promotion.
+        promotion_timeout = 2400 if env_is_truthy("CI_COVERAGE_ENABLED") else 1200
+        start_time = time.monotonic()
+        promotion_deadline = start_time + promotion_timeout
         c.promote_mz("mz_new", retire_mz_service=None)
-        start_time = time.time()
         c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+            DeploymentStatus.IS_LEADER,
+            "mz_new",
+            timeout=max(1, int(promotion_deadline - time.monotonic())),
+            sleep_time=None,
         )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+        # Completing the handshake waits for SQL serving without warming a query.
+        psycopg.connect(
+            host="127.0.0.1",
+            port=c.default_port("mz_new"),
+            user="materialize",
+            dbname="materialize",
+            sslmode="disable",
+            connect_timeout=max(1, int(promotion_deadline - time.monotonic())),
+        ).close()
+        elapsed = time.monotonic() - start_time
+        print(f"promotion took {elapsed} seconds (through SQL readiness)")
+        assert elapsed < promotion_timeout, f"Promotion exceeded {promotion_timeout}s"
         c.kill_fenced_mz("mz_old")
 
         start_time = time.time()
@@ -1127,11 +1497,11 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
-        start_time = time.time()
-        result = c.sql_query("SELECT 1", service="mz_new")
-        elapsed = time.time() - start_time
-        print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
-        assert result[0][0] == 1, f"Wrong result: {result}"
+        new_version = c.query_mz_version(service="mz_new")
+        print(f"mz_new SQL binary version: {new_version}")
+        if artifact:
+            assert new_version.split()[0] == f"v{artifact['new_version']}", artifact
+            assert new_version.split()[0] != old_version.split()[0]
 
         print("Ingesting again")
         for i in range(repeats, repeats * 2):
@@ -3068,7 +3438,7 @@ def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
 
 
 def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
-    """Verify a DDL-triggered restart of mz_new keeps its stability progress.
+    """Verify an environmentd-only restart preserves replica hydration age.
 
     mz_new's replicas outlive the restart, and the stability gate reads their
     hydration times from the replicas, so the period keeps counting from the
@@ -3076,18 +3446,13 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
     earlier than the restart plus a full period.
     """
     period = 120
-    ddl_after = 60
+    restart_after = 60
 
     c.down(destroy_volumes=True)
     c.up("mz_old")
 
-    # Poll for DDL every second, so the restart comes right after the DDL and
-    # not at the end of the period.
     c.sql(
-        f"""
-        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s';
-        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
-        """,
+        f"ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s'",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -3104,19 +3469,22 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
     )
 
     c.up("mz_new")
-    time.sleep(ddl_after)
+    time.sleep(restart_after)
     environmentd = _pids(c, "mz_new", "environmentd")
     replicas = _pids(c, "mz_new", "clusterd")
+    assert environmentd, "mz_new has no environmentd process before restart"
+    assert replicas, "mz_new has no clusterd processes before restart"
 
-    # A table has no dataflow, so no replica gets a new export to hydrate.
-    c.sql("CREATE TABLE unrelated (a int)", service="mz_old")
+    # mz_new's on-failure entrypoint loop restarts environmentd after SIGKILL.
+    # Keep the container and clusterd alive so replica hydration age is retained.
+    c.exec("mz_new", "bash", "-c", f"kill -9 {' '.join(sorted(environmentd))}")
 
     deadline = time.time() + 60
     while True:
         pids = _pids(c, "mz_new", "environmentd")
         if pids and pids != environmentd:
             break
-        assert time.time() < deadline, "the DDL did not restart mz_new"
+        assert time.time() < deadline, "mz_new's environmentd did not restart"
         time.sleep(0.5)
     restarted = time.time()
 
@@ -3287,95 +3655,6 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             > SELECT * FROM pool_mv;
             1
             """))
-
-
-def workflow_ddl_detection_drops(c: Composition) -> None:
-    """Drop-only DDL must restart the follower and release dropped replicas."""
-    c.down(destroy_volumes=True)
-    c.up("mz_old")
-    c.sql(
-        "ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s'",
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
-    c.sql(
-        """
-        CREATE TABLE dropped_table (a int);
-        CREATE CLUSTER dropped_replica REPLICAS (r1 (SIZE 'scale=1,workers=1'));
-        """,
-        service="mz_old",
-    )
-    replica_id = c.sql_query(
-        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
-        "WHERE c.name = 'dropped_replica' AND r.name = 'r1'",
-        service="mz_old",
-    )[0][0]
-
-    def replica_process_exists() -> bool:
-        return bool(
-            c.exec(
-                "mz_new",
-                "bash",
-                "-c",
-                f"ps aux | grep -v grep | grep -w 'replica_id={replica_id}' || true",
-                capture=True,
-            ).stdout.strip()
-        )
-
-    # Keep DDL polling active regardless of how quickly the follower catches up.
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            environment_extra=["FAILPOINTS=0dt_caught_up_check=return"],
-            default_replication_factor=2,
-        )
-    ):
-        c.up("mz_new")
-        for statement, reason in [
-            ("DROP TABLE dropped_table", "Dropped objects:"),
-            ("DROP CLUSTER REPLICA dropped_replica.r1", "Dropped replicas:"),
-        ]:
-            # Wait for the follower to finish its current boot before dropping.
-            # A fresh connection each attempt, because the cached one died with
-            # the previous boot.
-            deadline = time.time() + 120
-            while True:
-                try:
-                    c.sql("SELECT 1", service="mz_new", reuse_connection=False)
-                    break
-                except (OperationalError, CommandFailureCausedUIError):
-                    if time.time() > deadline:
-                        raise
-                    time.sleep(0.5)
-            logs = c.invoke("logs", "mz_new", capture=True).stdout
-            boots = logs.count("waiting for deployment to be caught up")
-            assert _leader_status(c, "mz_new") == DeploymentStatus.INITIALIZING.value
-            assert replica_process_exists(), "follower never started the replica"
-            c.sql(statement, service="mz_old")
-            deadline = time.time() + 120
-            while time.time() < deadline:
-                logs = c.invoke("logs", "mz_new", capture=True).stdout
-                if (
-                    reason in logs
-                    and logs.count("waiting for deployment to be caught up") > boots
-                ):
-                    break
-                time.sleep(0.5)
-            else:
-                raise AssertionError(f"follower did not restart after {statement}")
-            c.up("mz_new")
-            if reason == "Dropped replicas:":
-                deadline = time.time() + 120
-                while replica_process_exists():
-                    if time.time() > deadline:
-                        raise AssertionError("follower retained the dropped replica")
-                    time.sleep(0.5)
 
 
 def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:

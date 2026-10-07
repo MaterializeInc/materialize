@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
-use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ReplicaId;
 use mz_repr::CatalogItemId;
 use mz_sql::catalog::CatalogItem;
 use mz_sql::rbac::UnauthorizedError;
@@ -56,7 +56,7 @@ pub struct PlanValidity {
     /// read-modify-write a dependency's `create_sql`.
     check_dependency_hashes: bool,
     cluster_id: Option<ComputeInstanceId>,
-    replica_id: Option<ReplicaId>,
+    replica_target: Option<ReplicaId>,
     role_metadata: RoleMetadata,
 }
 
@@ -65,7 +65,7 @@ impl PlanValidity {
         catalog: &Catalog,
         dependency_ids: BTreeSet<CatalogItemId>,
         cluster_id: Option<ComputeInstanceId>,
-        replica_id: Option<ReplicaId>,
+        replica_target: Option<ReplicaId>,
         role_metadata: RoleMetadata,
     ) -> Self {
         PlanValidity {
@@ -74,7 +74,7 @@ impl PlanValidity {
             dependency_hashes: BTreeMap::new(),
             check_dependency_hashes: false,
             cluster_id,
-            replica_id,
+            replica_target,
             role_metadata,
         }
     }
@@ -117,15 +117,18 @@ impl PlanValidity {
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
         if let Some(cluster_id) = self.cluster_id {
-            let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
+            let Some(_) = catalog.try_get_cluster(cluster_id) else {
                 return Err(AdapterError::ConcurrentDependencyDrop {
                     dependency_kind: "cluster",
                     dependency_id: cluster_id.to_string(),
                 });
             };
 
-            if let Some(replica_id) = self.replica_id {
-                if cluster.replica(replica_id).is_none() {
+            if let Some(replica_id) = self.replica_target {
+                if !catalog
+                    .state()
+                    .replica_target_exists(cluster_id, replica_id)
+                {
                     return Err(AdapterError::ConcurrentDependencyDrop {
                         dependency_kind: "cluster replica",
                         dependency_id: format!("{replica_id} of cluster {cluster_id}"),
@@ -205,7 +208,6 @@ mod tests {
 
     use mz_adapter_types::connection::ConnectionId;
     use mz_auth::AuthenticatorKind;
-    use mz_cluster_client::ReplicaId;
     use mz_controller_types::ClusterId;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::{assert_contains, assert_ok};
@@ -302,7 +304,7 @@ mod tests {
                 (
                     Box::new(|validity, _catalog| {
                         validity.cluster_id = Some(some_system_cluster.id);
-                        validity.replica_id = Some(ReplicaId::User(4));
+                        validity.replica_target = Some(mz_controller_types::ReplicaId::User(4));
                     }),
                     Box::new(|res| {
                         assert_contains!(

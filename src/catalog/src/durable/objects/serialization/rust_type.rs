@@ -21,7 +21,7 @@
 //! same scope. Method calls such as `into_proto()` become ambiguous for any
 //! type that implements both.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_proto::TryFromProtoError;
 
@@ -118,6 +118,22 @@ where
             .into_iter()
             .map(T::into_rust)
             .collect::<Result<BTreeMap<_, _>, _>>()
+    }
+}
+
+impl<R, P> RustType<Vec<P>> for BTreeSet<R>
+where
+    R: RustType<P> + std::cmp::Ord,
+{
+    fn into_proto(&self) -> Vec<P> {
+        self.iter().map(R::into_proto).collect()
+    }
+
+    fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
+        proto
+            .into_iter()
+            .map(R::from_proto)
+            .collect::<Result<BTreeSet<_>, _>>()
     }
 }
 

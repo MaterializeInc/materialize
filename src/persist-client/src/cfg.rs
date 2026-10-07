@@ -18,8 +18,8 @@
 //! a rollout targeting replicas would leave a shard's other writer on the old
 //! value indefinitely. Declare new persist configs `Environment` too.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
@@ -34,7 +34,6 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::async_runtime;
 use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
@@ -42,6 +41,7 @@ use crate::internal::machine::{
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
 use crate::read::READER_LEASE_DURATION;
+use crate::{ShardId, async_runtime};
 
 // Ignores the patch version
 const SELF_MANAGED_VERSIONS: &[Version; 2] = &[
@@ -106,6 +106,9 @@ const SELF_MANAGED_VERSIONS: &[Version; 2] = &[
 pub struct PersistConfig {
     /// Info about which version of the code is running.
     pub build_version: Version,
+    /// Authorized format for initialization and explicit upgrades, shared with
+    /// clients and handles created before catalog admission completes.
+    state_version_target: Arc<RwLock<StateVersionTarget>>,
     /// An opaque string describing the host of this persist client.
     /// Stored in state and used for debugging.
     pub hostname: String,
@@ -146,6 +149,13 @@ pub struct PersistConfig {
     pub isolated_runtime_worker_threads: usize,
 }
 
+#[derive(Debug, Clone)]
+enum StateVersionTarget {
+    Binary,
+    AwaitingCatalog(Option<ShardId>),
+    Authorized(Version),
+}
+
 // Impl Deref to ConfigSet for convenience of accessing the dynamic configs.
 impl std::ops::Deref for PersistConfig {
     type Target = ConfigSet;
@@ -155,6 +165,84 @@ impl std::ops::Deref for PersistConfig {
 }
 
 impl PersistConfig {
+    /// Requires explicit authorization before initialization or format upgrades.
+    /// Only the optional catalog shard may be initialized before authorization:
+    /// its first format establishes the floor for subsequent catalog admission.
+    /// Existing authorization is retained when another catalog handle opens.
+    pub fn require_state_version_target(&self, catalog_shard: Option<ShardId>) {
+        let mut current = self.state_version_target.write().expect("lock poisoned");
+        match &*current {
+            StateVersionTarget::Binary => {
+                *current = StateVersionTarget::AwaitingCatalog(catalog_shard);
+            }
+            StateVersionTarget::AwaitingCatalog(existing) => {
+                assert_eq!(
+                    existing, &catalog_shard,
+                    "one catalog authority per Persist config"
+                );
+            }
+            StateVersionTarget::Authorized(_) => {}
+        }
+    }
+
+    /// Installs a durably authorized state-format target across config clones.
+    ///
+    /// The caller must authorize the target against all admitted deployments
+    /// before installing it, and install it before initializing shared shards or
+    /// upgrading them. Older authorized observations do not regress the target.
+    /// This does not change binary identity, decode support, or existing shard state.
+    pub fn set_state_version_target(&self, target: Version) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            code_can_write_data(&self.build_version, &target),
+            "Persist code {} cannot write state format {target}",
+            self.build_version
+        );
+        let mut current = self.state_version_target.write().expect("lock poisoned");
+        // Independent catalog handles can observe committed prefixes out of order.
+        // Their shared authorization must retain the greatest observed target.
+        if let StateVersionTarget::Authorized(current) = &*current
+            && target.cmp_precedence(current).is_le()
+        {
+            return Ok(());
+        }
+        *current = StateVersionTarget::Authorized(target);
+        Ok(())
+    }
+
+    /// Returns the supported format for initialization and explicit upgrades.
+    /// Standalone clients without catalog authorization use their binary version.
+    pub fn state_version_target(&self) -> Version {
+        self.state_version_for(None)
+    }
+
+    pub(crate) fn initial_state_version(&self, shard: ShardId) -> Version {
+        self.state_version_for(Some(shard))
+    }
+
+    fn state_version_for(&self, initializing: Option<ShardId>) -> Version {
+        let authorization = self
+            .state_version_target
+            .read()
+            .expect("lock poisoned")
+            .clone();
+        let target = match authorization {
+            StateVersionTarget::Binary => self.build_version.clone(),
+            StateVersionTarget::Authorized(target) => target,
+            StateVersionTarget::AwaitingCatalog(Some(catalog)) if initializing == Some(catalog) => {
+                self.build_version.clone()
+            }
+            StateVersionTarget::AwaitingCatalog(_) => {
+                panic!("Persist format authorization must precede shard initialization or upgrade")
+            }
+        };
+        assert!(
+            code_can_write_data(&self.build_version, &target),
+            "Persist code {} cannot write state format {target}",
+            self.build_version
+        );
+        target
+    }
+
     /// Returns a new instance of [PersistConfig] with default tuning and
     /// default ConfigSet.
     pub fn new_default_configs(build_info: &BuildInfo, now: NowFn) -> Self {
@@ -172,6 +260,7 @@ impl PersistConfig {
 
         Self {
             build_version: build_info.semver_version(),
+            state_version_target: Arc::new(RwLock::new(StateVersionTarget::Binary)),
             is_cc_active: false,
             announce_memory_limit: None,
             now,
@@ -866,6 +955,10 @@ pub fn code_can_read_data(code_version: &Version, data_version: &Version) -> boo
 /// Imagine the case of eg. garbage collection after a version upgrade... we may need to read old
 /// diffs to be able to find blobs to delete, even if we no longer have code to generate data in
 /// that format.
+///
+/// Writer features requiring newer reader support must remain disabled until
+/// deployments lacking that support are durably retired from catalog membership.
+/// Emulation preserves encoding and behavior, not just the version label.
 pub fn code_can_write_data(code_version: &Version, data_version: &Version) -> bool {
     if !code_can_read_data(code_version, data_version) {
         return false;
@@ -888,5 +981,36 @@ pub fn code_can_write_data(code_version: &Version, data_version: &Version) -> bo
     } else {
         // Otherwise, the data must be from at earliest the _previous_ major version.
         code_version.major - 1 <= data_version.major
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn initialization_requires_catalog_authorization() {
+        let mut cfg = PersistConfig::new_for_tests();
+        cfg.build_version = Version::new(26, 2, 0);
+        let observer = cfg.clone();
+        let catalog = ShardId::new();
+        let output = ShardId::new();
+        cfg.require_state_version_target(Some(catalog));
+        assert_eq!(observer.initial_state_version(catalog), cfg.build_version);
+        for operation in [None, Some(output)] {
+            let result = mz_ore::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                observer.state_version_for(operation)
+            }));
+            assert!(
+                result.is_err(),
+                "initialization and upgrades need authorization"
+            );
+        }
+        let authorized = Version::new(26, 1, 0);
+        cfg.set_state_version_target(authorized.clone())
+            .expect("supported target");
+        cfg.require_state_version_target(Some(catalog));
+        assert_eq!(observer.initial_state_version(output), authorized);
+        assert_eq!(observer.state_version_target(), authorized);
     }
 }

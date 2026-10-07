@@ -12,6 +12,7 @@ $ set-arg-default single-replica-cluster=quickstart
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_table_keys = true
 ALTER SYSTEM SET enable_primary_key_not_enforced = true
+ALTER SYSTEM SET log_filter = 'info,mz_adapter::query_client=debug'
 
 #
 # Test that the knowledge that a given set of fields forms a primary key is used by the optimizer to remove grouping and distinct operations
@@ -329,3 +330,6 @@ $ set schema={
             {"name":"nokey", "type":"string"}
         ]
     }
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET log_filter

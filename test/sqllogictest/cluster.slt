@@ -520,7 +520,7 @@ ALTER CLUSTER REPLICA IF EXISTS quickstart.bar_foo RENAME TO foo_bar
 statement ok
 CREATE CLUSTER REPLICA quickstart.bar_foo SIZE 'scale=1,workers=1'
 
-statement error uniqueness violation
+statement error cannot create multiple replicas named 'foo_bar' on cluster 'quickstart'
 ALTER CLUSTER REPLICA quickstart.bar_foo RENAME TO foo_bar
 
 statement ok

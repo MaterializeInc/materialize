@@ -351,6 +351,27 @@ fn test_statement_logging_basic() {
         .unwrap();
     client.execute("SELECT * FROM v", &[]).unwrap();
     client.execute("CREATE DEFAULT INDEX i ON v", &[]).unwrap();
+    // Establish the indexed access path before measuring its execution strategy.
+    // The internal connection keeps setup queries out of the sampled statements.
+    {
+        let mut probe = server.connect_internal(postgres::NoTls).unwrap();
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let ready: bool = probe
+                    .query_one(
+                        "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                         JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                         JOIN mz_indexes i ON i.id = g.id \
+                         WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                ready.then_some(()).ok_or("Index not readable")
+            })
+            .unwrap();
+    }
     client.execute("SELECT * FROM v", &[]).unwrap();
     let _ = client.execute("SELECT 1/0", &[]);
     client.execute("CREATE TABLE t (x int)", &[]).unwrap();
@@ -1030,39 +1051,77 @@ fn test_statement_logging_ws_subscribe_no_crash() {
 /// got around to the end event. A statement the session task retires itself
 /// reports its own end timestamp, so a busy coordinator cannot inflate it.
 ///
-/// The coordinator is stalled inside `Catalog::transact` while the measured
-/// statement runs. That failpoint sits ahead of every catalog mutation, so the
-/// catalog revision does not move while it sleeps and the session's cached
-/// snapshot stays valid, which is what keeps the measured statement from
-/// needing the coordinator at all.
+/// Pause the coordinator immediately before consuming the frontend end event,
+/// and release it only after the client has observed completion.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_statement_logging_finished_at_excludes_coordinator_queue() {
+    use std::sync::{Mutex, mpsc};
+
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
 
-    // Populate this session's catalog snapshot cache, so the measured statement
-    // below needs nothing from the stalled coordinator.
-    client.execute("SELECT 1", &[]).unwrap();
+    // Pgwire Sync commits implicit transactions through the coordinator, even
+    // for constant queries. Keep those round trips outside the measured window.
+    client.batch_execute("BEGIN").unwrap();
 
-    let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
-    fail::cfg("catalog_transact", "sleep(3000)").unwrap();
-    let stall = thread::spawn(move || {
-        let _ = ddl.batch_execute("CREATE TABLE stalls_the_coordinator (x int)");
+    // Frontend logging events and catalog snapshots use the same FIFO command
+    // channel. Drain earlier end events before arming the hook for the probe.
+    drop(
+        server.server.runtime().block_on(
+            server
+                .server
+                .inner()
+                .adapter_client()
+                .catalog_snapshot_expensive(),
+        ),
+    );
+
+    let (paused_tx, paused_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (resumed_tx, resumed_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let hook = fail::FailGuard::with_callback("frontend_statement_logging_end", move || {
+        let _ = paused_tx.send(());
+        // Never strand the coordinator if the probe or the test fails. Report
+        // timeout/disconnection to the test rather than panicking this thread.
+        let released = release_rx.lock().unwrap().recv_timeout(TIMEOUT);
+        let _ = resumed_tx.send((released, Utc::now().timestamp_millis()));
+    })
+    .unwrap();
+
+    let (probe_tx, probe_rx) = mpsc::channel();
+    thread::spawn(move || {
+        // Logged timestamps truncate to epoch milliseconds, so floor the lower
+        // bound and ceil the upper one.
+        let began_bound = Utc::now().timestamp_millis();
+        let result = client.execute("SELECT 1 AS finished_at_probe", &[]);
+        let finished_bound = Utc::now().timestamp_millis() + 1;
+        let _ = probe_tx.send((client, result, began_bound, finished_bound));
     });
-    // Give the DDL time to reach the failpoint before we measure.
-    thread::sleep(Duration::from_millis(500));
 
-    // Logged timestamps are epoch milliseconds and truncate, so floor the lower
-    // bound and ceil the upper one rather than comparing against the
-    // sub-millisecond instants `Utc::now` reports.
-    let began_bound = Utc::now().timestamp_millis();
-    client
-        .execute("SELECT 1 AS finished_at_probe", &[])
-        .unwrap();
-    let finished_bound = Utc::now().timestamp_millis() + 1;
+    // Both waits are bounded, and cleanup precedes assertions, so releasing the
+    // coordinator does not depend indefinitely on the probe completing.
+    let paused = paused_rx.recv_timeout(TIMEOUT);
+    let probe = probe_rx.recv_timeout(TIMEOUT);
+    // Put consumption strictly beyond even the rounded-up client finish bound.
+    thread::sleep(Duration::from_millis(10));
+    drop(hook);
+    let _ = release_tx.send(());
+    let resumed = resumed_rx.recv_timeout(TIMEOUT);
 
-    stall.join().unwrap();
-    fail::remove("catalog_transact");
+    paused.expect("probe end event must reach the coordinator hook");
+    let (mut client, result, began_bound, finished_bound) =
+        probe.expect("probe must finish while end-event consumption is paused");
+    result.unwrap();
+    let (released, resumed_at) = resumed.expect("coordinator hook must resume");
+    released.expect("coordinator hook must wait for explicit release, not time out");
+    assert!(
+        resumed_at > finished_bound,
+        "end-event consumption must be delayed beyond the client finish bound"
+    );
+    client.batch_execute("COMMIT").unwrap();
 
     let mut internal = server.connect_internal(postgres::NoTls).unwrap();
     let query = "

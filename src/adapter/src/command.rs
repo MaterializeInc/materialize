@@ -84,12 +84,18 @@ pub struct CopyFromStdinWriter {
 #[derive(Debug)]
 pub struct CatalogSnapshot {
     pub catalog: Arc<Catalog>,
+    /// A certified durable prefix, when explicitly requested.
+    pub durable_upper: Option<Result<mz_repr::Timestamp, AdapterError>>,
 }
 
 #[derive(Debug)]
 pub enum Command {
     CatalogSnapshot {
         tx: oneshot::Sender<CatalogSnapshot>,
+        include_durable_upper: bool,
+        /// Certify an applied prefix through this timestamp for query planning.
+        /// This does not announce completion of a table write.
+        through: Option<mz_repr::Timestamp>,
     },
 
     Startup {
@@ -254,6 +260,16 @@ pub enum Command {
         >,
     },
 
+    /// Establishes durable coverage on a query client's local acquisition miss.
+    AcquireClientReadProtection {
+        incarnation: u64,
+        bundle: CollectionIdBundle,
+        read_ts: Option<mz_repr::Timestamp>,
+        tx: oneshot::Sender<
+            Result<(ReadHolds, timely::progress::Antichain<mz_repr::Timestamp>), AdapterError>,
+        >,
+    },
+
     GetOracle {
         timeline: Timeline,
         tx: oneshot::Sender<
@@ -280,6 +296,7 @@ pub enum Command {
     },
 
     ExecuteSlowPathPeek {
+        catalog: Arc<Catalog>,
         dataflow_plan: Box<PeekDataflowPlan>,
         determination: TimestampDetermination,
         finishing: RowSetFinishing,
@@ -297,6 +314,7 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
+        catalog: Arc<Catalog>,
         df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
@@ -322,6 +340,7 @@ pub enum Command {
     },
 
     ExecuteCopyTo {
+        catalog: Arc<Catalog>,
         df_desc: Box<DataflowDescription<mz_compute_types::plan::LirRelationExpr>>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -369,9 +388,8 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
-    /// Unregister and retire a pending peek that was registered but then
-    /// failed to issue, ending its statement-logging execution with the given
-    /// reason.
+    /// Unregister and retire frontend-owned execution, including completed
+    /// query-client peeks and peeks that failed to issue.
     ///
     /// Registration handed ownership of end-of-execution logging to the
     /// coordinator, so the frontend must not log the end itself. If a
@@ -383,8 +401,8 @@ pub enum Command {
         tx: oneshot::Sender<()>,
     },
 
-    /// Generate a timestamp explanation.
-    /// This is used when `emit_timestamp_notice` is enabled.
+    /// Generate a legacy, unprotected timestamp explanation for a notice.
+    /// Protected callers observe frontiers directly through QueryClient.
     ExplainTimestamp {
         conn_id: ConnectionId,
         session_wall_time: DateTime<Utc>,
@@ -401,10 +419,11 @@ pub enum Command {
     /// Registers a connection-scoped cancellation watch and returns a receiver
     /// that becomes `true` when cancellation is requested for the connection.
     ///
-    /// Registration always installs a fresh channel, so the caller cannot
-    /// observe a cancellation aimed at an earlier statement.
+    /// New outer statements reset the channel. Continuations retain any
+    /// cancellation already requested for the execution they belong to.
     RegisterConnectionCancelWatch {
         conn_id: ConnectionId,
+        reset: bool,
         tx: oneshot::Sender<watch::Receiver<bool>>,
     },
 
@@ -413,6 +432,7 @@ pub enum Command {
     /// frontend-sequenced read-then-write (DELETE/UPDATE/INSERT...SELECT)
     /// operations via OCC.
     CreateInternalSubscribe {
+        catalog: Arc<Catalog>,
         df_desc: Box<LirDataflowDescription>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -493,6 +513,7 @@ impl Command {
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
+            | Command::AcquireClientReadProtection { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
             | Command::GetTransactionReadHoldsBundle { .. }
@@ -538,6 +559,7 @@ impl Command {
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
+            | Command::AcquireClientReadProtection { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
             | Command::GetTransactionReadHoldsBundle { .. }
@@ -588,8 +610,8 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
-    pub storage_collections:
-        Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>,
+    pub storage_collections: Option<crate::peek_client::StorageCollectionsHandle>,
+    pub(crate) query_client: Option<Arc<crate::query_client::QueryClient>>,
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
@@ -629,7 +651,7 @@ impl Transmittable for StartupResponse {
     }
 }
 
-/// The response to [`SessionClient::dump_catalog`](crate::SessionClient::dump_catalog).
+/// A JSON-encoded catalog snapshot.
 #[derive(Debug, Clone)]
 pub struct CatalogDump(String);
 

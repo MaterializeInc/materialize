@@ -864,14 +864,14 @@ pub static MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescri
         object_name: MZ_REPLICA_HYDRATION_HISTORY.name.to_string(),
     });
 
-/// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS`] for the schema-migration guard in
+/// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS_RAW`] for the schema-migration guard in
 /// `builtin_schema_migration.rs`, which forbids migrating this source because the 0dt
 /// caught-up gate reads the leader's shard for it to learn the live frontiers.
 pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescription> =
     LazyLock::new(|| SystemObjectDescription {
-        schema_name: MZ_CLUSTER_REPLICA_FRONTIERS.schema.to_string(),
+        schema_name: MZ_CLUSTER_REPLICA_FRONTIERS_RAW.schema.to_string(),
         object_type: CatalogItemType::Source,
-        object_name: MZ_CLUSTER_REPLICA_FRONTIERS.name.to_string(),
+        object_name: MZ_CLUSTER_REPLICA_FRONTIERS_RAW.name.to_string(),
     });
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
@@ -1420,17 +1420,22 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
-        Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
-        Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
-        Builtin::Source(&MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED),
+        Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_BY_DEPLOYMENT),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
+        Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES_RAW),
+        Builtin::View(&MZ_COMPUTE_HYDRATION_TIMES),
+        Builtin::Source(&MZ_OBJECT_ARRANGEMENT_SIZES_RAW),
+        Builtin::View(&MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED),
         Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZES_IND),
         Builtin::Table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
         Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND),
         Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND),
         Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
         Builtin::View(&MZ_LIR_MAPPING),
-        Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
-        Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
+        Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_RAW),
+        Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
+        Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS_RAW),
+        Builtin::View(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::Index(&MZ_HYDRATION_STATUSES_IND),

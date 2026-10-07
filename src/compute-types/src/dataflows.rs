@@ -24,7 +24,7 @@ use timely::progress::Antichain;
 use crate::plan::LirRelationExpr;
 use crate::plan::render_plan::RenderPlan;
 use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
-use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 /// A description of a dataflow to construct and results to surface.
@@ -105,6 +105,86 @@ impl<P, S> DataflowDescription<P, S> {
 }
 
 impl DataflowDescription<LirRelationExpr, ()> {
+    /// Enriches storage references and converts valid LIR into worker render plans.
+    ///
+    /// The caller supplies metadata and observed uppers for imports, and metadata
+    /// for MV outputs. This neither acquires read protection nor chooses timestamps.
+    /// All execution bounds and export settings are preserved. Invalid LIR panics.
+    pub fn into_render_plan<S: 'static, E>(
+        self,
+        mut source: impl FnMut(GlobalId) -> Result<(S, Antichain<Timestamp>), E>,
+        mut output: impl FnMut(GlobalId) -> Result<S, E>,
+    ) -> Result<DataflowDescription<RenderPlan, S>, E> {
+        let mut source_imports = BTreeMap::new();
+        for (id, import) in self.source_imports {
+            let (storage_metadata, upper) = source(id)?;
+            source_imports.insert(
+                id,
+                SourceImport {
+                    desc: SourceInstanceDesc {
+                        storage_metadata,
+                        arguments: import.desc.arguments,
+                        typ: import.desc.typ,
+                    },
+                    monotonic: import.monotonic,
+                    with_snapshot: import.with_snapshot,
+                    upper,
+                },
+            );
+        }
+
+        let mut sink_exports = BTreeMap::new();
+        for (id, sink) in self.sink_exports {
+            let connection = match sink.connection {
+                ComputeSinkConnection::MaterializedView(conn) => {
+                    ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
+                        value_desc: conn.value_desc,
+                        storage_metadata: output(id)?,
+                    })
+                }
+                ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
+                ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                    ComputeSinkConnection::CopyToS3Oneshot(conn)
+                }
+                ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
+            };
+            sink_exports.insert(
+                id,
+                ComputeSinkDesc {
+                    from: sink.from,
+                    from_desc: sink.from_desc,
+                    connection,
+                    with_snapshot: sink.with_snapshot,
+                    up_to: sink.up_to,
+                    non_null_assertions: sink.non_null_assertions,
+                    refresh_schedule: sink.refresh_schedule,
+                },
+            );
+        }
+
+        let objects_to_build = self
+            .objects_to_build
+            .into_iter()
+            .map(|object| BuildDesc {
+                id: object.id,
+                plan: RenderPlan::try_from(object.plan).expect("valid plan"),
+            })
+            .collect();
+        Ok(DataflowDescription {
+            source_imports,
+            sink_exports,
+            objects_to_build,
+            index_imports: self.index_imports,
+            index_exports: self.index_exports,
+            as_of: self.as_of,
+            until: self.until,
+            initial_storage_as_of: self.initial_storage_as_of,
+            refresh_schedule: self.refresh_schedule,
+            debug_name: self.debug_name,
+            time_dependence: self.time_dependence,
+        })
+    }
+
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
@@ -658,6 +738,9 @@ pub struct BuildDesc<P> {
     /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
 }
+
+#[cfg(test)]
+mod render_plan_tests;
 
 #[cfg(test)]
 mod tests {

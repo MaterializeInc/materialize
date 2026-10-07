@@ -435,7 +435,8 @@ def workflow_endpoints(c: Composition) -> None:
 
         # Now confirm via the activity log that the read ran on
         # `dex27_other`, not the session default. The log is emitted
-        # asynchronously, so poll briefly.
+        # asynchronously, so poll briefly. Match the data read, not the
+        # preceding metadata lookup that also contains the object's name.
         deadline = time.monotonic() + 30
         observed_cluster: str | None = None
         while time.monotonic() < deadline:
@@ -444,7 +445,7 @@ def workflow_endpoints(c: Composition) -> None:
                 SELECT cluster_name
                 FROM mz_internal.mz_recent_activity_log
                 WHERE application_name = 'mz_mcp_agents'
-                  AND sql ILIKE '%dex27_routed_mv%'
+                  AND sql = 'SELECT * FROM "materialize"."public"."dex27_routed_mv" LIMIT 5'
                   AND finished_status = 'success'
                 ORDER BY began_at DESC
                 LIMIT 1

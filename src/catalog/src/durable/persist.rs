@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod deployments;
 #[cfg(test)]
 mod tests;
 
@@ -26,8 +27,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::{
-    soft_assert_eq_no_log, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log,
-    soft_assert_or_log, soft_panic_or_log,
+    soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log, soft_assert_or_log,
+    soft_panic_or_log,
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
@@ -59,7 +60,9 @@ use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
+use crate::durable::objects::{
+    AuditLogKey, DeploymentAdmission, FenceToken, ReadProtectionIndex, Snapshot,
+};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -71,6 +74,9 @@ use crate::memory;
 
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
+
+/// Durable environment latch, also observed after fresh catalog initialization.
+const READ_PROTECTION_CONFIG: &str = "catalog_read_protection_enabled";
 
 /// The minimum value of an epoch.
 const MIN_EPOCH: Epoch = Epoch::new(1).expect("1 is non-zero");
@@ -95,7 +101,7 @@ pub const _BUILTIN_MIGRATION_SEED: usize = 3;
 /// Legacy seed used to generate the persist shard ID for the expression cache. DO NOT REUSE.
 pub const _EXPRESSION_CACHE_SEED: usize = 4;
 
-/// Durable catalog mode that dictates the effect of mutable operations.
+/// Durable catalog read and write behavior.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum Mode {
     /// Mutable operations are prohibited.
@@ -118,7 +124,12 @@ pub(crate) enum FenceableToken {
         current_deploy_generation: Option<u64>,
     },
     /// The current token has not been fenced.
-    Unfenced { current_token: FenceToken },
+    Unfenced {
+        /// This handle's identity. Observing promotion must not replace it.
+        current_token: FenceToken,
+        /// Latest durable authority, distinct from a prewarming handle's identity.
+        durable_token: Option<FenceToken>,
+    },
     /// The current token has been fenced.
     Fenced {
         current_token: FenceToken,
@@ -176,8 +187,17 @@ impl FenceableToken {
         }
     }
 
+    fn durable_token(&self) -> Option<&FenceToken> {
+        match self {
+            Self::Initializing { durable_token, .. } | Self::Unfenced { durable_token, .. } => {
+                durable_token.as_ref()
+            }
+            Self::Fenced { fence_token, .. } => Some(fence_token),
+        }
+    }
+
     /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
-    fn maybe_fence(&mut self, token: FenceToken) -> Result<(), FenceError> {
+    fn maybe_fence(&mut self, token: FenceToken, protected: bool) -> Result<(), FenceError> {
         match self {
             FenceableToken::Initializing {
                 durable_token,
@@ -205,8 +225,17 @@ impl FenceableToken {
                     }
                 }
             }
-            FenceableToken::Unfenced { current_token } => {
-                if *current_token < token {
+            FenceableToken::Unfenced {
+                current_token,
+                durable_token,
+            } => {
+                *durable_token = Some(match durable_token.take() {
+                    Some(observed) => max(observed, token.clone()),
+                    None => token.clone(),
+                });
+                if current_token.deploy_generation < token.deploy_generation
+                    || (!protected && *current_token < token)
+                {
                     *self = FenceableToken::Fenced {
                         current_token: current_token.clone(),
                         fence_token: token,
@@ -222,12 +251,30 @@ impl FenceableToken {
         Ok(())
     }
 
+    fn generate_admin_token(&self) -> Result<Option<FenceableToken>, DurableCatalogError> {
+        self.validate()?;
+        match self {
+            Self::Initializing { durable_token, .. } => {
+                let current_token = durable_token
+                    .clone()
+                    .ok_or(DurableCatalogError::Uninitialized)?;
+                Ok(Some(Self::Unfenced {
+                    durable_token: Some(current_token.clone()),
+                    current_token,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Returns a [`FenceableToken::Unfenced`] token and the updates to the catalog required to
     /// transition to the `Unfenced` state if `self` is [`FenceableToken::Initializing`], otherwise
     /// returns `None`.
     fn generate_unfenced_token(
         &self,
         mode: Mode,
+        exclusive: bool,
+        promote: bool,
     ) -> Result<Option<(Vec<(StateUpdateKind, Diff)>, FenceableToken)>, DurableCatalogError> {
         let (durable_token, current_deploy_generation) = match self {
             FenceableToken::Initializing {
@@ -251,14 +298,14 @@ impl FenceableToken {
             // We cannot initialize a catalog without a deploy generation.
             .ok_or(DurableCatalogError::Uninitialized)?;
         let mut current_epoch = durable_token
+            .as_ref()
             .map(|token| token.epoch)
             .unwrap_or(MIN_EPOCH)
             .get();
-        // Only writable catalogs attempt to increment the epoch.
-        if matches!(mode, Mode::Writable) {
-            current_epoch = current_epoch + 1;
+        if exclusive && mode == Mode::Writable {
+            current_epoch += 1;
         }
-        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
+        let current_epoch = Epoch::new(current_epoch).expect("nonzero epoch");
         let current_token = FenceToken {
             deploy_generation: current_deploy_generation,
             epoch: current_epoch,
@@ -269,7 +316,17 @@ impl FenceableToken {
             Diff::ONE,
         ));
 
-        let current_fenceable_token = FenceableToken::Unfenced { current_token };
+        if !promote || durable_token.as_ref() == Some(&current_token) {
+            fence_updates.clear();
+        }
+        let current_fenceable_token = FenceableToken::Unfenced {
+            durable_token: if mode == Mode::Writable && promote {
+                Some(current_token.clone())
+            } else {
+                durable_token
+            },
+            current_token,
+        };
 
         Ok(Some((fence_updates, current_fenceable_token)))
     }
@@ -279,7 +336,7 @@ impl FenceableToken {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CompareAndAppendError {
     #[error(transparent)]
-    Fence(#[from] FenceError),
+    Durable(#[from] DurableCatalogError),
     /// Catalog encountered an upper mismatch when trying to write to the catalog: another
     /// writer moved the upper between our snapshot of it and the write. Handled by the conflict
     /// classification in the commit and advance paths (rebase over empty progress, surface
@@ -296,7 +353,10 @@ pub(crate) enum CompareAndAppendError {
 impl CompareAndAppendError {
     pub(crate) fn unwrap_fence_error(self) -> FenceError {
         match self {
-            CompareAndAppendError::Fence(e) => e,
+            CompareAndAppendError::Durable(DurableCatalogError::Fence(e)) => e,
+            CompareAndAppendError::Durable(e) => {
+                panic!("unexpected recovery requirement during upgrade: {e}")
+            }
             e @ CompareAndAppendError::UpperMismatch { .. } => {
                 panic!("unexpected upper mismatch: {e:?}")
             }
@@ -314,6 +374,14 @@ impl From<UpperMismatch<Timestamp>> for CompareAndAppendError {
 }
 
 pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
+    /// Format authorization from the applied catalog prefix, when protected.
+    fn persist_target(&self) -> Option<&semver::Version>;
+
+    /// Validate runtime identity after consuming a complete durable prefix.
+    fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
+        Ok(())
+    }
+
     /// Process and apply `update`.
     ///
     /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
@@ -340,8 +408,11 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
 /// respectively.
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
-    /// The [`Mode`] that this catalog was opened in.
+    /// The catalog's read and write mode.
     pub(crate) mode: Mode,
+    /// Joined writers may publish updates but cannot upgrade shared Persist metadata.
+    is_join: bool,
+    prewarming_plan_build: Option<String>,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Write handle to persist.
@@ -368,6 +439,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     bootstrap_complete: bool,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
+    timestamp_oracle: Option<crate::durable::CatalogTimestampOracle>,
     /// Snapshot size at the last amortized consolidation, used by
     /// [`Self::maybe_consolidate`] to decide when to consolidate. Initialized
     /// lazily on the first call.
@@ -380,6 +452,17 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
 }
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
+    fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
+        self.fenceable_token.validate()?;
+        self.update_applier.validate_runtime()?;
+        if let Some(target) = self.update_applier.persist_target() {
+            self.persist_client
+                .set_state_version_target(target.clone())
+                .map_err(|error| DurableCatalogError::NotWritable(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Fetch the current upper of the catalog state.
     #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
@@ -401,23 +484,49 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         updates: Vec<(S, Diff)>,
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
+        self.validate_runtime()?;
+        let (commit_ts, allocation) = if let Some(oracle) = &self.timestamp_oracle {
+            // Every entry point, including bootstrap, upgrades and debug edits,
+            // must allocate after preceding reads. A rebased upper is a lower
+            // bound, not a substitute for that oracle allocation.
+            let allocated = oracle.oracle.write_ts().await.timestamp;
+            (max(commit_ts, max(self.upper, allocated)), Some(allocated))
+        } else {
+            (commit_ts, None)
+        };
+        let mut traffic = [(0u64, 0u64); 3];
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            (
-                (Into::<SourceData>::into(kind), ()),
-                commit_ts,
-                diff.into_inner(),
-            )
+            let index = match kind.kind() {
+                "CollectionCompactionBound" => 0,
+                "MaintainedReadRequirement" => 1,
+                _ => 2,
+            };
+            let row = SourceData::from(kind);
+            traffic[index].0 += 1;
+            traffic[index].1 += u64::try_from(row.0.as_ref().expect("catalog row").byte_len())
+                .expect("row length fits in u64");
+            ((row, ()), commit_ts, diff.into_inner())
         });
-        let next_upper = commit_ts.step_forward();
         // Upper mismatches are classified by the commit and advance callers.
-        self.compare_and_append_inner(updates, next_upper).await?;
+        let next_upper = self
+            .compare_and_append_inner(updates, commit_ts, allocation)
+            .await?;
 
+        // Publication succeeded even if the subsequent local sync fails.
+        for ((updates, bytes), (update_count, byte_count)) in
+            self.metrics.committed_row_traffic.iter().zip_eq(traffic)
+        {
+            updates.inc_by(update_count);
+            bytes.inc_by(byte_count);
+        }
         self.sync(next_upper).await?;
         Ok(next_upper)
     }
 
-    /// Compare-and-append `updates` to the catalog shard, advancing the upper to `next_upper`.
+    /// Compare-and-append `updates` at `commit_ts`, returning its successor upper.
+    /// An oracle allocation identifies a content commit requiring completion.
+    /// Empty prefix advances do not complete an oracle write.
     ///
     /// On success, updating `self.upper` is left to the caller. The caller can thus decide whether
     /// or not it needs to sync the catalog.
@@ -425,19 +534,42 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// # Panics
     ///
     /// Panics if not in `Writable` mode.
-    /// Panics if `next_upper` is not greater than `self.upper`.
+    /// Panics if `commit_ts` is less than `self.upper`.
     async fn compare_and_append_inner(
         &mut self,
         updates: impl IntoIterator<Item = ((SourceData, ()), Timestamp, StorageDiff)>,
-        next_upper: Timestamp,
-    ) -> Result<(), CompareAndAppendError> {
+        commit_ts: Timestamp,
+        allocation: Option<Timestamp>,
+    ) -> Result<Timestamp, CompareAndAppendError> {
+        self.validate_runtime()?;
         assert_eq!(self.mode, Mode::Writable);
         assert!(
-            next_upper > self.upper,
-            "next_upper ({next_upper}) not greater than current upper ({})",
+            commit_ts >= self.upper,
+            "commit timestamp ({commit_ts}) is less than current upper ({})",
             self.upper,
         );
 
+        if let Some(oracle) = self.timestamp_oracle.clone() {
+            // Ordinary empty prefix advances need no extra oracle call. Only
+            // outliers need to establish inherited progress beyond this handle.
+            let inherited = self.upper.max(allocation.unwrap_or(Timestamp::MIN));
+            if oracle.check_timestamp(commit_ts, inherited).is_err() {
+                // A peer may have durably introduced this progress since our
+                // snapshot. Refresh before classifying it as a new jump. Return
+                // any advancement to the caller's normal conflict validation.
+                let expected_upper = self.upper;
+                self.sync_to_current_upper().await?;
+                if self.upper != expected_upper {
+                    return Err(CompareAndAppendError::UpperMismatch {
+                        expected_upper,
+                        actual_upper: self.upper,
+                    });
+                }
+                let inherited = self.upper.max(oracle.oracle.peek_write_ts().await);
+                oracle.check_timestamp(commit_ts, inherited)?;
+            }
+        }
+        let next_upper = commit_ts.step_forward();
         let res = self
             .write_handle
             .compare_and_append(
@@ -453,6 +585,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             // Sync to the current upper to detect that.
             self.sync_to_current_upper().await?;
             return Err(e.into());
+        }
+
+        if allocation.is_some()
+            && let Some(oracle) = &self.timestamp_oracle
+        {
+            // Durability precedes completion, which precedes acknowledgement.
+            // Do this before any local sync that can fail after publication.
+            oracle.oracle.apply_write(commit_ts).await;
         }
 
         // Lag the shard's upper by 1 to keep it readable.
@@ -471,7 +611,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}");
         }
 
-        Ok(())
+        Ok(next_upper)
     }
 
     /// Accepts an upper mismatch caused only by empty progress.
@@ -522,35 +662,49 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
     /// Listen and apply all updates that are currently in persist.
     ///
-    /// Returns an error if this instance has been fenced out.
+    /// Returns fencing or bootstrap-bound runtime recovery errors.
     #[mz_ore::instrument]
-    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), FenceError> {
+    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
         let upper = self.current_upper().await;
         self.sync(upper).await
     }
 
     /// Listen and apply all updates up to `target_upper`.
     ///
-    /// Returns an error if this instance has been fenced out.
+    /// Returns fencing or bootstrap-bound runtime recovery errors.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn sync(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
+    pub(crate) async fn sync(
+        &mut self,
+        target_upper: Timestamp,
+    ) -> Result<(), DurableCatalogError> {
+        self.sync_with_limit(target_upper, false).await
+    }
+
+    fn sync_with_limit(
+        &mut self,
+        target_upper: Timestamp,
+        terminal: bool,
+    ) -> impl std::future::Future<Output = Result<(), DurableCatalogError>> + '_ {
         self.metrics.syncs.inc();
         let histogram = self.metrics.sync_latency_seconds.clone();
-        self.sync_inner(target_upper)
+        self.sync_inner(target_upper, terminal)
             .wall_time()
             .observe(histogram)
-            .await
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
+    async fn sync_inner(
+        &mut self,
+        target_upper: Timestamp,
+        terminal: bool,
+    ) -> Result<(), DurableCatalogError> {
         self.fenceable_token.validate()?;
 
         // Savepoint catalogs do not yet know how to update themselves in response to concurrent
         // writes from writer catalogs.
         if self.mode == Mode::Savepoint {
             self.upper = max(self.upper, target_upper);
-            return Ok(());
+            return self.validate_runtime();
         }
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
@@ -567,6 +721,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     ListenEvent::Progress(upper) => {
                         debug!("synced up to {upper:?}");
                         self.upper = antichain_to_timestamp(upper);
+                        if terminal {
+                            self.upper = self.upper.min(target_upper);
+                        }
                         // Attempt to apply updates in batches of a single timestamp. If another
                         // catalog wrote a fence token at one timestamp and then updates in a new
                         // format at a later timestamp, then we want to apply the fence token
@@ -587,10 +744,18 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                             self.apply_updates(updates)?;
                             self.maybe_consolidate();
                         }
+                        if terminal && self.upper == target_upper {
+                            break;
+                        }
                     }
                     ListenEvent::Updates(batch_updates) => {
                         for update in batch_updates {
                             let update: StateUpdate<StateUpdateKindJson> = update.into();
+                            // Terminal synchronization discards the suffix of this continuous
+                            // listen, since the consumed handle must never follow it again.
+                            if terminal && update.ts >= target_upper {
+                                continue;
+                            }
                             updates.entry(update.ts).or_default().push(update);
                         }
                     }
@@ -602,7 +767,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         if self.updates_applied != updates_applied_before {
             self.consolidate();
         }
-        Ok(())
+        // Compare the effective final prefix, not individual retractions or
+        // intermediate values. Consuming fences first preserves their precedence.
+        self.validate_runtime()
     }
 
     /// Apply a batch of updates and then consolidate the snapshot. This is the
@@ -754,7 +921,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 }
 
-impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
+impl PersistCatalogState {
     /// Execute and return the results of `f` on the current catalog snapshot.
     ///
     /// Will return an error if the catalog has been fenced out.
@@ -762,6 +929,12 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
         &mut self,
         f: impl FnOnce(Snapshot) -> Result<T, CatalogError>,
     ) -> Result<T, CatalogError> {
+        self.sync_to_current_upper().await?;
+        f(self.cached_snapshot()?)
+    }
+
+    fn cached_snapshot(&self) -> Result<Snapshot, CatalogError> {
+        self.validate_runtime()?;
         fn apply<K, V>(map: &mut BTreeMap<K, V>, key: &K, value: &V, diff: Diff)
         where
             K: Ord + Clone,
@@ -785,9 +958,10 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             }
         }
 
-        self.with_trace(|trace| {
+        {
             let mut snapshot = Snapshot::empty();
-            for (kind, ts, diff) in trace {
+            snapshot.read_protection_index = self.update_applier.read_protection_index.clone();
+            for (kind, ts, diff) in &self.snapshot {
                 let diff = *diff;
                 if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                     panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
@@ -803,6 +977,12 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::ClusterReplica(key, value) => {
                         apply(&mut snapshot.cluster_replicas, key, value, diff);
                     }
+                    StateUpdateKind::ClusterReplicaDeclaration(key, value) => {
+                        apply(&mut snapshot.cluster_replica_declarations, key, value, diff);
+                    }
+                    StateUpdateKind::ClusterRuntime(key, value) => {
+                        apply(&mut snapshot.cluster_runtimes, key, value, diff);
+                    }
                     StateUpdateKind::Comment(key, value) => {
                         apply(&mut snapshot.comments, key, value, diff);
                     }
@@ -815,8 +995,8 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::DefaultPrivilege(key, value) => {
                         apply(&mut snapshot.default_privileges, key, value, diff);
                     }
-                    StateUpdateKind::FenceToken(_token) => {
-                        // Ignore for snapshots.
+                    StateUpdateKind::FenceToken(_) | StateUpdateKind::DeploymentAdmission(_) => {
+                        // Admission authority is not mutable through catalog transactions.
                     }
                     StateUpdateKind::IdAllocator(key, value) => {
                         apply(&mut snapshot.id_allocator, key, value, diff);
@@ -867,6 +1047,21 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::SystemPrivilege(key, value) => {
                         apply(&mut snapshot.system_privileges, key, value, diff);
                     }
+                    StateUpdateKind::CollectionCompactionBound(key, value) => {
+                        apply(&mut snapshot.collection_compaction_bounds, key, value, diff);
+                    }
+                    StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                        apply(&mut snapshot.maintained_read_requirements, key, value, diff);
+                    }
+                    StateUpdateKind::ClientIncarnation(key, value) => {
+                        apply(&mut snapshot.client_incarnations, key, value, diff);
+                    }
+                    StateUpdateKind::WrittenPlan(key, value) => {
+                        apply(&mut snapshot.written_plans, key, value, diff);
+                    }
+                    StateUpdateKind::ClientReadRequirement(key, value) => {
+                        apply(&mut snapshot.client_read_requirements, key, value, diff);
+                    }
                     StateUpdateKind::StorageCollectionMetadata(key, value) => {
                         apply(&mut snapshot.storage_collection_metadata, key, value, diff);
                     }
@@ -881,9 +1076,8 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                 }
             }
-            f(snapshot)
-        })
-        .await
+            Ok(snapshot)
+        }
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -911,6 +1105,7 @@ pub(crate) struct UnopenedCatalogStateInner {
     configs: BTreeMap<String, u64>,
     /// A cache of the settings collection of the catalog.
     settings: BTreeMap<String, String>,
+    deployment_admission: Option<DeploymentAdmission>,
 }
 
 impl UnopenedCatalogStateInner {
@@ -918,11 +1113,21 @@ impl UnopenedCatalogStateInner {
         UnopenedCatalogStateInner {
             configs: BTreeMap::new(),
             settings: BTreeMap::new(),
+            deployment_admission: None,
         }
     }
 }
 
 impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
+    fn persist_target(&self) -> Option<&semver::Version> {
+        self.configs
+            .get(READ_PROTECTION_CONFIG)
+            .is_some_and(|value| *value != 0)
+            .then_some(self.deployment_admission.as_ref())
+            .flatten()
+            .map(|admission| &admission.persist_target)
+    }
+
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKindJson>,
@@ -932,6 +1137,12 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         if !update.kind.is_audit_log() && update.kind.is_always_deserializable() {
             let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
+                (StateUpdateKind::DeploymentAdmission(admission), Diff::ONE) => {
+                    assert!(self.deployment_admission.replace(admission).is_none());
+                }
+                (StateUpdateKind::DeploymentAdmission(admission), Diff::MINUS_ONE) => {
+                    assert_eq!(self.deployment_admission.take(), Some(admission));
+                }
                 (StateUpdateKind::Config(key, value), Diff::ONE) => {
                     let prev = self.configs.insert(key.key, value.value);
                     assert_eq!(
@@ -963,7 +1174,12 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                     );
                 }
                 (StateUpdateKind::FenceToken(fence_token), Diff::ONE) => {
-                    current_fence_token.maybe_fence(fence_token)?;
+                    current_fence_token.maybe_fence(
+                        fence_token,
+                        self.configs
+                            .get(READ_PROTECTION_CONFIG)
+                            .is_some_and(|v| *v != 0),
+                    )?;
                 }
                 _ => {}
             }
@@ -983,6 +1199,14 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
 pub(crate) type UnopenedPersistCatalogState =
     PersistHandle<StateUpdateKindJson, UnopenedCatalogStateInner>;
 
+#[derive(Clone, Copy, Debug)]
+enum OpenPurpose<'a> {
+    Bootstrap(&'a BootstrapArgs),
+    Promotion(&'a BootstrapArgs),
+    Join,
+    Prewarm(&'a str),
+}
+
 impl UnopenedPersistCatalogState {
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
     /// `organization_id`.
@@ -996,8 +1220,9 @@ impl UnopenedPersistCatalogState {
         version: semver::Version,
         deploy_generation: Option<u64>,
         metrics: Arc<Metrics>,
+        timestamp_oracle: Option<crate::durable::CatalogTimestampOracle>,
     ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
-        let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
+        let catalog_shard_id = catalog_shard_id(organization_id);
         debug!(?catalog_shard_id, "new persist backed catalog state");
 
         // Check the catalog shard version to ensure that we are compatible with the persist
@@ -1081,6 +1306,8 @@ impl UnopenedPersistCatalogState {
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
             mode: Mode::Writable,
+            is_join: false,
+            prewarming_plan_build: None,
             since_handle,
             write_handle,
             listen,
@@ -1094,6 +1321,7 @@ impl UnopenedPersistCatalogState {
             catalog_content_version: version,
             bootstrap_complete: false,
             metrics,
+            timestamp_oracle,
             size_at_last_consolidation: None,
             updates_applied: 0,
         };
@@ -1142,8 +1370,30 @@ impl UnopenedPersistCatalogState {
         mut self,
         mode: Mode,
         initial_ts: Timestamp,
-        bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        purpose: OpenPurpose<'_>,
+    ) -> Result<Box<PersistCatalogState>, CatalogError> {
+        let bootstrap_args = match purpose {
+            OpenPurpose::Bootstrap(args) | OpenPurpose::Promotion(args) => Some(args),
+            OpenPurpose::Join | OpenPurpose::Prewarm(_) => None,
+        };
+        let join = bootstrap_args.is_none();
+        let prewarming_plan_build = match purpose {
+            OpenPurpose::Prewarm(build) => {
+                let version = build.parse::<semver::Version>().map_err(|_| {
+                    DurableCatalogError::NotWritable("invalid prewarming plan namespace".into())
+                })?;
+                if version.cmp_precedence(&self.catalog_content_version)
+                    != std::cmp::Ordering::Equal
+                {
+                    return Err(DurableCatalogError::NotWritable(
+                        "prewarming plan namespace does not match writer version".into(),
+                    )
+                    .into());
+                }
+                Some(build.to_owned())
+            }
+            _ => None,
+        };
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
         let mut commit_ts = self.upper;
@@ -1175,24 +1425,137 @@ impl UnopenedPersistCatalogState {
 
         let read_only = matches!(self.mode, Mode::Readonly);
 
-        // Fence out previous catalogs.
+        let promoted;
+        let protected;
+        let cleanup_owners;
+        let deferred_admission_updates;
+        // Admit this generation with a compare-and-append.
         loop {
             self.sync_to_current_upper().await?;
             commit_ts = max(commit_ts, self.upper);
-            let (fence_updates, current_fenceable_token) = self
+            let protection_enabled = self
+                .update_applier
+                .configs
+                .get(READ_PROTECTION_CONFIG)
+                .is_some_and(|v| *v != 0);
+            if join {
+                if !self.is_initialized_inner() {
+                    return Err(DurableCatalogError::Uninitialized.into());
+                }
+                if !protection_enabled {
+                    return Err(DurableCatalogError::NotWritable(
+                        "joining requires catalog read protection".into(),
+                    )
+                    .into());
+                }
+                let version = self.update_applier.configs.get(USER_VERSION_KEY).copied();
+                if version != Some(crate::durable::upgrade::CATALOG_VERSION) {
+                    return Err(DurableCatalogError::NotWritable(
+                        "joining requires the current catalog version".into(),
+                    )
+                    .into());
+                }
+            }
+            let durable_generation = self.fenceable_token.token().map(|t| t.deploy_generation);
+            let (mut fence_updates, current_fenceable_token) = self
                 .fenceable_token
-                .generate_unfenced_token(self.mode)?
+                .generate_unfenced_token(
+                    self.mode,
+                    !protection_enabled && !join,
+                    prewarming_plan_build.is_none(),
+                )?
                 .ok_or_else(|| {
                     DurableCatalogError::Internal(
                         "catalog should not have fenced before opening".to_string(),
                     )
                 })?;
+            let admitted_generation = current_fenceable_token
+                .token()
+                .expect("admitted token")
+                .deploy_generation;
+            if protection_enabled
+                && durable_generation.is_some_and(|generation| generation < admitted_generation)
+                && matches!(purpose, OpenPurpose::Promotion(_) | OpenPurpose::Prewarm(_))
+            {
+                // Revalidate on every CAS attempt. A serving writer can add a
+                // targeted MV after prewarming starts or promotion is authorized.
+                super::promotion::validate_native_promotion(
+                    self.snapshot.iter().map(|(kind, _, _)| kind),
+                )?;
+            }
+            if join
+                && prewarming_plan_build.is_none()
+                && durable_generation != Some(admitted_generation)
+            {
+                return Err(DurableCatalogError::NotWritable(
+                    "joining cannot promote the deployment generation".into(),
+                )
+                .into());
+            }
             debug!(
                 ?self.upper,
                 ?self.fenceable_token,
                 ?current_fenceable_token,
                 "fencing previous catalogs"
             );
+            let promoting = prewarming_plan_build.is_none()
+                && durable_generation.is_some_and(|generation| generation < admitted_generation);
+            let defer_admission = matches!(self.mode, Mode::Writable)
+                && !protection_enabled
+                && self
+                    .update_applier
+                    .configs
+                    .get(USER_VERSION_KEY)
+                    .is_some_and(|version| *version < crate::durable::upgrade::CATALOG_VERSION);
+            let mut admission_updates = Vec::new();
+            let admission = if matches!(self.mode, Mode::Writable) {
+                let previous = self.update_applier.deployment_admission.as_ref();
+                let mut admission = match previous {
+                    Some(value) => value.clone(),
+                    None if protection_enabled => {
+                        return Err(DurableCatalogError::NotWritable(
+                            "protected catalog is missing deployment admission metadata".into(),
+                        )
+                        .into());
+                    }
+                    None => {
+                        DeploymentAdmission::initial(self.persist_client.build_version().clone())
+                    }
+                };
+                admission.admit(
+                    admitted_generation,
+                    self.persist_client.build_version(),
+                    !protection_enabled && !join,
+                    promoting.then_some(admitted_generation),
+                )?;
+                if previous != Some(&admission) {
+                    if let Some(previous) = previous {
+                        admission_updates.push((
+                            StateUpdateKind::DeploymentAdmission(previous.clone()),
+                            Diff::MINUS_ONE,
+                        ));
+                    }
+                    admission_updates.push((
+                        StateUpdateKind::DeploymentAdmission(admission.clone()),
+                        Diff::ONE,
+                    ));
+                }
+                Some(admission)
+            } else {
+                None
+            };
+            if !defer_admission {
+                fence_updates.append(&mut admission_updates);
+            }
+            // Recollect on every CAS attempt. Only the successful attempt's
+            // snapshot grants cleanup authority, not subsequent publications.
+            let owners = if protection_enabled && promoting {
+                Some(super::promotion::ephemeral_owners(
+                    self.snapshot.iter().map(|(kind, _, _)| kind),
+                )?)
+            } else {
+                None
+            };
             if matches!(self.mode, Mode::Writable) {
                 match self
                     .compare_and_append(fence_updates.clone(), commit_ts)
@@ -1201,18 +1564,31 @@ impl UnopenedPersistCatalogState {
                     Ok(upper) => {
                         commit_ts = upper;
                     }
-                    Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                    Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
                     Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
                         warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
                         continue;
                     }
                 }
             }
+            protected = protection_enabled;
+            if protection_enabled {
+                if let Some(admission) = admission {
+                    // Only the successful admission CAS authorizes this target.
+                    // Retried attempts must not expose speculative advancement.
+                    self.persist_client
+                        .set_state_version_target(admission.persist_target)
+                        .map_err(|error| DurableCatalogError::NotWritable(error.to_string()))?;
+                }
+            }
+            promoted = promoting;
+            cleanup_owners = owners;
+            deferred_admission_updates = admission_updates;
             self.fenceable_token = current_fenceable_token;
             break;
         }
 
-        if matches!(self.mode, Mode::Writable) {
+        if !join && matches!(self.mode, Mode::Writable) {
             // One-time migration: The catalog previously used `CONTROLLER_CRITICAL_SINCE` for its
             // since handle. Now it uses its own `CATALOG_CRITICAL_SINCE`, to free
             // `CONTROLLER_CRITICAL_SINCE` up for the storage controller. The catalog and
@@ -1271,8 +1647,17 @@ impl UnopenedPersistCatalogState {
         drop(audit_logs);
 
         // Perform data migrations.
-        if is_initialized && !read_only {
+        if is_initialized && !read_only && !join {
             commit_ts = upgrade(&mut self, commit_ts).await?;
+        }
+        if !deferred_admission_updates.is_empty() {
+            // Historical decoders must see only their own schema. The exclusive
+            // fence is already durable, but admission must wait for the upgrade.
+            // Publish under that fence and upper before exposing the opened catalog.
+            commit_ts = self
+                .compare_and_append(deferred_admission_updates, commit_ts)
+                .await
+                .map_err(|e| e.unwrap_fence_error())?;
         }
 
         debug!(
@@ -1282,6 +1667,8 @@ impl UnopenedPersistCatalogState {
         );
         let mut catalog = PersistCatalogState {
             mode: self.mode,
+            is_join: join,
+            prewarming_plan_build,
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -1295,6 +1682,7 @@ impl UnopenedPersistCatalogState {
             catalog_content_version: self.catalog_content_version,
             bootstrap_complete: false,
             metrics: self.metrics,
+            timestamp_oracle: self.timestamp_oracle,
             size_at_last_consolidation: None,
             updates_applied: 0,
         };
@@ -1312,69 +1700,67 @@ impl UnopenedPersistCatalogState {
         });
         catalog.apply_updates_and_consolidate(updates)?;
 
+        if join {
+            return Ok(Box::new(catalog));
+        }
+
         let catalog_content_version = catalog.catalog_content_version.to_string();
-        let txn = if is_initialized {
-            let mut txn = catalog.transaction_unchecked().await?;
+        loop {
+            let mut txn =
+                match catalog.transaction_unchecked().await {
+                    Ok(txn) => txn,
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) if protected => continue,
+                    Err(error) => return Err(error),
+                };
+            let txn = if txn.get_config(USER_VERSION_KEY.into()).is_some() {
+                // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
+                // present in existing catalogs.
+                //
+                // Note: Need to exclude read-only catalog mode here, because in that mode all
+                // transactions are expected to be no-ops.
+                // TODO: remove this once we only support upgrades from version >= 0.164
+                if txn.get_setting("migration_version".into()).is_none() && mode != Mode::Readonly {
+                    let old_version = txn.get_catalog_content_version();
+                    txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
+                }
 
-            // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
-            // present in existing catalogs.
-            //
-            // Note: Need to exclude read-only catalog mode here, because in that mode all
-            // transactions are expected to be no-ops.
-            // TODO: remove this once we only support upgrades from version >= 0.164
-            if txn.get_setting("migration_version".into()).is_none() && mode != Mode::Readonly {
-                let old_version = txn.get_catalog_content_version();
-                txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
+                // Exclusive opens invalidate every previous owner. Protected
+                // promotion only invalidates owners in its admitted snapshot.
+                // Keep that set fixed when retrying against newer publications.
+                if (!protected || promoted) && mode != Mode::Readonly {
+                    txn.remove_ephemeral_items_for_owners(cleanup_owners.as_ref());
+                }
+
+                txn.set_catalog_content_version(catalog_content_version.clone())?;
+                txn
+            } else {
+                initialize::initialize(
+                    &mut txn,
+                    bootstrap_args.expect("ordinary open has bootstrap arguments"),
+                    initial_ts.into(),
+                    catalog_content_version.clone(),
+                )
+                .await?;
+                txn
+            };
+
+            if read_only {
+                let (txn_batch, _) = txn.into_parts()?;
+                // The upper here doesn't matter because we are only applying the updates in memory.
+                let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
+                catalog.apply_updates_and_consolidate(updates)?;
+            } else {
+                match txn.commit_internal(commit_ts).await {
+                    Ok(_) => {}
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) if protected => continue,
+                    Err(error) => return Err(error),
+                }
             }
-
-            // Opening the catalog with write intent fences out every previous
-            // catalog owner, so all sessions served by previous owners are
-            // dead. Reclaim the temporary items they owned here, before
-            // anything else reads the catalog.
-            //
-            // NOTE: This only reclaims on the fence, which covers a
-            // single-writer world where every crash is followed by some
-            // process's writable open. Once several serving envds run
-            // concurrently, a peer crash triggers no fence here, so
-            // reclaiming its sessions' items needs the durable
-            // envd-heartbeat mechanism described in the durable temporary
-            // objects design doc.
-            if mode != Mode::Readonly {
-                txn.remove_ephemeral_items();
-            }
-
-            txn.set_catalog_content_version(catalog_content_version)?;
-            txn
-        } else {
-            soft_assert_eq_no_log!(
-                catalog
-                    .snapshot
-                    .iter()
-                    .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::FenceToken(_)))
-                    .count(),
-                0,
-                "trace should not contain any updates for an uninitialized catalog: {:#?}",
-                catalog.snapshot
-            );
-
-            let mut txn = catalog.transaction_unchecked().await?;
-            initialize::initialize(
-                &mut txn,
-                bootstrap_args,
-                initial_ts.into(),
-                catalog_content_version,
-            )
-            .await?;
-            txn
-        };
-
-        if read_only {
-            let (txn_batch, _) = txn.into_parts()?;
-            // The upper here doesn't matter because we are only applying the updates in memory.
-            let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
-            catalog.apply_updates_and_consolidate(updates)?;
-        } else {
-            txn.commit_internal(commit_ts).await?;
+            break;
         }
 
         if matches!(catalog.mode, Mode::Writable) {
@@ -1407,6 +1793,30 @@ impl UnopenedPersistCatalogState {
         }
 
         Ok(Box::new(catalog))
+    }
+
+    async fn open_active(
+        mut self: Box<Self>,
+        purpose: OpenPurpose<'_>,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        // Discover the durable generation, not the pending deployment's generation.
+        let durable_token = self.fenceable_token.validate()?;
+        self.fenceable_token = FenceableToken::Initializing {
+            durable_token,
+            current_deploy_generation: None,
+        };
+        self.sync_to_current_upper().await?;
+        let token = self
+            .fenceable_token
+            .validate()?
+            .ok_or(DurableCatalogError::Uninitialized)?;
+        self.fenceable_token = FenceableToken::Initializing {
+            durable_token: Some(token.clone()),
+            current_deploy_generation: Some(token.deploy_generation),
+        };
+        Ok(self
+            .open_inner(Mode::Writable, Timestamp::minimum(), purpose)
+            .await?)
     }
 
     /// Reports if the catalog state has been initialized.
@@ -1471,9 +1881,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
+        Ok(self
+            .open_inner(
+                Mode::Savepoint,
+                initial_ts,
+                OpenPurpose::Bootstrap(bootstrap_args),
+            )
             .boxed()
-            .await
+            .await?)
     }
 
     #[mz_ore::instrument]
@@ -1481,9 +1896,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
+        Ok(self
+            .open_inner(
+                Mode::Readonly,
+                EpochMillis::MIN.into(),
+                OpenPurpose::Bootstrap(bootstrap_args),
+            )
             .boxed()
-            .await
+            .await?)
     }
 
     #[mz_ore::instrument]
@@ -1492,9 +1912,55 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                initial_ts,
+                OpenPurpose::Bootstrap(bootstrap_args),
+            )
             .boxed()
-            .await
+            .await?)
+    }
+
+    #[mz_ore::instrument]
+    async fn open_for_promotion(
+        self: Box<Self>,
+        initial_ts: Timestamp,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                initial_ts,
+                OpenPurpose::Promotion(bootstrap_args),
+            )
+            .boxed()
+            .await?)
+    }
+
+    async fn join(mut self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(Mode::Writable, Timestamp::minimum(), OpenPurpose::Join)
+            .await?)
+    }
+
+    async fn join_prewarming(
+        self: Box<Self>,
+        plan_build: &str,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                Timestamp::minimum(),
+                OpenPurpose::Prewarm(plan_build),
+            )
+            .await?)
+    }
+
+    async fn join_active(
+        mut self: Box<Self>,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        self.open_active(OpenPurpose::Join).await
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1524,6 +1990,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .token()
             .map(|token| token.deploy_generation)
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn catalog_read_protection_enabled(&mut self) -> Result<bool, CatalogError> {
+        Ok(self
+            .get_current_config(READ_PROTECTION_CONFIG)
+            .await?
+            .is_some_and(|value| value != 0))
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1610,23 +2084,110 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 struct CatalogStateInner {
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
+    read_protection_index: ReadProtectionIndex,
+    /// Follow the durable latch, rather than freezing the mode at open: adapter
+    /// latches protection after initializing a fresh catalog.
+    protected: bool,
+    deployment_admission: Option<DeploymentAdmission>,
+    runtime_identity: RuntimeIdentity,
+    bootstrap_identity: Option<RuntimeIdentity>,
+}
+
+/// Values used to construct runtime components rather than incremental memory updates.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RuntimeIdentity {
+    read_protection_mode: bool,
+    txn_wal_shard: Option<String>,
+    // Settings initialize bootstrap resources, including expression-cache shards
+    // and authentication state. Unlike SystemConfiguration, they have no live
+    // application path.
+    settings: BTreeMap<String, String>,
 }
 
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
             updates: VecDeque::new(),
+            read_protection_index: ReadProtectionIndex::default(),
+            protected: false,
+            deployment_admission: None,
+            runtime_identity: RuntimeIdentity::default(),
+            bootstrap_identity: None,
         }
     }
 }
 
 impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
+    fn persist_target(&self) -> Option<&semver::Version> {
+        self.protected
+            .then_some(self.deployment_admission.as_ref())
+            .flatten()
+            .map(|admission| &admission.persist_target)
+    }
+
+    fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
+        if let Some(identity) = &self.bootstrap_identity {
+            let field =
+                if identity.read_protection_mode != self.runtime_identity.read_protection_mode {
+                    Some(READ_PROTECTION_CONFIG)
+                } else if identity.txn_wal_shard != self.runtime_identity.txn_wal_shard {
+                    Some("TxnWalShard")
+                } else if identity.settings != self.runtime_identity.settings {
+                    Some("Setting")
+                } else {
+                    None
+                };
+            if let Some(field) = field {
+                return Err(DurableCatalogError::RestartRequired { field });
+            }
+        }
+        Ok(())
+    }
+
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKind>,
         current_fence_token: &mut FenceableToken,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKind>>, FenceError> {
+        if let StateUpdateKind::DeploymentAdmission(admission) = &update.kind {
+            if update.diff == Diff::ONE {
+                assert!(
+                    self.deployment_admission
+                        .replace(admission.clone())
+                        .is_none()
+                );
+            } else {
+                assert_eq!(self.deployment_admission.take(), Some(admission.clone()));
+            }
+        }
+        if let StateUpdateKind::Config(key, value) = &update.kind {
+            if key.key == READ_PROTECTION_CONFIG {
+                self.protected = update.diff == Diff::ONE && value.value != 0;
+                self.runtime_identity.read_protection_mode = self.protected;
+            }
+        }
+        if let StateUpdateKind::TxnWalShard((), value) = &update.kind {
+            self.runtime_identity.txn_wal_shard =
+                (update.diff == Diff::ONE).then(|| value.shard.clone());
+        }
+        if let StateUpdateKind::Setting(key, value) = &update.kind
+            && !matches!(
+                key.name.as_str(),
+                CATALOG_CONTENT_VERSION_KEY | "migration_version"
+            )
+        {
+            // Version markers describe catalog writers and completed migrations,
+            // not resources captured by a running replica's bootstrap.
+            if update.diff == Diff::ONE {
+                self.runtime_identity
+                    .settings
+                    .insert(key.name.clone(), value.value.clone());
+            } else {
+                self.runtime_identity.settings.remove(&key.name);
+            }
+        }
+        self.read_protection_index.apply_update(&update);
         if let Some(collection_type) = update.kind.collection_type() {
             metrics
                 .collection_entries
@@ -1648,7 +2209,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             // Nothing to due for fence token retractions but wait for the next insertion.
             (StateUpdateKind::FenceToken(_), Diff::MINUS_ONE) => Ok(None),
             (StateUpdateKind::FenceToken(token), Diff::ONE) => {
-                current_fence_token.maybe_fence(token)?;
+                current_fence_token.maybe_fence(token, self.protected)?;
                 Ok(None)
             }
             (kind, diff) => Ok(Some(StateUpdate {
@@ -1667,13 +2228,111 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
+/// An independent readonly acquisition consumed by exact-prefix reconstruction.
+#[derive(Debug)]
+pub struct CatalogSnapshotReader {
+    state: Box<PersistCatalogState>,
+}
+
+impl CatalogSnapshotReader {
+    /// Opens an ordinary readonly catalog without a deployment generation override.
+    pub async fn open(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        version: semver::Version,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Self, CatalogError> {
+        let state = UnopenedPersistCatalogState::new(
+            persist_client,
+            organization_id,
+            version,
+            None,
+            Arc::new(Metrics::new(&mz_ore::metrics::MetricsRegistry::new())),
+            None,
+        )
+        .await?
+        .open_inner(
+            Mode::Readonly,
+            EpochMillis::MIN.into(),
+            OpenPurpose::Bootstrap(bootstrap_args),
+        )
+        .await?;
+        Ok(Self { state })
+    }
+
+    /// Consumes the acquisition at exactly `exclusive_upper`, releasing resources on success or error.
+    ///
+    /// Open before capturing memory. The prefix excludes updates at the upper and later,
+    /// including later fences. Backwards requests and observed fences are errors.
+    pub async fn into_snapshot_at(
+        self,
+        exclusive_upper: Timestamp,
+    ) -> Result<crate::durable::CatalogSnapshot, CatalogError> {
+        let mut state = self.state;
+        let result = async {
+            state.fenceable_token.validate()?;
+            if exclusive_upper < state.upper {
+                return Err(DurableCatalogError::Internal(format!(
+                    "catalog prefix {exclusive_upper} predates acquisition upper {}",
+                    state.upper,
+                ))
+                .into());
+            }
+            state.sync_with_limit(exclusive_upper, true).await?;
+            Ok(crate::durable::CatalogSnapshot {
+                snapshot: state.cached_snapshot()?,
+                updates: state.update_applier.updates.drain(..).collect(),
+                upper: exclusive_upper,
+                deployment_generation: state
+                    .fenceable_token
+                    .token()
+                    .expect("opened catalog has a fence token")
+                    .deploy_generation,
+                is_bootstrap_complete: state.bootstrap_complete,
+            })
+        }
+        .await;
+        state.expire().await;
+        result
+    }
+
+    /// Releases the acquisition without extracting a snapshot.
+    pub async fn expire(self) {
+        self.state.expire().await;
+    }
+}
+
 impl PersistHandle<StateUpdateKind, CatalogStateInner> {
+    fn prewarming_namespace(&self) -> Result<Option<String>, CatalogError> {
+        let own = self.fenceable_token.token().expect("opened identity");
+        let active = self
+            .fenceable_token
+            .durable_token()
+            .expect("opened authority");
+        if self.mode == Mode::Writable && own.deploy_generation > active.deploy_generation {
+            self.prewarming_plan_build.clone().map(Some).ok_or_else(|| {
+                DurableCatalogError::NotWritable(
+                    "pending writer has no prewarming authority".into(),
+                )
+                .into()
+            })
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Creates a transaction without validating pending catalog updates.
     async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         let commit_ts = self.upper;
-        Transaction::new(self, snapshot, commit_ts)
+        let generation = self
+            .fenceable_token
+            .token()
+            .expect("opened catalog has a generation")
+            .deploy_generation;
+        let namespace = self.prewarming_namespace()?;
+        Transaction::new(self, snapshot, commit_ts, generation, namespace)
     }
 }
 
@@ -1761,8 +2420,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn sync_to_current_updates(
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
-        let upper = self.current_upper().await;
-        self.sync_updates(upper).await
+        self.sync_to_current_upper().await?;
+        // Listen can overshoot its target. Drain the whole synchronized prefix
+        // so callers can pair these updates with `synced_upper`.
+        Ok(self.update_applier.updates.drain(..).collect())
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1813,6 +2474,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn current_upper(&mut self) -> Timestamp {
         self.current_upper().await
     }
+
+    fn synced_upper(&self) -> Timestamp {
+        self.upper
+    }
 }
 
 #[async_trait]
@@ -1827,8 +2492,12 @@ impl DurableCatalogState for PersistCatalogState {
     }
 
     async fn mark_bootstrap_complete(&mut self) {
+        if !self.bootstrap_complete {
+            self.update_applier.bootstrap_identity =
+                Some(self.update_applier.runtime_identity.clone());
+        }
         self.bootstrap_complete = true;
-        if matches!(self.mode, Mode::Writable) {
+        if matches!(self.mode, Mode::Writable) && !self.is_join {
             self.since_handle
                 .upgrade_version()
                 .await
@@ -1847,8 +2516,16 @@ impl DurableCatalogState for PersistCatalogState {
         &mut self,
         snapshot: Snapshot,
     ) -> Result<DryRunTransaction, CatalogError> {
+        self.validate_runtime()?;
         let commit_ts = self.upper;
-        Transaction::new(self, snapshot, commit_ts).map(DryRunTransaction::new)
+        let generation = self
+            .fenceable_token
+            .token()
+            .expect("opened catalog has a generation")
+            .deploy_generation;
+        let namespace = self.prewarming_namespace()?;
+        Transaction::new(self, snapshot, commit_ts, generation, namespace)
+            .map(DryRunTransaction::new)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1862,9 +2539,18 @@ impl DurableCatalogState for PersistCatalogState {
         if amount == 0 {
             return Ok(Vec::new());
         }
-        let mut txn = self.transaction_unchecked().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal(commit_ts).await?;
+        let ids = loop {
+            let mut txn = self.transaction_unchecked().await?;
+            let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
+            match txn.commit_internal(commit_ts).await {
+                Ok(_) => break ids,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    // Recompute from the synchronized snapshot, without draining the
+                    // memory updates owed to this handle's projection.
+                }
+                Err(error) => return Err(error),
+            }
+        };
         self.metrics
             .allocate_id_seconds
             .observe(start.elapsed().as_secs_f64());
@@ -1882,10 +2568,11 @@ impl DurableCatalogState for PersistCatalogState {
             txn_batch: TransactionBatch,
             commit_ts: Timestamp,
         ) -> Result<Timestamp, CatalogError> {
+            catalog.validate_runtime()?;
             // If the transaction is empty then we don't error, even in read-only mode.
             // This is mostly for legacy reasons (i.e. with enough elbow grease this
             // behavior can be changed without breaking any fundamental assumptions).
-            if catalog.mode == Mode::Readonly {
+            if catalog.is_read_only() {
                 let updates: Vec<_> = StateUpdate::from_txn_batch(txn_batch).collect();
                 if !updates.is_empty() {
                     let collection_types: Vec<_> = updates
@@ -1920,7 +2607,7 @@ impl DurableCatalogState for PersistCatalogState {
                     let updates_applied_before = catalog.updates_applied;
                     match catalog.compare_and_append(updates.clone(), commit_ts).await {
                         Ok(next_upper) => break next_upper,
-                        Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                        Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
                         Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
                             // The mismatch synchronized the handle. Retry only if it applied no
                             // content.
@@ -1937,6 +2624,7 @@ impl DurableCatalogState for PersistCatalogState {
                         diff,
                     });
                     catalog.apply_updates_and_consolidate(updates)?;
+                    catalog.validate_runtime()?;
                     catalog.upper = commit_ts.step_forward();
                     catalog.upper
                 }
@@ -1955,6 +2643,7 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
+        self.validate_runtime()?;
         loop {
             if self.upper >= new_upper {
                 // This does not consult Persist. It only revalidates a fence already cached by
@@ -1977,17 +2666,22 @@ impl DurableCatalogState for PersistCatalogState {
                 }
             }
 
-            let updates_applied_before = self.updates_applied;
-            match self.compare_and_append_inner([], new_upper).await {
-                Ok(()) => {
+            // This only certifies an empty catalog prefix. In particular, a
+            // table writer calls it before its own durable append, so it must
+            // not announce completion of that writer's timestamp.
+            match self
+                .compare_and_append_inner([], new_upper.step_back().expect("advancing upper"), None)
+                .await
+            {
+                Ok(_) => {
                     self.upper = new_upper;
                     // No sync needed since no data was written.
                     return Ok(());
                 }
-                Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
-                    // The mismatch synchronized the handle. Retry only if it applied no content.
-                    self.classify_upper_mismatch(updates_applied_before, actual_upper)?;
+                Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
+                Err(CompareAndAppendError::UpperMismatch { .. }) => {
+                    // Empty progress has no snapshot-dependent decisions. The sync
+                    // retains content updates for the caller's projection.
                 }
             }
         }
@@ -1996,6 +2690,11 @@ impl DurableCatalogState for PersistCatalogState {
     fn shard_id(&self) -> ShardId {
         self.shard_id
     }
+}
+
+/// The catalog shard that bootstraps an organization's durable admission authority.
+pub fn catalog_shard_id(organization_id: Uuid) -> ShardId {
+    shard_id(organization_id, CATALOG_SEED)
 }
 
 /// Deterministically generate a shard ID for the given `organization_id` and `seed`.
@@ -2111,14 +2810,21 @@ impl Trace {
                 StateUpdateKind::ClusterReplica(k, v) => {
                     trace.cluster_replicas.values.push(((k, v), ts, diff))
                 }
+                StateUpdateKind::ClusterReplicaDeclaration(k, v) => trace
+                    .cluster_replica_declarations
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::ClusterRuntime(k, v) => {
+                    trace.cluster_runtimes.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Database(k, v) => trace.databases.values.push(((k, v), ts, diff)),
                 StateUpdateKind::DefaultPrivilege(k, v) => {
                     trace.default_privileges.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::FenceToken(_) => {
-                    // Fence token not included in trace.
+                StateUpdateKind::FenceToken(_) | StateUpdateKind::DeploymentAdmission(_) => {
+                    // Admission authority is not a transactional collection.
                 }
                 StateUpdateKind::IdAllocator(k, v) => {
                     trace.id_allocator.values.push(((k, v), ts, diff))
@@ -2153,6 +2859,24 @@ impl Trace {
                 StateUpdateKind::SystemPrivilege(k, v) => {
                     trace.system_privileges.values.push(((k, v), ts, diff))
                 }
+                StateUpdateKind::CollectionCompactionBound(k, v) => trace
+                    .collection_compaction_bounds
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::MaintainedReadRequirement(k, v) => trace
+                    .maintained_read_requirements
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::ClientIncarnation(k, v) => {
+                    trace.client_incarnations.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::WrittenPlan(k, v) => {
+                    trace.written_plans.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::ClientReadRequirement(k, v) => trace
+                    .client_read_requirements
+                    .values
+                    .push(((k, v), ts, diff)),
                 StateUpdateKind::StorageCollectionMetadata(k, v) => trace
                     .storage_collection_metadata
                     .values
@@ -2177,6 +2901,7 @@ impl UnopenedPersistCatalogState {
         &mut self,
         key: T::Key,
         value: T::Value,
+        force: bool,
     ) -> Result<Option<T::Value>, CatalogError>
     where
         T::Key: PartialEq + Eq + Debug + Clone,
@@ -2187,6 +2912,14 @@ impl UnopenedPersistCatalogState {
             let value = value.clone();
             let snapshot = self.current_snapshot().await?;
             let trace = Trace::from_snapshot(snapshot);
+            if !force
+                && let Some(reason) =
+                    trace.live_mutation_reason(mz_ore::now::SYSTEM_TIME().into(), self.upper)
+            {
+                return Err(DurableCatalogError::NotWritable(format!(
+                    "refusing to edit a live environment: {reason}; use --force to override the liveness check"
+                )).into());
+            }
             let collection_trace = T::collection_trace(trace);
             let prev_values: Vec<_> = collection_trace
                 .values
@@ -2208,28 +2941,19 @@ impl UnopenedPersistCatalogState {
                 .map(|((k, v), _, _)| (T::update(k, v), Diff::MINUS_ONE))
                 .collect();
             updates.push((T::update(key, value), Diff::ONE));
-            // We must fence out all other catalogs, if we haven't already, since we are writing.
-            match self.fenceable_token.generate_unfenced_token(self.mode)? {
-                Some((fence_updates, current_fenceable_token)) => {
-                    updates.extend(fence_updates.clone());
-                    match self.compare_and_append(updates, self.upper).await {
-                        Ok(_) => {
-                            self.fenceable_token = current_fenceable_token;
-                            break prev_value;
-                        }
-                        Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                        Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
-                            warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
-                            continue;
-                        }
+            // Manual mutations never acquire exclusive ownership or promote.
+            let token = self.fenceable_token.generate_admin_token()?;
+            match self.compare_and_append(updates, self.upper).await {
+                Ok(_) => {
+                    if let Some(token) = token {
+                        self.fenceable_token = token;
                     }
-                }
-                None => {
-                    self.compare_and_append(updates, self.upper)
-                        .await
-                        .map_err(|e| e.unwrap_fence_error())?;
                     break prev_value;
                 }
+                Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
+                // Refresh and repeat the liveness check against the next CAS
+                // snapshot. A separate precheck would race a renewing client.
+                Err(CompareAndAppendError::UpperMismatch { .. }) => continue,
             }
         };
         Ok(prev_value)
@@ -2240,6 +2964,7 @@ impl UnopenedPersistCatalogState {
     pub(crate) async fn debug_delete<T: Collection>(
         &mut self,
         key: T::Key,
+        force: bool,
     ) -> Result<(), CatalogError>
     where
         T::Key: PartialEq + Eq + Debug + Clone,
@@ -2249,8 +2974,16 @@ impl UnopenedPersistCatalogState {
             let key = key.clone();
             let snapshot = self.current_snapshot().await?;
             let trace = Trace::from_snapshot(snapshot);
+            if !force
+                && let Some(reason) =
+                    trace.live_mutation_reason(mz_ore::now::SYSTEM_TIME().into(), self.upper)
+            {
+                return Err(DurableCatalogError::NotWritable(format!(
+                    "refusing to delete from a live environment: {reason}; use --force to override the liveness check"
+                )).into());
+            }
             let collection_trace = T::collection_trace(trace);
-            let mut retractions: Vec<_> = collection_trace
+            let retractions: Vec<_> = collection_trace
                 .values
                 .into_iter()
                 .filter(|((k, _), _, diff)| {
@@ -2260,28 +2993,17 @@ impl UnopenedPersistCatalogState {
                 .map(|((k, v), _, _)| (T::update(k, v), Diff::MINUS_ONE))
                 .collect();
 
-            // We must fence out all other catalogs, if we haven't already, since we are writing.
-            match self.fenceable_token.generate_unfenced_token(self.mode)? {
-                Some((fence_updates, current_fenceable_token)) => {
-                    retractions.extend(fence_updates.clone());
-                    match self.compare_and_append(retractions, self.upper).await {
-                        Ok(_) => {
-                            self.fenceable_token = current_fenceable_token;
-                            break;
-                        }
-                        Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                        Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
-                            warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
-                            continue;
-                        }
+            // Manual mutations never acquire exclusive ownership or promote.
+            let token = self.fenceable_token.generate_admin_token()?;
+            match self.compare_and_append(retractions, self.upper).await {
+                Ok(_) => {
+                    if let Some(token) = token {
+                        self.fenceable_token = token;
                     }
-                }
-                None => {
-                    self.compare_and_append(retractions, self.upper)
-                        .await
-                        .map_err(|e| e.unwrap_fence_error())?;
                     break;
                 }
+                Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
+                Err(CompareAndAppendError::UpperMismatch { .. }) => continue,
             }
         }
         Ok(())

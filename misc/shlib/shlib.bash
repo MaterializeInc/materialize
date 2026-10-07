@@ -319,6 +319,8 @@ trufflehog_jq_filter_files() {
   select(
     .Raw != "{SqlSe" and
     .Raw != "{SqlServe" and
+    (.Raw != "postgres://postgres:postgres@po:5432" or
+      .SourceMetadata.Data.Filesystem.file != "test/cluster/mzcompose.py") and
     .Raw != "ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN" and
     (.SourceMetadata.Data.Filesystem.file | startswith("src/catalog/src/durable/upgrade/snapshots") | not)
   )'

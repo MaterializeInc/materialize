@@ -24,12 +24,10 @@ use mz_sql::catalog::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
-use mz_storage_client::controller::IntrospectionType;
 
 use super::{
-    BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinType,
-    BuiltinView, Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
-    assert_safe_builtin_name,
+    BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinTable, BuiltinType, BuiltinView,
+    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT, assert_safe_builtin_name,
 };
 
 pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
@@ -2706,6 +2704,8 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
         // The `kind = 'ClusterReplica'` filter is pushed into a subquery on
         // `mz_catalog_raw` by hand. database-issues/8495 keeps the optimizer
         // from pushing a top-level `WHERE` below the LEFT JOIN.
+        // Public membership follows the durable active generation, independently
+        // of the deployment evaluating this shared materialized relation.
         sql: "
 IN CLUSTER mz_catalog_server
 WITH (
@@ -2734,7 +2734,14 @@ SELECT
             AND COALESCE(internal.disk_bytes, 0) != 0
     END AS disk
 FROM (
-    SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
+    SELECT replicas.data
+    FROM (
+        SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
+    ) replicas
+    JOIN (
+        SELECT (data->>'deploy_generation')::uint8 AS generation
+        FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken'
+    ) active ON COALESCE((replicas.data->'key'->>'deployment_generation')::uint8, 0) = active.generation
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
     ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'",
@@ -3049,32 +3056,45 @@ WHERE principal IS NOT NULL",
         }
     });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
-    LazyLock::new(|| BuiltinSource {
-        name: "mz_cluster_replica_frontiers",
-        schema: MZ_CATALOG_SCHEMA,
-        oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
-        data_source: IntrospectionType::ReplicaFrontiers.into(),
-        desc: RelationDesc::builder()
-            .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            (
-                "object_id",
-                "The ID of the source, sink, index, materialized view, or subscription.",
-            ),
-            ("replica_id", "The ID of a cluster replica."),
-            (
-                "write_frontier",
-                "The next timestamp at which the output may change.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: None,
-    });
+pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_replica_frontiers",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the source, sink, index, materialized view, or subscription.",
+        ),
+        ("replica_id", "The ID of a cluster replica."),
+        (
+            "write_frontier",
+            "The next timestamp at which the output may change.",
+        ),
+    ]),
+    // Public observations follow shared catalog authority, not the querying
+    // process's deployment. Legacy execution has no deployment qualifier.
+    sql: "
+SELECT object_id, replica_id, write_frontier
+FROM mz_internal.mz_cluster_replica_frontiers_raw
+WHERE deployment_generation IS NOT DISTINCT FROM (
+        SELECT (data->>'deploy_generation')::uint8
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'FenceToken'
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_raw AS native_config
+              WHERE native_config.data->>'kind' = 'Config'
+                AND native_config.data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND native_config.data->'value'->'value' <> '0'::jsonb
+          )
+    )",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
     LazyLock::new(|| BuiltinIndex {

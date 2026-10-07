@@ -13,14 +13,14 @@ use std::num::NonZeroUsize;
 
 use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
 use mz_dyncfg::ConfigUpdates;
+use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
-use mz_expr::{MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::num::NonNeg;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
-use mz_repr::{Datum, IntoRowIterator, ReprScalarType, Row, RowIterator, RowRef};
+use mz_repr::{IntoRowIterator, Row, RowIterator, RowRef};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::index_peek_tests::{
@@ -165,38 +165,9 @@ fn counted_blob_config(yield_granularity: usize) -> OffloadConfig {
     })
 }
 
-/// The highest run limit a batch builder honors.
-///
-/// Persist clamps the limit to 1024 in `BatchParts::new_compacting`, so an upload of more parts
-/// than this merges whatever the limit says. A test counting what a walk over [`LONG_WALK_KEYS`]
-/// positions wrote therefore also bounds the rows it uploads, with [`long_walk_peek`].
-const NO_RUN_MERGING: usize = 1_024;
-
-/// How many of the keys of a [`long_walk_peek`] reach its answer.
-///
-/// [`CountedBlob::new`] writes a part per row, and how many rows a walk uploads before it observes
-/// its cancellation is wall clock. Bounding the answer is what keeps the parts below
-/// [`NO_RUN_MERGING`] however late that observation lands.
-const LONG_WALK_ANSWER_KEYS: u64 = 512;
-
-/// A peek over the index `wide_ok_rows(LONG_WALK_KEYS)` builds whose filter keeps the keys below
-/// [`LONG_WALK_ANSWER_KEYS`].
-///
-/// The walk still visits every position, so it takes as long as one without the filter.
-fn long_walk_peek() -> Peek {
-    let mut peek = index_peek(trivial_finishing(), None);
-    let predicate = MirScalarExpr::column(0).call_binary(
-        MirScalarExpr::literal_ok(Datum::UInt64(LONG_WALK_ANSWER_KEYS), ReprScalarType::UInt64),
-        mz_expr::func::Lt,
-    );
-    peek.map_filter_project = MapFilterProject::new(1)
-        .filter([predicate])
-        .into_plan()
-        .expect("valid plan")
-        .into_nontemporal()
-        .expect("non-temporal plan");
-    peek
-}
+/// Above the parts the small counted-blob traces produce, and within Persist's
+/// supported run limits. Upload cancellation also gates writes before merging.
+const NO_RUN_MERGING: usize = 64;
 
 /// A finishing that orders the peek's one column descending, which is the reverse of the order
 /// the trace holds its keys in.
@@ -735,35 +706,31 @@ fn the_permit_fraction_scales_with_the_worker_count() {
 /// opened, and this is the one test that drives an abort into that drop into that spawn.
 #[mz_ore::test(tokio::test)]
 async fn an_aborted_walk_deletes_the_parts_its_upload_wrote() {
-    let keys = wide_ok_rows(LONG_WALK_KEYS);
-    let peek = long_walk_peek();
+    let keys = wide_ok_rows(20);
+    let peek = index_peek(trivial_finishing(), None);
     let mut bundle = trace_bundle(&keys, cancelling_errors(0));
-    // Crossed by the third answered row, so the walk opens an upload a few rows in and is still
-    // under way over a trace it cannot reach the end of when it is aborted.
-    let answered = wide_ok_rows(LONG_WALK_ANSWER_KEYS);
-    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&answered)));
+    // Crossed by the third row, so the write gate stalls the upload mid-trace.
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
 
     let metrics = worker_metrics();
     let permits = Arc::new(PeekPermits::new(1));
-    let blob = CountedBlob::new();
+    let (blob, gate) = CountedBlob::with_gated_writes().await;
     let offloaded = OffloadedPeek::start(
         peek.clone(),
         scan,
         Some(stash_target(&peek, blob.clients())),
         Arc::clone(&permits),
-        // One position per slice, so the walk is still far from the end of the trace when the
-        // first part reaches blob storage.
         counted_blob_config(1),
         PeekWalkMetrics::new(&metrics),
         std::thread::current(),
     );
 
-    blob.wait_until_something_is_written("a walk past the stash threshold")
-        .await;
+    gate.wait_until_uploading().await;
 
     // Dropping the whole entry is what a cancellation does, and it is the abort rather than
     // any signal the walk observes.
     drop(offloaded);
+    gate.release();
 
     blob.wait_until_nothing_is_left("an aborted walk").await;
     assert_eq!(
@@ -789,11 +756,10 @@ async fn an_aborted_walk_deletes_the_parts_its_upload_wrote() {
 /// The branch that sees the cancellation has to give the upload up rather than return past it.
 #[mz_ore::test(tokio::test)]
 async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
-    let keys = wide_ok_rows(LONG_WALK_KEYS);
-    let peek = long_walk_peek();
+    let keys = wide_ok_rows(20);
+    let peek = index_peek(trivial_finishing(), None);
     let mut bundle = trace_bundle(&keys, cancelling_errors(0));
-    let answered = wide_ok_rows(LONG_WALK_ANSWER_KEYS);
-    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&answered)));
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
 
     let metrics = worker_metrics();
     let walk_metrics = PeekWalkMetrics::new(&metrics);
@@ -801,7 +767,7 @@ async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
     permits.resize(1.0);
     let permit = permits.try_acquire().expect("a permit is free");
 
-    let blob = CountedBlob::new();
+    let (blob, gate) = CountedBlob::with_gated_writes().await;
     let stash = stash_target(&peek, blob.clients());
     let (result_tx, result_rx) = oneshot::channel();
     let config = counted_blob_config(1);
@@ -824,14 +790,14 @@ async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
         response.is_some()
     });
 
-    blob.wait_until_something_is_written("a walk past the stash threshold")
-        .await;
+    gate.wait_until_uploading().await;
     assert!(
         !walk.is_finished(),
         "the walk must still be under way when it is cancelled"
     );
 
     drop(result_rx);
+    gate.release();
 
     wait_until(|| walk.is_finished(), "the cancelled walk stopping").await;
     assert_eq!(walk.await, false, "a cancelled walk reports no outcome");

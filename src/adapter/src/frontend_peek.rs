@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
@@ -40,6 +40,7 @@ use mz_sql::session::vars::{
     CLUSTER, CLUSTER_REPLICA, IsolationLevel, TRANSACTION_ISOLATION, Var, VarInput,
 };
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
+use mz_storage_types::sources::Timeline;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -60,7 +61,7 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::peek_client::{ExecutionLogging, TakeOver};
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
 use crate::{
@@ -82,6 +83,8 @@ impl PeekClient {
         portal_name: &str,
         session: &mut Session,
         logging: &mut ExecutionLogging,
+        diagnostic_cancel: impl std::future::Future<Output = ()> + Send,
+        execute_started: std::time::Instant,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // # From handle_execute
 
@@ -98,7 +101,15 @@ impl PeekClient {
             }
         }
 
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        // Catalog certification is shared by statements with different timeout
+        // policies. Keep it cancellable without imposing an execution deadline.
+        let diagnostic_cancel = diagnostic_cancel.boxed().shared();
+        let (mut catalog, mut catalog_read_ts) = crate::util::run_cancellable(
+            diagnostic_cancel.clone(),
+            None,
+            self.fresh_catalog_snapshot("try_frontend_peek"),
+        )
+        .await?;
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement
@@ -203,8 +214,32 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_frontend_peek_inner(session, catalog, stmt, params, logging)
-            .await
+        loop {
+            let response = self
+                .try_frontend_peek_inner(
+                    session,
+                    Arc::clone(&catalog),
+                    catalog_read_ts,
+                    stmt.clone(),
+                    &params,
+                    logging,
+                    diagnostic_cancel.clone(),
+                    execute_started,
+                )
+                .await?;
+            if response.is_some() {
+                return Ok(response);
+            }
+            // No execution or transaction timestamp was installed. A newer
+            // definition prefix requires planning again, not replaying old work.
+            (catalog, catalog_read_ts) = crate::util::run_cancellable(
+                diagnostic_cancel.clone(),
+                None,
+                self.fresh_catalog_snapshot("replan frontend peek"),
+            )
+            .await?;
+            Coordinator::verify_portal(&catalog, session, portal_name)?;
+        }
     }
 
     /// Executes a coordinator-owned `SELECT`, pinned to `replica_id`, and
@@ -227,10 +262,15 @@ impl PeekClient {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) -> Result<Vec<Row>, AdapterError> {
+        let execute_started = std::time::Instant::now();
         // Not `catalog_snapshot`, which expects the coordinator to outlive its
         // caller. A background client may race the coordinator's shutdown.
-        let CatalogSnapshot { catalog } = self
-            .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+        let CatalogSnapshot { catalog, .. } = self
+            .call_coordinator(|tx| Command::CatalogSnapshot {
+                tx,
+                include_durable_upper: false,
+                through: None,
+            })
             .await?;
         let (cluster_name, replica_name) = {
             let cluster = catalog
@@ -267,9 +307,12 @@ impl PeekClient {
             .try_frontend_peek_inner(
                 &mut session,
                 catalog,
+                None,
                 Some(Arc::new(stmt)),
-                Params::empty(),
+                &Params::empty(),
                 &mut logging,
+                futures::future::pending::<()>(),
+                execute_started,
             )
             .await?;
 
@@ -314,9 +357,12 @@ impl PeekClient {
         &mut self,
         session: &mut Session,
         catalog: Arc<Catalog>,
+        catalog_read_ts: Option<Timestamp>,
         stmt: Option<Arc<Statement<Raw>>>,
-        params: Params,
+        params: &Params,
         logging: &mut ExecutionLogging,
+        diagnostic_cancel: impl std::future::Future<Output = ()> + Send + Clone,
+        execute_started: std::time::Instant,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -335,7 +381,7 @@ impl PeekClient {
 
         let pcx = session.pcx();
         let (plan, sql_impl_ids) =
-            mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+            mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, params, &resolved_ids)?;
 
         /// What do we do with the result of the select?
         enum QueryPlan<'a> {
@@ -565,11 +611,14 @@ impl PeekClient {
             &sql_impl_ids,
         )?;
 
-        if let Some((_, wait_future)) =
+        let waited_for_startup_appends = if let Some((_, wait_future)) =
             coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
         {
             wait_future.await;
-        }
+            true
+        } else {
+            false
+        };
 
         let max_query_result_size = Some(session.vars().max_query_result_size());
 
@@ -577,8 +626,17 @@ impl PeekClient {
 
         // # From peek_validate
 
-        let compute_instance_snapshot =
-            ComputeInstanceSnapshot::new_without_collections(cluster.id());
+        let candidate_compute = self
+            .query_client
+            .as_ref()
+            .map(|client| client.instance_snapshot(&catalog, cluster.id()));
+        let compute_instance_snapshot = if explain_ctx.needs_cluster() {
+            candidate_compute
+                .clone()
+                .unwrap_or_else(|| ComputeInstanceSnapshot::new_without_collections(cluster.id()))
+        } else {
+            ComputeInstanceSnapshot::new_without_collections(cluster.id())
+        };
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features())
@@ -640,7 +698,19 @@ impl PeekClient {
         let needs_linearized_read_ts =
             Coordinator::needs_linearized_read_ts(&isolation_level, when);
 
+        // A required startup write (such as this session's mz_sessions row) can
+        // commit after catalog validation. Its completion must precede the oracle
+        // read used for data visibility, not just timestamp selection itself.
         let oracle_read_ts = match timeline {
+            Some(Timeline::EpochMilliseconds)
+                if needs_linearized_read_ts
+                    && !when.must_advance_to_timeline_ts()
+                    && isolation_level == IsolationLevel::StrictSerializable
+                    && !waited_for_startup_appends
+                    && catalog_read_ts.is_some() =>
+            {
+                catalog_read_ts
+            }
             Some(timeline) if needs_linearized_read_ts => {
                 let oracle = self.ensure_oracle(timeline).await?;
                 let oracle_read_ts = oracle.read_ts().await;
@@ -669,8 +739,13 @@ impl PeekClient {
 
         // # From peek_timestamp_read_hold
 
-        let dataflow_builder =
-            DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
+        // EXPLAIN may describe a declared index before its trace is installed.
+        // Timestamp/statistics reads and SELECT use the same candidates for
+        // planning and domain construction, protected independently of installation.
+        let dataflow_builder = DataflowBuilder::new(
+            catalog.state(),
+            candidate_compute.unwrap_or_else(|| compute_instance_snapshot.clone()),
+        );
         let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
 
         // ## From sequence_peek_timestamp
@@ -687,6 +762,7 @@ impl PeekClient {
         // it would be the cleanest to just simply disallow AS OF queries inside transactions.
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when)
             && !matches!(query_plan, QueryPlan::Subscribe { .. });
+        let requires_linearization = RequireLinearization::from(&explain_ctx);
 
         // Fetch or generate a timestamp for this query and fetch or acquire read holds.
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
@@ -767,17 +843,47 @@ impl PeekClient {
                     // Simply use the inputs of the current query.
                     &input_id_bundle
                 };
-                let (determination, read_holds) = self
-                    .frontend_determine_timestamp(
+                let (determination, read_holds) = crate::util::run_cancellable(
+                    diagnostic_cancel.clone(),
+                    None,
+                    self.frontend_determine_timestamp(
                         session,
+                        catalog.state(),
                         determine_bundle,
                         when,
                         target_cluster_id,
                         &timeline_context,
                         oracle_read_ts,
                         real_time_recency_ts,
-                    )
-                    .await?;
+                    ),
+                )
+                .await?;
+
+                // Explanations use the fresh statement-entry catalog. Their hypothetical
+                // data timestamp can be in the future, with no execution to linearize.
+                if matches!(requires_linearization, RequireLinearization::Required)
+                    && needs_linearized_read_ts
+                    && isolation_level == IsolationLevel::StrictSerializable
+                    && let Some(validated_at) = catalog_read_ts
+                    && let TimestampContext::TimelineTimestamp {
+                        timeline: Timeline::EpochMilliseconds,
+                        chosen_ts: timestamp,
+                        ..
+                    } = &determination.timestamp_context
+                    && *timestamp > validated_at
+                {
+                    let current =
+                        crate::util::run_cancellable(diagnostic_cancel.clone(), None, async {
+                            self.oracle_read_ts_at_least(Timeline::EpochMilliseconds, *timestamp)
+                                .await?;
+                            self.catalog_snapshot_at(Arc::clone(&catalog), *timestamp)
+                                .await
+                        })
+                        .await?;
+                    if current.planning_position() != catalog.planning_position() {
+                        return Ok(None);
+                    }
+                }
 
                 // If this query pins the timestamp of a multi-statement transaction, store
                 // the read holds in the coordinator, so subsequent queries can validate
@@ -856,7 +962,6 @@ impl PeekClient {
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
-        let requires_linearization = (&explain_ctx).into();
         let mut transaction_determination = determination.clone();
         match query_plan {
             QueryPlan::Subscribe { .. } => {
@@ -891,7 +996,10 @@ impl PeekClient {
             &determination.timestamp_context.antichain(),
             true,
             catalog.system_config(),
-            &*self.storage_collections,
+            self.storage_collections.as_deref(),
+            self.query_client
+                .as_deref()
+                .map(|client| (client, &*catalog)),
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
@@ -1284,7 +1392,8 @@ impl PeekClient {
                     coord::sequencer::explain_pushdown_future_inner(
                         session,
                         &*catalog,
-                        &self.storage_collections,
+                        self.storage_collections.as_deref(),
+                        self.query_client.as_ref(),
                         as_of,
                         mz_now,
                         imports,
@@ -1353,8 +1462,35 @@ impl PeekClient {
 
                 // Clone determination if we need it for emit_timestamp_notice, since it may be
                 // moved into Command::ExecuteSlowPathPeek.
-                let determination_for_notice = if session.vars().emit_timestamp_notice() {
+                let mut determination_for_notice = if session.vars().emit_timestamp_notice() {
                     Some(determination.clone())
+                } else {
+                    None
+                };
+
+                // Observe before dispatch so a diagnostic timeout cannot orphan a peek.
+                let timestamp_notice = if let Some(client) = &self.query_client
+                    && let Some(determination) = determination_for_notice.take()
+                {
+                    // Diagnostic work has not dispatched a peek. It can stop on
+                    // disconnect, cancellation, or the original execution budget
+                    // without abandoning an executing query.
+                    let timeout = *session.vars().statement_timeout();
+                    let expires = (!timeout.is_zero())
+                        .then_some(timeout)
+                        .and_then(|timeout| execute_started.checked_add(timeout));
+                    let observe = async {
+                        Ok(client
+                            .explain_timestamp(
+                                &catalog,
+                                session.conn_id(),
+                                session.pcx().wall_time,
+                                &input_id_bundle,
+                                determination,
+                            )
+                            .await)
+                    };
+                    Some(crate::util::run_cancellable(diagnostic_cancel, expires, observe).await?)
                 } else {
                     None
                 };
@@ -1394,6 +1530,7 @@ impl PeekClient {
                                 .get(catalog.system_config().dyncfgs());
 
                         self.implement_fast_path_peek_plan(
+                            Arc::clone(&catalog),
                             fast_path_plan,
                             determination.timestamp_context.timestamp_or_default(),
                             finishing,
@@ -1420,6 +1557,7 @@ impl PeekClient {
 
                         let response = self
                             .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
+                                catalog: Arc::clone(&catalog),
                                 dataflow_plan: Box::new(dataflow_plan),
                                 determination,
                                 finishing,
@@ -1443,6 +1581,10 @@ impl PeekClient {
                         response
                     }
                 };
+
+                if let Some(explanation) = timestamp_notice {
+                    session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                }
 
                 // Add timestamp notice if emit_timestamp_notice is enabled
                 if let Some(determination) = determination_for_notice {
@@ -1493,6 +1635,7 @@ impl PeekClient {
 
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSubscribe {
+                        catalog: Arc::clone(&catalog),
                         df_desc,
                         dependency_ids: subscribe_plan.from.depends_on(),
                         cluster_id: target_cluster_id,
@@ -1573,6 +1716,7 @@ impl PeekClient {
                 // logged by the caller.
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
+                        catalog: Arc::clone(&catalog),
                         df_desc: Box::new(df_desc),
                         compute_instance: target_cluster_id,
                         target_replica,
@@ -1597,6 +1741,7 @@ impl PeekClient {
     pub(crate) async fn frontend_determine_timestamp(
         &mut self,
         session: &Session,
+        catalog: &crate::catalog::CatalogState,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -1609,7 +1754,16 @@ impl PeekClient {
         let isolation_level = session.vars().transaction_isolation();
 
         let (read_holds, upper) = self
-            .acquire_read_holds_and_least_valid_write(id_bundle)
+            .acquire_read_holds_and_least_valid_write(id_bundle, |upper| {
+                Coordinator::read_protection_timestamp(
+                    session,
+                    when,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    upper,
+                )
+            })
             .await
             .map_err(|err| {
                 AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
@@ -1629,6 +1783,9 @@ impl PeekClient {
             upper.clone(),
         )?;
 
+        if !self.read_only && det.needs_table_progress(catalog, id_bundle) {
+            self.group_commit_notifier.notify();
+        }
         session
             .metrics()
             .by_cluster()

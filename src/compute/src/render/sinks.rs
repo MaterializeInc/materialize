@@ -91,7 +91,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
 
         // Attach logging of dataflow errors.
         if let Some(logger) = compute_state.compute_logger.clone() {
-            err_collection = err_collection.log_dataflow_errors(logger, sink_id);
+            err_collection = err_collection.log_dataflow_errors(logger, sink_id, self.dataflow_id);
         }
 
         let mut ok_collection = ok_collection.leave(outer_scope);

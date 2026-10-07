@@ -54,6 +54,17 @@ use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason};
 use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
 use crate::error::AdapterError;
 
+fn matches_declaration_config(
+    replica: &mz_catalog::memory::objects::ClusterReplica,
+    declaration: &mz_catalog::durable::ClusterReplicaDeclaration,
+) -> bool {
+    let physical: mz_catalog::durable::ClusterReplica = replica.clone().into();
+    physical.cluster_id == declaration.cluster_id
+        && physical.name == declaration.name
+        && physical.owner_id == declaration.owner_id
+        && physical.config == declaration.config
+}
+
 /// A request the controller task marshals to the Coordinator to satisfy one
 /// [`ClusterControllerCtx`] call. Each variant carries a oneshot for the reply.
 ///
@@ -328,11 +339,11 @@ impl Coordinator {
         &mut self,
         request: ClusterControllerRequest,
     ) {
-        let active = !self.controller.read_only();
+        let enabled = !self.controller.read_only() || self.controller.replica_owned_compute();
 
         match request {
             ClusterControllerRequest::ManagedClusterIds { tx } => {
-                let ids = if active {
+                let ids = if enabled {
                     self.catalog()
                         .clusters()
                         .filter(|c| c.is_managed())
@@ -400,7 +411,7 @@ impl Coordinator {
                 });
             }
             ClusterControllerRequest::Apply { decisions, tx } => {
-                let outcome = if active {
+                let outcome = if enabled {
                     self.apply_cluster_decisions(decisions).await
                 } else {
                     ApplyOutcome::Rejected
@@ -415,17 +426,143 @@ impl Coordinator {
         }
     }
 
+    /// Realize shared explicit declarations without borrowing a peer's inventory.
+    /// The existing catalog transaction owns admission and derived provisioning.
+    pub(super) async fn reconcile_declared_replicas(&mut self) -> Result<(), AdapterError> {
+        if !self.controller.replica_owned_compute() {
+            return Ok(());
+        }
+        let mut declarations: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for declaration in self.catalog().state().replica_declarations() {
+            declarations
+                .entry(declaration.cluster_id)
+                .or_default()
+                .push(declaration.clone());
+        }
+        let clusters: Vec<_> = self
+            .catalog()
+            .clusters()
+            .filter(|cluster| !cluster.is_managed())
+            .map(|cluster| {
+                (
+                    cluster.id,
+                    declarations.remove(&cluster.id).unwrap_or_default(),
+                    cluster.replicas().cloned().collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        for (cluster_id, expected, replicas) in clusters {
+            let mut retained = BTreeSet::new();
+            let mut ops = Vec::new();
+            let mut missing = Vec::new();
+            for declaration in &expected {
+                let matching = replicas.iter().find(|replica| {
+                    replica.replica_id == declaration.replica_id
+                        && matches_declaration_config(replica, declaration)
+                });
+                if let Some(replica) = matching {
+                    retained.insert(replica.replica_id);
+                } else {
+                    missing.push(declaration.clone());
+                }
+            }
+            for replica in replicas {
+                if !retained.contains(&replica.replica_id) {
+                    ops.push(Op::DropClusterReplicaRealization {
+                        cluster_id,
+                        replica_id: replica.replica_id,
+                    });
+                }
+            }
+            for declaration in missing {
+                let location = self.catalog().concretize_replica_location(
+                    declaration.config.location,
+                    &Vec::new(),
+                    None,
+                    true,
+                )?;
+                ops.push(Op::CreateClusterReplicaRealization {
+                    cluster_id,
+                    replica_id: declaration.replica_id,
+                    name: declaration.name,
+                    owner_id: declaration.owner_id,
+                    carryover_from: None,
+                    config: mz_controller::clusters::ReplicaConfig {
+                        location,
+                        compute: ComputeReplicaConfig {
+                            logging: declaration.config.logging,
+                            arrangement_compression: declaration.config.arrangement_compression,
+                        },
+                    },
+                });
+            }
+            if !ops.is_empty() {
+                ops.insert(
+                    0,
+                    Op::CheckClusterDeclarations {
+                        cluster_id,
+                        expected,
+                    },
+                );
+                match self.catalog_transact(None, ops).await {
+                    Ok(()) | Err(AdapterError::DDLTransactionRace) => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the current replica-set policy has its required local realizations.
+    /// This does not certify process health or collection hydration.
+    pub(super) fn cluster_has_required_realizations(
+        &self,
+        cluster_id: ClusterId,
+        read_ts: Option<Timestamp>,
+        now: Timestamp,
+    ) -> bool {
+        let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
+            return false;
+        };
+        if !cluster.is_managed() {
+            return self
+                .catalog()
+                .state()
+                .replica_declarations()
+                .filter(|declaration| declaration.cluster_id == cluster_id)
+                .all(|declaration| {
+                    cluster.replicas().any(|replica| {
+                        replica.replica_id == declaration.replica_id
+                            && matches_declaration_config(replica, declaration)
+                    })
+                });
+        }
+        let Some(state) = self.observe_cluster_state(cluster_id) else {
+            return false;
+        };
+        let refresh_window = read_ts.and_then(|read_ts| {
+            self.refresh_window_catalog_inputs(cluster_id)
+                .map(|inputs| mz_cluster_controller::ctx::RefreshWindowInputs {
+                    read_ts,
+                    compaction_estimate: inputs.compaction_estimate,
+                    refresh_mvs: inputs.refresh_mvs,
+                })
+        });
+        ClusterController::new(self.catalog().system_config().dyncfgs().clone())
+            .required_replicas_present(&state, refresh_window, now)
+    }
+
     /// Build the controller's view of one managed cluster from the catalog.
     /// Returns `None` for a missing or unmanaged cluster.
     fn observe_cluster_state(&self, cluster_id: ClusterId) -> Option<ClusterState> {
         let cluster = self.catalog().try_get_cluster(cluster_id)?;
-        let ClusterVariant::Managed(managed) = &cluster.config.variant else {
-            return None;
-        };
         // The witness fields come from the same projection the compare-and-append
         // check uses, so the state a decision is derived from and the state the
         // apply path checks against cannot drift.
-        let expected = crate::catalog::cluster_state::project_expected(managed);
+        let expected = crate::catalog::cluster_state::project_deployment_expected(
+            self.catalog().state(),
+            cluster_id,
+        )?;
 
         // All replicas, with the raw traits the controller's ownership test
         // (`ObservedReplica::owned_shape`) classifies on.
@@ -443,6 +580,7 @@ impl Coordinator {
 
         Some(ClusterState {
             cluster_id,
+            intent: expected.intent,
             size: expected.size,
             replication_factor: expected.replication_factor,
             availability_zones: expected.availability_zones.0,
@@ -504,9 +642,9 @@ impl Coordinator {
     /// Starts per-replica readiness checks for `cluster_id`: hydration, plus
     /// the lag gate against `reference` when `allowed_lag` is `Some`.
     ///
-    /// Returns only checks for replicas whose processes are all online, that
-    /// are already storage-hydrated, and that are known to the compute
-    /// controller. The compute receiver completes off the coordinator loop.
+    /// Returns checks for online, storage-hydrated replicas. Native compute uses
+    /// connection-scoped hydration and output observations. Legacy compute
+    /// completes its check off the coordinator loop.
     ///
     /// The storage-side check is hydration only. Storage hydration has its own
     /// definition (see `StorageController::collections_hydrated_on_replicas`),
@@ -531,7 +669,7 @@ impl Coordinator {
         // bound to a replica being replaced, then roll back at the deadline
         // (leaving the old replica, and the targeted MV, in place). Indexes
         // cannot be replica-pinned, so MVs are the only case.
-        let pinned_mvs: Vec<(ReplicaId, mz_repr::GlobalId)> = self
+        let pinned_mvs: Vec<_> = self
             .catalog()
             .try_get_cluster(cluster_id)
             .into_iter()
@@ -558,20 +696,75 @@ impl Coordinator {
             }
             let exclude: BTreeSet<mz_repr::GlobalId> = pinned_mvs
                 .iter()
-                .filter(|(target, _)| *target != replica_id)
+                .filter(|(target, _)| {
+                    !self.catalog().state().replica_matches_target(
+                        cluster_id,
+                        replica_id,
+                        Some(*target),
+                    )
+                })
                 .map(|(_, id)| *id)
                 .collect();
-            let compute_fut = match self.controller.compute.collections_ready_for_replicas(
-                cluster_id,
-                vec![replica_id],
-                exclude.clone(),
-                allowed_lag,
-                reference.clone(),
-            ) {
-                Ok(fut) => fut,
-                // The replica is not known to the compute controller. Treat it
-                // as not ready.
-                Err(_) => continue,
+            let compute_fut = if self.controller.replica_owned_compute() {
+                let Some(client) = &self.query_client else {
+                    continue;
+                };
+                let expected = self
+                    .catalog()
+                    .entries()
+                    .filter_map(|entry| {
+                        if entry.item().cluster_id() != Some(cluster_id) {
+                            return None;
+                        }
+                        let id = match entry.item() {
+                            CatalogItem::Index(index) => index.global_id(),
+                            CatalogItem::MaterializedView(mv) => {
+                                // A completed finite-refresh writer needs no new runtime
+                                // dataflow. Pending replacements cannot borrow completion
+                                // from the target's shared shard.
+                                let complete = mv.replacement_target.is_none()
+                                    && mv
+                                        .refresh_schedule
+                                        .as_ref()
+                                        .and_then(|s| s.last_refresh())
+                                        .is_some_and(|last| {
+                                            self.controller
+                                                .storage_collections
+                                                .collection_frontiers(mv.global_id_writes())
+                                                .is_ok_and(|f| !f.write_frontier.less_equal(&last))
+                                        });
+                                if complete {
+                                    return None;
+                                }
+                                mv.global_id_writes()
+                            }
+                            CatalogItem::MetricSink(sink) => sink.global_id,
+                            _ => return None,
+                        };
+                        (!exclude.contains(&id)).then_some(id)
+                    })
+                    .collect();
+                let (tx, rx) = oneshot::channel();
+                let _ = tx.send(client.collections_ready_on_replica(
+                    self.catalog(),
+                    cluster_id,
+                    replica_id,
+                    &expected,
+                    allowed_lag,
+                    reference,
+                ));
+                rx
+            } else {
+                match self.controller.compute.collections_ready_for_replicas(
+                    cluster_id,
+                    vec![replica_id],
+                    exclude.clone(),
+                    allowed_lag,
+                    reference.clone(),
+                ) {
+                    Ok(fut) => fut,
+                    Err(_) => continue,
+                }
             };
             let storage_hydrated = match self.controller.storage.collections_hydrated_on_replicas(
                 Some(vec![replica_id]),
@@ -669,6 +862,13 @@ impl Coordinator {
     /// recomputes next tick.
     async fn apply_cluster_decisions(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         let checks = Self::partition_checks(&decisions);
+        let carryover = match self.initial_replica_carryover(&decisions).await {
+            Ok(ops) => ops,
+            Err(error) => {
+                warn!(%error, "unable to prepare initial replica carryover");
+                return ApplyOutcome::Rejected;
+            }
+        };
 
         // Pre-allocate replica ids before the apply transaction (each allocation
         // is its own durable commit, so it cannot happen inside the transaction).
@@ -676,9 +876,10 @@ impl Coordinator {
             return ApplyOutcome::Rejected;
         };
 
-        let Some(mutations) = self.build_mutation_ops(decisions, replica_ids) else {
+        let Some(mut mutations) = self.build_mutation_ops(decisions, replica_ids) else {
             return ApplyOutcome::Rejected;
         };
+        mutations.extend(carryover);
         if mutations.is_empty() {
             // Nothing to apply, so the checks guard nothing. Skip the transaction
             // rather than commit a check-only batch, which would still cost a
@@ -687,6 +888,71 @@ impl Coordinator {
         }
 
         self.commit_with_checks(checks, mutations).await
+    }
+
+    /// Enrolls an initial predecessor set by explicit identity, not by name.
+    /// The runtime initialization and these memberships commit together under
+    /// the controller's witness. Later policy creates allocate independent IDs.
+    async fn initial_replica_carryover(
+        &self,
+        decisions: &[Decision],
+    ) -> Result<Vec<Op>, AdapterError> {
+        let clusters: BTreeSet<_> = decisions
+            .iter()
+            .filter_map(|decision| {
+                let Decision::UpdateClusterState {
+                    cluster_id,
+                    expected,
+                    ..
+                } = decision
+                else {
+                    return None;
+                };
+                expected
+                    .intent
+                    .as_ref()
+                    .filter(|intent| !intent.runtime_initialized && !intent.may_settle)?;
+                self.catalog()
+                    .try_get_cluster(*cluster_id)
+                    .filter(|cluster| cluster.replicas().next().is_none())?;
+                Some(*cluster_id)
+            })
+            .collect();
+        if clusters.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(source_generation) = self.catalog().state().active_deployment_generation() else {
+            return Ok(Vec::new());
+        };
+        let mut ops = Vec::new();
+        for replica in self.catalog().committed_replica_memberships().await? {
+            if replica.deployment_generation != source_generation
+                || !clusters.contains(&replica.cluster_id)
+            {
+                continue;
+            }
+            let location = self.catalog().concretize_replica_location(
+                replica.config.location,
+                &Vec::new(),
+                None,
+                true,
+            )?;
+            ops.push(Op::CreateClusterReplicaRealization {
+                cluster_id: replica.cluster_id,
+                replica_id: replica.replica_id,
+                name: replica.name,
+                owner_id: replica.owner_id,
+                carryover_from: Some(source_generation),
+                config: mz_controller::clusters::ReplicaConfig {
+                    location,
+                    compute: ComputeReplicaConfig {
+                        logging: replica.config.logging,
+                        arrangement_compression: replica.config.arrangement_compression,
+                    },
+                },
+            });
+        }
+        Ok(ops)
     }
 
     /// The compare-and-append guards for a decision batch: one
@@ -779,8 +1045,8 @@ impl Coordinator {
             match decision {
                 Decision::UpdateClusterState {
                     cluster_id, write, ..
-                } => match self.build_update_cluster_config_op(cluster_id, &write) {
-                    Some(op) => mutations.push(op),
+                } => match self.build_update_cluster_config_ops(cluster_id, &write) {
+                    Some(ops) => mutations.extend(ops),
                     // The cluster vanished. The batch is no longer coherent.
                     None => return None,
                 },
@@ -821,11 +1087,21 @@ impl Coordinator {
                     {
                         return None;
                     }
-                    drops.push(DropObjectInfo::ClusterReplica((
-                        cluster_id,
-                        replica_id,
-                        ReplicaCreateDropReason::Retired,
-                    )));
+                    if self.catalog().state().active_deployment_generation()
+                        != Some(self.catalog().state().deployment_generation())
+                        && self.controller.replica_owned_compute()
+                    {
+                        mutations.push(Op::DropClusterReplicaRealization {
+                            cluster_id,
+                            replica_id,
+                        });
+                    } else {
+                        drops.push(DropObjectInfo::ClusterReplica((
+                            cluster_id,
+                            replica_id,
+                            ReplicaCreateDropReason::Retired,
+                        )));
+                    }
                 }
             }
         }
@@ -868,10 +1144,8 @@ impl Coordinator {
                 ApplyOutcome::Rejected
             }
             Err(AdapterError::ReadOnly) => {
-                // The controller is quiesced while read-only (see
-                // `handle_cluster_controller_request`), so this is normally
-                // unreachable; if reached it's expected and not actionable, not
-                // a failure to surface.
+                // Native prewarming admits only owned metadata operations.
+                // A shared mutation remains forbidden while the adapter is read-only.
                 debug!("cluster controller apply skipped in read-only mode");
                 ApplyOutcome::Rejected
             }
@@ -888,71 +1162,123 @@ impl Coordinator {
         }
     }
 
-    /// Build an [`Op::UpdateClusterConfig`] that applies `write`'s deltas to the
-    /// cluster's current in-memory config, or `None` if the cluster is gone or
-    /// unmanaged. The write was guard-checked against the same state, so this is
-    /// the realized cut-over / record write.
-    fn build_update_cluster_config_op(
+    /// Persist local realization separately from shared ALTER outcomes. Only the
+    /// active deployment's actual reconfiguration decision settles shared intent.
+    fn build_update_cluster_config_ops(
         &self,
         cluster_id: ClusterId,
         write: &StateWrite,
-    ) -> Option<Op> {
+    ) -> Option<Vec<Op>> {
         let cluster = self.catalog().try_get_cluster(cluster_id)?;
+        let apply = |config: &mut ClusterConfig, write: &StateWrite| {
+            let ClusterVariant::Managed(managed) = &mut config.variant else {
+                return None;
+            };
+            // Exhaustive destructure of the source (no `..`): a field added to
+            // `StateWrite` is a compile error here until it's overlaid onto the
+            // managed config. We cannot destructure `managed` itself. It carries
+            // fields the controller does not model (`workload_class`,
+            // `optimizer_feature_overrides`) that this overlay must leave untouched.
+            let StateWrite {
+                new_size,
+                new_replication_factor,
+                new_availability_zones,
+                new_logging,
+                new_arrangement_compression,
+                reconfiguration,
+                burst,
+            } = write;
+            if let Some(size) = new_size {
+                managed.size = size.clone();
+            }
+            if let Some(rf) = new_replication_factor {
+                managed.replication_factor = *rf;
+            }
+            if let Some(azs) = new_availability_zones {
+                managed.availability_zones = azs.clone();
+            }
+            if let Some(logging) = new_logging {
+                managed.logging = logging.clone();
+            }
+            if let Some(arrangement_compression) = new_arrangement_compression {
+                managed.arrangement_compression = *arrangement_compression;
+            }
+            if let Some(reconfiguration) = reconfiguration {
+                managed.reconfiguration =
+                    reconfiguration.record.as_ref().map(memory_reconfiguration);
+            }
+            if let Some(burst) = burst {
+                managed.burst = burst.record.as_ref().map(memory_burst);
+            }
+            Some(())
+        };
         let mut config = cluster.config.clone();
-        let ClusterConfig {
-            variant: ClusterVariant::Managed(managed),
-            ..
-        } = &mut config
-        else {
+        if !self.catalog().state().catalog_read_protection_enabled() {
+            apply(&mut config, write)?;
+            return Some(vec![Op::UpdateClusterConfig {
+                id: cluster_id,
+                name: cluster.name.clone(),
+                config,
+                reconfiguration_audit: write.reconfiguration.as_ref().and_then(|w| w.audit),
+                burst_audit: write.burst.as_ref().and_then(|w| w.audit),
+            }]);
+        }
+        let expected = crate::catalog::cluster_state::project_deployment_expected(
+            self.catalog().state(),
+            cluster_id,
+        )?;
+        let may_settle = expected.intent.as_ref()?.may_settle;
+        let ClusterVariant::Managed(managed) = &mut config.variant else {
             return None;
         };
-        // Exhaustive destructure of the source (no `..`): a field added to
-        // `StateWrite` is a compile error here until it's overlaid onto the
-        // managed config. We cannot destructure `managed` itself. It carries
-        // fields the controller does not model (`workload_class`,
-        // `optimizer_feature_overrides`) that this overlay must leave untouched.
-        let StateWrite {
-            new_size,
-            new_replication_factor,
-            new_availability_zones,
-            new_logging,
-            new_arrangement_compression,
-            reconfiguration,
-            burst,
-        } = write;
-        if let Some(size) = new_size {
-            managed.size = size.clone();
+        managed.size = expected.size;
+        managed.replication_factor = expected.replication_factor;
+        managed.availability_zones = expected.availability_zones.0;
+        managed.logging = expected.logging;
+        managed.arrangement_compression = expected.arrangement_compression;
+        managed.reconfiguration = expected
+            .reconfiguration
+            .as_ref()
+            .map(memory_reconfiguration);
+        managed.burst = expected.burst.as_ref().map(memory_burst);
+        apply(&mut config, write)?;
+        let ClusterVariant::Managed(managed) = config.variant else {
+            unreachable!("managed realization");
+        };
+        let local: mz_catalog::durable::ClusterVariantManaged = managed.into();
+        let runtime = mz_catalog::durable::ClusterRuntime {
+            cluster_id,
+            deployment_generation: self.catalog().state().deployment_generation(),
+            realized_config: mz_catalog::durable::ReconfigurationTarget {
+                size: local.size,
+                replication_factor: local.replication_factor,
+                availability_zones: local.availability_zones,
+                logging: local.logging,
+                arrangement_compression: local.arrangement_compression,
+            },
+            reconfiguration: local.reconfiguration,
+            burst: local.burst,
+        };
+        let mut ops = vec![Op::UpdateClusterRuntime {
+            runtime,
+            burst_audit: may_settle
+                .then(|| write.burst.as_ref().and_then(|w| w.audit))
+                .flatten(),
+        }];
+        if may_settle && let Some(audit) = write.reconfiguration.as_ref().and_then(|w| w.audit) {
+            let mut shared = cluster.config.clone();
+            let mut outcome = write.clone();
+            outcome.burst = None;
+            apply(&mut shared, &outcome)?;
+            ops.push(Op::UpdateClusterConfig {
+                id: cluster_id,
+                name: cluster.name.clone(),
+                config: shared,
+                reconfiguration_audit: Some(audit),
+                burst_audit: None,
+            });
         }
-        if let Some(rf) = new_replication_factor {
-            managed.replication_factor = *rf;
-        }
-        if let Some(azs) = new_availability_zones {
-            managed.availability_zones = azs.clone();
-        }
-        if let Some(logging) = new_logging {
-            managed.logging = logging.clone();
-        }
-        if let Some(arrangement_compression) = new_arrangement_compression {
-            managed.arrangement_compression = *arrangement_compression;
-        }
-        if let Some(reconfiguration) = reconfiguration {
-            managed.reconfiguration = reconfiguration.record.as_ref().map(memory_reconfiguration);
-        }
-        if let Some(burst) = burst {
-            managed.burst = burst.record.as_ref().map(memory_burst);
-        }
-        // The audit intents travel with the write, declared by the strategy at
-        // the decision point. We pass them through untouched so the events are
-        // emitted in the same catalog transaction as the state they describe.
-        let reconfiguration_audit = write.reconfiguration.as_ref().and_then(|w| w.audit);
-        let burst_audit = write.burst.as_ref().and_then(|w| w.audit);
-        Some(Op::UpdateClusterConfig {
-            id: cluster_id,
-            name: cluster.name.clone(),
-            config,
-            reconfiguration_audit,
-            burst_audit,
-        })
+        Some(ops)
     }
 
     /// Build an [`Op::CreateClusterReplica`] for a desired replica `shape` on
@@ -1004,6 +1330,19 @@ impl Coordinator {
             },
         };
 
+        if self.catalog().state().active_deployment_generation()
+            != Some(self.catalog().state().deployment_generation())
+            && self.controller.replica_owned_compute()
+        {
+            return Ok(Some(Op::CreateClusterReplicaRealization {
+                cluster_id,
+                replica_id,
+                name,
+                config,
+                owner_id,
+                carryover_from: None,
+            }));
+        }
         Ok(Some(Op::CreateClusterReplica {
             cluster_id,
             replica_id,

@@ -707,7 +707,7 @@ impl StateVersions {
         D: Monoid + Codec64,
     {
         let empty_state = TypedState::new(
-            self.cfg.build_version.clone(),
+            self.cfg.initial_state_version(shard_metrics.shard_id),
             shard_metrics.shard_id,
             self.cfg.hostname.clone(),
             (self.cfg.now)(),

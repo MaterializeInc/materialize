@@ -218,6 +218,20 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         cluster_replica_name: &'b QualifiedReplica,
     ) -> Result<&'a dyn CatalogClusterReplica<'a>, CatalogError>;
 
+    /// Resolves an MV pin without requiring its local physical realization.
+    /// Catalogs with shared replica declarations override the physical default.
+    fn resolve_materialized_view_replica(
+        &self,
+        cluster_id: ClusterId,
+        name: &str,
+    ) -> Result<ReplicaId, CatalogError> {
+        self.get_cluster(cluster_id)
+            .replica_ids()
+            .get(name)
+            .copied()
+            .ok_or_else(|| CatalogError::UnknownClusterReplica(name.to_string()))
+    }
+
     /// Resolves a partially-specified item name, that is NOT a function or
     /// type. (For resolving functions or types, please use
     /// [SessionCatalog::resolve_function] or [SessionCatalog::resolve_type].)

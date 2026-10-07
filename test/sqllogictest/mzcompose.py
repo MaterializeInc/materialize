@@ -24,7 +24,7 @@ from queue import Queue
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn, ui
 from materialize.cli.run import update_sqlite_repo
-from materialize.mzcompose import sanitizer_enabled
+from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -408,8 +408,18 @@ def run_sqllogictest(
                 c.metadata_store(),
                 rewrite_results=rewrite_results,
             )
+            trace_statements = file == "test/sqllogictest/materialized_views.slt"
+            if trace_statements:
+                # Preserve active statements and the real-time compaction window
+                # in the timestamped job log, including on job timeout.
+                cmd.insert(1, "--verbose")
             try:
-                c.exec(container_name, *cmd, capture=True, capture_stderr=True)
+                c.exec(
+                    container_name,
+                    *cmd,
+                    capture=not trace_statements,
+                    capture_stderr=not trace_statements,
+                )
                 # Uploading successful junit files wastes time and contains no useful information
                 if junit_report_path:
                     os.remove(junit_report_path)
@@ -509,6 +519,21 @@ class SltRunStepConfig:
             f"--replica-size={replica_size}",
             f"--replicas={replicas}",
         ]
+        if file in {
+            "test/sqllogictest/id.slt",
+            "test/sqllogictest/alter-table.slt",
+        }:
+            # Literal ID references require a fresh user allocator. Optional metric
+            # plans reserve durable IDs before SQL runs, so exclude them here only.
+            # CLI defaults replace the environment's entire list, not individual keys.
+            parameters = get_default_system_parameters() | {
+                "enable_lgalloc": "false",
+                "enable_metric_sink": "false",
+            }
+            sqllogictest_config.append(
+                "--system-parameter-default="
+                + ";".join(f"{key}={value}" for key, value in parameters.items())
+            )
         command = [
             "sqllogictest",
             *([] if rewrite_results else self.flags),
@@ -592,11 +617,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cluster.slt",
         "test/sqllogictest/coercion.slt",
         "test/sqllogictest/collate.slt",
-        # Asserts on exact allocated ids to force a replica/item id collision,
-        # which --auto-index-selects perturbs by consuming item ids for its
-        # wrapper views. The singlereplica_ prefix also pins it to one replica,
-        # since extra replicas shift id allocation and add replica rows.
-        "test/sqllogictest/singlereplica_comment_id_collision.slt",
         "test/sqllogictest/comparison.slt",
         "test/sqllogictest/cte.slt",
         "test/sqllogictest/cte_lowering.slt",
@@ -1106,11 +1126,6 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/peek_result_thinning.slt",
         # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
         "test/sqllogictest/materialized_views.slt",
-        # Asserts on exact allocated ids to force a replica/item id collision,
-        # which --auto-index-selects perturbs by consuming item ids for its
-        # wrapper views. The singlereplica_ prefix also pins it to one replica,
-        # since extra replicas shift id allocation and add replica rows.
-        "test/sqllogictest/singlereplica_comment_id_collision.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)

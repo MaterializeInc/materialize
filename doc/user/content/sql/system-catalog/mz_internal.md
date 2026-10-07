@@ -241,7 +241,14 @@ They are sampled roughly once a minute, so a spike shorter than the sampling int
 trace. Unlike
 [`mz_introspection.mz_cluster_replica_resource_usage`](/sql/system-catalog/mz_introspection/#mz_cluster_replica_resource_usage),
 which is sampled every few seconds but is replica-local and resets when a replica restarts, this
-history is retained across restarts.
+history is retained across restarts and deployment promotions. Raw history preserves
+deployment provenance. Current metrics and utilization views select observations from
+the active deployment (or legacy observations in legacy mode). Historical views retain
+observations across deployments, including prewarming and retiring activity. They do not
+represent a timeline of which deployment was serving.
+
+The Console's utilization history sums process metrics within each deployment before
+taking chart peaks across samples. Coincident deployment samples are not added together.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics_history -->
 | Field            | Type      | Meaning
@@ -255,11 +262,13 @@ history is retained across restarts.
 | `heap_bytes`     | [`uint8`] | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`     | [`uint8`] | Available heap (RAM + swap) space, in bytes.
 | `swap_bytes`     | [`uint8`] | Approximate swap usage, in bytes.
+| `deployment_generation` | [`uint8`] | The deployment of the native replica observation, or `NULL` for legacy execution.
 
 ## `mz_cluster_replica_statuses`
 
 The `mz_cluster_replica_statuses` view contains a row describing the status
 of each process in each cluster replica in the system.
+It selects observations from the active deployment (or legacy observations in legacy mode).
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_statuses -->
 | Field        | Type                         | Meaning                                                                                                 |
@@ -275,6 +284,9 @@ of each process in each cluster replica in the system.
 {{< warn-if-unreleased v0.116 >}}
 The `mz_cluster_replica_status_history` table records status changes
 for all processes of all extant cluster replicas.
+History retains events across deployment promotions, including prewarming and retiring
+activity. Historical offline events do not necessarily indicate that the serving deployment
+was offline.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_status_history -->
 | Field         | Type      | Meaning
@@ -284,6 +296,7 @@ for all processes of all extant cluster replicas.
 | `status`      | [`text`]  | The status of the cluster replica: `online` or `offline`.
 | `reason`      | [`text`]  | If the cluster replica is in an `offline` state, the reason (if available). For example, `oom-killed`.
 | `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+| `deployment_generation` | [`uint8`] | The deployment of the native replica event, or `NULL` for legacy execution. |
 
 ## `mz_cluster_replica_utilization`
 
@@ -308,6 +321,9 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 {{< warn-if-unreleased v0.116 >}}
 The `mz_cluster_replica_utilization_history` view records resource utilization metrics
 for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
+It retains observations from all deployments of those replicas, with deployment provenance.
+Replicas no longer in `mz_cluster_replicas` are excluded. Normalization uses the replica's
+current size and the current resource allocations in `mz_cluster_replica_sizes`.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
@@ -322,6 +338,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
 | `swap_percent`   | [`double precision`] | Approximate swap usage, in percent of the total heap allocation.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+| `deployment_generation` | [`uint8`] | The deployment of the native replica observation, or `NULL` for legacy execution.
 
 ## `mz_cluster_replica_history`
 
@@ -431,6 +448,10 @@ A dataflow operator is hydrated on a given replica when it has fully processed t
 The `mz_frontiers` table describes the frontiers of each source, sink, table,
 materialized view, index, and subscription in the system, as observed from the
 coordinator.
+
+An index has no row when its frontiers have not been observed from a connected
+replica, including when its cluster has no replicas. Missing observations are
+distinct from an empty frontier, which is represented by `NULL`.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 
@@ -555,6 +576,9 @@ The `mz_materialization_lag` view describes the difference between the input
 frontiers and the output frontier for each materialized view, index, and sink
 in the system. For hydrated dataflows, this lag roughly corresponds to the time
 it takes for updates at the inputs to be reflected in the output.
+
+Indexes without an observed frontier in [`mz_frontiers`](#mz_frontiers) have no
+row in this view. Their absence does not indicate zero lag.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 
@@ -768,6 +792,7 @@ size](/clusters/sizing/).
 | `started_at`   | [`timestamp with time zone`] | When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately. |
 | `hydrated_at`  | [`timestamp with time zone`] | When hydration finished.                                                                                                 |
 | `status`       | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
+| `deployment_generation` | [`uint8`] | The deployment in which native hydration occurred, or NULL for legacy execution. |
 
 ## `mz_replica_hydration_history`
 
@@ -814,6 +839,7 @@ columns to choose a cluster size, see [Optimize cluster size](/clusters/sizing/)
 | `peak_disk_bytes`   | [`uint8`]                    | The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
 | `status`            | [`text`]                     | The hydration episode's status. Currently always `hydrated`.                                                             |
 | `process_id`        | [`uint8`]                    | The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process. |
+| `deployment_generation` | [`uint8`] | The deployment in which native hydration occurred, or NULL for legacy execution. |
 
 ## `mz_object_transitive_dependencies`
 
@@ -1371,6 +1397,7 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 | `replica_id`   | [`text`]                        | The ID of the replica that an instance of a sink is running on.                                                  |
+| `deployment_generation` | [`uint8`] | The deployment of the native replica event, or `NULL` for legacy execution and source/sink-global events with `NULL` replica ID. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_raw -->
 
@@ -1493,6 +1520,7 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 | `replica_id`   | [`text`]                        | The ID of the replica that an instance of a source is running on.                                                  |
+| `deployment_generation` | [`uint8`] | The deployment of the native replica event, or `NULL` for legacy execution and source/sink-global events with `NULL` replica ID. |
 
 <!--
 ## `mz_statement_execution_history`
@@ -1572,11 +1600,12 @@ i.e., the [freshness](/fundamentals/concepts/reaction-time/#freshness), for each
 | `replica_id`  | [`text`]     | The ID of a replica computing the object, or `NULL` for persistent objects. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas).
 | `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
 | `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+| `deployment_generation` | [`uint8`] | The deployment of the native replica observation, or `NULL` for legacy execution and shared observations with `NULL` replica ID.
 
 ## `mz_wallclock_global_lag_history`
 
 The `mz_wallclock_global_lag_history` view contains historical wallclock lag for tables, sources, indexes, materialized views, and sinks, binned by minute.
-Unlike [`mz_wallclock_lag_history`](#mz_wallclock_lag_history), this view aggregates across replicas, reporting the minimum lag per object per minute.
+Unlike [`mz_wallclock_lag_history`](#mz_wallclock_lag_history), this view aggregates across replicas and deployments, reporting the minimum lag per object per minute. It includes legacy observations and shared observations with `NULL` replica ID and generation. Promotion does not remove earlier observations. The minimum can come from a prewarming or retiring deployment, so it does not necessarily describe the deployment serving at that time.
 
 <!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag_history -->
 | Field         | Type         | Meaning
@@ -1637,9 +1666,13 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_frontiers_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_by_deployment -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_hydration_times_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_operator_hydration_statuses_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
@@ -1678,6 +1711,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview_3h -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview_24h -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_sizes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_sizes_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_arrangement_size_history -->
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attrdef_all_databases -->

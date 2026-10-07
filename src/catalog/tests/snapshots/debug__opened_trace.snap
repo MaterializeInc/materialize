@@ -473,6 +473,7 @@ Trace {
                         id: User(
                             1,
                         ),
+                        deployment_generation: 0,
                     },
                     ClusterReplicaValue {
                         cluster_id: User(
@@ -511,6 +512,12 @@ Trace {
                 ),
             ),
         ],
+    },
+    cluster_replica_declarations: CollectionTrace {
+        values: [],
+    },
+    cluster_runtimes: CollectionTrace {
+        values: [],
     },
     comments: CollectionTrace {
         values: [],
@@ -1625,6 +1632,21 @@ Trace {
         ],
     },
     storage_collection_metadata: CollectionTrace {
+        values: [],
+    },
+    collection_compaction_bounds: CollectionTrace {
+        values: [],
+    },
+    maintained_read_requirements: CollectionTrace {
+        values: [],
+    },
+    client_incarnations: CollectionTrace {
+        values: [],
+    },
+    written_plans: CollectionTrace {
+        values: [],
+    },
+    client_read_requirements: CollectionTrace {
         values: [],
     },
     unfinalized_shards: CollectionTrace {

@@ -9,6 +9,7 @@
 
 //! Shared types for the `mz-controller` crate
 
+pub mod clusters;
 pub mod dyncfgs;
 
 /// Identifies a cluster.

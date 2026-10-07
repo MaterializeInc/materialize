@@ -52,13 +52,13 @@ true
 query T multiline
 SELECT create_sql FROM mz_indexes WHERE name = 't_idx'
 ----
-CREATE INDEX "t_idx" IN CLUSTER [u1] ON [u1 AS "materialize"."public"."t"] ("i")
+CREATE INDEX "t_idx" IN CLUSTER [u1] ON [u17 AS "materialize"."public"."t"] ("i")
 EOF
 
 query T multiline
 SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_idx'
 ----
-CREATE INDEX t_idx IN CLUSTER [u1] ON [u1 AS materialize.public.t] (i)
+CREATE INDEX t_idx IN CLUSTER [u1] ON [u17 AS materialize.public.t] (i)
 EOF
 
 # --- builtin_indexes branch ---------------------------------------------------

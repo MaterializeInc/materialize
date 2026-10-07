@@ -1231,7 +1231,8 @@ impl<'a> RunnerInner<'a> {
         let persist_clients = Arc::new(persist_clients);
 
         let secrets_controller = Arc::clone(&orchestrator);
-        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        connection_context.environment_id = environment_id.to_string();
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
             config.tracing.clone(),
@@ -1302,8 +1303,10 @@ impl<'a> RunnerInner<'a> {
         let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
         let server_config = mz_environmentd::Config {
             catalog_config,
-            timestamp_oracle_url: Some(timestamp_oracle_url),
+            timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
             controller: ControllerConfig {
+                timestamp_oracle_url: Some(timestamp_oracle_url),
+                timestamp_oracle_clock_file: None,
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,
                 clusterd_image: "clusterd".into(),
@@ -1376,6 +1379,10 @@ impl<'a> RunnerInner<'a> {
                 params.insert(
                     "log_filter".to_string(),
                     config.tracing.startup_log_filter.to_string(),
+                );
+                params.insert(
+                    "enable_catalog_read_protection".to_string(),
+                    "true".to_string(),
                 );
                 params.extend(config.system_parameter_defaults.clone());
                 params

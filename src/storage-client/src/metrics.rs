@@ -258,12 +258,18 @@ impl transport::Metrics<StorageCommand, StorageResponse> for ReplicaMetrics {
 pub struct CommandMetrics<M> {
     /// Metrics for `Hello`.
     pub hello: M,
+    /// Metrics for `HelloQuery`.
+    pub hello_query: M,
+    /// Metrics for `SubscribeObservations`.
+    pub subscribe_observations: M,
     /// Metrics for `InitializationComplete`.
     pub initialization_complete: M,
     /// Metrics for `AllowWrites`.
     pub allow_writes: M,
     /// Metrics for `UpdateConfiguration`.
     pub update_configuration: M,
+    /// Metrics for `ApplyCatalogPosition`.
+    pub apply_catalog_position: M,
     /// Metrics for `RunIngestion`.
     pub run_ingestion: M,
     /// Metrics for `AllowCompaction`.
@@ -283,9 +289,12 @@ impl<M> CommandMetrics<M> {
     {
         Self {
             hello: build_metric("hello"),
+            hello_query: build_metric("hello_query"),
+            subscribe_observations: build_metric("subscribe_observations"),
             initialization_complete: build_metric("initialization_complete"),
             allow_writes: build_metric("allow_writes"),
             update_configuration: build_metric("update_configuration"),
+            apply_catalog_position: build_metric("apply_catalog_position"),
             run_ingestion: build_metric("run_ingestion"),
             allow_compaction: build_metric("allow_compaction"),
             run_sink: build_metric("run_sink"),
@@ -299,9 +308,12 @@ impl<M> CommandMetrics<M> {
         F: Fn(&M),
     {
         f(&self.hello);
+        f(&self.hello_query);
+        f(&self.subscribe_observations);
         f(&self.initialization_complete);
         f(&self.allow_writes);
         f(&self.update_configuration);
+        f(&self.apply_catalog_position);
         f(&self.run_ingestion);
         f(&self.allow_compaction);
         f(&self.run_sink);
@@ -314,9 +326,12 @@ impl<M> CommandMetrics<M> {
 
         match command {
             Hello { .. } => &self.hello,
+            HelloQuery { .. } => &self.hello_query,
+            SubscribeObservations => &self.subscribe_observations,
             InitializationComplete => &self.initialization_complete,
             AllowWrites => &self.allow_writes,
             UpdateConfiguration(..) => &self.update_configuration,
+            ApplyCatalogPosition(..) => &self.apply_catalog_position,
             RunIngestion(..) => &self.run_ingestion,
             AllowCompaction(..) => &self.allow_compaction,
             RunSink(..) => &self.run_sink,
@@ -329,6 +344,8 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `StorageResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
+    query_ready: M,
+    catalog_catchup: M,
     frontier_upper: M,
     dropped_id: M,
     staged_batches: M,
@@ -342,6 +359,8 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
+            query_ready: build_metric("query_ready"),
+            catalog_catchup: build_metric("catalog_catchup"),
             frontier_upper: build_metric("frontier_upper"),
             dropped_id: build_metric("dropped_id"),
             staged_batches: build_metric("staged_batches"),
@@ -354,6 +373,8 @@ impl<M> ResponseMetrics<M> {
         use StorageResponse::*;
 
         match response {
+            QueryReady => &self.query_ready,
+            CatalogCatchup(..) => &self.catalog_catchup,
             FrontierUpper(..) => &self.frontier_upper,
             DroppedId(..) => &self.dropped_id,
             StagedBatches(..) => &self.staged_batches,

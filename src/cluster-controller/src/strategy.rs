@@ -470,12 +470,9 @@ impl Strategy for GracefulReconfigurationStrategy {
 /// hydration-time estimate, and the current read timestamp, all carried in
 /// [`RefreshWindowInputs`].
 ///
-/// The controller (not the user's `replication_factor`) owns a scheduled
-/// cluster's replica set, so [`Strategy::update_state`] normalizes the realized
-/// `replication_factor` to `0`. This is self-healing (no migration needed to
-/// enable the controller) and makes `mz_clusters.replication_factor` read `0` for
-/// a scheduled cluster, with `mz_cluster_replicas` authoritative for what is
-/// actually running.
+/// DDL records a shared `replication_factor` of `0` for scheduled clusters.
+/// [`Strategy::update_state`] normalizes deployment-local realized state, not
+/// shared intent. Replica membership describes what is actually running.
 ///
 /// NB: the decision is re-derived purely from the live signals each tick, with
 /// no cross-tick latch. We pull a complete decision from durable and storage

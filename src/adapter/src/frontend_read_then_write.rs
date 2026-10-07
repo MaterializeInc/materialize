@@ -84,17 +84,25 @@
 //! durable in the first case and there was never anything to write in the
 //! second, so all they do is make the disagreement loud.
 //!
-//! ## The frontier certifies, the oracle chooses
+//! ## The frontier certifies, the oracle caps, Persist arbitrates
 //!
-//! The target `T` comes from the oracle, and a progress message at `F` only
-//! certifies completeness below `F`, so it gates the write rather than choosing
-//! its timestamp. The design doc's "The OCC loop" says why. Three invariants
-//! hold for every write this path makes:
+//! Choose a target `T` certified by subscribe progress `F`, capped by one above
+//! the oracle's write timestamp so a future refresh frontier cannot advance the
+//! write timeline. A conflict's reported txns upper is a lower bound even while
+//! its writer has not yet completed its oracle update. Persist decides whether
+//! `T` remains available. Three invariants hold for every write this path makes:
 //!
 //! * `F >= T` before it submits, so the payload is a complete view of `T - 1`.
 //! * The payload is every diff below `T`, strictly. A diff at `T` is concurrent
 //!   with the write and waits for a later target.
 //! * `T > as_of`, so the snapshot, which arrives at `as_of`, is in the payload.
+//!
+//! Freshness selection puts `as_of` at or above an oracle read taken after the
+//! statement began. Catalog commits, writes and strict-serializable reads complete
+//! their oracle updates before acknowledgement, so `T` follows operations that
+//! completed before this statement began. Concurrent reads can have timestamps
+//! at or above `T`, but any result depending on this write waits for the txns
+//! upper to pass its timestamp. Oracle allocation alone is not a write conflict.
 //!
 //! NOTE: `F >= T` does not make the two equal, because `F` is a minimum over the
 //! selection's inputs. Where `F` runs above `T`, a selection that reads the
@@ -117,7 +125,6 @@ use std::collections::BTreeSet;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::consolidation;
@@ -699,7 +706,8 @@ impl PeekClient {
     /// The caller owns the end-of-execution logging for
     /// `statement_logging_id` and verified and planned the portal against
     /// `catalog`, which stays in force through optimization and write-target
-    /// generation capture.
+    /// generation capture. `None` requests replanning before execution or session
+    /// transaction state has changed.
     pub(crate) async fn frontend_read_then_write(
         &mut self,
         session: &mut Session,
@@ -708,7 +716,7 @@ impl PeekClient {
         catalog: &Arc<Catalog>,
         statement_logging_id: Option<StatementLoggingId>,
         attempt_state: Arc<FrontendWriteAttemptState>,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
         self.read_then_write(
             session,
             plan,
@@ -758,10 +766,14 @@ impl PeekClient {
             Arc::new(FrontendWriteAttemptState::new()),
             RtwCaller::Background { replica_id },
         )
-        .await
+        .await?
+        .ok_or_else(|| AdapterError::ChangedPlan("background catalog context changed".into()))
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "debug", skip_all, fields(
+        conn_id = %session.conn_id(), target_id = %plan.id,
+    ))]
     async fn read_then_write(
         &mut self,
         session: &mut Session,
@@ -771,7 +783,7 @@ impl PeekClient {
         statement_logging_id: Option<StatementLoggingId>,
         attempt_state: Arc<FrontendWriteAttemptState>,
         caller: RtwCaller,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // The OCC dataflow emits raw diffs and does not apply top-level
         // finishing. Silently dropping a LIMIT, OFFSET, projection or ordering
         // can change the rows written, so this stage requires trivial finishing.
@@ -846,11 +858,6 @@ impl PeekClient {
             ));
         }
 
-        // Mark this as a write transaction in the session state machine, so
-        // auto-commit treats the statement as a write. The rows follow once we
-        // know them.
-        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
-
         // Prepare expressions (resolve unmaterializable functions like
         // current_user())
         let style = ExprPrepOneShot {
@@ -896,6 +903,10 @@ impl PeekClient {
         // that stalls user DML behind a background sampler. The bound above does
         // not apply to it either: it has no statement timeout, only its own much
         // longer one.
+        tracing::debug!(
+            background = caller.is_background(),
+            "RTW waiting for admission"
+        );
         let permit = if caller.is_background() {
             None
         } else {
@@ -907,6 +918,7 @@ impl PeekClient {
             )
         };
 
+        tracing::debug!("RTW admitted, acquiring read timestamp");
         // Determine timestamp and acquire read holds.
         let oracle_read_ts = self.oracle_read_ts(&timeline).await?;
 
@@ -933,6 +945,7 @@ impl PeekClient {
         let (determination, read_holds) = self
             .frontend_determine_timestamp(
                 session,
+                catalog.state(),
                 &bundle,
                 &QueryWhen::FreshestTableWrite,
                 cluster_id,
@@ -943,6 +956,24 @@ impl PeekClient {
             .await?;
 
         let as_of = determination.timestamp_context.timestamp_or_default();
+        tracing::debug!(%as_of, ?oracle_read_ts, ?bundle, "RTW timestamp selected");
+
+        if catalog.observed_position().is_some()
+            && governing_timeline(&timeline) == Some(Timeline::EpochMilliseconds)
+        {
+            self.oracle_read_ts_at_least(Timeline::EpochMilliseconds, as_of)
+                .await?;
+            let current = self.catalog_snapshot_at(Arc::clone(catalog), as_of).await?;
+            if current.planning_position() != catalog.planning_position() {
+                tracing::debug!("RTW catalog changed, replanning");
+                return Ok(None);
+            }
+        }
+        tracing::debug!("RTW catalog validated");
+
+        // Mark the transaction only after catalog validation. A replan must not
+        // make an otherwise standalone write look like a subsequent statement.
+        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
         let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
@@ -968,8 +999,12 @@ impl PeekClient {
         if session.vars().emit_timestamp_notice() {
             let conn_id = session.conn_id().clone();
             let session_wall_time = session.pcx().wall_time;
-            let explanation = self
-                .call_coordinator(|tx| Command::ExplainTimestamp {
+            let explanation = if let Some(client) = &self.query_client {
+                client
+                    .explain_timestamp(catalog, &conn_id, session_wall_time, &bundle, determination)
+                    .await
+            } else {
+                self.call_coordinator(|tx| Command::ExplainTimestamp {
                     conn_id,
                     session_wall_time,
                     cluster_id,
@@ -977,7 +1012,8 @@ impl PeekClient {
                     determination,
                     tx,
                 })
-                .await?;
+                .await?
+            };
             session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 
@@ -1005,8 +1041,9 @@ impl PeekClient {
         // snapshot. A far-future `as_of` parks here until the clock arrives,
         // bounded by `statement_timeout`.
         self.ensure_read_linearized(&timeline, as_of).await?;
+        tracing::debug!(%as_of, "RTW read linearized, creating subscribe");
 
-        // The loop takes its write target from this oracle, and reaching one takes
+        // The loop caps its write target with this oracle, and reaching one takes
         // `&mut self`, which the loop does not have. `None` for a
         // timestamp-independent selection, which reads at `Timestamp::maximum()`
         // and so always leaves through the blind path rather than reaching a write.
@@ -1017,6 +1054,7 @@ impl PeekClient {
 
         let subscribe_handle = self
             .create_internal_subscribe(
+                Arc::clone(catalog),
                 Box::new(df_desc),
                 cluster_id,
                 replica_id,
@@ -1030,6 +1068,7 @@ impl PeekClient {
             )
             .await?;
 
+        tracing::debug!(?sink_id, "RTW subscribe created");
         let (retry_count, result) = self
             .run_occ_loop(
                 subscribe_handle,
@@ -1049,6 +1088,11 @@ impl PeekClient {
                 &attempt_state,
             )
             .await;
+        tracing::debug!(
+            retry_count,
+            success = result.is_ok(),
+            "RTW OCC loop finished"
+        );
 
         let caller_label = match caller {
             RtwCaller::Session => OCC_CALLER_SESSION,
@@ -1188,7 +1232,7 @@ impl PeekClient {
 
         drop(permit);
 
-        response
+        response.map(Some)
     }
 
     /// Builds the subscribe optimizer and the unresolved global MIR plan for a
@@ -1237,7 +1281,13 @@ impl PeekClient {
         };
         expr.try_visit_scalars_mut(&mut |s| style.prep_scalar_expr(s))?;
 
-        let compute_instance = ComputeInstanceSnapshot::new_without_collections(cluster_id);
+        // Catalog definitions determine access paths, as for frontend SELECTs.
+        // Execution separately waits for the selected imports to become readable.
+        let compute_instance = self
+            .query_client
+            .as_ref()
+            .map(|client| client.instance_snapshot(catalog, cluster_id))
+            .unwrap_or_else(|| ComputeInstanceSnapshot::new_without_collections(cluster_id));
         let (_, view_id) = self.transient_id_gen.allocate_id();
         let (_, sink_id) = self.transient_id_gen.allocate_id();
         let debug_name = format!("frontend-read-then-write-subscribe-{}", sink_id);
@@ -1318,45 +1368,8 @@ impl PeekClient {
             None => return Ok(()),
         };
 
-        // Cloned before `ensure_oracle` borrows `self` for the rest of this
-        // function. The handle is an `Arc` internally, so this is cheap.
-        let group_commit_notifier = self.group_commit_notifier.clone();
-        let oracle = self.ensure_oracle(tl).await?;
-
-        // The oracle advances only when a group commit applies, and an empty
-        // group commit is already the periodic keepalive. So when we have
-        // nothing to write ourselves, waiting for the next tick costs up to a
-        // full `default_timestamp_interval`. We ask for that commit instead of
-        // waiting for it, which also spares the oracle the ~1ms poll below
-        // running for the whole interval.
-        //
-        // Once per wait rather than once per poll. The committer never
-        // allocates a write timestamp above wall clock, so a far-future `as_of`
-        // cannot be reached by asking, and nudging per iteration would spin for
-        // as long as such a statement legitimately parks. That case pays one
-        // empty commit, which is what the keepalive would have done anyway.
-        let mut nudged = false;
-
-        loop {
-            let oracle_ts = oracle.read_ts().await;
-            if as_of <= oracle_ts {
-                return Ok(());
-            }
-
-            if !nudged {
-                group_commit_notifier.notify();
-                nudged = true;
-            }
-
-            // Sleep for roughly the difference between as_of and the current
-            // oracle timestamp. Since timestamps are epoch milliseconds, the
-            // difference is the approximate wall-clock time we need to wait.
-            // Cap at 1s to avoid very long sleeps if clocks are skewed,
-            // matching the cap in `message_linearize_reads`.
-            let wait_ms = u64::from(as_of.saturating_sub(oracle_ts));
-            let wait = Duration::from_millis(wait_ms).min(Duration::from_secs(1));
-            tokio::time::sleep(wait).await;
-        }
+        self.oracle_read_ts_at_least(tl, as_of).await?;
+        Ok(())
     }
 
     /// Submits frontier-independent diffs to group commit, which picks the
@@ -1415,6 +1428,7 @@ impl PeekClient {
     /// cleanup on drop.
     async fn create_internal_subscribe(
         &self,
+        catalog: Arc<Catalog>,
         df_desc: Box<optimize::LirDataflowDescription>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -1428,6 +1442,7 @@ impl PeekClient {
     ) -> Result<SubscribeHandle, AdapterError> {
         let rx: mpsc::UnboundedReceiver<PeekResponseUnary> = self
             .call_coordinator(|tx| Command::CreateInternalSubscribe {
+                catalog,
                 df_desc,
                 cluster_id,
                 replica_id,
@@ -1453,10 +1468,11 @@ impl PeekClient {
     /// mutation, and submit the resulting diffs as a write.
     ///
     /// Semantically a SELECT at `target - 1` followed by an INSERT at `target`.
-    /// `write_oracle` chooses `target`, the subscribe's frontier certifies the
-    /// payload is complete below it, and a target the target table has moved
-    /// past comes back as `WriteResult::TimestampPassed`, whose next eligible
-    /// timestamp the loop adopts. At most `max_occ_retries` attempts.
+    /// `write_oracle` caps the target proposal, and the subscribe's frontier
+    /// certifies the payload is complete below it. Persist rejects a target the
+    /// txns shard has moved past with `WriteResult::TimestampPassed`, whose
+    /// next eligible timestamp raises the retry lower bound. At most
+    /// `max_occ_retries` attempts.
     ///
     /// A subscribe that ends on its own has diffs no frontier can change, and
     /// those are returned as [`OccOutcome::Blind`] rather than written.
@@ -1492,9 +1508,8 @@ impl PeekClient {
     ) -> (usize, Result<OccOutcome, AdapterError>) {
         let mut state = OccState::new();
 
-        // The timestamp the next attempt writes at, chosen when we are first
-        // ready to attempt one and replaced only by a conflict. `None` until
-        // then.
+        // A lower bound for the next attempt, raised by the txns upper on
+        // conflict. Each attempt chooses a certified target and refolds its diffs.
         let mut write_target: Option<Timestamp> = None;
 
         // The smallest timestamp an attempt may target. `as_of` itself is out,
@@ -1532,6 +1547,10 @@ impl PeekClient {
             let attempt_write = match write_target {
                 Some(target) if state.current_upper.is_some_and(|upper| upper >= target) => true,
                 _ => {
+                    tracing::debug!(
+                        ?write_target, ?min_target, upper = ?state.current_upper,
+                        "RTW waiting for subscribe progress"
+                    );
                     let msg = match subscribe_handle.recv().await {
                         Some(msg) => msg,
                         None => {
@@ -1633,53 +1652,38 @@ impl PeekClient {
                 .current_upper
                 .expect("a write attempt requires an observed frontier");
 
-            let target = match write_target {
-                Some(target) => target,
-                None => {
-                    let Some(oracle) = &write_oracle else {
-                        // Invariant: a statement with no governing timeline
-                        // reads at `as_of == Timestamp::maximum()`, so it
-                        // observes no progress past its `as_of` and leaves
-                        // through the blind arm above rather than reaching a
-                        // write.
-                        soft_panic_or_log!(
-                            "read-then-write reached a write attempt with no governing timeline"
-                        );
-                        break Err(AdapterError::Internal(
-                            "read-then-write has no oracle to take a write timestamp from".into(),
-                        ));
-                    };
-
-                    // One step above the oracle's write timestamp is the smallest
-                    // value `commit_timestamped` accepts.
-                    let peek_write_ts = oracle.peek_write_ts().await;
-                    let Some(chosen) = peek_write_ts.try_step_forward() else {
-                        // A timeline that reached `Timestamp::MAX` is a broken
-                        // environment, not anything this statement did.
-                        soft_panic_or_log!(
-                            "read-then-write cannot target a timestamp above the write \
-                             timeline's timestamp {peek_write_ts}"
-                        );
-                        break Err(AdapterError::Internal(format!(
-                            "write timeline exhausted at timestamp {peek_write_ts}"
-                        )));
-                    };
-
-                    // Unreachable while the oracle's read timestamp is at or
-                    // above `as_of` on entry, and the clamp keeps the payload
-                    // rule rather than only reporting the violation.
-                    if chosen < min_target {
-                        soft_panic_or_log!(
-                            "read-then-write target {chosen} does not clear the as_of {as_of}, \
-                             so the payload would miss the snapshot"
-                        );
-                    }
-                    let chosen = std::cmp::max(chosen, min_target);
-
-                    write_target = Some(chosen);
-                    chosen
-                }
+            let Some(oracle) = &write_oracle else {
+                // Timeless selections close their subscribe and use the blind path.
+                soft_panic_or_log!(
+                    "read-then-write reached a write attempt with no governing timeline"
+                );
+                break Err(AdapterError::Internal(
+                    "read-then-write has no oracle to take a write timestamp from".into(),
+                ));
             };
+            let peek_write_ts = oracle.peek_write_ts().await;
+            let Some(cap) = peek_write_ts.try_step_forward() else {
+                soft_panic_or_log!(
+                    "read-then-write cannot target a timestamp above the write \
+                     timeline's timestamp {peek_write_ts}"
+                );
+                break Err(AdapterError::Internal(format!(
+                    "write timeline exhausted at timestamp {peek_write_ts}"
+                )));
+            };
+            // Linearizing `as_of` before this loop ensures as_of <= R <= W.
+            if cap < min_target {
+                soft_panic_or_log!(
+                    "read-then-write oracle cap {cap} does not clear the as_of {as_of}"
+                );
+            }
+
+            // Progress certifies the payload, not a future jump in the write
+            // timeline. The oracle caps the proposal while Persist arbitrates
+            // availability. A reported txns upper can exceed the cap while its
+            // writer is between its CAS and oracle completion.
+            let target = std::cmp::max(fold_target, std::cmp::min(upper, cap));
+            write_target = Some(target);
 
             // Fold in what the drain picked up, plus anything a target raised
             // by the last conflict now admits.
@@ -1721,6 +1725,7 @@ impl PeekClient {
             // in profiles. Every attempt clones every row, and we retry up to
             // `max_occ_retries` times.
             attempt_state.mark_write_submitted();
+            tracing::debug!(%target, retry_count = state.retry_count, "RTW submitting write");
             let result = match self
                 .call_coordinator(|tx| Command::AttemptWrite {
                     attempt: match write_conn_id.clone() {

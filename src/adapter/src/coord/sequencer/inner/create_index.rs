@@ -21,6 +21,7 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_transform::notice::OptimizerNoticeApi;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -32,7 +33,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, ExecuteContext, catalog};
@@ -189,8 +189,8 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_index(
-        &self,
+    pub(crate) async fn explain_index(
+        catalog: &catalog::Catalog,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -202,23 +202,42 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::Index(index) = catalog.get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&index.global_id())
-        else {
+        let selected = if catalog.state().catalog_read_protection_enabled() {
+            Some(
+                catalog
+                    .selected_plan(index.global_id())
+                    .await?
+                    .ok_or_else(|| {
+                        AdapterError::internal("explain index", "selected plan is missing")
+                    })?,
+            )
+        } else {
+            None
+        };
+        let metainfo = match &selected {
+            Some(plan) => Some(&plan.dataflow_metainfos),
+            None => catalog.try_get_dataflow_metainfo(&index.global_id()),
+        };
+        let Some(dataflow_metainfo) = metainfo else {
             if !id.is_system() {
                 tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
             }
             coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
         };
 
-        let target_cluster = self.catalog().get_cluster(index.cluster_id);
+        let target_cluster = catalog.get_cluster(index.cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
+        let features = OptimizerFeatures::from(catalog.system_config())
             .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(index.cluster_id),
+            )
             .override_from(&config.features);
 
         // TODO(mgree): calculate statistics (need a timestamp)
@@ -226,11 +245,11 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self
-                    .catalog()
-                    .try_get_optimized_plan(&index.global_id())
-                    .cloned()
-                else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.global_mir.clone()),
+                    None => catalog.try_get_optimized_plan(&index.global_id()).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -240,18 +259,18 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self
-                    .catalog()
-                    .try_get_physical_plan(&index.global_id())
-                    .cloned()
-                else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.physical_plan.clone()),
+                    None => catalog.try_get_physical_plan(&index.global_id()).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -260,7 +279,7 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
@@ -321,7 +340,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(*cluster_id)
+            .candidate_instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             self.allocate_user_id().await?
@@ -452,12 +471,11 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let on_entry = self.catalog().get_entry_by_global_id(&on);
         let owner_id = *on_entry.owner_id();
 
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id: item_id,
             name: name.clone(),
             item: CatalogItem::Index(Index {
@@ -480,61 +498,28 @@ impl Coordinator {
         // We keep `raw_df_meta` live so that on success we can emit its raw
         // notices to the user session (rendered against the user's
         // session-aware humanizer).
-        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let on_desc = on_entry
             .relation_desc()
             .expect("can only create indexes on items with a valid description");
         let df_meta = self.render_create_item_notices(&name, global_id, &on_desc, &raw_df_meta);
 
-        // Populate the durable expression cache before the catalog
-        // transaction and await the write. This way any other envd (or a
-        // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
+        // Write the plan before committing the object and its selection together.
+        let selection = self
+            .catalog()
+            .prepare_item_plan(
                 global_id,
                 None,
                 global_mir_plan.df_desc().clone(),
-                df_desc.clone(),
-                df_meta.clone(),
+                df_desc,
+                df_meta,
                 optimizer_features,
             )
-            .await;
+            .await?;
+        ops.extend(selection);
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    // TODO: Maybe in the future, pass the read holds
-                    // `ship_new_dataflow` takes on to compute, to hold on to them
-                    // and downgrade when possible?
-                    coord
-                        .ship_new_dataflow(
-                            &id_bundle,
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                        )
-                        .await;
-                    // No `allow_writes` here because indexes do not modify external state.
-
-                    coord.update_compute_read_policy(
-                        cluster_id,
-                        item_id,
-                        compaction_window.unwrap_or_default().into(),
-                    );
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
@@ -543,6 +528,13 @@ impl Coordinator {
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
+                // Optimizer-only dependencies are not covered by SQL plan validity.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice
+                        .dependencies()
+                        .iter()
+                        .all(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
             }

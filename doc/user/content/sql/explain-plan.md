@@ -136,6 +136,12 @@ Explained object | Description
 **INDEX name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
 **MATERIALIZED VIEW name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
 
+For an existing index or materialized view, the explanation describes the stored
+plan selected for reconstruction. Dropping an index that this plan imports updates
+the stored plan without necessarily replacing the running dataflow. In that case,
+the explanation can differ from the running operators and their node identifiers
+in `mz_introspection.mz_lir_mapping`.
+
 ### Output format
 
 You can select between `JSON` and `TEXT` for the output format of `EXPLAIN PLAN`. Non-text

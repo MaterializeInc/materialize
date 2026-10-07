@@ -1,0 +1,793 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Table writes and registration through the transaction WAL or read-only migration worker.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
+use std::fmt::Write;
+use std::sync::Arc;
+
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use itertools::Itertools;
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::critical::Opaque;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_storage_client::client::{TableData, Update};
+use mz_storage_client::controller::PersistEpoch;
+use mz_storage_types::StorageDiff;
+use mz_storage_types::controller::{InvalidUpper, StorageError, TxnsCodecRow};
+use mz_storage_types::sources::SourceData;
+use mz_txn_wal::txns::{Tidy, TxnsHandle};
+use timely::progress::Antichain;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
+use tracing::{Instrument, Span, debug, info_span};
+
+mod read_only_table_worker;
+
+/// Metadata required to register a table with the txns shard.
+#[derive(Debug, Clone)]
+pub(crate) struct TableRegistration {
+    pub id: GlobalId,
+    pub data_shard: ShardId,
+    pub relation_desc: RelationDesc,
+}
+
+/// Queues txns-shard operations on the table worker.
+///
+/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
+/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
+/// restores its bookkeeping and the caller must retry at a fresh timestamp.
+pub(crate) trait TableWriteHandle: Debug + Send + Sync {
+    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Registers `tables` at `register_ts`.
+    fn register(
+        &self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
+    fn forget(
+        &self,
+        forget_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+}
+
+/// Opens the table writer after the txns shard identity has been durably recorded.
+///
+/// Callers must await this before starting controller txn reads: writable mode upgrades
+/// the txns shard version before any reader starts.
+pub(crate) async fn open(
+    persist: PersistClient,
+    txns_id: ShardId,
+    txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
+    read_only: bool,
+) -> Arc<dyn TableWriteHandle> {
+    let worker = if read_only {
+        let txns_write = persist
+            .open_writer(
+                txns_id,
+                Arc::new(TxnsCodecRow::desc()),
+                Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "follow txns upper".to_owned(),
+                },
+            )
+            .await
+            .expect("txns schema shouldn't change");
+        PersistTableWriteWorker::new_read_only_mode(txns_write, persist.clone())
+    } else {
+        let mut txns = TxnsHandle::open(
+            Timestamp::MIN,
+            persist.clone(),
+            persist.dyncfgs().clone(),
+            Arc::clone(&txns_metrics),
+            txns_id,
+            Opaque::encode(&PersistEpoch::default()),
+        )
+        .await;
+        txns.upgrade_version().await;
+        PersistTableWriteWorker::new_txns(txns, persist.clone())
+    };
+    Arc::new(worker)
+}
+
+#[derive(Debug, Clone)]
+struct PersistTableWriteWorker {
+    inner: Arc<PersistTableWriteWorkerInner>,
+}
+
+/// Commands for [PersistTableWriteWorker].
+#[derive(Debug)]
+enum PersistTableWriteCmd {
+    Register(
+        Timestamp,
+        Vec<TableRegistration>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    ),
+    DropHandles {
+        forget_ts: Timestamp,
+        /// Tables that we want to drop our handle for.
+        ids: Vec<GlobalId>,
+        /// Notifies us when all resources have been cleaned up.
+        tx: oneshot::Sender<Result<(), StorageError>>,
+    },
+    Append {
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        updates: Vec<(GlobalId, Vec<TableData>)>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    },
+    Shutdown,
+}
+
+impl PersistTableWriteCmd {
+    fn name(&self) -> &'static str {
+        match self {
+            PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
+            PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
+            PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
+            PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
+        }
+    }
+}
+
+/// Opens fresh table write handles concurrently.
+///
+/// Registration consumes handles even on conflict, so retries cannot reuse them.
+async fn open_table_write_handles(
+    persist_client: &PersistClient,
+    tables: Vec<TableRegistration>,
+) -> Vec<(
+    GlobalId,
+    WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+)> {
+    futures::stream::iter(tables)
+        .map(|table| async move {
+            let mut write = persist_client
+                .open_writer(
+                    table.data_shard,
+                    Arc::new(table.relation_desc),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: table.id.to_string(),
+                        handle_purpose: format!("table write worker data for {}", table.id),
+                    },
+                )
+                .await
+                .expect("invalid persist usage");
+            // Fetch the most recent upper: a freshly opened handle may otherwise report an upper
+            // behind the shard's since.
+            write.fetch_recent_upper().await;
+            (table.id, write)
+        })
+        .buffer_unordered(50)
+        .collect()
+        .await
+}
+
+async fn append_work(
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    mut commands: BTreeMap<
+        GlobalId,
+        (
+            tracing::Span,
+            Vec<Update>,
+            Antichain<Timestamp>,
+            Antichain<Timestamp>,
+        ),
+    >,
+) -> Result<(), Vec<(GlobalId, Antichain<Timestamp>)>> {
+    let futs = FuturesUnordered::new();
+
+    // We cannot iterate through the updates and then set off a persist call
+    // on the write handle because we cannot mutably borrow the write handle
+    // multiple times.
+    //
+    // Instead, we first group the update by ID above and then iterate
+    // through all available write handles and see if there are any updates
+    // for it. If yes, we send them all in one go.
+    for (id, write) in write_handles.iter_mut() {
+        if let Some((span, updates, expected_upper, new_upper)) = commands.remove(id) {
+            let updates = updates.into_iter().map(|u| {
+                (
+                    (SourceData(Ok(u.row)), ()),
+                    u.timestamp,
+                    u.diff.into_inner(),
+                )
+            });
+
+            futs.push(async move {
+                write
+                    .compare_and_append(updates.clone(), expected_upper.clone(), new_upper.clone())
+                    .instrument(span.clone())
+                    .await
+                    .expect("cannot append updates")
+                    .or_else(|upper_mismatch| Err((*id, upper_mismatch.current)))?;
+
+                Ok::<_, (GlobalId, Antichain<Timestamp>)>((*id, new_upper))
+            })
+        }
+    }
+
+    // Ensure all futures run to completion, and track status of each of them individually
+    let (_new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .partition_result();
+
+    if failed_appends.is_empty() {
+        Ok(())
+    } else {
+        Err(failed_appends)
+    }
+}
+
+impl PersistTableWriteWorker {
+    /// Create a new read-only table worker that continually bumps the upper of
+    /// it's tables. It is expected that we only register migrated builtin
+    /// tables, that cannot yet be registered in the txns system in read-only
+    /// mode.
+    ///
+    /// This takes a [WriteHandle] for the txns shard so that it can follow the
+    /// upper and continually bump the upper of registered tables to follow the
+    /// upper of the txns shard.
+    pub(crate) fn new_read_only_mode(
+        txns_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        persist_client: PersistClient,
+    ) -> Self {
+        let (tx, rx) =
+            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
+        mz_ore::task::spawn(
+            || "PersistTableWriteWorker",
+            read_only_table_worker::read_only_mode_table_worker(rx, txns_handle, persist_client),
+        );
+        Self {
+            inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
+        }
+    }
+
+    pub(crate) fn new_txns(
+        txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
+        persist_client: PersistClient,
+    ) -> Self {
+        let (tx, rx) =
+            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
+        mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
+            let mut worker = TxnsTableWorker {
+                txns,
+                persist_client,
+                write_handles: BTreeMap::new(),
+                tidy: Tidy::default(),
+            };
+            worker.run(rx).await
+        });
+        Self {
+            inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
+        }
+    }
+
+    fn send(&self, cmd: PersistTableWriteCmd) {
+        self.inner.send(cmd);
+    }
+}
+
+impl TableWriteHandle for PersistTableWriteWorker {
+    fn register(
+        &self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+        // We expect this to be awaited, so keep the span connected.
+        let span = info_span!("PersistTableWriteCmd::Register");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let cmd = PersistTableWriteCmd::Register(register_ts, tables, tx);
+        self.inner.send_with_span(span, cmd);
+        rx
+    }
+
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        updates: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        // Always send the append command to the txn-wal layer, even for empty
+        // updates. The txn-wal commit advances the logical upper of ALL
+        // registered data shards, which is needed for periodic group commits
+        // that have no actual data writes.
+        self.send(PersistTableWriteCmd::Append {
+            write_ts,
+            advance_to,
+            updates,
+            tx,
+        });
+        rx
+    }
+
+    fn forget(
+        &self,
+        forget_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
+        rx
+    }
+}
+
+struct TxnsTableWorker {
+    txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
+    persist_client: PersistClient,
+    write_handles: BTreeMap<GlobalId, ShardId>,
+    tidy: Tidy,
+}
+
+impl TxnsTableWorker {
+    async fn run(
+        &mut self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd)>,
+    ) {
+        while let Some((span, command)) = rx.recv().await {
+            match command {
+                PersistTableWriteCmd::Register(register_ts, tables, tx) => {
+                    let res = self.register(register_ts, tables).instrument(span).await;
+                    // We don't care if our waiter has gone away.
+                    let _ = tx.send(res);
+                }
+                PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
+                    let res = self.drop_handles(ids, forget_ts).instrument(span).await;
+                    // We don't care if our waiter has gone away.
+                    let _ = tx.send(res);
+                }
+                PersistTableWriteCmd::Append {
+                    write_ts,
+                    advance_to,
+                    updates,
+                    tx,
+                } => {
+                    self.append(write_ts, advance_to, updates, tx)
+                        .instrument(span)
+                        .await
+                }
+                PersistTableWriteCmd::Shutdown => {
+                    tracing::info!("PersistTableWriteWorker shutting down via command");
+                    return;
+                }
+            }
+        }
+
+        tracing::info!("PersistTableWriteWorker shutting down via input exhaustion");
+    }
+
+    async fn register(
+        &mut self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> Result<(), StorageError> {
+        let mut ids_handles = open_table_write_handles(&self.persist_client, tables).await;
+        // As tables evolve (e.g. columns are added) we treat the older versions as
+        // "views" on the later versions. While it's not required, it's easier to reason
+        // about table registration if we do it in GlobalId order.
+        ids_handles.sort_unstable_by_key(|(gid, _handle)| *gid);
+
+        for (id, write_handle) in ids_handles.iter() {
+            debug!(
+                "tables register {} {:.9}",
+                id,
+                write_handle.shard_id().to_string()
+            );
+            let previous = self.write_handles.insert(*id, write_handle.shard_id());
+            if previous.is_some() {
+                panic!("already registered a WriteHandle for collection {:?}", id);
+            }
+        }
+
+        // Registering also advances the logical upper of all shards in the txns set.
+        let new_ids = ids_handles.iter().map(|(id, _)| *id).collect_vec();
+        let handles = ids_handles.into_iter().map(|(_, handle)| handle);
+        let res = self.txns.register(register_ts, handles).await;
+        match res {
+            Ok(tidy) => {
+                self.tidy.merge(tidy);
+                Ok(())
+            }
+            Err(current) => {
+                // Registration consumed the handles. Roll back the IDs so a fresh retry can
+                // register them.
+                debug!(
+                    "register at {:?} conflicted with txns upper {:?}, rolling back {:?}",
+                    register_ts, current, new_ids
+                );
+                for id in &new_ids {
+                    self.write_handles.remove(id);
+                }
+                Err(StorageError::InvalidUppers(
+                    new_ids
+                        .into_iter()
+                        .map(|id| InvalidUpper {
+                            id,
+                            current_upper: Antichain::from_elem(current),
+                        })
+                        .collect(),
+                ))
+            }
+        }
+    }
+
+    async fn drop_handles(
+        &mut self,
+        ids: Vec<GlobalId>,
+        forget_ts: Timestamp,
+    ) -> Result<(), StorageError> {
+        tracing::info!(?ids, "drop tables");
+        let removed = ids
+            .iter()
+            // n.b. this should only remove the handle from the persist
+            // worker and not take any additional action such as closing
+            // the shard it's connected to because dataflows might still
+            // be using it.
+            .filter_map(|id| self.write_handles.remove(id).map(|shard| (*id, shard)))
+            .collect::<Vec<_>>();
+        let data_ids = removed
+            .iter()
+            .map(|(_, shard)| *shard)
+            .collect::<BTreeSet<_>>();
+        if !data_ids.is_empty() {
+            match self.txns.forget(forget_ts, data_ids.clone()).await {
+                Ok(tidy) => {
+                    self.tidy.merge(tidy);
+                    Ok(())
+                }
+                Err(current) => {
+                    // Restore local bookkeeping before the caller retries.
+                    debug!(
+                        "forget at {:?} conflicted with txns upper {:?}, restoring {:?}",
+                        forget_ts, current, ids
+                    );
+                    for (id, shard) in removed {
+                        self.write_handles.insert(id, shard);
+                    }
+                    Err(StorageError::InvalidUppers(
+                        ids.into_iter()
+                            .map(|id| InvalidUpper {
+                                id,
+                                current_upper: Antichain::from_elem(current),
+                            })
+                            .collect(),
+                    ))
+                }
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn append(
+        &mut self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        updates: Vec<(GlobalId, Vec<TableData>)>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    ) {
+        debug!(
+            "tables append timestamp={:?} advance_to={:?} len={} ids={:?}{}",
+            write_ts,
+            advance_to,
+            updates.iter().flat_map(|(_, x)| x).count(),
+            updates
+                .iter()
+                .map(|(x, _)| x.to_string())
+                .collect::<BTreeSet<_>>(),
+            updates.iter().filter(|(_, v)| !v.is_empty()).fold(
+                String::new(),
+                |mut output, (k, v)| {
+                    let _ = write!(output, "\n  {}: {:?}", k, v.first());
+                    output
+                }
+            )
+        );
+        // TODO: txn-wal doesn't take an advance_to yet, it uses
+        // timestamp.step_forward. This is the same in all cases, so just assert that
+        // for now. Note that this uses the _persist_ StepForward, not the
+        // TimestampManipulation one (the impls are the same) because that's what
+        // txn-wal uses.
+        assert_eq!(
+            advance_to,
+            mz_persist_types::StepForward::step_forward(&write_ts)
+        );
+
+        let mut txn = self.txns.begin();
+        for (id, updates) in updates {
+            let Some(data_id) = self.write_handles.get(&id) else {
+                // HACK: When creating a table we get an append that includes it
+                // before it's been registered. When this happens there are no
+                // updates, so it's ~fine to ignore it.
+                assert!(
+                    updates.iter().all(|u| u.is_empty()),
+                    "{}: {:?}",
+                    id,
+                    updates
+                );
+                continue;
+            };
+            for update in updates {
+                match update {
+                    TableData::Rows(updates) => {
+                        for (row, diff) in updates {
+                            let () = txn
+                                .write(data_id, SourceData(Ok(row)), (), diff.into_inner())
+                                .await;
+                        }
+                    }
+                    TableData::Batches(batches) => {
+                        for batch in batches {
+                            let () = txn.write_batch(data_id, batch);
+                        }
+                    }
+                }
+            }
+        }
+        // Sneak in any txns shard tidying from previous commits.
+        txn.tidy(std::mem::take(&mut self.tidy));
+        let txn_res = txn.commit_at(&mut self.txns, write_ts).await;
+        let response = match txn_res {
+            Ok(apply) => {
+                // TODO: Do the applying in a background task. This will be a
+                // significant INSERT latency performance win.
+                debug!("applying {:?}", apply);
+                let tidy = apply.apply(&mut self.txns).await;
+                self.tidy.merge(tidy);
+
+                // We don't serve any reads out of this TxnsHandle, so go ahead
+                // and compact as aggressively as we can (i.e. to the time we
+                // just wrote).
+                let () = self.txns.compact_to(write_ts).await;
+
+                Ok(())
+            }
+            Err(current) => {
+                self.tidy.merge(txn.take_tidy());
+                debug!(
+                    "unable to commit txn at {:?} current={:?}",
+                    write_ts, current
+                );
+                Err(StorageError::InvalidUppers(
+                    self.write_handles
+                        .keys()
+                        .copied()
+                        .map(|id| InvalidUpper {
+                            id,
+                            current_upper: Antichain::from_elem(current),
+                        })
+                        .collect(),
+                ))
+            }
+        };
+        // It is not an error for the other end to hang up.
+        let _ = tx.send(response);
+    }
+}
+
+/// Contains the components necessary for sending commands to a `PersistTableWriteWorker`.
+///
+/// When `Drop`-ed sends a shutdown command, as such this should _never_ implement `Clone` because
+/// if one clone is dropped, the other clones will be unable to send commands. If you need this
+/// to be `Clone`-able, wrap it in an `Arc` or `Rc` first.
+///
+/// #[derive(Clone)] <-- do not do this.
+///
+#[derive(Debug)]
+struct PersistTableWriteWorkerInner {
+    /// Sending side of a channel that we can use to send commands.
+    tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd)>,
+}
+
+impl Drop for PersistTableWriteWorkerInner {
+    fn drop(&mut self) {
+        self.send(PersistTableWriteCmd::Shutdown);
+        // TODO: Can't easily block on shutdown occurring.
+    }
+}
+
+impl PersistTableWriteWorkerInner {
+    fn new(tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd)>) -> Self {
+        PersistTableWriteWorkerInner { tx }
+    }
+
+    fn send(&self, cmd: PersistTableWriteCmd) {
+        let span =
+            info_span!(parent: None, "PersistTableWriteWorkerInner::send", otel.name = cmd.name());
+        OpenTelemetryContext::obtain().attach_as_parent_to(&span);
+        self.send_with_span(span, cmd)
+    }
+
+    fn send_with_span(&self, span: Span, cmd: PersistTableWriteCmd) {
+        match self.tx.send((span, cmd)) {
+            Ok(()) => (), // All good!
+            Err(e) => {
+                tracing::trace!("could not forward command: {:?}", e);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::{Diff, Row};
+
+    async fn persist_client() -> PersistClient {
+        let mut config = mz_persist_client::cfg::PersistConfig::new_for_tests();
+        config.configs = Arc::new(mz_txn_wal::all_dyncfgs((*config.configs).clone()));
+        mz_persist_client::cache::PersistClientCache::new(
+            config,
+            &MetricsRegistry::new(),
+            |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+        )
+        .open(mz_persist_types::PersistLocation::new_in_mem())
+        .await
+        .expect("can open in-memory Persist")
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn standalone_writer_orders_membership_and_appends() {
+        let persist = persist_client().await;
+        let txns = ShardId::new();
+        let shard = ShardId::new();
+        let id = GlobalId::User(1);
+        let writer = open(
+            persist.clone(),
+            txns,
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
+            false,
+        )
+        .await;
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("can open table reader");
+
+        // Enqueue without awaiting, so registration, append, and forgetting must
+        // be serialized by the concrete worker, without a storage controller.
+        let registered = writer.register(
+            10.into(),
+            vec![TableRegistration {
+                id,
+                data_shard: shard,
+                relation_desc: RelationDesc::empty(),
+            }],
+        );
+        let appended = writer.append(
+            11.into(),
+            12.into(),
+            vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
+        );
+        let forgotten = writer.forget(12.into(), vec![id, GlobalId::User(2)]);
+        for result in [registered, appended, forgotten] {
+            result
+                .await
+                .expect("worker responds")
+                .expect("ordered operation succeeds");
+        }
+        // Forgotten tables keep their data. Shard finalization belongs to
+        // collection lifetime management, not the row writer.
+        let rows = reader
+            .snapshot_and_fetch(Antichain::from_elem(11.into()))
+            .await
+            .expect("written rows remain readable");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.0, SourceData(Ok(Row::default())));
+        assert_eq!(rows[0].2, 1);
+
+        writer
+            .append(13.into(), 14.into(), Vec::new())
+            .await
+            .expect("worker responds")
+            .expect("empty append advances WAL time");
+        assert_eq!(
+            persist
+                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                    txns,
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .expect("can observe WAL upper"),
+            Antichain::from_elem(14.into()),
+        );
+        reader.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn read_only_backfill_does_not_tick_the_wal() {
+        let persist = persist_client().await;
+        let txns = ShardId::new();
+        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+        let live = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
+        live.append(10.into(), 11.into(), Vec::new())
+            .await
+            .expect("live worker responds")
+            .expect("live adapter ticks WAL");
+        let prewarming = open(persist.clone(), txns, metrics, true).await;
+        let shard = ShardId::new();
+        let id = GlobalId::System(1);
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("can open migrated table reader");
+        prewarming
+            .register(
+                12.into(),
+                vec![TableRegistration {
+                    id,
+                    data_shard: shard,
+                    relation_desc: RelationDesc::empty(),
+                }],
+            )
+            .await
+            .expect("prewarming worker responds")
+            .expect("can register migrated shard locally");
+        prewarming
+            .append(
+                0.into(),
+                1.into(),
+                vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
+            )
+            .await
+            .expect("prewarming worker responds")
+            .expect("can backfill migrated shard");
+        assert_eq!(
+            persist
+                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                    txns,
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .expect("can observe WAL upper"),
+            Antichain::from_elem(11.into()),
+        );
+        let rows = reader
+            .snapshot_and_fetch(Antichain::from_elem(0.into()))
+            .await
+            .expect("backfilled row is readable");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.0, SourceData(Ok(Row::default())));
+        reader.expire().await;
+    }
+}

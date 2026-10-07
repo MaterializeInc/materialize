@@ -31,6 +31,38 @@ CREATE TABLE t (value int);
 statement ok
 SET statement_timeout = 0;
 
+# Admission and catalog certification must not apply statement_timeout to
+# session control, transaction control, or DDL. These operations must work
+# even when the timeout is too short for a coordinator round trip.
+statement ok
+SET statement_timeout = '1us';
+
+query T
+SHOW statement_timeout;
+----
+1 us
+
+statement ok
+BEGIN;
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+statement ok
+ROLLBACK;
+
+statement ok
+CREATE TABLE timeout_ddl (a int);
+
+statement ok
+DROP TABLE timeout_ddl;
+
+statement ok
+SET statement_timeout = 0;
+
 query I
 SELECT count(*) FROM t;
 ----

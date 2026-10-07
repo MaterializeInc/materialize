@@ -70,6 +70,17 @@ contains: division by zero
 
 > CREATE DEFAULT INDEX i ON t
 
+# The fast-path assertion needs an observed index. Exclude this readiness query
+# from the logging checks using their helper-query marker.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers f
+    JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id
+    JOIN mz_indexes i ON i.id = g.id
+    WHERE i.name = 'i' AND f.read_frontier IS NOT NULL
+  ) AS sduiahsdfuoiahsdf
+true
+
 > SELECT * FROM t
 1
 
@@ -217,6 +228,7 @@ COMMIT execution-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-began
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" optimization-finished
+"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" storage-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" execution-began

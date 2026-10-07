@@ -1965,6 +1965,8 @@ pub struct View {
 pub struct MaterializedView {
     /// Parse-able SQL that is stored durably and defines this materialized view.
     pub create_sql: String,
+    /// Query name references, including those eliminated by planning, rather than all statement references.
+    pub query_ids: ResolvedIds,
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
     /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.
@@ -1974,7 +1976,8 @@ pub struct MaterializedView {
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
-    /// If set, only install this materialized view's dataflow on the specified replica.
+    /// If set, install only on replicas matching this binding. Missing realization
+    /// does not make a bound materialized view untargeted.
     pub target_replica: Option<ReplicaId>,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,

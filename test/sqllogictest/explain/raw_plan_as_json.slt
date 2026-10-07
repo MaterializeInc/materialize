@@ -47,7 +47,7 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
               "Get": {
                 "id": {
                   "Global": {
-                    "User": 5
+                    "User": 21
                   }
                 },
                 "typ": {
@@ -236,7 +236,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 17
                       }
                     },
                     "typ": {
@@ -272,7 +272,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 5
+                              "User": 21
                             }
                           },
                           "typ": {
@@ -315,7 +315,7 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
   "Get": {
     "id": {
       "Global": {
-        "User": 1
+        "User": 17
       }
     },
     "typ": {
@@ -350,7 +350,7 @@ SELECT abs(min(a) - max(a)) FROM t
               "Get": {
                 "id": {
                   "Global": {
-                    "User": 1
+                    "User": 17
                   }
                 },
                 "typ": {
@@ -462,7 +462,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 17
                       }
                     },
                     "typ": {
@@ -587,7 +587,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
           "Get": {
             "id": {
               "Global": {
-                "User": 5
+                "User": 21
               }
             },
             "typ": {
@@ -645,7 +645,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
               "Get": {
                 "id": {
                   "Global": {
-                    "User": 5
+                    "User": 21
                   }
                 },
                 "typ": {
@@ -699,7 +699,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
               "Get": {
                 "id": {
                   "Global": {
-                    "User": 1
+                    "User": 17
                   }
                 },
                 "typ": {
@@ -790,7 +790,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 5
+                            "User": 21
                           }
                         },
                         "typ": {
@@ -891,7 +891,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 3
+                                "User": 19
                               }
                             },
                             "typ": {
@@ -984,7 +984,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 17
                       }
                     },
                     "typ": {
@@ -1063,7 +1063,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
           "Get": {
             "id": {
               "Global": {
-                "User": 1
+                "User": 17
               }
             },
             "typ": {
@@ -1085,7 +1085,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
           "Get": {
             "id": {
               "Global": {
-                "User": 1
+                "User": 17
               }
             },
             "typ": {
@@ -1150,7 +1150,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 17
                       }
                     },
                     "typ": {
@@ -1172,7 +1172,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 17
                       }
                     },
                     "typ": {
@@ -1211,7 +1211,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
               "Get": {
                 "id": {
                   "Global": {
-                    "User": 1
+                    "User": 17
                   }
                 },
                 "typ": {

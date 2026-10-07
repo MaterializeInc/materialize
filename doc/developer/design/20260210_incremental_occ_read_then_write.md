@@ -50,7 +50,7 @@ a subscribe that continually tracks the current state of the data.
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.
 - Mixed read/write transactions. A write that reads persisted state commits at a
-  timestamp the oracle handed out while the statement ran, which it cannot
+  timestamp chosen while the statement ran, which it cannot
   postpone until COMMIT, so it runs only as a single statement. A write that reads nothing does compose with
   transactions: its diffs are frontier-independent, so they are buffered as
   session write ops and land when the transaction commits. That covers, for
@@ -65,13 +65,13 @@ subscribe-based OCC loop:
 1. Open a subscribe on the read expression (the `selection` from the
    `ReadThenWrite` plan), starting at the timestamp determined by the oracle
 2. Accumulate diffs from the subscribe
-3. Take the write timestamp T from the timeline's oracle, one step above its
-   write timestamp, which is the smallest value the group committer accepts
+3. Choose `T = max(retry_lower_bound, min(F, W+1))`, where `F` is the subscribe
+   frontier, `W` the oracle write timestamp, and the initial lower bound is `as_of+1`
 4. Once the subscribe frontier has advanced to T, so the accumulated diffs below
    T are complete, attempt to write those diffs at T
 5. If the write succeeds, done
-6. If the write fails because another writer already took T, adopt the timestamp
-   the committer reports as next eligible and go back to step 4 with it
+6. On conflict, raise the lower bound to the reported txns-shard upper and return
+   to step 3, folding diffs below the new T into the payload before retrying
 
 This approach is correct by construction: the subscribe always reflects the
 committed state of the data, and the timestamped write mechanism ensures that
@@ -145,12 +145,12 @@ Session Task                         Coordinator
   |                                      |
   |   +-- OCC Loop ------------------+   |
   |   | receive diffs from subscribe |   |
-  |   | target T from the oracle     |   |
+  |   | choose bounded target T      |   |
   |   | once frontier >= T:          |   |
   |   |   consolidate diffs below T  |   |
   |   |   AttemptTimestampedWrite -> |-->|-- group_commit()
   |   |   <-- Success/Failed --------|<--|
-  |   |   if Failed: T = next, loop  |   |
+  |   |   if Failed: raise bound     |   |
   |   |   if Success: break          |   |
   |   +------------------------------+   |
   |                                      |
@@ -158,34 +158,32 @@ Session Task                         Coordinator
   |                                      |
 ```
 
-The target `T` comes from the oracle, not from the subscribe's frontier. A
-frontier certifies what the loop has a complete view of, which is a different
-question from which timestamp to write at, and the two coincide only when the
-selection's inputs are caught up with the oracle. An input can legitimately sit
-far in the future, a materialized view with a `REFRESH` schedule for instance, so
-taking `T` from the frontier would move the write timeline to that future and
-keep it there. The frontier gates the write, the oracle chooses it, and three
-invariants hold for every write the loop makes: the frontier is at or above `T`
-before it submits, the payload is every diff strictly below `T`, and `T` is above
-the statement's `as_of`, which is where the snapshot arrives.
+The frontier certifies completeness, and the oracle caps target selection:
+`T = max(retry_lower_bound, min(F, W+1))`. A far-future frontier, for example
+from a materialized view with a `REFRESH` schedule, must not move the write
+timeline to that future. `T <= W+1` at choice time unless a reported txns upper
+raises the lower bound above that cap. Linearizing `as_of` before the loop
+ensures the initial lower bound `as_of+1 <= W+1`. Before every submission,
+`F >= T`, the payload contains every diff strictly below `T`, and `T > as_of`.
+Whenever T changes, the loop refolds the intervening diffs before submitting.
 
 Note that the frontier being at or above `T` does not make the two equal. The
-frontier is a minimum over the selection's inputs, so it bounds neither `T` nor
-the target table's upper. Where it runs above `T`, a selection that reads the
-target table sees diffs the payload excludes, the compare-and-append refuses, and
-the loop retries at a higher target. Persist arbitrates the timestamp, not the
-frontier.
+frontier is a minimum over the selection's inputs, not the target table's upper.
+Where it runs above `T`, a selection that reads the target table sees diffs the
+payload excludes, the compare-and-append refuses, and the loop retries at a higher
+target. Persist arbitrates the timestamp, not the frontier.
 
 ### Timestamped writes
 
 A timestamped write is a write that must be committed at a specific timestamp.
 The group commit machinery has to be extended to support this by:
 
-1. Checking if the target timestamp is still valid (hasn't been passed by the
-   oracle)
+1. Checking validity through the txns-shard compare-and-append.
+   Oracle allocations are not table-write conflicts
 2. Using the target timestamp directly instead of allocating a new one from the
    oracle
-3. Advancing the oracle past the target timestamp after the write
+3. Applying the target timestamp to the oracle after the write is durable and
+   before acknowledging it
 
 Only one timestamped write is processed per group commit round. If multiple
 timestamped writes target the same timestamp, one is selected and the others
@@ -255,20 +253,16 @@ selection.
 
 ### The timestamped write ensures atomicity
 
-The write is submitted at a timestamp taken from the timeline's oracle, once the
-subscribe's frontier has reached it so that the accumulated diffs below it are
-complete. The group commit machinery checks that this timestamp hasn't been
-passed by the oracle:
+The write is submitted once `F >= T`, with all diffs strictly below T. Persist
+arbitrates against the txns-shard upper `U`, independently of oracle allocations:
 
-- If the timestamp is still valid: the write is committed at exactly that
-  timestamp, and the oracle is advanced past it. Any concurrent OCC loops that
-  were targeting the same timestamp will fail and retry.
-- If the timestamp has already passed (another write committed first): the
-  write also fails, and the reply names the next eligible timestamp. The OCC
-  loop adopts that as its new target, waits for the subscribe's frontier to
-  reach it, which folds the intervening writes' updates into the payload, and
-  retries. The reported timestamp is always strictly above the rejected one, so
-  the retries make progress.
+- Success requires `U_before <= T`. For txns-table inputs,
+  `U_before <= T <= F <= U_observed`, so every landed table write is below T
+  and was observed. The write commits at T and advances U to `T+1`.
+- On conflict, the reply reports the actual current txns upper, which is
+  strictly above the rejected T. The loop raises
+  its retry lower bound, chooses T again, waits for `F >= T`, and refolds diffs
+  below the new T before retrying.
 
 This ensures that the write is always based on the state of the data at exactly
 the write timestamp. There is no window for lost updates: either the write
@@ -277,13 +271,22 @@ fresh data.
 
 ### Linearization
 
-Semantically, a read-then-write is a SELECT followed by a write. Normally we
-have to linearize reads, ensuring that the oracle read timestamp is at least
-the timestamp chosen for a peek, so that results can't "go backwards". With the
-subscribe-based OCC loop, we might observe data timestamped beyond the current
-oracle read timestamp. However, actually applying the write bumps the oracle
-read timestamp to at least the write timestamp, so at write time it holds that
-`write_ts <= oracle_read_ts`. The linearization invariant is maintained.
+Let R be the shared oracle read timestamp and `R_s` its value obtained after the
+statement begins. Timestamp selection enforces `as_of >= R_s`, and the loop enforces
+`T > as_of`. Every operation acknowledged before the statement began has its
+timestamp at or below `R_s`: txns writes and catalog content commits apply
+their timestamps to the shared oracle before acknowledgement, and strict
+serializable reads wait for the oracle read timestamp to reach their chosen
+timestamp. This completion-before-acknowledgement requirement is
+load-bearing, including for catalog commits. Thus those operations precede T
+without requiring `T > W` or `T > R` at submission.
+
+A concurrent read can have timestamp `X >= T`, even if it was handed out before
+the subscribe started. A read that depends on the txns write is served only
+after `U > X >= T`, when the compare-and-append at T is decided, and sees the
+write iff it landed. Reads below T do not see it. Reads not gated by U have
+content independent of the write, such as a REFRESH view whose last refresh is
+below T. Applying the successful write sets `R' = max(R, T)` before acknowledgement.
 
 A statement that matches no rows performs no write, so nothing advances the
 oracle for it. It reports the timestamp its view is complete through and waits
@@ -311,8 +314,8 @@ because:
 2. Two independently computed timestamped writes could be inconsistent if
    applied at the same timestamp (e.g., both try to delete the same row, but
    after one succeeds the other's diff is stale)
-3. After committing at timestamp T, the oracle advances past T, so additional
-   writes at T would fail anyway. We fail them early to avoid unnecessary work.
+3. After committing at timestamp T, the txns-shard upper is `T+1`, so additional
+   writes at T fail the compare-and-append regardless of oracle allocations.
 
 ### Timeouts
 
@@ -344,7 +347,9 @@ In the new approach, correctness depends on:
 1. The subscribe reflecting committed state accurately (guaranteed by the
    compute/storage layers)
 2. The timestamped write succeeding only if the target timestamp is still valid
-   (guaranteed by the group commit / timestamp oracle)
+   (guaranteed by the txns-shard compare-and-append)
+3. Real-time ordering through the shared oracle's completion-before-acknowledgement
+   contract, and generation fencing through the catalog advance before the write
 
 The new approach is arguably easier to reason about: there is no global lock
 state to consider, no deferred operations, no lock merging. The correctness
@@ -370,18 +375,22 @@ that the next reader does not take them for bugs.
   needs a materially conflicting write plus a reader inside it, which is
   presumably why it went unnoticed.
 - **A lagging dependency delays rather than being read stale.** This is the
-  price of the strengthening above. The write timestamp comes from the oracle,
-  and the loop waits for the subscribe's frontier to certify it before
-  submitting, so a lagging selection dependency delays the statement by its lag.
+  price of the strengthening above. The loop waits for the subscribe's frontier
+  to certify the chosen write timestamp before submitting, so a lagging selection
+  dependency delays the statement by its lag.
   A dependency that catches up commits normally. One that persistently lags by
   more than about one `default_timestamp_interval` never lets an attempt land:
-  every wait ends with the oracle already past the target, the committer refuses
-  it and names a newer one, and the next wait is again bounded by the lagging
+  every wait ends with the txns upper already past the target, Persist refuses
+  it and reports that upper, and the next wait is again bounded by the lagging
   input. Each round costs one of `max_occ_retries`, but the rounds are paced by
-  frontier advances rather than spinning, so what ends the statement is
-  `statement_timeout`, which it runs out while holding an OCC permit and its
-  subscribe. The lock path's peek simply waited for the input to catch up and
-  then committed.
+  frontier advances rather than spinning. The statement can exhaust its timeout
+  while holding an OCC permit and its subscribe. Oracle allocations alone do
+  not cause conflicts, but this does not fix subscribe lag or the initial
+  snapshot wait when catalog progress puts `as_of` ahead of the txns upper.
+  Catalog progress can also leave the oracle ahead of the txns upper after a
+  successful UPDATE, so a following strict-serializable read waits for table
+  progress even though the write is already durable.
+  The lock path's peek simply waited for the input to catch up and then committed.
 - **Statement lifecycle events.** The frontend path records an
   `optimization-finished` event for a DML, the coordinator path does not,
   because it hands the read-then-write's inner peek a trivial logging context
@@ -415,8 +424,9 @@ that the next reader does not take them for bugs.
   committer, so sleeping would only delay a write that already has to land at
   that timestamp. The committer instead refuses a target above
   `write_ts_upper_bound(now)` outright. That refusal is unreachable in normal
-  operation, since the target is one step above the oracle's write timestamp and
-  the oracle clamps itself to the clock. It fires only for a write timeline that
+  operation, since target selection is capped by the oracle's write timestamp
+  plus one, except when raised by a reported txns upper, and the oracle clamps
+  itself to the clock. It fires only for a write timeline that
   has already run away from the clock, which is an environment-level invariant
   violation rather than something a statement can provoke. See the doc comment on
   `GroupCommitter::commit_timestamped` for the full list of what that path skips
@@ -456,8 +466,8 @@ throughput (left) and latency (right). Key observations:
   table). Writers on different tables do not reprocess each other's data, since
   a subscribe sees only progress from another table's write. They do still
   contend, in three ways: the concurrency semaphore is process-global across
-  tables and clusters, the conflict predicate is the global oracle plus the
-  shared txns-shard upper, so two writers that took the same target timestamp
+  tables and clusters, the conflict predicate is the shared txns-shard upper,
+  so two writers that took the same target timestamp
   refuse each other, and each timestamped write is its own committer round rather
   than merging into a shared group commit. Every write benchmark is single-table,
   so the cross-table case is unmeasured.

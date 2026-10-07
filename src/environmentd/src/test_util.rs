@@ -101,6 +101,60 @@ use crate::{
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
 
+/// Publishes a mock clock independently of any server runtime. Harness clones
+/// and their servers share this owner, so deployment and replica restarts keep
+/// using the same file. Open reader handles remain valid while detached tasks
+/// and replicas drain after the fixture releases its directory.
+struct TimestampOracleClock {
+    path: PathBuf,
+    stop: std::sync::mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TimestampOracleClock {
+    fn new(now: NowFn) -> Self {
+        let directory = tempfile::tempdir().expect("creating fixture clock directory");
+        let path = directory.path().join("timestamp-oracle-clock");
+        let mut file = fs::File::create(&path).expect("creating fixture clock");
+        let mut published = now();
+        mz_timestamp_oracle::fixture_clock::publish(&mut file, published)
+            .expect("publishing fixture clock");
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("fixture-timestamp-clock".into())
+            .spawn(move || {
+                let _directory = directory;
+                while matches!(
+                    stopped.recv_timeout(Duration::from_millis(1)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    let value = now();
+                    if value != published {
+                        mz_timestamp_oracle::fixture_clock::publish(&mut file, value)
+                            .expect("publishing fixture clock");
+                        published = value;
+                    }
+                }
+            })
+            .expect("spawning fixture clock publisher");
+        Self {
+            path,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for TimestampOracleClock {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        let result = self.thread.take().expect("publisher exists").join();
+        if !std::thread::panicking() {
+            result.expect("fixture clock publisher panicked");
+        }
+    }
+}
+
 /// Entry point for creating and configuring an `environmentd` test harness.
 #[derive(Clone)]
 pub struct TestHarness {
@@ -118,6 +172,7 @@ pub struct TestHarness {
     aws_connection_context: bool,
     workers: usize,
     now: NowFn,
+    timestamp_oracle_clock: Option<Arc<TimestampOracleClock>>,
     seed: u32,
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
@@ -204,6 +259,7 @@ impl Default for TestHarness {
             aws_connection_context: true,
             workers: 1,
             now: SYSTEM_TIME.clone(),
+            timestamp_oracle_clock: None,
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
@@ -244,6 +300,10 @@ impl Default for TestHarness {
                 (
                     SHARD_METRICS.name().to_string(),
                     ShardMetricsExport::Summary.as_str().to_string(),
+                ),
+                (
+                    "enable_catalog_read_protection".to_string(),
+                    "true".to_string(),
                 ),
             ]),
             internal_console_redirect_url: None,
@@ -574,7 +634,13 @@ impl TestHarness {
         self
     }
 
+    /// Mocks the adapter clock and explicitly enables a shared fixture clock
+    /// for catalog and data timestamp allocation and policy checks. Changes to
+    /// `now` are published asynchronously, sampled every millisecond. Other
+    /// adapter consumers continue to call `now` directly. Source clocks, Persist
+    /// leases, and runtime timers are not mocked.
     pub fn with_now(mut self, now: NowFn) -> Self {
+        self.timestamp_oracle_clock = Some(Arc::new(TimestampOracleClock::new(now.clone())));
         self.now = now;
         self
     }
@@ -699,6 +765,8 @@ impl TestHarness {
         self
     }
 
+    /// Simulates the Persist binary version in this server and its clusterd children.
+    /// Written-plan identity and transport versions still describe the actual binaries.
     pub fn with_code_version(mut self, version: semver::Version) -> Self {
         self.code_version = version;
         self
@@ -749,7 +817,10 @@ impl Listeners {
             Some(data_directory) => (data_directory, None),
         };
         let scratch_dir = tempfile::tempdir()?;
-        let (consensus_uri, timestamp_oracle_url) = {
+        let (consensus_uri, timestamp_oracle_url): (
+            mz_ore::url::SensitiveUrl,
+            mz_ore::url::SensitiveUrl,
+        ) = {
             let seed = config.seed;
             let cockroach_url = env::var("METADATA_BACKEND_URL")
                 .map_err(|_| anyhow!("METADATA_BACKEND_URL environment variable is not set"))?;
@@ -791,7 +862,19 @@ impl Listeners {
             suppress_output: false,
             environment_id: config.environment_id.to_string(),
             secrets_dir: data_directory.join("secrets"),
-            command_wrapper: vec![],
+            // Scope version simulation to this harness's child launches, including
+            // replacements. Other concurrently running harnesses keep their version.
+            command_wrapper: if config.code_version != crate::BUILD_INFO.semver_version() {
+                vec![
+                    "env".into(),
+                    format!(
+                        "CLUSTERD_TEST_PERSIST_BUILD_VERSION={}",
+                        config.code_version
+                    ),
+                ]
+            } else {
+                vec![]
+            },
             propagate_crashes: config.propagate_crashes,
             tcp_proxy: None,
             scratch_directory: scratch_dir.path().to_path_buf(),
@@ -839,6 +922,7 @@ impl Listeners {
 
         let secrets_controller = Arc::clone(&orchestrator);
         let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        connection_context.environment_id = config.environment_id.to_string();
         if !config.aws_connection_context {
             connection_context.aws_external_id_prefix = None;
             connection_context.aws_connection_role_arn = None;
@@ -884,25 +968,37 @@ impl Listeners {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
         };
+        let persist_location = PersistLocation {
+            blob_uri: format!("file://{}/persist/blob", data_directory.display())
+                .parse()
+                .expect("invalid blob URI"),
+            consensus_uri,
+        };
+        let environment_id = config.environment_id.clone();
 
+        let timestamp_oracle_clock_file = config
+            .timestamp_oracle_clock
+            .as_ref()
+            .map(|clock| clock.path.clone());
+        let timestamp_oracle_now = match &timestamp_oracle_clock_file {
+            Some(path) => mz_timestamp_oracle::fixture_clock::open(path.clone())?,
+            None => config.now.clone(),
+        };
         let inner = self
             .inner
             .serve(crate::Config {
                 catalog_config,
-                timestamp_oracle_url: Some(timestamp_oracle_url),
+                timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
                 controller: ControllerConfig {
+                    timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
+                    timestamp_oracle_clock_file,
                     build_info: &crate::BUILD_INFO,
                     orchestrator,
                     clusterd_image: "clusterd".into(),
                     init_container_image: None,
                     deploy_generation: config.deploy_generation,
-                    persist_location: PersistLocation {
-                        blob_uri: format!("file://{}/persist/blob", data_directory.display())
-                            .parse()
-                            .expect("invalid blob URI"),
-                        consensus_uri,
-                    },
-                    persist_clients,
+                    persist_location: persist_location.clone(),
+                    persist_clients: Arc::clone(&persist_clients),
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
@@ -925,7 +1021,7 @@ impl Listeners {
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
                 metrics_registry: metrics_registry.clone(),
-                now: config.now,
+                now: config.now.clone(),
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
                 cors_allowed_origin_list: Vec::new(),
@@ -970,8 +1066,14 @@ impl Listeners {
         Ok(TestServer {
             inner,
             metrics_registry,
+            persist_clients,
+            persist_location,
+            environment_id,
+            timestamp_oracle_url,
+            timestamp_oracle_now,
             _temp_dir: temp_dir,
             _scratch_dir: scratch_dir,
+            _timestamp_oracle_clock: config.timestamp_oracle_clock,
         })
     }
 }
@@ -980,12 +1082,46 @@ impl Listeners {
 pub struct TestServer {
     pub inner: crate::Server,
     pub metrics_registry: MetricsRegistry,
+    /// Connection identity for fixture peers of this server's durable catalog.
+    pub persist_clients: Arc<PersistClientCache>,
+    pub persist_location: PersistLocation,
+    pub environment_id: EnvironmentId,
+    timestamp_oracle_url: mz_ore::url::SensitiveUrl,
+    timestamp_oracle_now: NowFn,
     /// The `TempDir`s are saved to prevent them from being dropped, and thus cleaned up too early.
     _temp_dir: Option<TempDir>,
     _scratch_dir: TempDir,
+    _timestamp_oracle_clock: Option<Arc<TimestampOracleClock>>,
 }
 
 impl TestServer {
+    /// Open an independent handle to the fixture's shared timestamp namespace.
+    pub async fn timestamp_oracle(
+        &self,
+    ) -> Arc<dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync> {
+        let config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
+            &self.timestamp_oracle_url,
+            &MetricsRegistry::new(),
+        )
+        .expect("test oracle URL");
+        config
+            .open(
+                mz_storage_types::sources::Timeline::EpochMilliseconds.to_string(),
+                mz_repr::Timestamp::MIN,
+                self.timestamp_oracle_now.clone(),
+                false,
+            )
+            .await
+    }
+
+    /// Open the same timestamp namespace for an independent fixture catalog writer.
+    pub async fn catalog_timestamp_oracle(&self) -> mz_catalog::durable::CatalogTimestampOracle {
+        mz_catalog::durable::CatalogTimestampOracle::new(
+            self.timestamp_oracle().await,
+            self.timestamp_oracle_now.clone(),
+        )
+    }
+
     pub fn connect(&self) -> ConnectBuilder<'_, postgres::NoTls, NoHandle> {
         ConnectBuilder::new(self).no_tls()
     }

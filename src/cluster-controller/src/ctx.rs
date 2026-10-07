@@ -39,7 +39,7 @@ use timely::progress::Antichain;
 // decision can share them without depending on this crate. They are part of the
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
-    AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
+    AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, ClusterIntent,
     ClusterSchedule, ExpectedClusterState, OnHydrationPolicy, OnTimeout, ReconfigurationAudit,
     ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget, ReplicaShape,
 };
@@ -227,6 +227,9 @@ pub struct RefreshWindowInputs {
 #[derive(Clone, Debug)]
 pub struct ClusterState {
     pub cluster_id: ClusterId,
+    /// Shared intent for deployment-local realization. `None` uses the legacy
+    /// single-state contract, with no normalization against shared intent.
+    pub intent: Option<ClusterIntent>,
     pub size: String,
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
@@ -259,6 +262,7 @@ impl ClusterState {
     /// durable fields a concurrent `ALTER` could change out from under a tick.
     pub fn expected(&self) -> ExpectedClusterState {
         ExpectedClusterState {
+            intent: self.intent.clone(),
             size: self.size.clone(),
             replication_factor: self.replication_factor,
             availability_zones: AvailabilityZones(self.availability_zones.clone()),

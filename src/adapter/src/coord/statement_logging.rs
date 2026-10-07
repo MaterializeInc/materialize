@@ -167,6 +167,8 @@ impl Coordinator {
                 self.write_began_execution_events(record, mseh_update, prepared_statement);
             }
             FrontendStatementLoggingEvent::EndedExecution(ended_record) => {
+                // Let tests delay consumption without delaying frontend execution.
+                fail::fail_point!("frontend_statement_logging_end");
                 self.end_statement_execution(
                     StatementLoggingId(ended_record.id),
                     ended_record.reason,
@@ -248,10 +250,8 @@ impl Coordinator {
             (StatementLifecycleHistory, statement_lifecycle_updates),
             (SqlText, sql_text_updates),
         ] {
-            if !updates.is_empty() && !self.controller.read_only() {
-                self.controller
-                    .storage
-                    .append_introspection_updates(type_, updates);
+            if !updates.is_empty() && !self.read_only_controllers {
+                self.adapter_storage.append_history(type_, updates);
             }
         }
     }

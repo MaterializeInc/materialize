@@ -18,9 +18,8 @@
 //! broadcasts them to other workers through the Timely fabric, taking care of the correct
 //! sequencing.
 //!
-//! Commands in the command channel are tagged with a nonce identifying the incarnation of the
-//! compute protocol the command belongs to, allowing workers to recognize client reconnects that
-//! require a reconciliation.
+//! Commands carry a connection nonce and origin. Workers reconcile lifecycle reconnects without
+//! treating query connections or their disconnects as changes to maintained desired state.
 //!
 //! The channel optionally also carries storage-internal commands, for
 //! clusters that host storage objects alongside compute objects. Both command kinds are sequenced
@@ -57,21 +56,34 @@ mod tests;
 /// A command in the unified command lane.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UnifiedCommand {
-    /// A compute command, tagged with the client nonce.
-    Compute(ComputeCommand, Uuid),
+    /// A compute command or query disconnect, tagged with its connection origin.
+    Compute(Option<ComputeCommand>, Origin),
     /// A storage-internal command.
     Storage(InternalStorageCommand),
 }
 
+/// Origin carried through worker 0's common command order.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Origin {
+    Lifecycle(Uuid),
+    Query(Uuid),
+    /// Runtime-owned maintained commands, independent of transport connections.
+    Replica,
+}
+
+/// A missing command denotes query disconnect, never lifecycle replacement.
+pub type Envelope = (Option<ComputeCommand>, Origin);
+
 /// A sender pushing compute commands onto the command channel.
+#[derive(Clone)]
 pub struct Sender {
-    tx: mpsc::Sender<(ComputeCommand, Uuid)>,
+    tx: mpsc::Sender<Envelope>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
 impl Sender {
     /// Broadcasts the given command to all workers.
-    pub fn send(&self, message: (ComputeCommand, Uuid)) {
+    pub fn send(&self, message: Envelope) {
         if self.tx.send(message).is_err() {
             unreachable!("command channel never shuts down");
         }
@@ -168,11 +180,18 @@ pub fn render(
                                 ));
                                 cmd_index += 1;
                             }
-                            Ok((cmd, _nonce)) => {
-                                // Non-leader workers only receive `UpdateConfiguration` commands
-                                // from the controller and must drop them to not sequence
-                                // duplicates.
-                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            Ok((cmd, _origin)) => {
+                                // Handshakes and configuration are observed by every partitioning
+                                // layer. Only worker 0 sequences them, so drop local duplicates.
+                                assert!(matches!(
+                                    cmd,
+                                    Some(
+                                        ComputeCommand::UpdateConfiguration(_)
+                                            | ComputeCommand::ApplyCatalogPosition(_)
+                                            | ComputeCommand::HelloQuery { .. }
+                                            | ComputeCommand::SetQueryMaxResultSize { .. }
+                                    )
+                                ));
                             }
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => {
@@ -330,16 +349,30 @@ pub fn render(
 
 /// Split the given command into one part per target worker.
 ///
-/// Compute `CreateDataflow` commands are partitioned among the workers. Every other command is
-/// replicated to all workers.
+/// Compute `CreateDataflow` and `CreateQueryDataflow` commands are partitioned among the workers.
+/// Every other command, including query disconnects, is replicated to all workers.
 fn split_command(
     command: UnifiedCommand,
     parts: usize,
 ) -> impl Iterator<Item = (usize, UnifiedCommand)> {
     use itertools::Either;
 
+    let (command, query_context) = match command {
+        UnifiedCommand::Compute(
+            Some(ComputeCommand::CreateQueryDataflow {
+                request_id,
+                dataflow,
+                catalog_position,
+            }),
+            origin,
+        ) => (
+            UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin),
+            Some((request_id, catalog_position)),
+        ),
+        command => (command, None),
+    };
     let commands = match command {
-        UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), nonce) => {
+        UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin) => {
             let dataflow = *dataflow;
 
             // A list of descriptions of objects for each part to build.
@@ -375,7 +408,7 @@ fn split_command(
                 })
                 .map(Box::new)
                 .map(move |dataflow| {
-                    UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), nonce)
+                    UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin)
                 });
             Either::Left(commands)
         }
@@ -385,5 +418,21 @@ fn split_command(
         }
     };
 
-    commands.into_iter().enumerate()
+    commands
+        .into_iter()
+        .map(move |command| match (&query_context, command) {
+            (
+                Some((request_id, catalog_position)),
+                UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin),
+            ) => UnifiedCommand::Compute(
+                Some(ComputeCommand::CreateQueryDataflow {
+                    request_id: *request_id,
+                    catalog_position: catalog_position.clone(),
+                    dataflow,
+                }),
+                origin,
+            ),
+            (_, command) => command,
+        })
+        .enumerate()
 }

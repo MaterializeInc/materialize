@@ -86,6 +86,39 @@ impl ClusterController {
         }
     }
 
+    /// Whether all replicas required by the observed state and inputs are present.
+    ///
+    /// Returns false while intent needs normalization or required refresh-window
+    /// inputs are unavailable. Extra replicas awaiting retirement do not block
+    /// this check. This does not establish hydration or future scheduling stability.
+    pub fn required_replicas_present(
+        &self,
+        state: &ClusterState,
+        refresh_window: Option<RefreshWindowInputs>,
+        now: mz_repr::Timestamp,
+    ) -> bool {
+        if Self::normalize_intent(state).is_some() {
+            return false;
+        }
+        let config = self.config_signals();
+        if refresh_window.is_none()
+            && self
+                .strategies
+                .iter()
+                .any(|strategy| strategy.signal_request(state, &config).refresh_window)
+        {
+            return false;
+        }
+        let signals = LiveSignals {
+            refresh_window,
+            ..Default::default()
+        };
+        !self
+            .collect_replica_decisions(state, &signals, &config, now)
+            .iter()
+            .any(|decision| matches!(decision, Decision::CreateReplica { .. }))
+    }
+
     /// Run one reconcile tick over every managed cluster the ctx reports.
     ///
     /// See the module docs for the two-phase structure. Both phases apply per
@@ -131,10 +164,16 @@ impl ClusterController {
         // that is probably about to go stale.
         let mut rejected = BTreeSet::new();
         for state in &states {
-            let Some(signals) = signals.get(&state.cluster_id) else {
-                continue;
+            let write = if let Some(write) = Self::normalize_intent(state) {
+                // Strategies must not write from a pre-normalization baseline.
+                // Phase 2 rereads this write before computing concrete replicas.
+                write
+            } else {
+                let Some(signals) = signals.get(&state.cluster_id) else {
+                    continue;
+                };
+                self.merge_state_writes(state, signals, &config, now)
             };
-            let write = self.merge_state_writes(state, signals, &config, now);
             if write.is_empty() {
                 continue;
             }
@@ -144,8 +183,8 @@ impl ClusterController {
                 expected: state.expected(),
                 write,
             };
-            // A phase-1 batch carries no creates, so it cannot exhaust the
-            // resource budget. Treat any non-applied outcome as a rejection.
+            // Initial deployment enrollment may also realize carried-over IDs.
+            // On any rejection, reobserve rather than diffing an unapplied state.
             if ctx.apply(vec![decision]).await != ApplyOutcome::Applied {
                 rejected.insert(state.cluster_id);
             }
@@ -197,6 +236,78 @@ impl ClusterController {
                 }
             }
         }
+    }
+
+    /// Align local realization with shared intent without declaring an outcome.
+    /// Normal strategies own readiness, resource checks and lifecycle audits.
+    fn normalize_intent(state: &ClusterState) -> Option<StateWrite> {
+        let intent = state.intent.as_ref()?;
+        if !intent.runtime_initialized {
+            let accepted = &intent.accepted;
+            return Some(StateWrite {
+                new_size: Some(accepted.size.clone()),
+                new_replication_factor: Some(accepted.replication_factor),
+                new_availability_zones: Some(accepted.availability_zones.0.clone()),
+                new_logging: Some(accepted.logging.clone()),
+                new_arrangement_compression: Some(accepted.arrangement_compression),
+                reconfiguration: Some(ReconfigurationWrite {
+                    record: intent
+                        .reconfiguration
+                        .clone()
+                        .filter(|r| r.is_in_progress()),
+                    audit: None,
+                }),
+                ..Default::default()
+            });
+        }
+        let record = match intent
+            .reconfiguration
+            .as_ref()
+            .filter(|r| r.is_in_progress())
+        {
+            Some(request) => {
+                if let Some(local) = &state.reconfiguration {
+                    if local.same_request(request) {
+                        if local.is_in_progress() || !intent.may_settle {
+                            // Pending deployments keep their private terminal outcome.
+                            return None;
+                        }
+                        // Recheck authority using current readiness without first
+                        // provisioning a rollback baseline alongside a warmed target.
+                        // A shared rollback restores accepted intent separately.
+                        return Some(StateWrite {
+                            reconfiguration: Some(ReconfigurationWrite {
+                                record: Some(request.clone()),
+                                audit: None,
+                            }),
+                            ..Default::default()
+                        });
+                    }
+                }
+                // A new request starts from its accepted rollback baseline.
+                Some(request.clone())
+            }
+            None => None,
+        };
+        let accepted = &intent.accepted;
+        let write = StateWrite {
+            new_size: (state.size != accepted.size).then(|| accepted.size.clone()),
+            new_replication_factor: (state.replication_factor != accepted.replication_factor)
+                .then_some(accepted.replication_factor),
+            new_availability_zones: (state.availability_zones != accepted.availability_zones.0)
+                .then(|| accepted.availability_zones.0.clone()),
+            new_logging: (state.logging != accepted.logging).then(|| accepted.logging.clone()),
+            new_arrangement_compression: (state.arrangement_compression
+                != accepted.arrangement_compression)
+                .then_some(accepted.arrangement_compression),
+            reconfiguration: (state.reconfiguration != record).then_some(ReconfigurationWrite {
+                record,
+                audit: None,
+            }),
+            // Burst lifetime belongs to local policy/readiness, not promotion.
+            burst: None,
+        };
+        (!write.is_empty()).then_some(write)
     }
 
     /// The decision that sheds this cluster's most expendable transient strategy

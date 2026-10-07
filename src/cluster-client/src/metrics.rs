@@ -9,6 +9,9 @@
 
 //! Metrics shared by both compute and storage.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
 use mz_ore::cast::CastLossy;
 use mz_ore::metric;
 use mz_ore::metrics::{
@@ -17,10 +20,12 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::SlidingMinMax;
 use prometheus::core::{AtomicF64, AtomicU64};
+use prometheus::proto::LabelPair;
 
 /// Controller metrics.
 #[derive(Debug, Clone)]
 pub struct ControllerMetrics {
+    workload_classes: Arc<Mutex<BTreeMap<String, String>>>,
     dataflow_wallclock_lag_seconds: GaugeVec,
     dataflow_wallclock_lag_seconds_sum: CounterVec,
     dataflow_wallclock_lag_seconds_count: IntCounterVec,
@@ -29,7 +34,40 @@ pub struct ControllerMetrics {
 impl ControllerMetrics {
     /// Create a metrics instance registered into the given registry.
     pub fn new(metrics_registry: &MetricsRegistry) -> Self {
+        let workload_classes = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
+
+        // Apply a `workload_class` label to all metrics in the registry that
+        // have an `instance_id` label for an instance whose workload class is
+        // known.
+        metrics_registry.register_postprocessor({
+            let workload_classes = Arc::clone(&workload_classes);
+            move |metrics| {
+                let workload_classes = workload_classes.lock().expect("lock poisoned").clone();
+                for metric in metrics {
+                    'metric: for metric in metric.mut_metric() {
+                        for label in metric.get_label() {
+                            if label.name() == "instance_id" {
+                                if let Some(workload_class) =
+                                    workload_classes.get(label.value()).cloned()
+                                {
+                                    let mut label = LabelPair::default();
+                                    label.set_name("workload_class".into());
+                                    label.set_value(workload_class);
+
+                                    let mut labels = metric.take_label();
+                                    labels.push(label);
+                                    metric.set_label(labels);
+                                }
+                                continue 'metric;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
         Self {
+            workload_classes,
             // The next three metrics immitate a summary metric type. The `prometheus` crate lacks
             // support for summaries, so we roll our own. Note that we also only expose the 0- and
             // the 1-quantile, i.e., minimum and maximum lag values.
@@ -51,6 +89,17 @@ impl ControllerMetrics {
                 help: "The total count of dataflow wallclock lag measurements.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
+        }
+    }
+
+    /// Set the current committed workload class used to enrich cluster metrics.
+    /// `None` removes enrichment, both for RESET and cluster deletion.
+    pub fn set_workload_class(&self, cluster_id: String, workload_class: Option<String>) {
+        let mut classes = self.workload_classes.lock().expect("lock poisoned");
+        if let Some(workload_class) = workload_class {
+            classes.insert(cluster_id, workload_class);
+        } else {
+            classes.remove(&cluster_id);
         }
     }
 
@@ -132,5 +181,48 @@ impl WallclockLagMetrics {
         self.wallclock_lag_seconds_max.set(max.into());
         self.wallclock_lag_seconds_sum.inc_by(lag_secs.into());
         self.wallclock_lag_seconds_count.inc();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn workload_labels_follow_cluster_metadata_without_recreating_metrics() {
+        let registry = MetricsRegistry::new();
+        let metrics = ControllerMetrics::new(&registry);
+        let mut lag =
+            metrics.wallclock_lag_metrics("u1".into(), Some("u1".into()), Some("u1".into()));
+        let mut other =
+            metrics.wallclock_lag_metrics("u2".into(), Some("u2".into()), Some("u2".into()));
+        lag.observe(1);
+        other.observe(1);
+
+        for class in [None, Some("production"), Some("staging"), None] {
+            metrics.set_workload_class("u1".into(), class.map(str::to_owned));
+            let families = registry.gather();
+            let counts = families
+                .iter()
+                .find(|family| family.name() == "mz_dataflow_wallclock_lag_seconds_count")
+                .expect("retained collection metrics");
+            assert_eq!(counts.get_metric().len(), 2);
+            for metric in counts.get_metric() {
+                let labels = metric.get_label();
+                let cluster = labels
+                    .iter()
+                    .find(|label| label.name() == "instance_id")
+                    .unwrap()
+                    .value();
+                let classes: Vec<_> = labels
+                    .iter()
+                    .filter(|label| label.name() == "workload_class")
+                    .map(|label| label.value())
+                    .collect();
+                let expected = if cluster == "u1" { class } else { None };
+                assert_eq!(classes, expected.into_iter().collect::<Vec<_>>());
+                assert_eq!(metric.get_counter().value(), 1.0);
+            }
+        }
     }
 }

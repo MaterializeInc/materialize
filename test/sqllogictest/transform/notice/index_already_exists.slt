@@ -178,10 +178,9 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_i
 ----
 materialize.notices.t_idx3:
   ArrangeBy keys=[[(#0{a} + 7)]]
-    ReadIndex on=t [DELETED INDEX]=[plan root (no new arrangement)]
+    ReadStorage materialize.notices.t
 
-Used Indexes:
-  - [DELETED INDEX] (plan root (no new arrangement), index export)
+Source materialize.notices.t
 
 Target cluster: quickstart
 
