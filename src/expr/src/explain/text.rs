@@ -22,8 +22,11 @@ use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
-use mz_repr::{Datum, Diff, GlobalId, Row, StableRow, UNKNOWN_COLUMN_NAME};
+use mz_repr::{
+    ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, StableRow, UNKNOWN_COLUMN_NAME,
+};
 use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
@@ -167,6 +170,12 @@ where
             }
         }
 
+        for (id, desc) in &self.export_schemas {
+            writeln!(f)?;
+            writeln!(f, "Schema of {id}:")?;
+            fmt_schema(f, desc, self.context.humanizer)?;
+        }
+
         if !self.context.used_indexes.is_empty() {
             writeln!(f)?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
@@ -192,6 +201,43 @@ where
 
         Ok(())
     }
+}
+
+/// Renders `desc` as the column definitions of a `CREATE MATERIALIZED VIEW`
+/// statement, one per line.
+///
+/// Keys are rendered as `UNIQUE NULLS NOT DISTINCT` if they contain nullable
+/// columns, because `RelationDesc` keys treat `NULL` like any other value.
+/// Empty keys have no SQL syntax and are omitted.
+fn fmt_schema(
+    f: &mut fmt::Formatter<'_>,
+    desc: &RelationDesc,
+    humanizer: &dyn ExprHumanizer,
+) -> fmt::Result {
+    let ident = |name: &ColumnName| Ident::new_unchecked(name.as_str()).to_ast_string_simple();
+    let columns = desc.iter().map(|(name, typ)| {
+        format!(
+            "{} {}{}",
+            ident(name),
+            humanizer.humanize_sql_scalar_type(&typ.scalar_type, false),
+            if typ.nullable { "" } else { " NOT NULL" },
+        )
+    });
+    let keys = desc
+        .typ()
+        .keys
+        .iter()
+        .filter(|key| !key.is_empty())
+        .map(|key| {
+            let nullable = key.iter().any(|&i| desc.typ().column_types[i].nullable);
+            format!(
+                "UNIQUE{} ({})",
+                if nullable { " NULLS NOT DISTINCT" } else { "" },
+                separated(", ", key.iter().map(|&i| ident(desc.get_name(i)))),
+            )
+        });
+    let defs: Vec<_> = columns.chain(keys).collect();
+    writeln!(f, "  {}", defs.join(",\n  "))
 }
 
 impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, RowSetFinishing, M>

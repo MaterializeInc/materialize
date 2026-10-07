@@ -17,7 +17,7 @@
 //! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::explain::export_ids_for;
+use mz_compute_types::explain::{export_ids_for, export_schemas};
 use mz_expr::explain::{
     ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource, enforce_linear_chains,
 };
@@ -139,10 +139,13 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             })
             .collect::<Vec<_>>();
 
+        let export_schemas = export_schemas(&self.0.sink_exports, context);
+
         Ok(ExplainMultiPlan {
             context,
             sources,
             plans,
+            export_schemas,
         })
     }
 }
