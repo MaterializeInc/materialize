@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -490,6 +490,17 @@ impl Coordinator {
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                        // `EXPLAIN REPLAN` re-plans an existing materialized view,
+                        // whose keys were proven on creation.
+                        let is_replan = matches!(
+                            &explain_ctx,
+                            ExplainContext::Plan(ExplainPlanContext { replan: Some(_), .. })
+                        );
+                        if let (Some(declared), false) =
+                            (&plan.materialized_view.declared_desc, is_replan)
+                        {
+                            prove_declared_keys(declared, &local_mir_plan.typ().keys)?;
+                        }
                         let global_mir_plan =
                             optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
@@ -1062,4 +1073,31 @@ impl Coordinator {
         )
         .await
     }
+}
+
+/// Checks that every key of `declared` contains one of the `proven` keys.
+///
+/// Declared keys are trusted by every query that reads the materialized view,
+/// so they must follow from the keys the optimizer proves. The check runs only
+/// on creation, not when the `create_sql` is re-planned: key inference is
+/// conservative, so a key proven once stays true even if a later optimizer can
+/// no longer derive it.
+fn prove_declared_keys(declared: &RelationDesc, proven: &[Vec<usize>]) -> Result<(), AdapterError> {
+    let names = |key: &[usize]| -> Vec<String> {
+        key.iter()
+            .map(|&i| declared.get_name(i).to_string())
+            .collect()
+    };
+    for key in &declared.typ().keys {
+        if !proven
+            .iter()
+            .any(|proven_key| proven_key.iter().all(|c| key.contains(c)))
+        {
+            return Err(AdapterError::MaterializedViewKeyNotProven {
+                key: names(key),
+                proven_keys: proven.iter().map(|k| names(k)).collect(),
+            });
+        }
+    }
+    Ok(())
 }
