@@ -879,7 +879,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let (role_id, _) = txn
             .insert_user_role(
                 role_name.to_string(),
-                RoleAttributesRaw::new(),
+                RoleAttributesRaw::new().into(),
                 RoleMembership::new(),
                 RoleVars::default(),
                 &HashSet::new(),

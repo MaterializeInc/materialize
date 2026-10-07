@@ -997,7 +997,10 @@ impl Coordinator {
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.validate_role_attributes(&attributes.clone())?;
-        let op = catalog::Op::CreateRole { name, attributes };
+        let op = catalog::Op::CreateRole {
+            name,
+            attributes: attributes.into(),
+        };
         self.catalog_transact_with_context(conn_id, None, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
@@ -2749,13 +2752,14 @@ impl Coordinator {
             }
         }
 
-        let op = catalog::Op::AlterRole {
+        let op = catalog::Op::alter_role(
             id,
             name,
             attributes,
             nopassword,
-            vars: RoleVars { map: vars },
-        };
+            RoleVars { map: vars },
+            self.catalog().system_config().scram_iterations(),
+        );
         let response = self
             .catalog_transact(Some(session), vec![op])
             .await

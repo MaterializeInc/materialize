@@ -241,7 +241,7 @@ mod tests {
                     None,
                     vec![Op::CreateRole {
                         name: role.into(),
-                        attributes: RoleAttributesRaw::new(),
+                        attributes: RoleAttributesRaw::new().into(),
                     }],
                 )
                 .await

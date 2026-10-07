@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::num::NonZeroU32;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -31,8 +30,7 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, PasswordAction,
-    RoleAttributesRaw, RoleMembership, RoleVars,
+    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql::plan::NetworkPolicyRule;
@@ -79,6 +77,7 @@ use crate::durable::{
     USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+use crate::role_password::{PreparedPasswordAction, PreparedRoleAttributes};
 
 type Timestamp = u64;
 
@@ -587,7 +586,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         id: RoleId,
         name: String,
-        attributes: RoleAttributesRaw,
+        attributes: PreparedRoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
         oid: u32,
@@ -600,7 +599,7 @@ impl<'a> Transaction<'a> {
     pub fn insert_user_role(
         &mut self,
         name: String,
-        attributes: RoleAttributesRaw,
+        attributes: PreparedRoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
         temporary_oids: &HashSet<u32>,
@@ -616,27 +615,13 @@ impl<'a> Transaction<'a> {
         &mut self,
         id: RoleId,
         name: String,
-        attributes: RoleAttributesRaw,
+        attributes: PreparedRoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
         oid: u32,
     ) -> Result<(), CatalogError> {
-        if let Some(ref password) = attributes.password {
-            let hash = mz_auth::hash::scram256_hash(
-                password,
-                &attributes
-                    .scram_iterations
-                    .or_else(|| {
-                        soft_panic_or_log!(
-                            "Hash iterations must be set if a password is provided."
-                        );
-                        None
-                    })
-                    // This should never happen, but rather than panicking we'll
-                    // set a known secure value as a fallback.
-                    .unwrap_or_else(|| NonZeroU32::new(600_000).expect("known valid")),
-            )
-            .expect("password hash should be valid");
+        if let Some(password) = attributes.password {
+            let hash = password.into_verifier();
             match self.role_auth.insert(
                 RoleAuthKey { role_id: id },
                 RoleAuthValue {
@@ -656,7 +641,7 @@ impl<'a> Transaction<'a> {
             RoleKey { id },
             RoleValue {
                 name: name.clone(),
-                attributes: attributes.into(),
+                attributes: attributes.attributes,
                 membership,
                 vars,
                 oid,
@@ -1906,19 +1891,15 @@ impl<'a> Transaction<'a> {
         &mut self,
         id: RoleId,
         role: Role,
-        password: PasswordAction,
+        password: PreparedPasswordAction,
     ) -> Result<(), CatalogError> {
         let key = RoleKey { id };
         if self.roles.get(&key).is_some() {
             let auth_key = RoleAuthKey { role_id: id };
 
             match password {
-                PasswordAction::Set(new_password) => {
-                    let hash = mz_auth::hash::scram256_hash(
-                        &new_password.password,
-                        &new_password.scram_iterations,
-                    )
-                    .expect("password hash should be valid");
+                PreparedPasswordAction::Set(new_password) => {
+                    let hash = new_password.into_verifier();
                     let value = RoleAuthValue {
                         password_hash: Some(hash),
                         updated_at: SYSTEM_TIME(),
@@ -1931,7 +1912,7 @@ impl<'a> Transaction<'a> {
                         self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
                     }
                 }
-                PasswordAction::Clear => {
+                PreparedPasswordAction::Clear => {
                     let value = RoleAuthValue {
                         password_hash: None,
                         updated_at: SYSTEM_TIME(),
@@ -1941,7 +1922,7 @@ impl<'a> Transaction<'a> {
                             .update_by_key(auth_key.clone(), value, self.op_id)?;
                     }
                 }
-                PasswordAction::NoChange => {}
+                PreparedPasswordAction::NoChange => {}
             }
 
             self.roles
@@ -2906,6 +2887,7 @@ impl<'a> Transaction<'a> {
             deployment_generation: _,
             prewarming_plan_build: _,
             read_protection_index: _,
+            oid_index: _,
             databases,
             schemas,
             items,
@@ -3704,6 +3686,7 @@ impl<'a> Transaction<'a> {
             deployment_generation,
             prewarming_plan_build: _,
             read_protection_index: _,
+            oid_index: _,
             databases,
             schemas,
             items,
@@ -5228,6 +5211,149 @@ mod tests {
         ReplicaConfig, ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args,
     };
     use crate::memory;
+
+    #[mz_ore::test]
+    fn prepared_role_password_survives_candidate_rebuilds() {
+        use crate::catalog::Op;
+        use mz_sql::catalog::RoleAttributesRaw;
+        use std::num::NonZeroU32;
+
+        let mut raw = RoleAttributesRaw::new();
+        raw.password = Some("create-secret".into());
+        raw.scram_iterations = NonZeroU32::new(4096);
+        let create = Op::CreateRole {
+            name: "role".into(),
+            attributes: raw.clone().into(),
+        };
+        let mut create_verifiers = Vec::new();
+        let mut alter_verifiers = Vec::new();
+        raw.password = Some("alter-secret".into());
+        let alter = Op::alter_role(
+            RoleId::User(1),
+            "role".into(),
+            raw,
+            false,
+            RoleVars::default(),
+            NonZeroU32::new(8192).unwrap(),
+        );
+        for attempt in 1..=2 {
+            let mut tx =
+                Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+            tx.insert_id_allocator(USER_ROLE_ID_ALLOC_KEY.into(), attempt)
+                .unwrap();
+            tx.insert_id_allocator(OID_ALLOC_KEY.into(), u64::from(FIRST_USER_OID) + attempt)
+                .unwrap();
+            let Op::CreateRole { name, attributes } = create.clone() else {
+                unreachable!()
+            };
+            let before = SYSTEM_TIME();
+            let (id, oid) = tx
+                .insert_user_role(
+                    name.clone(),
+                    attributes.clone(),
+                    RoleMembership::new(),
+                    RoleVars::default(),
+                    &HashSet::new(),
+                )
+                .unwrap();
+            // Allocations belong to the candidate, not to the prepared verifier.
+            assert_eq!(id, RoleId::User(attempt));
+            assert_eq!(u64::from(oid), u64::from(FIRST_USER_OID) + attempt);
+            let key = RoleAuthKey { role_id: id };
+            let snapshot = tx.current_snapshot();
+            let auth = snapshot.role_auth.get(&key).unwrap();
+            assert!(auth.updated_at >= before);
+            create_verifiers.push(auth.password_hash.clone().unwrap());
+            assert!(
+                tx.insert_user_role(
+                    name,
+                    attributes,
+                    RoleMembership::new(),
+                    RoleVars::default(),
+                    &HashSet::new()
+                )
+                .is_err()
+            );
+
+            // Discard the failed candidate, then retry ALTER against the same base.
+            let mut tx = Transaction::from_snapshot(snapshot, 0.into(), false, false, 0).unwrap();
+            let role = tx.get_roles().find(|role| role.id == id).unwrap();
+            let Op::AlterRole { password, .. } = alter.clone() else {
+                unreachable!()
+            };
+            let before = SYSTEM_TIME();
+            tx.update_role(id, role.clone(), password).unwrap();
+            let snapshot = tx.current_snapshot();
+            let auth = snapshot.role_auth.get(&key).unwrap();
+            assert!(auth.updated_at >= before);
+            alter_verifiers.push(auth.password_hash.clone().unwrap());
+            tx.update_role(id, role.clone(), PreparedPasswordAction::NoChange)
+                .unwrap();
+            assert_eq!(tx.current_snapshot().role_auth.get(&key), Some(auth));
+            tx.update_role(id, role, PreparedPasswordAction::Clear)
+                .unwrap();
+            assert_eq!(
+                tx.current_snapshot()
+                    .role_auth
+                    .get(&key)
+                    .unwrap()
+                    .password_hash,
+                None
+            );
+        }
+        // SCRAM includes a random salt, so rehashing per candidate changes these bytes.
+        assert_eq!(create_verifiers[0], create_verifiers[1]);
+        assert_eq!(alter_verifiers[0], alter_verifiers[1]);
+        assert_ne!(create_verifiers[0], alter_verifiers[0]);
+    }
+
+    #[mz_ore::test]
+    fn prepared_password_actions_without_auth_record() {
+        use crate::role_password::PreparedPassword;
+        use mz_sql::catalog::RoleAttributesRaw;
+        use std::num::NonZeroU32;
+
+        let mut tx =
+            Transaction::from_snapshot(Snapshot::empty(), 0.into(), false, false, 0).unwrap();
+        let id = RoleId::Public;
+        tx.insert_builtin_role(
+            id,
+            "public".into(),
+            RoleAttributesRaw::new().into(),
+            RoleMembership::new(),
+            RoleVars::default(),
+            1,
+        )
+        .unwrap();
+        let role = tx.get_roles().find(|role| role.id == id).unwrap();
+        let key = RoleAuthKey { role_id: id };
+        for action in [
+            PreparedPasswordAction::NoChange,
+            PreparedPasswordAction::Clear,
+        ] {
+            tx.update_role(id, role.clone(), action).unwrap();
+            assert!(tx.current_snapshot().role_auth.get(&key).is_none());
+        }
+        let password = PreparedPasswordAction::Set(PreparedPassword::new(
+            &"secret".into(),
+            NonZeroU32::new(4096).unwrap(),
+        ));
+        assert!(
+            tx.update_role(RoleId::User(99), role.clone(), password.clone())
+                .is_err()
+        );
+        assert!(tx.current_snapshot().role_auth.is_empty());
+        tx.update_role(id, role, password).unwrap();
+        let snapshot = tx.current_snapshot();
+        let verifier = snapshot
+            .role_auth
+            .get(&key)
+            .unwrap()
+            .password_hash
+            .as_ref()
+            .unwrap();
+        mz_auth::hash::scram256_verify(&"secret".into(), verifier).unwrap();
+    }
 
     #[mz_ore::test]
     fn replica_names_are_unique_within_deployment() {

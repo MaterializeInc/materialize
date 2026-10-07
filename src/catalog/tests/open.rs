@@ -518,7 +518,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
     let (role_id, _) = txn
         .insert_user_role(
             "joe".to_string(),
-            RoleAttributesRaw::new(),
+            RoleAttributesRaw::new().into(),
             RoleMembership::new(),
             RoleVars::default(),
             &HashSet::new(),

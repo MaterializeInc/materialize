@@ -62,8 +62,8 @@ use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, PasswordAction, PasswordConfig, RoleAttributesRaw, RoleMembership,
-    RoleVars,
+    DefaultPrivilegeObject, PasswordAction, PasswordConfig, RoleAttributes, RoleAttributesRaw,
+    RoleMembership, RoleVars,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
@@ -95,6 +95,7 @@ use crate::catalog::{
 };
 use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::memory::implications::ParsedStateUpdate;
+use crate::role_password::{PreparedPasswordAction, PreparedRoleAttributes};
 
 fn add_to_audit_log(
     system_configuration: &SystemVars,
@@ -158,8 +159,8 @@ pub enum Op {
     AlterRole {
         id: RoleId,
         name: String,
-        attributes: RoleAttributesRaw,
-        nopassword: bool,
+        attributes: RoleAttributes,
+        password: PreparedPasswordAction,
         vars: RoleVars,
     },
     AlterNetworkPolicy {
@@ -190,7 +191,7 @@ pub enum Op {
     },
     CreateRole {
         name: String,
-        attributes: RoleAttributesRaw,
+        attributes: PreparedRoleAttributes,
     },
     CreateCluster {
         id: ClusterId,
@@ -385,6 +386,37 @@ pub enum Op {
 }
 
 impl Op {
+    /// Prepare an ALTER once before catalog retries. Replanning must construct a new
+    /// operation with the newly selected password and policy.
+    pub fn alter_role(
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributesRaw,
+        nopassword: bool,
+        vars: RoleVars,
+        current_scram_iterations: std::num::NonZeroU32,
+    ) -> Self {
+        let password = if nopassword {
+            PasswordAction::Clear
+        } else if let Some(password) = &attributes.password {
+            PasswordAction::Set(PasswordConfig {
+                password: password.clone(),
+                scram_iterations: attributes
+                    .scram_iterations
+                    .unwrap_or(current_scram_iterations),
+            })
+        } else {
+            PasswordAction::NoChange
+        };
+        Self::AlterRole {
+            id,
+            name,
+            attributes: attributes.into(),
+            password: password.into(),
+            vars,
+        }
+    }
+
     /// Whether this operation can participate in internal read-only prewarming.
     /// Durable transaction validation separately enforces namespace and ownership.
     pub fn is_deployment_metadata(&self) -> bool {
@@ -1640,29 +1672,15 @@ impl Catalog {
                 id,
                 name,
                 attributes,
-                nopassword,
+                password,
                 vars,
             } => {
                 state.ensure_not_reserved_role(&id)?;
 
                 let mut existing_role = state.get_role(&id).clone();
-                let password = attributes.password.clone();
-                let scram_iterations = attributes
-                    .scram_iterations
-                    .unwrap_or_else(|| state.system_config().scram_iterations());
-                existing_role.attributes = attributes.into();
+                existing_role.attributes = attributes;
                 existing_role.vars = vars;
-                let password_action = if nopassword {
-                    PasswordAction::Clear
-                } else if let Some(password) = password {
-                    PasswordAction::Set(PasswordConfig {
-                        password,
-                        scram_iterations,
-                    })
-                } else {
-                    PasswordAction::NoChange
-                };
-                tx.update_role(id, existing_role.into(), password_action)?;
+                tx.update_role(id, existing_role.into(), password)?;
 
                 add_to_audit_log(
                     &state.system_configuration,
@@ -1990,11 +2008,13 @@ impl Catalog {
                     EventDetails::CreateRoleV1(mz_audit_log::CreateRoleV1 {
                         id: id.to_string(),
                         name: name.clone(),
-                        auto_provision_source: attributes.auto_provision_source.map(|s| match s {
-                            AutoProvisionSource::Oidc => "oidc".to_string(),
-                            AutoProvisionSource::Frontegg => "frontegg".to_string(),
-                            AutoProvisionSource::None => "none".to_string(),
-                        }),
+                        auto_provision_source: attributes.attributes.auto_provision_source.map(
+                            |s| match s {
+                                AutoProvisionSource::Oidc => "oidc".to_string(),
+                                AutoProvisionSource::Frontegg => "frontegg".to_string(),
+                                AutoProvisionSource::None => "none".to_string(),
+                            },
+                        ),
                     }),
                 )?;
                 info!("create role {}", name);
@@ -2974,7 +2994,11 @@ impl Catalog {
                 }
                 let mut member_role = state.get_role(&member_id).clone();
                 member_role.membership.map.insert(role_id, grantor_id);
-                tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
+                tx.update_role(
+                    member_id,
+                    member_role.into(),
+                    PreparedPasswordAction::NoChange,
+                )?;
 
                 add_to_audit_log(
                     &state.system_configuration,
@@ -3004,7 +3028,11 @@ impl Catalog {
                 state.ensure_grantable_role(&role_id)?;
                 let mut member_role = state.get_role(&member_id).clone();
                 member_role.membership.map.remove(&role_id);
-                tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
+                tx.update_role(
+                    member_id,
+                    member_role.into(),
+                    PreparedPasswordAction::NoChange,
+                )?;
 
                 add_to_audit_log(
                     &state.system_configuration,

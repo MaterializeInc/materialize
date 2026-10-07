@@ -276,7 +276,7 @@ pub(crate) async fn initialize(
         tx.insert_builtin_role(
             role.id,
             role.name.to_string(),
-            role.attributes.clone(),
+            role.attributes.clone().into(),
             RoleMembership::new(),
             RoleVars::default(),
             role.oid,
@@ -285,7 +285,7 @@ pub(crate) async fn initialize(
     tx.insert_builtin_role(
         RoleId::Public,
         PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-        RoleAttributesRaw::new(),
+        RoleAttributesRaw::new().into(),
         RoleMembership::new(),
         RoleVars::default(),
         ROLE_PUBLIC_OID,
@@ -299,7 +299,7 @@ pub(crate) async fn initialize(
 
         let (id, oid) = tx.insert_user_role(
             role.to_string(),
-            attributes.clone(),
+            attributes.clone().into(),
             membership.clone(),
             vars.clone(),
             &HashSet::new(),

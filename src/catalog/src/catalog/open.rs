@@ -1596,7 +1596,7 @@ fn add_new_remove_old_builtin_roles_migration(
             txn.insert_builtin_role(
                 builtin_role.id,
                 builtin_role.name.to_string(),
-                builtin_role.attributes.clone(),
+                builtin_role.attributes.clone().into(),
                 RoleMembership::new(),
                 RoleVars::default(),
                 builtin_role.oid,

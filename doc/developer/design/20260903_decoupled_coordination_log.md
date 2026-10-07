@@ -41,8 +41,10 @@ cancellation. This slice still needs CI verification.
 Next finish APPLY REPLACEMENT, ordinary DDL and explicit DDL COMMIT resumption,
 plus direct preparation acquisition. Preserve cancellation and commit-once
 completion. Do not trade CAS spinning for repeated optimization.
-Password-bearing role creation still repeats SCRAM hashing on candidate retries.
-Keep that preparation cost distinct from OID scans and coordinator resumption.
+CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
+not per candidate. IDs, validation and audit effects remain candidate-owned.
+This removes repeated hashing, but aggregate candidate timings do not isolate
+hashing's cost from scans or scheduling delays.
 
 Keep the 1s publication default while making contention cheap and nonblocking.
 Defer the 5s comparison until that repair is measured. Preserve heartbeat/grace,

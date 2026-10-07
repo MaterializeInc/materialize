@@ -26,6 +26,7 @@ pub mod memory;
 pub mod optimize;
 pub mod read_protection;
 pub mod retry;
+pub mod role_password;
 pub mod storage_config;
 
 pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
