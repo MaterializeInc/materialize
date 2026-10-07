@@ -73,10 +73,10 @@ contains:Address resolved to a private IP
 # Kafka brokers are resolved by librdkafka's DNS callback, which also covers
 # brokers advertised in metadata and every reconnect.
 ! CREATE CONNECTION kafka_private TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = true)
-contains:Failed to resolve hostname
+contains:Broker address resolved to a private IP
 
 ! CREATE CONNECTION kafka_loopback TO KAFKA (BROKER '127.0.0.1:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = true)
-contains:Failed to resolve hostname
+contains:Broker address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 > CREATE TABLE copy_ssrf_target (a text, b text)

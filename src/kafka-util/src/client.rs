@@ -27,7 +27,7 @@ use crossbeam::channel::{Receiver, Sender, unbounded};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
-use mz_ore::netio::resolve_address;
+use mz_ore::netio::{DnsResolutionError, resolve_address};
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{Client, NativeClient, OAuthToken};
@@ -107,6 +107,11 @@ impl MzClientContext {
     }
 }
 
+/// Prefix of the `FAIL` log [`TunnelingClientContext`] emits when it rejects a
+/// broker, which [`MzKafkaError::from_str`] maps to
+/// [`MzKafkaError::PrivateBrokerAddress`].
+const PRIVATE_BROKER_ADDRESS_MARKER: &str = "Broker address resolved to a private IP";
+
 /// A structured error type for errors reported by librdkafka through its logs.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MzKafkaError {
@@ -137,6 +142,9 @@ pub enum MzKafkaError {
     /// Failed to resolve hostname
     #[error("Failed to resolve hostname")]
     HostnameResolutionFailed,
+    /// Broker resolved to a private address while external addresses are enforced
+    #[error("Broker address resolved to a private IP")]
+    PrivateBrokerAddress,
     /// Unsupported SASL mechanism
     #[error("Unsupported SASL mechanism")]
     UnsupportedSASLMechanism,
@@ -190,6 +198,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::ConnectionReset(inner.to_owned()))
         } else if s.contains("request(s) timed out: disconnect") {
             Ok(Self::ConnectionTimeout)
+        } else if s.contains(PRIVATE_BROKER_ADDRESS_MARKER) {
+            Ok(Self::PrivateBrokerAddress)
         } else if s.contains("Failed to resolve") {
             Ok(Self::HostnameResolutionFailed)
         } else if s.contains("mechanism handshake failed:") {
@@ -435,10 +445,6 @@ pub struct TunnelingClientContext<C> {
 
 impl<C> TunnelingClientContext<C> {
     /// Constructs a new context that wraps `inner`.
-    ///
-    /// With `enforce_external_addresses`, brokers that are not routed through
-    /// an SSH tunnel or PrivateLink fail to resolve unless every address they
-    /// resolve to is global.
     pub fn new(
         inner: C,
         runtime: Handle,
@@ -507,29 +513,6 @@ impl<C> TunnelingClientContext<C> {
         rewrites.insert(broker, BrokerRewriteHandle::Simple(rewrite));
     }
 
-    /// Resolves a broker address that the user controls directly, i.e. one not
-    /// rewritten to an SSH tunnel or PrivateLink endpoint.
-    // NOTE: librdkafka connects to exactly the addresses returned here and does
-    // not resolve the name again, so checking them here also defeats DNS
-    // rebinding between validation and connect. TLS SNI and certificate
-    // verification still use the broker's hostname.
-    fn resolve_direct(&self, addr: &BrokerAddr) -> Result<Vec<SocketAddr>, io::Error> {
-        if !self.enforce_external_addresses {
-            return addr.to_socket_addrs();
-        }
-        let ips = self
-            .runtime
-            .block_on(resolve_address(&addr.host, true))
-            .map_err(|e| {
-                warn!("kafka: rejecting broker {}:{}: {e}", addr.host, addr.port);
-                io::Error::other(e)
-            })?;
-        Ok(ips
-            .into_iter()
-            .map(|ip| SocketAddr::new(ip, addr.port))
-            .collect())
-    }
-
     /// Returns a reference to the wrapped context.
     pub fn inner(&self) -> &C {
         &self.inner
@@ -563,6 +546,42 @@ impl<C> TunnelingClientContext<C> {
                     }
                 }
             })
+    }
+}
+
+impl<C: ClientContext> TunnelingClientContext<C> {
+    /// Resolves a broker address that the user controls directly, i.e. one not
+    /// rewritten to an SSH tunnel or PrivateLink endpoint. With
+    /// `enforce_external_addresses`, fails unless every address is global.
+    // NOTE: librdkafka connects only to addresses returned here, and every
+    // re-resolution (e.g. after `broker.address.ttl`) comes back through this
+    // callback, so checking here also defeats DNS rebinding. TLS SNI and
+    // certificate verification still use the broker's hostname.
+    fn resolve_direct(&self, addr: &BrokerAddr) -> Result<Vec<SocketAddr>, io::Error> {
+        if !self.enforce_external_addresses {
+            return addr.to_socket_addrs();
+        }
+        match self.runtime.block_on(resolve_address(&addr.host, true)) {
+            Ok(ips) => Ok(ips
+                .into_iter()
+                .map(|ip| SocketAddr::new(ip, addr.port))
+                .collect()),
+            Err(e) => {
+                // librdkafka reports a callback failure as a generic resolution
+                // failure, so surface the reason through the inner context.
+                if let DnsResolutionError::PrivateAddress = e {
+                    self.inner.log(
+                        RDKafkaLogLevel::Error,
+                        "FAIL",
+                        &format!(
+                            "{PRIVATE_BROKER_ADDRESS_MARKER}: {}:{} is not routable on the public internet",
+                            addr.host, addr.port
+                        ),
+                    );
+                }
+                Err(io::Error::other(e))
+            }
+        }
     }
 }
 
@@ -1184,6 +1203,57 @@ mod tests {
             .unwrap();
         cert.sign(&key, MessageDigest::sha256()).unwrap();
         String::from_utf8(cert.build().to_pem().unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn resolve_direct_broker_enforces_external_addresses() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let loopback = BrokerAddr {
+            host: "127.0.0.1".into(),
+            port: 9092,
+        };
+        let no_match = HostMappingRules {
+            rules: vec![(
+                ConnectionRulePattern {
+                    prefix_wildcard: false,
+                    literal_match: "other:9092".into(),
+                    suffix_wildcard: false,
+                },
+                BrokerRewrite {
+                    host: "rewritten".into(),
+                    port: None,
+                },
+            )],
+        };
+        for tunnel in [TunnelConfig::None, TunnelConfig::Rules(no_match)] {
+            for enforce in [false, true] {
+                let (inner, errors) = MzClientContext::with_errors();
+                let mut cx = TunnelingClientContext::new(
+                    inner,
+                    runtime.handle().clone(),
+                    SshTunnelManager::default(),
+                    SshTimeoutConfig::default(),
+                    None,
+                    InTask::No,
+                    enforce,
+                );
+                cx.set_default_tunnel(tunnel.clone());
+                let result = cx.resolve_broker_addr(&loopback.host, loopback.port);
+                if enforce {
+                    assert!(result.is_err(), "loopback broker should be rejected");
+                    assert_eq!(
+                        errors.try_iter().collect::<Vec<_>>(),
+                        vec![MzKafkaError::PrivateBrokerAddress],
+                    );
+                } else {
+                    assert_eq!(
+                        result.expect("loopback broker should resolve"),
+                        loopback.to_socket_addrs().unwrap(),
+                    );
+                }
+            }
+        }
     }
 
     #[mz_ore::test]
