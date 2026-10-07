@@ -235,7 +235,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_cluster_reconfiguration_timeout
     default_hydration_burst_linger
     default_timestamp_interval
-    disabled_metric_sinks
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
@@ -272,7 +271,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
-    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key

@@ -2237,7 +2237,7 @@ feature_flags!(
     {
         name: enable_metric_sink,
         desc: "CREATE METRIC SINK",
-        default: false,
+        default: true,
         // Boot re-parses every item's `create_sql`, so turning this off would leave any
         // already-created metric sink unparseable and take the whole catalog down with it.
         enable_for_item_parsing: true,

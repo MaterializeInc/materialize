@@ -367,11 +367,16 @@ fn test_cancel_long_running_query() {
 #[allow(clippy::disallowed_methods)]
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
-    // Ignores introspection subscribe dataflows.
+    // Ignores the background dataflows every replica carries: introspection
+    // subscribes and curated metric sinks. Filtering rather than turning the
+    // features off keeps the shipping configuration under test, and it also
+    // sidesteps the async install: a sink landing mid-test cannot be mistaken
+    // for the query's dataflow, nor for one that failed to clean up.
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%'";
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND name NOT LIKE '%metric-sink-%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -447,11 +452,16 @@ fn test_cancel_insert_select() {
 #[allow(clippy::disallowed_methods)]
 fn test_closing_connection_cancels_dataflows(query: String) {
     // Query that returns how many dataflows are currently installed.
-    // Ignores introspection subscribe dataflows.
+    // Ignores the background dataflows every replica carries: introspection
+    // subscribes and curated metric sinks. Filtering rather than turning the
+    // features off keeps the shipping configuration under test, and it also
+    // sidesteps the async install: a sink landing mid-test cannot be mistaken
+    // for the query's dataflow, nor for one that failed to clean up.
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%'";
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND name NOT LIKE '%metric-sink-%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
