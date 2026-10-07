@@ -787,9 +787,9 @@ impl Coordinator {
     /// Prepare own-build replacements against the post-DDL catalog. These selections
     /// change recovery and EXPLAIN state, not the running dataflows.
     async fn begin_written_plan_rewrites(
-        &mut self,
+        &self,
         conn_id: Option<&ConnectionId>,
-        ops: &mut Vec<Op>,
+        ops: &[Op],
         write_ts: mz_repr::Timestamp,
     ) -> Result<Option<Box<WrittenPlanRewrites>>, AdapterError> {
         if !self.catalog().state().catalog_read_protection_enabled()
@@ -1178,7 +1178,7 @@ impl Coordinator {
     }
 
     async fn finish_written_plan_rewrites(
-        &mut self,
+        &self,
         conn_id: Option<&ConnectionId>,
         ops: &mut Vec<Op>,
         rewrites: WrittenPlanRewrites,
@@ -1327,11 +1327,10 @@ impl Coordinator {
                     (observer, baseline)
                 });
         let revision = self.catalog().transient_revision();
-        let rewrites =
-            Box::pin(self.begin_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
-                .wall_time()
-                .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
-                .await?;
+        let rewrites = Box::pin(self.begin_written_plan_rewrites(conn_id, &ops, oracle_write_ts))
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
+            .await?;
 
         Ok(CatalogTransactionState {
             preparation: CatalogPreparation::Rewrites(rewrites),
