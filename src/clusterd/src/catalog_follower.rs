@@ -352,6 +352,7 @@ pub(crate) async fn run(
                         )
                     ) =>
                 {
+                    tokio::time::sleep(execution::conflict_delay()).await;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -389,10 +390,11 @@ pub(crate) async fn run(
     let mut delay = Duration::from_secs(1);
     let mut pending_metadata = true;
     let mut compaction = compaction::Compaction::default();
-    let mut publication_interval = catalog
-        .system_config()
-        .catalog_read_protection_publish_interval();
-    let mut publication_after = tokio::time::Instant::now() + publication_interval;
+    let mut publication_clock = execution::PublicationClock::new(
+        catalog
+            .system_config()
+            .catalog_read_protection_publish_interval(),
+    );
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
@@ -400,6 +402,11 @@ pub(crate) async fn run(
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
         if let Some(execution) = &mut *execution {
+            let interval = catalog
+                .system_config()
+                .catalog_read_protection_publish_interval();
+            publication_clock.configure(interval);
+            execution.configure_publication(interval);
             execution.ensure_live(&catalog)?;
             if execution.renewal_due() {
                 if let Err(error) = execution
@@ -522,6 +529,7 @@ pub(crate) async fn run(
             Ok((catalog.transient_revision(), metadata))
         }
         .await;
+        let mut bounds_ready = false;
         match result {
             Ok((metadata_revision, metadata)) => {
                 pending_metadata = !metadata.pending.is_empty();
@@ -601,6 +609,7 @@ pub(crate) async fn run(
                             %error, "execution installation pending");
                     }
                     pending |= execution.pending_installations(&effects) > 0;
+                    bounds_ready = !pending;
                     execution.apply_progress(&catalog);
                     execution.apply_catalog(
                         &catalog,
@@ -608,15 +617,13 @@ pub(crate) async fn run(
                         &metadata,
                         effects.pending.is_empty(),
                     );
-                    let interval = catalog
-                        .system_config()
-                        .catalog_read_protection_publish_interval();
-                    if interval != publication_interval {
-                        publication_interval = interval;
-                        publication_after = tokio::time::Instant::now() + interval;
-                    }
-                    let publish_bounds = tokio::time::Instant::now() >= publication_after;
-                    if let Err(error) = execution
+                    publication_clock.configure(
+                        catalog
+                            .system_config()
+                            .catalog_read_protection_publish_interval(),
+                    );
+                    let publish_bounds = publication_clock.due();
+                    match execution
                         .publish(
                             &mut catalog,
                             &mut effects,
@@ -627,10 +634,14 @@ pub(crate) async fn run(
                         )
                         .await
                     {
-                        failures["publication"].inc();
-                        tracing::warn!(%error, "replica protection publication pending");
-                    } else if publish_bounds && !pending {
-                        publication_after = tokio::time::Instant::now() + publication_interval;
+                        Err(error) => {
+                            failures["publication"].inc();
+                            tracing::warn!(%error, "replica protection publication pending");
+                        }
+                        Ok(execution::PublicationOutcome::Completed) if publish_bounds => {
+                            publication_clock.completed();
+                        }
+                        Ok(_) => (),
                     }
                     let wanted = metadata.metadata.keys().copied().collect();
                     if let Err(error) = execution
@@ -707,7 +718,10 @@ pub(crate) async fn run(
             }
         }
         match &mut *execution {
-            Some(execution) => execution.io.idle(delay).await,
+            Some(execution) => {
+                let delay = execution.wake_delay(delay, &publication_clock, bounds_ready);
+                execution.io.idle(delay).await;
+            }
             None => tokio::time::sleep(delay).await,
         }
     }

@@ -46,6 +46,63 @@ use super::{ReplicaEffects, absorb_updates, storage_metadata, time_dependence};
 
 type Plan = DataflowDescription<LirRelationExpr, ()>;
 
+/// Initial phase is uniform. Subsequent intervals are centered on the configured
+/// cadence, so successful acquisitions cannot synchronize periodic publishers.
+pub(super) struct PublicationClock {
+    interval: Duration,
+    due: Instant,
+}
+
+impl PublicationClock {
+    pub fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            due: Instant::now() + mz_catalog::retry::sample_duration(Duration::ZERO, interval),
+        }
+    }
+
+    pub fn configure(&mut self, interval: Duration) {
+        if self.interval != interval {
+            *self = Self::new(interval);
+        }
+    }
+
+    pub fn due(&self) -> bool {
+        Instant::now() >= self.due
+    }
+
+    pub fn completed(&mut self) {
+        let half = self.interval / 2;
+        self.due = Instant::now()
+            + mz_catalog::retry::sample_duration(self.interval - half, self.interval + half);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PublicationOutcome {
+    Completed,
+    Deferred,
+}
+
+pub(super) fn conflict_delay() -> Duration {
+    mz_catalog::retry::sample_duration(Duration::from_millis(10), Duration::from_millis(100))
+}
+
+/// Never clamp to an expired deadline. Past the installation safety threshold,
+/// new use remains forbidden, but an open incarnation can still renew.
+fn limit_conflict_delay(delay: Duration, age: Duration) -> Duration {
+    let heartbeat = client_protection_heartbeat_interval();
+    let safety = client_protection_unchanged_grace() - heartbeat;
+    let remaining = if age < heartbeat {
+        heartbeat - age
+    } else if age < safety {
+        safety - age
+    } else {
+        delay
+    };
+    delay.min(remaining)
+}
+
 fn is_catalog_conflict(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<mz_catalog::catalog::CatalogError>()
@@ -242,7 +299,11 @@ pub(super) struct ReplicaEnactment {
     reclaimer: ClientProtectionReclaimer,
     // Renewal counts from before commit, advancement cadence from completion.
     published_at: Instant,
-    publication_completed_at: Instant,
+    publication_clock: Option<PublicationClock>,
+    // Notifications can wake the follower, but cannot bypass this write gate.
+    publication_retry_after: Option<Instant>,
+    publication_retry_requirements: bool,
+    publication_needs_refresh: bool,
     publication_seconds: mz_ore::metrics::Histogram,
 }
 
@@ -288,7 +349,10 @@ impl ReplicaEnactment {
             storage_state: storage::StorageState::default(),
             reclaimer: ClientProtectionReclaimer::default(),
             published_at: publication_started,
-            publication_completed_at: Instant::now(),
+            publication_clock: None,
+            publication_retry_after: None,
+            publication_retry_requirements: false,
+            publication_needs_refresh: false,
             publication_seconds: registry.register(mz_ore::metric! {
                 name: "mz_catalog_follower_publication_seconds",
                 help: "Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.",
@@ -383,6 +447,8 @@ impl ReplicaEnactment {
             {
                 Ok(()) => break,
                 Err(error) if is_catalog_conflict(&error) => {
+                    let delay = limit_conflict_delay(conflict_delay(), self.published_at.elapsed());
+                    self.io.wait(tokio::time::sleep(delay)).await;
                     // Metadata contention must not restart schema/plan preparation
                     // on every follower tick. Absorb the committed prefix before
                     // recomputing admission. Structural changes require the caller
@@ -828,6 +894,52 @@ impl ReplicaEnactment {
         self.published_at.elapsed() >= client_protection_heartbeat_interval()
     }
 
+    pub fn configure_publication(&mut self, interval: Duration) {
+        self.publication_clock
+            .get_or_insert_with(|| PublicationClock::new(interval))
+            .configure(interval);
+    }
+
+    /// Pending metadata/installations cannot make an overdue bounds clock spin.
+    /// Other elapsed deadlines get a short nonzero poll, including errors that
+    /// prevented renewal without producing a catalog-conflict gate.
+    pub fn wake_delay(
+        &self,
+        poll: Duration,
+        bounds: &PublicationClock,
+        bounds_ready: bool,
+    ) -> Duration {
+        let now = Instant::now();
+        let gate = self.publication_retry_after.unwrap_or(now);
+        [
+            (bounds_ready || bounds.due > now).then_some(bounds.due.max(gate)),
+            self.publication_clock
+                .as_ref()
+                .map(|clock| clock.due.max(gate)),
+            Some(if self.publication_retry_requirements {
+                (self.published_at + client_protection_heartbeat_interval()).max(gate)
+            } else {
+                self.published_at + client_protection_heartbeat_interval()
+            }),
+            self.publication_retry_after.filter(|due| *due > now),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|due| {
+            due.checked_duration_since(now)
+                .filter(|delay| !delay.is_zero())
+                .unwrap_or(Duration::from_millis(10))
+        })
+        .fold(poll, Duration::min)
+    }
+
+    fn defer_publication(&mut self, requirements: bool) {
+        let delay = limit_conflict_delay(conflict_delay(), self.published_at.elapsed());
+        self.publication_retry_after = Some(Instant::now() + delay);
+        self.publication_retry_requirements = requirements;
+        self.publication_needs_refresh = true;
+    }
+
     async fn commit_grants(
         &mut self,
         catalog: &mut Catalog,
@@ -856,7 +968,15 @@ impl ReplicaEnactment {
         self.protection.finish_publication(result.is_ok());
         result?;
         self.published_at = started;
-        self.publication_completed_at = Instant::now();
+        self.configure_publication(
+            catalog
+                .system_config()
+                .catalog_read_protection_publish_interval(),
+        );
+        self.publication_clock
+            .as_mut()
+            .expect("configured")
+            .completed();
         Ok(())
     }
 
@@ -1040,19 +1160,38 @@ impl ReplicaEnactment {
         build: &str,
         pending: bool,
         metadata: Option<&storage_metadata::Resolution>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<PublicationOutcome> {
         let _timer = self.publication_seconds.start_timer();
+        self.configure_publication(
+            catalog
+                .system_config()
+                .catalog_read_protection_publish_interval(),
+        );
+        let gated = self
+            .publication_retry_after
+            .is_some_and(|due| Instant::now() < due);
+        // A bounds/reclamation conflict must not defer an already-due heartbeat.
+        // A heartbeat conflict does defer renewal, avoiding an expired-deadline spin.
+        if gated && (self.publication_retry_requirements || !self.renewal_due()) {
+            return Ok(PublicationOutcome::Deferred);
+        }
+        if !gated {
+            self.publication_retry_after = None;
+        }
         let incarnation = self.protection.incarnation();
-        let mut refreshed = false;
+        let refreshed = self.publication_needs_refresh;
+        if refreshed {
+            let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
+            absorb_updates(effects, catalog, cluster, build, updates);
+            self.ensure_live(catalog)?;
+            self.publication_needs_refresh = false;
+        }
         // Maintenance only advances or releases committed grants. Coalescing it
         // retains protection until publication. Acquisitions commit independently
         // before use, and renewal must not wait for the advancement interval.
-        let publish_requirements = self.renewal_due()
-            || self.publication_completed_at.elapsed()
-                >= catalog
-                    .system_config()
-                    .catalog_read_protection_publish_interval();
-        while publish_requirements
+        let publish_requirements =
+            self.renewal_due() || self.publication_clock.as_ref().expect("configured").due();
+        if publish_requirements
             && let Some(requirements) = self
                 .protection
                 .prepare_publication_if_needed(self.published_at.elapsed())
@@ -1061,20 +1200,23 @@ impl ReplicaEnactment {
                 .commit_grants(catalog, effects, cluster, build, requirements)
                 .await
             {
-                Ok(()) => break,
+                Ok(()) => (),
                 Err(error) if is_catalog_conflict(&error) => {
-                    let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
-                    absorb_updates(effects, catalog, cluster, build, updates);
-                    self.ensure_live(catalog)?;
-                    refreshed = true;
+                    self.defer_publication(true);
+                    return Err(error);
                 }
                 Err(error) => return Err(error),
             }
+        } else if publish_requirements {
+            self.publication_clock
+                .as_mut()
+                .expect("configured")
+                .completed();
         }
         // A pending install may still need a committed prefix's earlier history.
         // Heartbeats and acquisitions continue, but bounds and reclamation wait.
-        if pending || refreshed {
-            return Ok(());
+        if pending || refreshed || gated {
+            return Ok(PublicationOutcome::Deferred);
         }
         let mut ops = Vec::new();
         if let Some(metadata) = metadata {
@@ -1193,8 +1335,15 @@ impl ReplicaEnactment {
                 ),
         );
         if !ops.is_empty() {
-            self.transact(catalog, effects, cluster, build, ops).await?;
+            match self.transact(catalog, effects, cluster, build, ops).await {
+                Ok(()) => (),
+                Err(error) if is_catalog_conflict(&error) => {
+                    self.defer_publication(false);
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
         }
-        Ok(())
+        Ok(PublicationOutcome::Completed)
     }
 }
