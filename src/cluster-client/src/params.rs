@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! gRPC client parameters shared by compute and storage.
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 

@@ -20,6 +20,7 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::params::GrpcClientParameters;
 use mz_dyncfg::ConfigUpdates;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
@@ -27,7 +28,6 @@ use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::{GenericClient, Partitioned};
-use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
 use mz_storage_client::client::{
     RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
