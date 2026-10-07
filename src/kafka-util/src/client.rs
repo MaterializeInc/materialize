@@ -27,6 +27,7 @@ use crossbeam::channel::{Receiver, Sender, unbounded};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::netio::resolve_address;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{Client, NativeClient, OAuthToken};
@@ -429,10 +430,15 @@ pub struct TunnelingClientContext<C> {
     ssh_timeout_config: SshTimeoutConfig,
     aws_config: Option<SdkConfig>,
     runtime: Handle,
+    enforce_external_addresses: bool,
 }
 
 impl<C> TunnelingClientContext<C> {
     /// Constructs a new context that wraps `inner`.
+    ///
+    /// With `enforce_external_addresses`, brokers that are not routed through
+    /// an SSH tunnel or PrivateLink fail to resolve unless every address they
+    /// resolve to is global.
     pub fn new(
         inner: C,
         runtime: Handle,
@@ -440,6 +446,7 @@ impl<C> TunnelingClientContext<C> {
         ssh_timeout_config: SshTimeoutConfig,
         aws_config: Option<SdkConfig>,
         in_task: InTask,
+        enforce_external_addresses: bool,
     ) -> TunnelingClientContext<C> {
         TunnelingClientContext {
             inner,
@@ -450,6 +457,7 @@ impl<C> TunnelingClientContext<C> {
             ssh_timeout_config,
             aws_config,
             runtime,
+            enforce_external_addresses,
         }
     }
 
@@ -497,6 +505,29 @@ impl<C> TunnelingClientContext<C> {
     pub fn add_broker_rewrite(&self, broker: BrokerAddr, rewrite: BrokerRewrite) {
         let mut rewrites = self.rewrites.lock().expect("poisoned");
         rewrites.insert(broker, BrokerRewriteHandle::Simple(rewrite));
+    }
+
+    /// Resolves a broker address that the user controls directly, i.e. one not
+    /// rewritten to an SSH tunnel or PrivateLink endpoint.
+    // NOTE: librdkafka connects to exactly the addresses returned here and does
+    // not resolve the name again, so checking them here also defeats DNS
+    // rebinding between validation and connect. TLS SNI and certificate
+    // verification still use the broker's hostname.
+    fn resolve_direct(&self, addr: &BrokerAddr) -> Result<Vec<SocketAddr>, io::Error> {
+        if !self.enforce_external_addresses {
+            return addr.to_socket_addrs();
+        }
+        let ips = self
+            .runtime
+            .block_on(resolve_address(&addr.host, true))
+            .map_err(|e| {
+                warn!("kafka: rejecting broker {}:{}: {e}", addr.host, addr.port);
+                io::Error::other(e)
+            })?;
+        Ok(ips
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, addr.port))
+            .collect())
     }
 
     /// Returns a reference to the wrapped context.
@@ -698,8 +729,14 @@ where
                     // Rewrite according to the routing rules.
                     TunnelConfig::Rules(rules) => {
                         // If no rules match, just use the address as-is.
-                        let resolved = rules.rewrite(&addr).unwrap_or_else(|| addr.clone());
-                        match resolved.to_socket_addrs() {
+                        let (resolved, result) = match rules.rewrite(&addr) {
+                            Some(rewritten) => {
+                                let result = rewritten.to_socket_addrs();
+                                (rewritten, result)
+                            }
+                            None => (addr.clone(), self.resolve_direct(&addr)),
+                        };
+                        match result {
                             Ok(addrs) => {
                                 info!(
                                     "kafka: resolve_broker_addr {}:{} -> {}:{} resolved to {:?}",
@@ -717,9 +754,7 @@ where
                         }
                     }
                     // We leave the broker's address as it is.
-                    TunnelConfig::None => {
-                        (host, port).to_socket_addrs().map(|addrs| addrs.collect())
-                    }
+                    TunnelConfig::None => self.resolve_direct(&addr),
                 }
             }
             // This broker's address was already rewritten. Reuse the existing rewrite.

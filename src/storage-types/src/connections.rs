@@ -1737,9 +1737,6 @@ impl KafkaConnection {
             ),
         };
 
-        // TODO(roshan): Implement enforcement of external address validation once
-        // rdkafka client has been updated to support providing multiple resolved
-        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -1750,6 +1747,7 @@ impl KafkaConnection {
             storage_configuration.parameters.ssh_timeout_config,
             aws_config,
             in_task,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         );
 
         match &self.default_tunnel {
