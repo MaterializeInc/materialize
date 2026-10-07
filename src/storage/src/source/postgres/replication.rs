@@ -69,6 +69,7 @@
 //! [1]: https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
@@ -628,16 +629,22 @@ pub(crate) fn render<'scope>(
         }
     }
     let mut replication_updates = Vec::with_capacity(data_streams.len());
+    let peers = u64::cast_from(scope.peers());
+    let record = Rc::new(Cell::new(0_u64));
     for (output_index, data_stream) in data_streams.into_iter().enumerate() {
         let info = output_info.get(&output_index).cloned();
         let mut final_row = Row::default();
         let mut datum_vec = DatumVec::new();
-        let mut next_worker = (0..u64::cast_from(scope.peers()))
-            // Round robin on 1000-records basis to avoid creating tiny containers when there are a
-            // small number of updates and a large number of workers.
-            .flat_map(|w| std::iter::repeat_n(w, 1000))
-            .cycle();
-        let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
+
+        // Round robin on 1000-records basis to avoid creating tiny containers when there are a
+        // small number of updates and a large number of workers. The counter is shared by every
+        // export's exchange so rotation follows total volume.
+        let record = Rc::clone(&record);
+        let round_robin = Exchange::new(move |_| {
+            let n = record.get();
+            record.set(n.wrapping_add(1));
+            (n / 1000) % peers
+        });
         let updates = data_stream
             .unary(
                 round_robin,
