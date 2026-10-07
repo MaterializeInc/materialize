@@ -7350,6 +7350,32 @@ def workflow_test_system_cluster_audit_events(
     )
 
 
+def initialize_replicas_before_expiration_test(c: Composition) -> None:
+    # SQL readiness does not imply that replicas have frozen their initial config.
+    # Execute on every existing replica before shortening the global offset for
+    # the external test replica. Introspection reads cannot bypass compute via
+    # a constant or Persist fast path.
+    replicas = c.sql_query(
+        """SELECT c.name, r.name
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           ORDER BY c.id, r.id""",
+        port=6877,
+        user="mz_system",
+    )
+    with c.sql_cursor(port=6877, user="mz_system") as cursor:
+        cursor.execute("SET auto_route_catalog_queries = false")
+        cursor.execute("SET statement_timeout = '30s'")
+        for cluster, replica in replicas:
+            cursor.execute(sql.SQL("SET cluster = {}").format(sql.Identifier(cluster)))
+            cursor.execute(
+                sql.SQL("SET cluster_replica = {}").format(sql.Identifier(replica))
+            )
+            cursor.execute(
+                "SELECT count(*) FROM mz_introspection.mz_dataflow_operators"
+            )
+            cursor.fetchall()
+
+
 def workflow_crash_on_replica_expiration_mv(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
@@ -7359,6 +7385,7 @@ def workflow_crash_on_replica_expiration_mv(
     offset = 20
 
     c.up("materialized")
+    initialize_replicas_before_expiration_test(c)
     c.sql(
         f"""
         ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
@@ -7441,6 +7468,7 @@ def workflow_crash_on_replica_expiration_index(
     offset = 20
 
     c.up("materialized")
+    initialize_replicas_before_expiration_test(c)
     c.sql(
         f"""
         ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
@@ -7543,6 +7571,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
     """
     with c.override(Testdrive(no_reset=True)):
         c.up("materialized", Service("testdrive", idle=True))
+        initialize_replicas_before_expiration_test(c)
         c.testdrive(dedent("""
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
