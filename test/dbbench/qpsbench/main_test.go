@@ -10,6 +10,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,11 +22,28 @@ type testDriver struct {
 	prepares, queries int
 	rows              int
 	fail              bool
+	loggingRate       float64
+	loggingChecks     int
 }
 
 type testConn struct{ d *testDriver }
 type testStmt struct{ c *testConn }
 type testRows struct{ remaining int }
+type loggingRateRows struct {
+	rate float64
+	done bool
+}
+
+func (r *loggingRateRows) Columns() []string { return []string{"statement_logging_sample_rate"} }
+func (r *loggingRateRows) Close() error      { return nil }
+func (r *loggingRateRows) Next(values []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	values[0] = r.rate
+	return nil
+}
 
 func (d *testDriver) Open(dsn string) (driver.Conn, error) {
 	d.mu.Lock()
@@ -41,7 +59,13 @@ func (c *testConn) Prepare(string) (driver.Stmt, error) {
 }
 func (c *testConn) Close() error              { return nil }
 func (c *testConn) Begin() (driver.Tx, error) { return nil, fmt.Errorf("unexpected transaction") }
-func (c *testConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+func (c *testConn) QueryContext(ctx context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if query == "SHOW statement_logging_sample_rate" {
+		c.d.mu.Lock()
+		defer c.d.mu.Unlock()
+		c.d.loggingChecks++
+		return &loggingRateRows{rate: c.d.loggingRate}, nil
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -54,6 +78,25 @@ func (c *testConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedV
 		return nil, fmt.Errorf("injected query failure")
 	}
 	return &testRows{c.d.rows}, nil
+}
+
+func TestBenchmarkChecksLoggingBeforePrepare(t *testing.T) {
+	for _, rate := range []float64{0, 0.99} {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) {
+			d := &testDriver{opens: make(map[string]int), rows: 10, loggingRate: rate}
+			name := fmt.Sprintf("qps-test-logging-%g", rate)
+			sql.Register(name, d)
+			c := config{DSNs: []string{"a", "b"}, Concurrency: 4, Protocol: "prepared", DurationSeconds: .01, QueryTimeoutSeconds: 1, Query: "SELECT x", ExpectedRows: 10, RequireStatementLoggingDisabled: true}
+			r, err := benchmarkWithDriver(c, name)
+			if rate == 0 {
+				if err != nil || d.loggingChecks != 4 || r.StatementLoggingSampleRate == nil || *r.StatementLoggingSampleRate != 0 {
+					t.Fatalf("logging check failed: %+v, %v, checks %d", r, err, d.loggingChecks)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "statement logging must be disabled") || d.prepares != 0 || d.queries != 0 {
+				t.Fatalf("measurement started with logging enabled: %+v, %v", r, err)
+			}
+		})
+	}
 }
 func (s *testStmt) Close() error  { return nil }
 func (s *testStmt) NumInput() int { return 0 }

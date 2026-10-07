@@ -59,6 +59,8 @@ class QpsSweep:
             "sslmode": params["sslmode"][0],
             "connect_timeout": str(int(self.query_timeout) + 1),
             "application_name": "cluster-spec-sheet-qps",
+            # Boot defaults can be replaced by staging's feature-flag sync.
+            "statement_logging_sample_rate": "0",
         }
         return {
             "dsns": [
@@ -77,6 +79,7 @@ class QpsSweep:
             "query_timeout_seconds": self.query_timeout,
             "query": "SELECT * FROM qps_gen_view",
             "expected_rows": 10,
+            "require_statement_logging_disabled": True,
         }
 
 
@@ -88,6 +91,7 @@ def validate_qps_result(result: dict, concurrency: int, protocol: str) -> None:
         or result["queries"] <= 0
         or result["qps"] <= 0
         or result["mean_latency_ms"] <= 0
+        or result.get("statement_logging_sample_rate") != 0
         or not all(
             isfinite(result[k]) for k in ("qps", "mean_latency_ms", "p99_latency_ms")
         )

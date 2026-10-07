@@ -66,8 +66,10 @@ def test_connection_routing_and_escaping():
         cluster = "c" if i == 0 else f"qps_{i}"
         assert f"cluster='{cluster}'" in dsn
         assert "sslmode='require'" in dsn
+        assert "statement_logging_sample_rate='0'" in dsn
         assert "password='quote\\'and\\\\slash'" in dsn
     assert config["expected_rows"] == 10
+    assert config["require_statement_logging_disabled"] is True
 
 
 @pytest.mark.parametrize(
@@ -78,6 +80,8 @@ def test_connection_routing_and_escaping():
         ("qps", 0),
         ("protocol", "simple"),
         ("concurrency", 8),
+        ("statement_logging_sample_rate", 0.99),
+        ("statement_logging_sample_rate", None),
     ],
 )
 def test_invalid_result(field, value):
@@ -89,6 +93,7 @@ def test_invalid_result(field, value):
         qps=20,
         mean_latency_ms=50,
         p99_latency_ms=60,
+        statement_logging_sample_rate=0,
     )
     validate_qps_result(result, 1, "prepared")
     result[field] = value
