@@ -22,7 +22,7 @@ import {
 } from "@chakra-ui/react";
 import * as React from "react";
 import { Link as RouterLink } from "react-router-dom";
-import useResizeObserver from "use-resize-observer";
+import { useResizeObserver } from "use-resize-observer";
 
 import ConnectDrawer from "~/components/connect/ConnectDrawer";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
