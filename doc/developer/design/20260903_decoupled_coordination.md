@@ -13,14 +13,15 @@ including the [fresh sink cutoff](#fresh-sink-cutoff), and the plan-selection an
 introspection behavior of [written plans](#written-plans).
 Losing an adapter must not disrupt maintained dataflows or other clients. Its own
 queries may fail. Transparent query or session failover is out of scope.
-For this deliverable, table and webhook ticking and shard finalization remain
+For M2, table and webhook ticking and shard finalization remain
 adapter-owned and may pause while no adapter is live.
 
 Active and prewarming deployments coexist as independent catalog participants.
 Their adapters and lifecycle components are cooperating catalog writers, with
-authority appropriate to each deployment. Arbitrary concurrently serving
-adapters remain a destination, not this deliverable. The boundaries must
-support them without another ownership redesign.
+authority appropriate to each deployment. M3 separates process management into
+`controllerd` and SQL serving into independently managed `adapterd` instances.
+Multiple adapters serve the same deployment without owning maintained lifecycle
+or depending on a designated serving adapter for shared management.
 
 Initial implementation and validation target environments initialized under the
 new protection rules. Native prewarming and handover between compatible
@@ -400,15 +401,55 @@ serves a request and how replicated responses are merged belong to the query
 client. Environment-wide storage accounting dissolves along the way: critical
 since handles follow committed bounds, table registration is adapter-owned, and
 shard finalization applies committed retirement permission idempotently.
-Adapters perform finalization for this deliverable. Creating replica processes
-stays with envd for now. DDL and table appends are request-scoped and stay with
-adapters.
+For M2, adapters perform finalization and envd creates replica processes. M3 moves
+process management to controllerd and establishes ownership of remaining shared
+duties. DDL and table appends are request-scoped and stay with adapters.
 
 A replica's execution reads and live-index retention windows use incarnation-scoped
 client protection. A slow or hydrating replica keeps the input history it needs
 until its protection is released or reclaimed. These requirements are additional
 to maintained recovery requirements and object-owned retention, which do not
 expire with the replica.
+
+### Adapters and process management (M3)
+
+Split environmentd into adapterd for SQL serving and controllerd for catalog-driven
+process management. Controllerd owns both replica-set reconciliation and process
+provisioning, using the existing local-process and Kubernetes backends. It follows
+committed catalog state independently of adapters. Clusterd continues to own
+maintained dataflow enactment. Process management does not introduce an
+adapter-to-controller lifecycle command channel.
+
+Controllerd is launched externally. Fresh-environment initialization commits a
+default adapter declaration so the first SQL endpoint needs no SQL bootstrap.
+Starting or restarting an adapter joins the deployment, rather than repeating
+environment initialization, resetting shared system tables or promoting itself.
+Assign remaining environment-wide duties explicitly, including table ticking and
+registration, introspection and finalization. Do not duplicate singleton effects
+or hide them on a special serving adapter.
+
+SQL supports `CREATE ADAPTER adapter_name (SIZE '<size>')`, `DROP ADAPTER` and
+`ALTER ADAPTER ... RENAME TO ...`. Creation acknowledges the catalog commit,
+not process readiness. A catalog relation lists adapters, requested sizes,
+endpoints and observed readiness or provisioning errors. Local sizes specify CPU
+and memory allocations using the backend's resource controls, with enforcement
+limitations explicit. Settle self-drop and removal of the last adapter with
+Aljoscha before implementing those cases.
+
+Adapter declarations have stable IDs independent of names. Rename does not change
+process identity or require a restart. Realizations are deployment-qualified.
+Controller-published endpoint and status describe that realization, separately
+from user intent. The endpoint is a local pgwire address or a backend-appropriate
+routable address. An assigned endpoint does not establish readiness, and observed
+readiness does not guarantee a future connection.
+
+Controllerd exposes pretty-printed JSON over HTTP for inspection and visualization:
+the desired adapterd and clusterd inventory used by reconciliation, including
+processes not yet running, their identities, deployments, resources, endpoints
+and observed status. This is a view of desired state, not a second authority or a
+dump of credential-bearing launch arguments. Keep desired-state calculation
+separate from enactment. A passive exporter consumed by a Kubernetes controller
+is future work, not required for M3.
 
 ### Written plans
 
@@ -587,18 +628,26 @@ catalog writers without premature shared-state migration. This requires
 active/prewarming overlap, not arbitrary concurrently serving adapters or a
 general upgrade-version matrix.
 
-#### 3. Independent query clients
+#### 3. Independent adapters and process management
 
-Several query clients use the fast protocol without acquiring ownership of
-maintained lifecycle. Catalog application and query readiness remain correctly
-ordered. Responses, cancellation, query-local dataflows, and disconnect cleanup are
-isolated between clients.
+Deliver [adapterd and controllerd](#adapters-and-process-management-m3), with
+multiple adapters serving SQL, including DDL and writes, against shared replicas.
+Preserve cross-adapter catalog freshness, write ordering and independent client
+protection. Responses, cancellation, query-local dataflows and disconnect cleanup
+remain isolated. No serving adapter owns shared process management.
 
-Demonstrate independent clients without a multi-adapter deployment. Cover one
-client advancing or losing its protection while another retains an older
-timestamp, recovery of the components enforcing compaction, and an expired client
-returning. Together, these milestones complete the fresh-environment decoupling
-outcome, subject to the correctness and performance acceptance criteria above.
+Demonstrate SQL creation, listing, rename and drop of adapters, endpoint discovery
+and the HTTP inventory. Use two adapters concurrently, kill one, and show
+controllerd restoring it while the other continues serving against the same
+replicas. Creation and recovery must not repeat shared initialization or reset
+peer state. The local demo uses declared CPU/memory sizes, not manually launched
+extra adapters.
+
+Retain the independent-client proof: one client advances or loses protection while
+another retains an older timestamp, the compaction enforcer recovers, and an
+expired client returns safely. Together, these milestones complete the
+fresh-environment decoupling outcome, subject to the correctness and performance
+acceptance criteria above.
 
 ## Appendix: catalog freshness and execution ordering
 

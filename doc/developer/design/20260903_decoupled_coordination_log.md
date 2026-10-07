@@ -109,8 +109,9 @@ the PR, not additional investigation campaigns.
 Native ownership, read protection, external-sink safeguards and compatible-version
 warm handover remain required. The outage, targeted DDL and bounded-throughput
 proof scopes stay closed. Pre-feature conversion and independent query-client
-isolation are outside M2. Surface consequential ownership or ordering changes
-before implementing them.
+isolation are outside M2. The adapterd/controllerd split and SQL adapter lifecycle
+belong to M3, not this repair or M2 acceptance. Surface consequential ownership or
+ordering changes before implementing them.
 
 ## Historical reference, only when changing these areas
 

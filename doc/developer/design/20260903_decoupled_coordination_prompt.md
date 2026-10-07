@@ -17,6 +17,9 @@ Current steering
 
 Milestone 2 includes native deployment coexistence and compatible-version warm
 handover. Keep native ownership enabled, with no second adapter-side installer.
+Finish M2 before starting M3's adapterd/controllerd split, SQL adapter lifecycle
+and process inventory. That extension retains independent-client isolation and
+requires multiple serving adapters, but does not expand M2 acceptance.
 
 The next end-to-end outcome is same-version native prewarming and warm
 promotion: a second deployment uses its own catalog-described replicas and
@@ -97,8 +100,8 @@ consequential behavior changes or disproportionate cost to Aljoscha and pause
 the affected work. Routine implementation decisions need no renewed approval.
 
 Existing-environment conversion, pre-feature binary compatibility and arbitrary
-concurrent serving adapters remain outside M2. Independent query-client
-isolation remains M3. Add durable records only for required information that
+concurrent serving adapters remain outside M2. M3 owns independent adapters and
+process management. Add durable records only for required information that
 cannot be derived. Production test-only APIs need approval. Do not tune grace
 periods or leases, weaken required safety checks, or invent scheduling
 guarantees to turn an unexplained failure green.
