@@ -201,8 +201,9 @@ will expose two modules: `subscribe` for live and durable consumption, and
 `sink` for writing to targets. Every change will keep its `mz_timestamp`.
 Durable consumption will store its checkpoint in the target, fenced by an epoch,
 and will read one storage collection (a table, materialized view, or source)
-plus an optional projection, filter, and envelope. The first sink will be
-turbopuffer. The spec, conformance vectors, and an end-to-end
+plus an optional projection, filter, and envelope. The Rust package comes first,
+with Python and Node to follow, and the first sink will be turbopuffer, written
+in Rust. The spec, conformance vectors, and an end-to-end
 suite will live in this repository and run in the nightlies.
 
 ### Naming
@@ -587,6 +588,12 @@ search-index use case and will run against our internal context graph, which
 has no Kafka, so the existing Kafka-based sink does not fit there. The sink will
 write only to namespaces it creates, so every document carries `mz_timestamp`.
 
+The October sink will be written in Rust on the Rust package and will call
+turbopuffer's HTTP API directly. Its transforms will be Rust functions that call
+an embedding provider over HTTP, so the existing sink's Python transforms are not
+reused. The tombstone, condition, and checkpoint rules below do not depend on
+the language, so a Python version can follow the same design.
+
 turbopuffer's documentation states that one write request to one namespace is
 applied atomically and is durable on return, and that there are no transactions
 across namespaces. Conditional writes compare each stored document with the
@@ -885,27 +892,34 @@ The server-side buffering bound (#37905) has landed and needs no further work.
 
 ## Minimal Viable Prototype
 
-The prototype will be the protocol core extracted from the Rust package, one
-language package, and the turbopuffer sink running against the internal context
-graph. It tests the three riskiest claims:
+The prototype will be the protocol core extracted from the Rust prototype, the
+Rust package on top of it, and the turbopuffer sink, written in Rust, running
+against the internal context graph. Python and Node packages are stretch goals
+for the same period. It tests three of the riskiest claims:
 
-- that a protocol core with no I/O binds into a language package without
-  packaging or performance problems,
+- that a protocol core with no I/O carries a full SDK and a real sink with only a
+  thin transport around it,
 - that tombstones and conditional writes give each turbopuffer namespace
   exactly-once state under random kills and a stale worker,
 - that the nightly end-to-end suite catches server changes that break the SDK.
 
+A Python or Node package, if it lands in the same period, also tests that the
+protocol core binds into another language without packaging or performance
+problems.
+
 ## Delivery plan
 
-October: the prototype above, with the end-to-end suite in the nightlies. Exit
-criteria are a passing convergence test, a passing fencing test, and every typed
-error reproduced in the end-to-end suite.
+October: the prototype above, with the end-to-end suite in the nightlies, and
+the Python and Node packages as stretch goals. Exit criteria are a passing
+convergence test, a passing fencing test, and every typed error reproduced in
+the end-to-end suite.
 
-November and December: the second language, durable subscriptions as they land,
-and a Redis or Postgres reference sink chosen by demand.
+November and December: the Python and Node packages if they did not land in
+October, durable subscriptions as they land, and a Redis or Postgres reference
+sink chosen by demand.
 
 GA requires dedicated SQLSTATEs released, the client docs rewritten on the SDK,
-and both languages passing the same vectors and end-to-end suite.
+and every published language passing the same vectors and end-to-end suite.
 
 ## Future work
 
@@ -985,10 +999,11 @@ produce.
 
 1. Name: Materialize SDK, Subscribe SDK, or Sink SDK? The reasoning is under
    "Naming". This is cheap to change now and expensive after the first publish.
-2. October language: Python matches the existing turbopuffer sink, the
-   turbopuffer client, and the field team's tooling. Rust is where the protocol
-   core already lives. Recommendation: the Rust protocol core plus the Python
-   package.
+2. First language: Rust is decided, with Python and Node as stretch goals, so the
+   October turbopuffer sink is written in Rust against turbopuffer's HTTP API.
+   The existing turbopuffer sink and its transforms are Python. Is a Rust
+   turbopuffer sink acceptable for October, or should it wait for the Python
+   package?
 3. Generation strategy: is a protocol core with bindings acceptable for
    packaging and support, or do we start with B plus A?
 4. turbopuffer tombstones: searches must filter on `deleted = false`, tombstones
