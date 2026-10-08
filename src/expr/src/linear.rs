@@ -17,6 +17,7 @@ use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
 pub mod batch;
+pub mod columns;
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -1582,6 +1583,7 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
+    use crate::linear::columns::BatchExpr;
     use crate::scalar::optimizable::OptimizableExpr;
     use crate::{Columns, Eval};
     use crate::{EvalError, MapFilterProject, MirScalarExpr};
@@ -1729,12 +1731,14 @@ pub mod plan {
         /// error it produced. The datums are valid only for the call.
         pub fn evaluate_batch<'a, I, F>(&'a self, input: &I, arena: &'a RowArena, mut each: F)
         where
+            E: BatchExpr,
             I: BatchInput<'a> + ?Sized,
             F: FnMut(usize, Result<bool, EvalError>, &[Datum<'a>]),
         {
-            // TODO: Evaluate steps whose expressions all have batch kernels a
-            // column at a time. Steps without them stay on this loop, which
-            // costs no more than evaluating rows one at a time.
+            each = match super::columns::evaluate(&self.mfp, input, each) {
+                Ok(()) => return,
+                Err(each) => each,
+            };
             let mut datums = Vec::new();
             for index in 0..input.len() {
                 input.read(index, &mut datums);
@@ -1970,6 +1974,7 @@ pub mod plan {
         /// completes each row.
         pub fn evaluate_batch<'a, I, F>(&'a self, input: &I, arena: &'a RowArena, each: F)
         where
+            E: BatchExpr,
             I: BatchInput<'a> + ?Sized,
             F: FnMut(usize, Result<bool, EvalError>, &[Datum<'a>]),
         {

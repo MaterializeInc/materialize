@@ -7255,6 +7255,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "chrono-tz",
+ "columnar",
  "columnation",
  "crc32fast",
  "criterion",
