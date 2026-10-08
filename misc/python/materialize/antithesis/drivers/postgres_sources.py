@@ -18,7 +18,9 @@ Upstream layout per slot `i`: schema `s{i}` with data tables `t{j} (k int
 PRIMARY KEY, v text)` and a `ledger`, all in publication `antithesis_pub_{i}`
 (`FOR TABLES IN SCHEMA`, so a re-created table joins it). Materialize has one
 source `pg_src_{i}` per slot, a table `pg_ledger_{i}` for the ledger, and one
-or more exports `pg_s{i}_t{j}_e{n}` per upstream table.
+or more exports `pg_s{i}_t{j}_e{n}` per upstream table. `first_configure`
+creates all of it through `setup_main`; the driver and the check repair
+whatever is missing, retrying within a bounded budget.
 
 Every upstream transaction, including the disruptive ones (TRUNCATE, DROP and
 re-CREATE, ADD COLUMN), first bumps a per-table row in
@@ -66,6 +68,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -86,6 +89,7 @@ from materialize.antithesis.drivers.source_status import (
     restart_events_since,
 )
 from materialize.antithesis.drivers.sources_common import (
+    LAZY_SETUP_BUDGET_S,
     RETAIN_HISTORY_CHOICES,
     SOURCES_CLUSTER,
     Deadline,
@@ -101,6 +105,7 @@ from materialize.antithesis.drivers.sources_common import (
     record_progress_observation,
     source_error_text,
     timeline_choice,
+    with_retry,
 )
 from materialize.antithesis.drivers.sources_common import log as _log
 from materialize.antithesis.endpoints import Endpoints
@@ -149,6 +154,22 @@ TERMINAL_STATS_SETTLE_S = 60.0
 CREATING_GIVE_UP_S = 600.0
 UPSTREAM_OPTIONS = "-c statement_timeout=30000 -c lock_timeout=10000"
 SETUP_LOCK_KEY = 727_274
+# Budget of `setup_main` in `first_configure`, for setup and seeding together.
+# It runs without faults, so this only has to cover a slow environmentd.
+FIRST_SETUP_BUDGET_S = 180.0
+SEED_TXNS_PER_TABLE = 2
+# Upstream Postgres `lock_not_available`, raised by `lock_timeout` when
+# concurrent setups or transactions hold the advisory lock or a table lock.
+LOCK_NOT_AVAILABLE = "55P03"
+TERMINAL_EXPORTS_QUERY = (
+    "SELECT count(*) FROM exports e"
+    " JOIN ops o ON o.tbl = 's' || e.slot || '.t' || e.j"
+    " JOIN txns t ON t.txn_id = o.txn_id"
+    " WHERE e.state != 'dropped' AND o.seq > e.s1"
+    " AND o.kind IN ('truncate', 'drop') AND t.status = 'acked'"
+)
+"""Live exports whose upstream table had an acknowledged TRUNCATE or DROP after
+the export bound to it. Read-only, for other drivers' triggers."""
 
 
 def log(message: str) -> None:
@@ -252,62 +273,87 @@ def _create_table_sql(slot: int, j: int) -> str:
     )
 
 
-def _ensure_upstream(endpoints: Endpoints, db: sqlite3.Connection) -> bool:
+def _setup_retryable(e: BaseException) -> bool:
+    # `sql.classify` describes Materialize, which never raises 55P03, so it
+    # calls the upstream lock timeout a violation.
+    if isinstance(e, psycopg.Error) and e.sqlstate == LOCK_NOT_AVAILABLE:
+        return True
+    return sql.classify(e).outcome is not sql.Outcome.VIOLATION
+
+
+def _with_retry(step: str, attempt: Callable[[], None], deadline: Deadline) -> bool:
+    failure = with_retry("postgres sources", step, attempt, deadline, _setup_retryable)
+    if failure is None:
+        return True
+    always_or_unreachable(
+        failure.retryable,
+        "postgres source: setup fails only with retryable errors",
+        failure.details(),
+    )
+    return False
+
+
+def _ensure_upstream(
+    endpoints: Endpoints, db: sqlite3.Connection, deadline: Deadline
+) -> bool:
     if _is_ready(db, "upstream"):
         return True
-    try:
-        with _upstream(endpoints) as up:
-            up.execute("SELECT pg_advisory_xact_lock(%s)", (SETUP_LOCK_KEY,))
-            up.execute("CREATE SCHEMA IF NOT EXISTS antithesis_meta")
-            up.execute(
-                "CREATE TABLE IF NOT EXISTS antithesis_meta.counters"
-                " (tbl text PRIMARY KEY, seq bigint NOT NULL, gen int NOT NULL)"
-            )
-            for slot in range(SLOTS):
-                up.execute(f"CREATE SCHEMA IF NOT EXISTS s{slot}".encode())
-                ledger = up.execute(
-                    "SELECT to_regclass(%s)", (f"s{slot}.ledger",)
-                ).fetchone()
-                assert ledger is not None
-                if ledger[0] is None:
-                    up.execute(
-                        f"CREATE TABLE s{slot}.ledger (txn_id text NOT NULL,"
-                        " tbl text NOT NULL, seq bigint NOT NULL, kind text NOT NULL,"
-                        " PRIMARY KEY (txn_id, tbl));"
-                        f" ALTER TABLE s{slot}.ledger REPLICA IDENTITY FULL".encode()
-                    )
-                tables = [_hb(slot)]
-                for j in range(TABLES_PER_SLOT):
-                    tables.append(_tbl(slot, j))
-                    existing = up.execute(
-                        "SELECT to_regclass(%s)", (_tbl(slot, j),)
-                    ).fetchone()
-                    assert existing is not None
-                    if existing[0] is None:
-                        up.execute(_create_table_sql(slot, j).encode())
-                for t in tables:
-                    up.execute(
-                        "INSERT INTO antithesis_meta.counters VALUES (%s, 0, 0)"
-                        " ON CONFLICT DO NOTHING",
-                        (t,),
-                    )
-                if (
-                    up.execute(
-                        "SELECT 1 FROM pg_publication WHERE pubname = %s",
-                        (f"antithesis_pub_{slot}",),
-                    ).fetchone()
-                    is None
-                ):
-                    up.execute(
-                        f"CREATE PUBLICATION antithesis_pub_{slot}"
-                        f" FOR TABLES IN SCHEMA s{slot}".encode()
-                    )
-            up.commit()
-    except (psycopg.Error, OSError) as e:
-        log(f"upstream setup failed: {e}")
+    if not _with_retry("upstream setup", lambda: _setup_upstream(endpoints), deadline):
         return False
     _mark_ready(db, "upstream")
     return True
+
+
+def _setup_upstream(endpoints: Endpoints) -> None:
+    # The advisory lock serializes concurrent setups, which would otherwise
+    # race on `CREATE PUBLICATION` (it has no `IF NOT EXISTS`).
+    with _upstream(endpoints) as up:
+        up.execute("SELECT pg_advisory_xact_lock(%s)", (SETUP_LOCK_KEY,))
+        up.execute("CREATE SCHEMA IF NOT EXISTS antithesis_meta")
+        up.execute(
+            "CREATE TABLE IF NOT EXISTS antithesis_meta.counters"
+            " (tbl text PRIMARY KEY, seq bigint NOT NULL, gen int NOT NULL)"
+        )
+        for slot in range(SLOTS):
+            up.execute(f"CREATE SCHEMA IF NOT EXISTS s{slot}".encode())
+            ledger = up.execute(
+                "SELECT to_regclass(%s)", (f"s{slot}.ledger",)
+            ).fetchone()
+            assert ledger is not None
+            if ledger[0] is None:
+                up.execute(
+                    f"CREATE TABLE s{slot}.ledger (txn_id text NOT NULL,"
+                    " tbl text NOT NULL, seq bigint NOT NULL, kind text NOT NULL,"
+                    " PRIMARY KEY (txn_id, tbl));"
+                    f" ALTER TABLE s{slot}.ledger REPLICA IDENTITY FULL".encode()
+                )
+            tables = [_hb(slot)]
+            for j in range(TABLES_PER_SLOT):
+                tables.append(_tbl(slot, j))
+                existing = up.execute(
+                    "SELECT to_regclass(%s)", (_tbl(slot, j),)
+                ).fetchone()
+                assert existing is not None
+                if existing[0] is None:
+                    up.execute(_create_table_sql(slot, j).encode())
+            for t in tables:
+                up.execute(
+                    "INSERT INTO antithesis_meta.counters VALUES (%s, 0, 0)"
+                    " ON CONFLICT DO NOTHING",
+                    (t,),
+                )
+            if (
+                up.execute(
+                    "SELECT 1 FROM pg_publication WHERE pubname = %s",
+                    (f"antithesis_pub_{slot}",),
+                ).fetchone()
+                is None
+            ):
+                up.execute(
+                    f"CREATE PUBLICATION antithesis_pub_{slot}"
+                    f" FOR TABLES IN SCHEMA s{slot}".encode()
+                )
+        up.commit()
 
 
 def _ddl(conn: psycopg.Connection, statement: str) -> None:
@@ -323,14 +369,19 @@ def _retain(db: sqlite3.Connection, slot: int) -> str:
 
 
 def _ensure_mz(
-    endpoints: Endpoints, host: str, db: sqlite3.Connection, slot: int
+    endpoints: Endpoints,
+    host: str,
+    db: sqlite3.Connection,
+    slot: int,
+    deadline: Deadline,
 ) -> bool:
     if _is_ready(db, f"mz_slot{slot}"):
         return True
     url = urlparse(endpoints.upstream_postgres_url)
     password = unquote(url.password or "").replace("'", "''")
     retain = f"WITH (RETAIN HISTORY = FOR '{_retain(db, slot)}')"
-    try:
+
+    def attempt() -> None:
         ensure_retain_history(host, endpoints)
         with mz_connect(host) as conn:
             ensure_cluster(conn, db)
@@ -357,11 +408,23 @@ def _ensure_mz(
                 f' FROM SOURCE {_source(slot)} (REFERENCE "s{slot}"."ledger")'
                 f" {retain}",
             )
-    except Exception as e:
-        log(f"Materialize setup of slot {slot} failed: {e}")
+
+    if not _with_retry(f"Materialize setup of slot {slot}", attempt, deadline):
         return False
     _mark_ready(db, f"mz_slot{slot}")
     return True
+
+
+def _ensure_slot(
+    endpoints: Endpoints,
+    host: str,
+    db: sqlite3.Connection,
+    slot: int,
+    deadline: Deadline,
+) -> bool:
+    return _ensure_upstream(endpoints, db, deadline) and _ensure_mz(
+        endpoints, host, db, slot, deadline
+    )
 
 
 def _counter(up: psycopg.Connection, tbl: str) -> int:
@@ -798,17 +861,79 @@ def run_txn(
     return txn_id, "acked"
 
 
-def upstream_main() -> int:
+def _dml_txn(
+    up: psycopg.Connection, db: sqlite3.Connection, slot: int, tables: list[int]
+) -> str:
+    """Run one DML transaction over `tables` of `slot` with this timeline's
+    keyspace and transaction size. Returns its status."""
+    keyspace = timeline_choice(db, "keyspace", KEYSPACE_CHOICES)
+    n_ops = timeline_choice(db, "ops_per_txn", OPS_PER_TXN_CHOICES)
+    plan = {_tbl(slot, j): ("dml", _dml_ops(keyspace, n_ops)) for j in tables}
+    return run_txn(up, db, slot, plan)[1]
+
+
+def setup_main() -> int:
+    """Set up every slot, seed its tables, and export them. Run from
+    `first_configure`; the driver and the check repair setup lazily if this
+    did not finish.
+
+    Seeding before the first exports makes their snapshots non-empty, so the
+    first checks already compare rows.
+    """
     endpoints = Endpoints.from_env()
     db = open_state()
-    if not _ensure_upstream(endpoints, db):
-        return 0
+    deadline = Deadline(FIRST_SETUP_BUDGET_S)
     try:
         host = mz_host()
     except Exception as e:
         log(f"no environmentd host: {e}")
         return 0
-    ready_slots = [s for s in range(SLOTS) if _ensure_mz(endpoints, host, db, s)]
+    ready = [s for s in range(SLOTS) if _ensure_slot(endpoints, host, db, s, deadline)]
+    sometimes(
+        len(ready) == SLOTS,
+        "postgres source: first_configure set up every slot",
+        {"ready_slots": ready},
+    )
+    if not ready:
+        return 0
+    try:
+        up = _upstream(endpoints)
+    except (psycopg.Error, OSError) as e:
+        log(f"no upstream connection: {e}")
+        return 0
+    try:
+        for slot in ready:
+            if deadline.expired():
+                log(f"setup budget spent; slot {slot} left for lazy seeding")
+                break
+            for _ in range(SEED_TXNS_PER_TABLE):
+                _dml_txn(up, db, slot, list(range(TABLES_PER_SLOT)))
+            _maintain_exports(endpoints, host, db, up, slot)
+    except (psycopg.Error, OSError) as e:
+        c = sql.classify(e)
+        log(f"seeding stopped early: {c.outcome.value} {c.sqlstate} {c.template}")
+    finally:
+        try:
+            up.close()
+        except psycopg.Error:
+            pass
+    return 0
+
+
+def upstream_main() -> int:
+    endpoints = Endpoints.from_env()
+    db = open_state()
+    try:
+        host = mz_host()
+    except Exception as e:
+        log(f"no environmentd host: {e}")
+        return 0
+    setup_deadline = Deadline(LAZY_SETUP_BUDGET_S)
+    if not _ensure_upstream(endpoints, db, setup_deadline):
+        return 0
+    ready_slots = [
+        s for s in range(SLOTS) if _ensure_mz(endpoints, host, db, s, setup_deadline)
+    ]
 
     keyspace = timeline_choice(db, "keyspace", KEYSPACE_CHOICES)
     n_txns = timeline_choice(db, "txns_per_run", TXNS_PER_RUN_CHOICES)
@@ -912,12 +1037,16 @@ def check_main() -> int:
     endpoints = Endpoints.from_env()
     db = open_state()
     slot = rng.randrange(SLOTS)
-    if not _is_ready(db, f"mz_slot{slot}"):
-        return 0
     try:
         host = mz_host()
-        conn = mz_connect(host)
     except Exception as e:
+        log(f"no environmentd host: {e}")
+        return 0
+    if not _ensure_slot(endpoints, host, db, slot, Deadline(LAZY_SETUP_BUDGET_S)):
+        return 0
+    try:
+        conn = mz_connect(host)
+    except (psycopg.Error, OSError) as e:
         log(f"no connection: {e}")
         return 0
     try:
@@ -927,6 +1056,13 @@ def check_main() -> int:
         conn.close()
         return 0
     try:
+        if not _exports(db, slot):
+            _maintain_exports(endpoints, host, db, up, slot)
+        # Test Composer often leaves `parallel_driver_pg_upstream` unscheduled
+        # for long stretches, and without new upstream transactions every
+        # check compares the same, possibly empty, history. One transaction
+        # per check keeps the ledger moving; it is visible to later checks.
+        _dml_txn(up, db, slot, [rng.randrange(TABLES_PER_SLOT)])
         _check(db, conn, up, slot, Deadline(CHECK_BUDGET_S))
     except (psycopg.Error, OSError) as e:
         c = sql.classify(e)
@@ -1091,19 +1227,24 @@ def _check_ledger(
         {**details, "tables": gaps},
     )
 
-    missing = [
+    committed_below = [
         r[0]
         for r in db.execute(
             "SELECT txn_id FROM txns WHERE slot = ? AND status = 'acked'"
             " AND lsn_after IS NOT NULL AND lsn_after < ?",
             (slot, f_db),
         )
-        if r[0] not in tables_of
     ]
+    missing = [t for t in committed_below if t not in tables_of]
     always(
         not missing,
         "postgres source: transactions committed below the mapped LSN are visible in the ledger",
         {**details, "missing": missing[:10], "missing_count": len(missing)},
+    )
+    sometimes(
+        len(committed_below) > len(missing),
+        "postgres source: a ledger check found an acknowledged transaction committed below the mapped LSN",
+        {**details, "committed_below": len(committed_below)},
     )
     early = [
         r[0]
@@ -1237,6 +1378,11 @@ def _check_export(
     expected = replay(replayed)
     diff = bag_diff(expected.items(), [(int(k), v) for k, v in rows])
     matched = diff["missing_count"] == 0 and diff["extra_count"] == 0
+    sometimes(
+        bool(expected),
+        "postgres source: a check compared an export with a non-empty replayed upstream table",
+        {**details, "replayed_txns": len(replayed), "expected_rows": len(expected)},
+    )
     if tagged:
         always_or_unreachable(
             matched,

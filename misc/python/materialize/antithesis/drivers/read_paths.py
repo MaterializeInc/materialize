@@ -489,6 +489,11 @@ class Round:
                 "read paths: every path returns the same rows of the TopK MV at one timestamp",
                 details,
             )
+        sometimes(
+            sum(ref.values()) > 0,
+            "read paths: a round compared a non-empty relation across paths",
+            {"relation": rel.name, "paths": sorted(ok), "rows": sum(ref.values())},
+        )
         replica_paths = [p for p in ok if p.startswith("replica:")]
         sometimes(
             len(replica_paths) >= 2,
