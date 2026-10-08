@@ -60,7 +60,7 @@ from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize import orchestratord
-from materialize.antithesis import kube_watch, sql
+from materialize.antithesis import kube_watch, spec_model, sql
 from materialize.antithesis.drivers import counters, history, lifecycle
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -148,10 +148,9 @@ VERSION_SAMPLE_SECONDS = 5.0
 OBSERVER_PREVIOUS_MAX_AGE_SECONDS = 15.0
 
 DEFAULT_ROLLOUT_REQUEST_TIMEOUT = "24h"
-DEFAULT_ROLLOUT_STRATEGY = "WaitUntilReady"
-FORCE_ROLLOUT_ANNOTATION = "materialize.cloud/force-rollout"
+DEFAULT_ROLLOUT_STRATEGY = spec_model.DEFAULT_ROLLOUT_STRATEGY
 LEASE_NAME = "orchestratord"
-MIGRATION_ARG_PREFIX = "--unsafe-force-builtin-schema-migration="
+MIGRATION_ARG_PREFIX = spec_model.MIGRATION_ARG_PREFIX
 SPEC_FIELDS = (
     "environmentdImageRef",
     "environmentdExtraArgs",
@@ -242,15 +241,12 @@ class Snapshot:
     def resource_id(self) -> str | None:
         return self.status.get("resourceId")
 
+    @property
+    def observed_generation(self) -> int | None:
+        return self.condition.get("observedGeneration")
+
     def expected_force(self) -> str:
-        """The `materialize.cloud/force` value orchestratord derives from this
-        spec, as `force_rollout_value` does."""
-        # An absent `forceRollout` deserializes to the nil UUID.
-        force = self.spec.get("forceRollout") or str(uuid.UUID(int=0))
-        annotation = ((self.obj.get("metadata") or {}).get("annotations") or {}).get(
-            FORCE_ROLLOUT_ANNOTATION
-        )
-        return f"{force}/{annotation}" if annotation is not None else str(force)
+        return spec_model.expected_force(self.obj)
 
     def tracked_spec(self) -> dict[str, Any]:
         return {k: self.spec.get(k) for k in SPEC_FIELDS}
@@ -278,6 +274,10 @@ class EnvdStatefulSet:
     force: str | None
     args: tuple[str, ...]
     deleting: bool
+    resources: dict[str, dict[str, str]] | None = None
+
+    def deployed(self) -> spec_model.Deployed:
+        return spec_model.Deployed(self.image, self.force, self.args, self.resources)
 
 
 @dataclass(frozen=True)
@@ -330,9 +330,10 @@ class Kube:
             log(f"reading the CR failed: {e}")
             return None
 
-    def patch_spec(self, spec: dict[str, Any]) -> None:
-        """Merge-patch the spec. A `None` value removes the field."""
-        self.custom.patch_namespaced_custom_object(
+    def patch_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
+        """Merge-patch the spec. A `None` value removes the field. Returns the
+        CR as stored by the patch, status included."""
+        return self.custom.patch_namespaced_custom_object(
             orchestratord.GROUP,
             orchestratord.VERSION,
             self.namespace,
@@ -362,6 +363,7 @@ class Kube:
                 (c for c in containers if c.name == "environmentd"), containers[0]
             )
             assert container.image is not None
+            resources = container.resources
             result.append(
                 EnvdStatefulSet(
                     generation=int(suffix),
@@ -371,6 +373,14 @@ class Kube:
                     force=(metadata.annotations or {}).get("materialize.cloud/force"),
                     args=tuple(container.args or ()),
                     deleting=metadata.deletion_timestamp is not None,
+                    resources=(
+                        {
+                            "requests": dict(resources.requests or {}),
+                            "limits": dict(resources.limits or {}),
+                        }
+                        if resources is not None
+                        else None
+                    ),
                 )
             )
         return sorted(result, key=lambda s: s.generation)
@@ -783,11 +793,19 @@ def submit(ctx: Ctx, action: str, changes: dict[str, Any]) -> str | None:
     patching, if the CR could not be read first. Raises `LeaseLost` before
     patching if the context's lease passed to another invocation.
     """
+    return submit_patch(ctx, action, changes)[0]
+
+
+def submit_patch(
+    ctx: Ctx, action: str, changes: dict[str, Any]
+) -> tuple[str | None, Snapshot | None]:
+    """`submit`, also returning the CR as the patch stored it, or None unless
+    the patch was acknowledged."""
     if ctx.lease is not None:
         ctx.lease.renew()
     before = ctx.kube.try_snapshot()
     if before is None:
-        return None
+        return None, None
     intended = {**before.tracked_spec(), **changes}
     request = intended.get("requestRollout")
     cursor = ctx.db.execute(
@@ -797,8 +815,9 @@ def submit(ctx: Ctx, action: str, changes: dict[str, Any]) -> str | None:
     )
     ctx.db.commit()
     seq = cursor.lastrowid
+    stored: Snapshot | None = None
     try:
-        ctx.kube.patch_spec(changes)
+        stored = Snapshot(ctx.kube.patch_spec(changes))
         outcome = "acked"
     except ApiException as e:
         outcome = (
@@ -813,7 +832,7 @@ def submit(ctx: Ctx, action: str, changes: dict[str, Any]) -> str | None:
     ctx.db.execute("UPDATE submitted SET outcome = ? WHERE seq = ?", (outcome, seq))
     ctx.db.commit()
     log(f"{action}: submitted {changes} ({outcome}, phase before {before.reason})")
-    return request
+    return request, stored
 
 
 def new_request() -> dict[str, Any]:
@@ -1794,6 +1813,7 @@ def check_cr_version(
     immediately before it, or None if that is unknown."""
     note_phase(snap.reason, snap.summary())
     check_status_history(db, snap)
+    track_promotion(db, snap)
     raise_protected(db, protected_from(snap, []))
     if previous is not None:
         check_adjacent_versions(snap, previous)
@@ -2044,58 +2064,168 @@ def check_protected(
     kv_set(db, "protected", protected)
 
 
-def check_applied_matches(
-    kube: Kube, snap: Snapshot, statefulsets: list[EnvdStatefulSet]
-) -> None:
-    """An Applied status describes the StatefulSet the active generation runs.
+def track_promotion(db: sqlite3.Connection, snap: Snapshot) -> None:
+    """Records the generations promoted with a spec whose rendered fields
+    differ from the spec they were applied with.
 
-    Only checked when the condition was written by a pass that saw the current
-    spec (`observedGeneration == metadata.generation`). Otherwise a spec patch
-    the controller has not reconciled yet would look like drift.
+    The `Promoting` status is written by the pass that applied the candidate's
+    StatefulSet, at that pass's spec, and `promote()` writes `Applied` at the
+    spec of its own pass without re-applying the StatefulSet (CLO-339). Both
+    conditions are judged only at their own spec generation, which is the
+    version they were written in (see `spec_model.status_check`).
     """
-    if snap.condition_status != "True" or snap.reason != "Applied":
+    active = snap.active
+    if active is None or snap.observed_generation != snap.generation:
         return
-    if snap.condition.get("observedGeneration") != snap.generation:
-        return
-    active = next((s for s in statefulsets if s.generation == snap.active), None)
+    specs: dict[str, Any] = kv_get(db, "promoting_specs") or {}
+    if snap.reason == "Promoting":
+        specs.setdefault(str(active), spec_model.deployed_spec(snap.obj))
+        kv_set(
+            db,
+            "promoting_specs",
+            {k: v for k, v in specs.items() if int(k) >= active - 1},
+        )
+    elif snap.reason == "Applied" and snap.condition_status == "True":
+        applied_with = specs.pop(str(active - 1), None)
+        kv_set(db, "promoting_specs", specs)
+        promoted_with = spec_model.deployed_spec(snap.obj)
+        if applied_with is not None and applied_with != promoted_with:
+            tainted = set(promoted_across_spec_change(db))
+            tainted.add(active)
+            kv_set(db, "promoted_across_spec_change", sorted(tainted))
+            reachable(
+                "Observer saw a promotion complete with a spec changed during Promoting",
+                {
+                    **snap.summary(),
+                    "applied_with": applied_with,
+                    "promoted_with": promoted_with,
+                },
+            )
+
+
+def promoted_across_spec_change(db: sqlite3.Connection) -> list[int]:
+    """Generations `track_promotion` saw promoted across a rendered spec change."""
+    return list(kv_get(db, "promoted_across_spec_change") or [])
+
+
+# A status claim is asserted violated only when a second evaluation at least
+# this long after the first sees the same claim (`StatusCheck.key`) still
+# violated, so a violation reflects a settled state rather than one read in
+# the middle of a reconcile pass. Needs calibration on one simulated core.
+STATUS_SETTLE_SECONDS = 30.0
+
+MSG_APPLIED = "Applied status implies the active StatefulSet runs the spec at the observed generation, and the completed request and image are the spec's"
+MSG_APPLIED_PROMOTING_SAME_REQUEST = "Applied status after a spec change during Promoting without a new requestRollout implies the active StatefulSet runs the spec (CLO-339)"
+MSG_APPLIED_PROMOTING_NEW_REQUEST = "Applied status after a spec change during Promoting with a new requestRollout implies the active StatefulSet runs the spec (CLO-339)"
+MSG_APPLIED_PROMOTED_ACROSS = "Applied status for a generation promoted across a spec change during Promoting implies the active StatefulSet runs the spec (CLO-339)"
+MSG_WAITING = "WaitingForApproval is reported only while the spec differs from the active StatefulSet"
+MSG_WAITING_EMPTY_HASH = "WaitingForApproval with an empty resourcesHash is reported only while the spec differs from the active StatefulSet (known: full revert after Applying)"
+MSG_WAITING_PROMOTED_ACROSS = "WaitingForApproval for a generation promoted across a spec change during Promoting is reported only while the spec differs from the active StatefulSet (CLO-339)"
+
+
+def assert_status_claim(cause: str, holds: bool, details: dict[str, Any]) -> None:
+    """The only site of each status-claim message. `cause` is a
+    `spec_model.claim_cause` value. `holds` is False only for a violation
+    confirmed after `STATUS_SETTLE_SECONDS`."""
+    details = {**details, "cause": cause}
+    if cause == "applied":
+        always(holds, MSG_APPLIED, details)
+    elif cause == "applied_promoting_same_request":
+        always_or_unreachable(holds, MSG_APPLIED_PROMOTING_SAME_REQUEST, details)
+    elif cause == "applied_promoting_new_request":
+        always_or_unreachable(holds, MSG_APPLIED_PROMOTING_NEW_REQUEST, details)
+    elif cause == "applied_promoted_across":
+        always_or_unreachable(holds, MSG_APPLIED_PROMOTED_ACROSS, details)
+    elif cause == "waiting":
+        always_or_unreachable(holds, MSG_WAITING, details)
+    elif cause == "waiting_empty_hash":
+        always_or_unreachable(holds, MSG_WAITING_EMPTY_HASH, details)
+    elif cause == "waiting_promoted_across":
+        always_or_unreachable(holds, MSG_WAITING_PROMOTED_ACROSS, details)
+    else:
+        raise ValueError(f"unknown status claim cause {cause}")
+
+
+@dataclass(frozen=True)
+class EvaluatedClaim:
+    check: spec_model.StatusCheck
+    snap: Snapshot
+    statefulset: EnvdStatefulSet
+
+    def details(self) -> dict[str, Any]:
+        return {
+            **self.snap.summary(),
+            "claim": self.check.kind,
+            "mismatches": self.check.mismatches,
+            "resources_hash_empty": self.check.empty_resources_hash,
+            "statefulset": self.statefulset.name,
+            "spec": self.snap.tracked_spec(),
+            "spec_resources": self.snap.spec.get("environmentdResourceRequirements"),
+        }
+
+
+def evaluate_claim(
+    kube: Kube, snap: Snapshot, statefulsets: list[EnvdStatefulSet]
+) -> EvaluatedClaim | None:
+    """The status claim of `snap` judged against a StatefulSet listing taken
+    after it, or None if it makes none or the CR changed during the listing."""
+    if snap.active is None:
+        return None
+    active = next(
+        (s for s in statefulsets if s.generation == snap.active and not s.deleting),
+        None,
+    )
     if active is None:
+        return None
+    check = spec_model.status_check(snap.obj, active.deployed())
+    if check is None:
+        return None
+    if kube.snapshot().resource_version != snap.resource_version:
+        return None
+    return EvaluatedClaim(check, snap, active)
+
+
+def read_claim(kube: Kube) -> EvaluatedClaim | None:
+    snap = kube.snapshot()
+    if snap.resource_id is None:
+        return None
+    return evaluate_claim(kube, snap, kube.envd_statefulsets(snap.resource_id))
+
+
+def check_status_claims(
+    db: sqlite3.Connection,
+    kube: Kube,
+    snap: Snapshot,
+    statefulsets: list[EnvdStatefulSet],
+) -> None:
+    """Judges the status claim of the latest CR version on every observation.
+
+    A violation is first recorded as pending in the observer database and
+    asserted by a later observation that still sees it under the same key.
+    """
+    claim = evaluate_claim(kube, snap, statefulsets)
+    if claim is None:
         return
-    # The StatefulSet listing must describe the same CR version.
-    again = kube.snapshot()
-    if again.resource_version != snap.resource_version:
+    cause = spec_model.claim_cause(
+        claim.check,
+        promoting_request_mode=None,
+        promoted_across=snap.active in promoted_across_spec_change(db),
+    )
+    if not claim.check.violated:
+        kv_set(db, "claim_pending", None)
+        assert_status_claim(cause, True, claim.details())
         return
-    extra_args = list(snap.spec.get("environmentdExtraArgs") or [])
-    details = {
-        **snap.summary(),
-        "statefulset": active.name,
-        "statefulset_image": active.image,
-        "statefulset_force": active.force,
-        "statefulset_unsafe_args": [a for a in active.args if a.startswith("--unsafe")],
-        "spec_image": snap.spec.get("environmentdImageRef"),
-        "spec_extra_args": extra_args,
-        "expected_force": snap.expected_force(),
-    }
-    always(
-        active.image == snap.status.get("lastCompletedRolloutEnvironmentdImageRef"),
-        "Applied status image matches the active environmentd StatefulSet image",
-        details,
-    )
-    always(
-        active.image == snap.spec.get("environmentdImageRef"),
-        "Applied status implies the active StatefulSet runs the spec image",
-        details,
-    )
-    always(
-        active.force == snap.expected_force(),
-        "Applied status implies the active StatefulSet carries the spec force annotation",
-        details,
-    )
-    always(
-        all(a in active.args for a in extra_args)
-        and all(a in extra_args for a in active.args if a.startswith("--unsafe")),
-        "Applied status implies the active StatefulSet runs the spec extra args",
-        details,
-    )
+    now = time.monotonic()
+    pending = kv_get(db, "claim_pending")
+    if pending is None or pending["key"] != list(claim.check.key):
+        kv_set(db, "claim_pending", {"key": list(claim.check.key), "at": now})
+        return
+    if now - pending["at"] >= STATUS_SETTLE_SECONDS:
+        assert_status_claim(
+            cause,
+            False,
+            {**claim.details(), "violated_for_seconds": now - pending["at"]},
+        )
 
 
 def first_observation(db: sqlite3.Connection, pod: EnvdPod) -> int:
@@ -2273,7 +2403,7 @@ def observe_once(db: sqlite3.Connection, kube: Kube) -> None:
         if snap.resource_id is not None:
             statefulsets = kube.envd_statefulsets(snap.resource_id)
             check_protected(db, kube, snap, leader_gens, statefulsets)
-            check_applied_matches(kube, snap, statefulsets)
+            check_status_claims(db, kube, snap, statefulsets)
         try:
             holder = kube.lease_holder()
         except TRANSIENT_ERRORS:
