@@ -284,6 +284,30 @@ impl ClientReadProtection {
         extra
     }
 
+    /// Prepare new or stronger grants without advancing or releasing committed protection.
+    /// Active tokens are already covered by committed grants and only downgrade
+    /// forward, so retaining those grants also preserves every active token.
+    /// Advancement and release remain eligible for the next aggregate publication.
+    ///
+    /// Uses the same acquisition barrier and definitive completion contract as
+    /// `prepare_publication`. Panics if another publication is pending.
+    pub fn prepare_grant_publication(
+        &self,
+        extra: BTreeMap<GlobalId, Timestamp>,
+    ) -> BTreeMap<GlobalId, Timestamp> {
+        let mut state = self.state.lock().expect("read protection mutex poisoned");
+        assert!(state.pending.is_none(), "publication already pending");
+        let mut requirements = state.committed.clone();
+        for (id, frontier) in extra {
+            requirements
+                .entry(id)
+                .and_modify(|held| *held = (*held).min(frontier))
+                .or_insert(frontier);
+        }
+        state.pending = Some(requirements.clone());
+        requirements
+    }
+
     /// Prepare changed aggregate requirements, or an idle heartbeat renewal.
     /// Called on the coalesced publication cadence. An unchanged aggregate needs
     /// no write until renewal is due. The snapshot installs the same acquisition

@@ -96,6 +96,13 @@ impl ClientReadProtection {
         self.inner.prepare_publication(extra)
     }
 
+    pub(crate) fn prepare_grant_publication(
+        &self,
+        extra: BTreeMap<GlobalId, Timestamp>,
+    ) -> BTreeMap<GlobalId, Timestamp> {
+        self.inner.prepare_grant_publication(extra)
+    }
+
     pub(crate) fn prepare_publication_if_needed(
         &self,
         elapsed: Duration,
@@ -261,6 +268,49 @@ mod tests {
             Some(BTreeMap::new())
         );
         client.finish_publication(true);
+    }
+
+    #[mz_ore::test]
+    fn grant_publication_leaves_advancement_and_release_to_maintenance() {
+        let client = ClientReadProtection::new(1);
+        publish(&client, requirements(&[(1, 10), (2, 10), (3, 10)]));
+        let mut window = acquire(&client, 10);
+        window.downgrade(Timestamp::from(30));
+        let extra = requirements(&[(1, 5), (4, 40)]);
+        let pending = requirements(&[(1, 5), (2, 10), (3, 10), (4, 40)]);
+        let new_bundle = CollectionIdBundle {
+            storage_ids: [GlobalId::User(4)].into(),
+            compute_ids: BTreeMap::new(),
+        };
+        let new_request = requirements(&[(4, 40)]);
+
+        for committed in [false, true] {
+            assert_eq!(client.prepare_grant_publication(extra.clone()), pending);
+            // Existing coverage remains usable despite locally advanced tokens.
+            drop(acquire(&client, 10));
+            assert!(
+                client
+                    .try_acquire(&new_bundle, &new_request, &BTreeMap::new())
+                    .expect("open")
+                    .is_none()
+            );
+            assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(10.into()));
+            client.finish_publication(committed);
+        }
+        let new_hold = client
+            .try_acquire(&new_bundle, &new_request, &BTreeMap::new())
+            .expect("open")
+            .expect("new grant committed");
+        assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(5.into()));
+        assert_eq!(client.granted_frontier(GlobalId::User(2)), Some(10.into()));
+        assert_eq!(client.granted_frontier(GlobalId::User(3)), Some(10.into()));
+        assert_eq!(
+            client.prepare_publication_if_needed(Duration::from_secs(1)),
+            Some(requirements(&[(1, 30), (2, 30), (4, 40)])),
+            "creator publication must not acknowledge unrelated advancement or release"
+        );
+        client.finish_publication(true);
+        drop((window, new_hold));
     }
 
     #[mz_ore::test]

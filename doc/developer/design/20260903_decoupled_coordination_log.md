@@ -90,8 +90,14 @@ but catch-up remains costly and the adapter still loses its incarnation after a
 301s renewal drought. Heartbeat attempts must renew the existing incarnation
 without preparing or acknowledging the full advancing aggregate. Both adapter and
 replica owners retain committed grants, pending acquisition barriers, advancement
-opportunities and their existing retry gates. Verify renewal and foreground progress
-together in the existing workloads, without inferring liveness from cheaper work.
+opportunities and their existing retry gates. The CREATE INDEX holders dominating
+the timed-out MV's DDL queue repeatedly lose content attempts to peer metadata.
+Their creator publication also carries unrelated advancing client requirements.
+Creator grants now extend committed protection, leaving advancement and release
+to aggregate publication. Verify this boundary correction in the existing workload
+before choosing another repair. It does not bypass catalog conflicts or establish
+fairness. Keep durable renewal and end-to-end SQL progress as separate outcomes,
+crediting heartbeat-only and full publications only after commit.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.

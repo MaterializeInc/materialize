@@ -289,6 +289,8 @@ impl Coordinator {
     /// Prepares client protection for index and MV outputs in a candidate or committed catalog.
     /// The catalog still owns admission and bound validation. These requirements
     /// preserve the serving adapter's oracle window, independently of installation.
+    /// Creator transactions add protection without carrying unrelated advancement
+    /// or release, which remain owned by aggregate publication.
     pub(super) async fn prepare_admission_timeline_publication(
         &mut self,
         client: Arc<QueryClient>,
@@ -356,7 +358,9 @@ impl Coordinator {
         }
         let requested = candidate
             .expand_client_read_requirements(client.protection.incarnation(), requested)?;
-        let requirements = client.protection.prepare_publication(requested.clone());
+        let requirements = client
+            .protection
+            .prepare_grant_publication(requested.clone());
         Ok(AdmissionTimelinePublication {
             client,
             bundle,

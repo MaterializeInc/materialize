@@ -47,6 +47,7 @@ async fn creation_protects_timelines_before_installation() {
             sql!("CREATE TABLE timeline_input (a int)"),
             sql!("CREATE CLUSTER timeline_cluster REPLICAS (), MANAGED = false"),
             sql!("CREATE INDEX timeline_idx IN CLUSTER timeline_cluster ON timeline_input (a)"),
+            sql!("INSERT INTO timeline_input VALUES (0)"),
             sql!(
                 "CREATE MATERIALIZED VIEW timeline_mv IN CLUSTER timeline_cluster
                  AS SELECT * FROM timeline_input"
@@ -116,6 +117,18 @@ async fn creation_protects_timelines_before_installation() {
                 }),
                 "creation must commit the output grant atomically, not acquire it later: {id}"
             );
+            if id == item_id("timeline_mv") {
+                // The write can advance existing timeline tokens. Their
+                // publication must not become part of this output's birth.
+                for update in updates.iter().filter(|update| update.ts == birth.ts) {
+                    if let StateUpdateKind::ClientReadRequirement(requirement) = &update.kind
+                        && requirement.incarnation == creator_id
+                    {
+                        assert_eq!(update.diff, StateDiff::Addition);
+                        assert_eq!(requirement.id, id);
+                    }
+                }
+            }
         }
 
         // Drive timeline advancement with a blind write rather than waiting for
@@ -165,8 +178,8 @@ async fn creation_protects_timelines_before_installation() {
                 .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
                 .find(|client| client.id == creator_id)
                 .expect("the creator must remain live");
-            // Heartbeats advance only with complete requirement publications.
-            // Observe that event rather than assuming a sleep caused publication.
+            // Observe acknowledged client activity, including heartbeat-only
+            // renewal, rather than assuming a sleep caused publication.
             if creator.heartbeat > initial_heartbeat {
                 break;
             }
