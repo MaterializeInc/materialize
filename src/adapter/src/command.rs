@@ -357,7 +357,7 @@ pub enum Command {
     /// Register a pending peek initiated by frontend sequencing. This is needed for:
     /// - statement logging
     /// - query cancellation
-    RegisterFrontendPeek {
+    RegisterPeek {
         uuid: Uuid,
         conn_id: ConnectionId,
         cluster_id: mz_controller_types::ClusterId,
@@ -377,7 +377,7 @@ pub enum Command {
     /// coordinator, so the frontend must not log the end itself. If a
     /// concurrent teardown (e.g. a `DROP CLUSTER`) already retired the peek
     /// and logged its end, this is a no-op.
-    UnregisterFrontendPeek {
+    UnregisterPeek {
         uuid: Uuid,
         reason: StatementEndedExecutionReason,
         tx: oneshot::Sender<()>,
@@ -503,8 +503,8 @@ impl Command {
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::LookupConnection { .. }
-            | Command::RegisterFrontendPeek { .. }
-            | Command::UnregisterFrontendPeek { .. }
+            | Command::RegisterPeek { .. }
+            | Command::UnregisterPeek { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
@@ -548,8 +548,8 @@ impl Command {
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::LookupConnection { .. }
-            | Command::RegisterFrontendPeek { .. }
-            | Command::UnregisterFrontendPeek { .. }
+            | Command::RegisterPeek { .. }
+            | Command::UnregisterPeek { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }

@@ -506,7 +506,7 @@ impl PeekClient {
         //
         // Warning: If we fail to actually issue the peek after this point, then we need to
         // unregister it to avoid an orphaned registration.
-        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
+        self.call_coordinator(|tx| Command::RegisterPeek {
             uuid,
             conn_id: conn_id.clone(),
             cluster_id: compute_instance,
@@ -557,7 +557,7 @@ impl PeekClient {
             // a concurrent teardown already retired the peek, the end is
             // already logged and the unregistration is a no-op.
             let _ = self
-                .call_coordinator(|tx| Command::UnregisterFrontendPeek {
+                .call_coordinator(|tx| Command::UnregisterPeek {
                     uuid,
                     reason: statement_logging::StatementEndedExecutionReason::Errored {
                         error: err.to_string(),
