@@ -21,8 +21,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.44.1
-*Released to Materialize Cloud: 2026-09-30* <br>
-*Released to Materialize Self-Managed: 2026-10-01* <br>
+*Released to Materialize Cloud: 2026-10-01* <br>
+*Released to Materialize Self-Managed: 2026-10-02* <br>
 
 ### Advanced SSO (OIDC, SAML and SCIM) for Self-Managed {#v26.44.1-advanced-sso}
 
@@ -99,8 +99,8 @@ For more information, see [Grafana](/observability/self-managed/grafana/) and th
 - Fixed `dbt-materialize` running unit tests on the session's default cluster instead of the cluster configured in the dbt profile.
 
 ## v26.43.0
-*Released to Materialize Cloud: 2026-09-23* <br>
-*Released to Materialize Self-Managed: 2026-09-24* <br>
+*Released to Materialize Cloud: 2026-09-24* <br>
+*Released to Materialize Self-Managed: 2026-09-25* <br>
 
 ### Iceberg support for Databricks on Azure {#v26.43-iceberg-support-for-databricks-on-azure}
 
@@ -297,8 +297,8 @@ Compare `peak_heap` (the memory plus disk a replica process used) with `heap_lim
 - Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
 
 ## v26.40.0
-*Released to Materialize Cloud: 2026-09-02* <br>
-*Released to Materialize Self-Managed: 2026-09-03* <br>
+*Released to Materialize Cloud: 2026-09-03* <br>
+*Released to Materialize Self-Managed: 2026-09-04* <br>
 
 ### Iceberg support for Databricks on AWS {#v26.40-iceberg-support-for-databricks-on-aws}
 
@@ -368,8 +368,8 @@ For more information, see:
 - Fixed the `mz` CLI failing on read-only commands such as `mz sql` when `mz.toml` sits on a read-only mount.
 
 ## v26.39.0
-*Released to Materialize Cloud: 2026-08-26* <br>
-*Released to Materialize Self-Managed: 2026-08-27* <br>
+*Released to Materialize Cloud: 2026-08-27* <br>
+*Released to Materialize Self-Managed: 2026-08-28* <br>
 
 ### Improvements {#v26.39-improvements}
 - **Improved connect modal in the console**: We've updated the UI to make it easier to connect coding agents to our MCP servers, and connect applications to Materialize.
@@ -391,7 +391,7 @@ For more information, see:
 - `CREATE CONNECTION`, `ALTER CONNECTION`, and `VALIDATE CONNECTION` for AWS PrivateLink now reject a `SERVICE NAME` that is not an AWS VPC endpoint service name, such as a DNS hostname, instead of failing later with a misleading missing-availability-zones error.
 
 ## v26.38.2
-*Released to Materialize Cloud: 2026-08-19* <br>
+*Released to Materialize Cloud: 2026-08-20* <br>
 *Released to Materialize Self-Managed: 2026-08-25* <br>
 
 ### Dictionary compression {#v26.38-dictionary-compression}
@@ -474,8 +474,8 @@ For more information, see:
 - Fixed the comment `dbt-materialize`'s `deploy_promote` puts on each promoted schema ending without a timestamp.
 
 ## v26.37.0
-*Released to Materialize Cloud: 2026-08-12* <br>
-*Released to Materialize Self-Managed: 2026-08-13* <br>
+*Released to Materialize Cloud: 2026-08-13* <br>
+*Released to Materialize Self-Managed: 2026-08-14* <br>
 
 ### Improvements {#v26.37-improvements}
 - **Self-Managed: Highly available operator**: The Materialize operator now runs two replicas by default, so rolling out an operator update no longer interrupts the CRD conversion webhook. Installations that manage their own RBAC must grant the operator `get`, `create`, and `update` on `leases` in `coordination.k8s.io`, because the two replicas coordinate through lease-based leader election.
@@ -527,8 +527,8 @@ For more information, see:
 - Fixed `mz-deploy compile` and `mz-deploy stage` failing with `type "text[]" does not exist` for projects whose dependencies have array-typed columns.
 
 ## v26.35.0
-*Released to Materialize Cloud: 2026-07-29* <br>
-*Released to Materialize Self-Managed: 2026-07-30* <br>
+*Released to Materialize Cloud: 2026-07-30* <br>
+*Released to Materialize Self-Managed: 2026-07-31* <br>
 
 ### Asynchronous Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
 `ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
