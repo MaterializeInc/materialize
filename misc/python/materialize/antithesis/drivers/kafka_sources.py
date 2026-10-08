@@ -35,6 +35,9 @@ for the upsert envelope.
 A slot rotates to a fresh topic and source after `TOPIC_RECORD_CAP` attempted
 produces, which bounds read-back and query cost; the previous generation's
 source is dropped and its topic deleted.
+
+`first_configure` sets up and seeds every slot through `setup_main`; the
+driver and the check repair a missing slot within a bounded retry budget.
 """
 
 from __future__ import annotations
@@ -63,6 +66,7 @@ from confluent_kafka.cimpl import (
 from materialize.antithesis import sql, state
 from materialize.antithesis.drivers.source_status import Export, observe
 from materialize.antithesis.drivers.sources_common import (
+    LAZY_SETUP_BUDGET_S,
     RETAIN_HISTORY_CHOICES,
     SOURCES_CLUSTER,
     Deadline,
@@ -78,6 +82,7 @@ from materialize.antithesis.drivers.sources_common import (
     record_progress_observation,
     source_error_text,
     timeline_choice,
+    with_retry,
 )
 from materialize.antithesis.drivers.sources_common import log as _log
 from materialize.antithesis.endpoints import Endpoints
@@ -106,6 +111,11 @@ _FILLER = "abcdefghijklmnopqrstuvwxyzé€𝄞"
 
 DRIVER_BUDGET_S = 90.0
 CHECK_BUDGET_S = 120.0
+# Budget of `setup_main` in `first_configure`, for setup and seeding together.
+# It runs without faults, so this only has to cover a slow environmentd or
+# broker.
+FIRST_SETUP_BUDGET_S = 120.0
+SEED_RECORDS = 20
 DELIVERY_TIMEOUT_S = 30.0
 ADMIN_TIMEOUT_S = 30.0
 
@@ -226,57 +236,84 @@ def _ddl(conn: psycopg.Connection, statement: str) -> None:
             raise
 
 
+def _setup_retryable(e: BaseException) -> bool:
+    # Broker timeouts and transport errors under faults are not marked
+    # retriable by librdkafka, so only a fatal client error ends the retries.
+    if isinstance(e, KafkaException):
+        return not e.args[0].fatal()
+    return sql.classify(e).outcome is not sql.Outcome.VIOLATION
+
+
 def ensure_slot(
-    db: sqlite3.Connection, endpoints: Endpoints, host: str, slot: int
+    db: sqlite3.Connection,
+    endpoints: Endpoints,
+    host: str,
+    slot: int,
+    deadline: Deadline,
 ) -> Slot | None:
     """The slot's current generation with its topic, source, and tables in place.
 
-    Returns `None` when setup failed for a reason the next invocation retries.
+    Setup is retried until `deadline`. Returns `None` when it did not finish.
     """
     s = _slot(db, slot)
     if _is_ready(db, s):
         _drop_old_generations(db, endpoints, host, s)
         return s
-    try:
-        _create_topic(_admin(endpoints.kafka_broker), s.topic, s.partitions)
-        ensure_retain_history(host, endpoints)
-        with mz_connect(host) as conn:
-            ensure_cluster(conn, db)
-            _ddl(
-                conn,
-                f"CREATE CONNECTION IF NOT EXISTS {KAFKA_CONNECTION} TO KAFKA"
-                f" (BROKER '{endpoints.kafka_broker}', SECURITY PROTOCOL PLAINTEXT)"
-                " WITH (VALIDATE = false)",
-            )
-            retain = f"WITH (RETAIN HISTORY = FOR '{s.retain}')"
-            _ddl(
-                conn,
-                f"CREATE SOURCE IF NOT EXISTS {_source(s.slot, s.gen)}"
-                f" IN CLUSTER {SOURCES_CLUSTER}"
-                f" FROM KAFKA CONNECTION {KAFKA_CONNECTION} (TOPIC '{s.topic}')"
-                f" {retain}",
-            )
-            _ddl(
-                conn,
-                f"CREATE TABLE IF NOT EXISTS {_upsert(s.slot, s.gen)}"
-                f' FROM SOURCE {_source(s.slot, s.gen)} (REFERENCE "{s.topic}")'
-                " KEY FORMAT TEXT VALUE FORMAT TEXT ENVELOPE UPSERT"
-                f" {retain}",
-            )
-            _ddl(
-                conn,
-                f"CREATE TABLE IF NOT EXISTS {_none(s.slot, s.gen)}"
-                f' FROM SOURCE {_source(s.slot, s.gen)} (REFERENCE "{s.topic}")'
-                " FORMAT TEXT INCLUDE PARTITION, OFFSET ENVELOPE NONE"
-                f" {retain}",
-            )
-    except Exception as e:
-        log(f"setup of slot {slot} gen {s.gen} failed: {e}")
+    failure = with_retry(
+        "kafka sources",
+        f"setup of slot {slot} gen {s.gen}",
+        lambda: _setup_slot(db, endpoints, host, s),
+        deadline,
+        _setup_retryable,
+    )
+    if failure is not None:
+        always_or_unreachable(
+            failure.retryable,
+            "kafka source: setup fails only with retryable errors",
+            failure.details(),
+        )
         return None
     with db:
         db.execute("INSERT OR IGNORE INTO ready VALUES (?, ?)", (s.slot, s.gen))
     _drop_old_generations(db, endpoints, host, s)
     return s
+
+
+def _setup_slot(
+    db: sqlite3.Connection, endpoints: Endpoints, host: str, s: Slot
+) -> None:
+    _create_topic(_admin(endpoints.kafka_broker), s.topic, s.partitions)
+    ensure_retain_history(host, endpoints)
+    with mz_connect(host) as conn:
+        ensure_cluster(conn, db)
+        _ddl(
+            conn,
+            f"CREATE CONNECTION IF NOT EXISTS {KAFKA_CONNECTION} TO KAFKA"
+            f" (BROKER '{endpoints.kafka_broker}', SECURITY PROTOCOL PLAINTEXT)"
+            " WITH (VALIDATE = false)",
+        )
+        retain = f"WITH (RETAIN HISTORY = FOR '{s.retain}')"
+        _ddl(
+            conn,
+            f"CREATE SOURCE IF NOT EXISTS {_source(s.slot, s.gen)}"
+            f" IN CLUSTER {SOURCES_CLUSTER}"
+            f" FROM KAFKA CONNECTION {KAFKA_CONNECTION} (TOPIC '{s.topic}')"
+            f" {retain}",
+        )
+        _ddl(
+            conn,
+            f"CREATE TABLE IF NOT EXISTS {_upsert(s.slot, s.gen)}"
+            f' FROM SOURCE {_source(s.slot, s.gen)} (REFERENCE "{s.topic}")'
+            " KEY FORMAT TEXT VALUE FORMAT TEXT ENVELOPE UPSERT"
+            f" {retain}",
+        )
+        _ddl(
+            conn,
+            f"CREATE TABLE IF NOT EXISTS {_none(s.slot, s.gen)}"
+            f' FROM SOURCE {_source(s.slot, s.gen)} (REFERENCE "{s.topic}")'
+            " FORMAT TEXT INCLUDE PARTITION, OFFSET ENVELOPE NONE"
+            f" {retain}",
+        )
 
 
 def _drop_old_generations(
@@ -415,6 +452,68 @@ def _produce(
     return acked
 
 
+def _records(db: sqlite3.Connection, n: int) -> list[tuple[str, str | None]]:
+    """`n` records drawn with this timeline's keyspace, tombstone rate, and key prefix."""
+    keyspace = timeline_choice(db, "keyspace", KEYSPACE_CHOICES)
+    tombstone_p = timeline_choice(db, "tombstone_p", TOMBSTONE_P_CHOICES)
+    prefix = timeline_choice(db, "key_prefix", KEY_PREFIXES)
+    records: list[tuple[str, str | None]] = []
+    for _ in range(n):
+        key = f"{prefix}{rng.randrange(keyspace)}"
+        if rng.random() < tombstone_p:
+            records.append((key, None))
+        else:
+            records.append((key, _value(f"{rng.getrandbits(32):08x}")))
+    return records
+
+
+def _timeline_producer(db: sqlite3.Connection, endpoints: Endpoints) -> Producer:
+    compression = timeline_choice(db, "compression", COMPRESSION_CHOICES)
+    return _producer(endpoints.kafka_broker, compression)
+
+
+def _acked(db: sqlite3.Connection, s: Slot) -> int:
+    row = db.execute(
+        "SELECT acked FROM attempts WHERE topic = ?", (s.topic,)
+    ).fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def setup_main() -> int:
+    """Set up every slot and seed its topic. Run from `first_configure`; the
+    driver and the check repair setup lazily if this did not finish."""
+    endpoints = Endpoints.from_env()
+    db = open_state()
+    deadline = Deadline(FIRST_SETUP_BUDGET_S)
+    try:
+        host = mz_host()
+    except Exception as e:
+        log(f"no environmentd host: {e}")
+        return 0
+    ready = [
+        s
+        for s in (
+            ensure_slot(db, endpoints, host, slot, deadline) for slot in range(SLOTS)
+        )
+        if s is not None
+    ]
+    sometimes(
+        len(ready) == SLOTS,
+        "kafka source: first_configure set up every slot",
+        {"ready_slots": [s.slot for s in ready]},
+    )
+    producer = _timeline_producer(db, endpoints)
+    for s in ready:
+        if deadline.expired():
+            log(f"setup budget spent; slot {s.slot} left for lazy seeding")
+            break
+        try:
+            _produce(db, producer, s, _records(db, SEED_RECORDS))
+        except KafkaException as e:
+            log(f"seeding {s.topic} failed: {e}")
+    return 0
+
+
 def produce_main() -> int:
     endpoints = Endpoints.from_env()
     db = open_state()
@@ -423,26 +522,17 @@ def produce_main() -> int:
     except Exception as e:
         log(f"no environmentd host: {e}")
         return 0
-    s = ensure_slot(db, endpoints, host, rng.randrange(SLOTS))
+    s = ensure_slot(
+        db, endpoints, host, rng.randrange(SLOTS), Deadline(LAZY_SETUP_BUDGET_S)
+    )
     if s is None:
         return 0
-    keyspace = timeline_choice(db, "keyspace", KEYSPACE_CHOICES)
-    tombstone_p = timeline_choice(db, "tombstone_p", TOMBSTONE_P_CHOICES)
-    prefix = timeline_choice(db, "key_prefix", KEY_PREFIXES)
-    compression = timeline_choice(db, "compression", COMPRESSION_CHOICES)
     deadline = Deadline(DRIVER_BUDGET_S)
-    producer = _producer(endpoints.kafka_broker, compression)
+    producer = _timeline_producer(db, endpoints)
     total = 0
     while not deadline.expired() and total < 2_000:
         n = rng.choice(BATCH_CHOICES)
-        records: list[tuple[str, str | None]] = []
-        for _ in range(n):
-            key = f"{prefix}{rng.randrange(keyspace)}"
-            if rng.random() < tombstone_p:
-                records.append((key, None))
-            else:
-                records.append((key, _value(f"{rng.getrandbits(32):08x}")))
-        _produce(db, producer, s, records)
+        _produce(db, producer, s, _records(db, n))
         total += n
         _rotate_if_full(db, s)
         if rng.random() < 0.5:
@@ -596,14 +686,29 @@ def _partition_frontier(
 def check_main() -> int:
     endpoints = Endpoints.from_env()
     db = open_state()
-    s = _read_slot(db, rng.randrange(SLOTS))
-    if s is None or not _is_ready(db, s):
-        return 0
-    deadline = Deadline(CHECK_BUDGET_S)
     try:
         host = mz_host()
-        conn = mz_connect(host)
     except Exception as e:
+        log(f"no environmentd host: {e}")
+        return 0
+    s = ensure_slot(
+        db, endpoints, host, rng.randrange(SLOTS), Deadline(LAZY_SETUP_BUDGET_S)
+    )
+    if s is None:
+        return 0
+    # Test Composer often leaves `parallel_driver_kafka_produce` unscheduled
+    # for long stretches, and an empty topic makes every comparison trivial.
+    # The batch is visible to later checks once ingested.
+    if _acked(db, s) == 0:
+        try:
+            producer = _timeline_producer(db, endpoints)
+            _produce(db, producer, s, _records(db, SEED_RECORDS))
+        except KafkaException as e:
+            log(f"seeding {s.topic} failed: {e}")
+    deadline = Deadline(CHECK_BUDGET_S)
+    try:
+        conn = mz_connect(host)
+    except (psycopg.Error, OSError) as e:
         log(f"no connection: {e}")
         return 0
     try:
@@ -630,15 +735,18 @@ def _check(
     )
     ids = lookup_ids(conn, [src_name, up_name, none_name])
     if len(ids) != 3:
+        log(f"{s.topic}: check skipped, catalog has only {sorted(ids)}")
         return
     src, up, none = ids[src_name], ids[up_name], ids[none_name]
     observe(conn, [Export(up, src, "upsert"), Export(none, src, "other")])
 
     fronts = frontiers(conn, [src, up, none])
     if len(fronts) != 3:
+        log(f"{s.topic}: check skipped, frontiers only for {sorted(fronts)}")
         return
     t = pick_as_of((f[0] for f in fronts.values()), (f[1] for f in fronts.values()))
     if t is None:
+        log(f"{s.topic}: check skipped, no readable time in {fronts}")
         return
     details: dict[str, Any] = {"topic": s.topic, "as_of": t}
 

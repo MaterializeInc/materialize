@@ -9,10 +9,10 @@
 
 """Materialize-side objects and query helpers shared by the source drivers.
 
-Setup is lazy and idempotent: each source driver calls the `ensure_*`
-functions before it needs an object, so no `first_` command is involved.
-Concurrent creators race on the catalog, and a duplicate-object rejection means
-another driver won.
+Setup is idempotent: `first_configure` runs each source driver's `setup_main`
+before any fault, and drivers and checks repair whatever is missing through
+`with_retry` before they need an object. Concurrent creators race on the
+catalog, and a duplicate-object rejection means another driver won.
 
 Every source table is created with `RETAIN HISTORY`, which needs
 `enable_logical_compaction_window`. Without retained history the since of a
@@ -27,7 +27,7 @@ import re
 import sqlite3
 import time
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,6 +54,12 @@ SINCE_MARGIN_MS = 2_000
 
 CONNECT_DEADLINE_S = 30.0
 STATEMENT_TIMEOUT_MS = 30_000
+
+SETUP_BACKOFF_BASE_S = 1.0
+SETUP_BACKOFF_MAX_S = 8.0
+# Lazy setup repair in drivers and checks runs under faults and must leave
+# most of their budget for their own work.
+LAZY_SETUP_BUDGET_S = 45.0
 
 _ID = re.compile(r"^[us]\d+$")
 _NAME = re.compile(r"^[a-z0-9_]+$")
@@ -305,3 +311,54 @@ class Deadline:
 
     def expired(self) -> bool:
         return self.remaining() <= 0
+
+
+@dataclass(frozen=True)
+class SetupFailure:
+    """The last error of a setup step that `with_retry` gave up on."""
+
+    step: str
+    classified: sql.Classified
+    retryable: bool
+    """False if the error was one retrying cannot fix, so it ended the retries."""
+
+    def details(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "outcome": self.classified.outcome.value,
+            "sqlstate": self.classified.sqlstate,
+            "template": self.classified.template,
+        }
+
+
+def with_retry(
+    prefix: str,
+    step: str,
+    attempt: Callable[[], None],
+    deadline: Deadline,
+    retryable: Callable[[BaseException], bool],
+) -> SetupFailure | None:
+    """Run an idempotent setup step until it succeeds, fails with an error
+    `retryable` rejects, or `deadline` leaves no room for another try.
+
+    Returns None on success. `deadline` is checked between attempts only, so
+    the step can overrun it by the length of one attempt.
+    """
+    delay = SETUP_BACKOFF_BASE_S
+    while True:
+        try:
+            attempt()
+            return None
+        except Exception as e:
+            c = sql.classify(e)
+            failure = f"{step} failed: {c.sqlstate} {c.template}"
+            if not retryable(e):
+                log(prefix, f"{failure}; not retryable ({c.outcome.value})")
+                return SetupFailure(step, c, False)
+            wait = delay * rng.uniform(0.5, 1.0)
+            if deadline.remaining() <= wait:
+                log(prefix, f"{failure}; giving up at the setup deadline")
+                return SetupFailure(step, c, True)
+            log(prefix, f"{failure}; retrying in {wait:.1f}s")
+            time.sleep(wait)
+            delay = min(delay * 2, SETUP_BACKOFF_MAX_S)

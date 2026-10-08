@@ -619,6 +619,11 @@ def _check_epoch(epoch: int, new: list[Read], db: sqlite3.Connection) -> None:
                     "missing_ids": _sample(missing),
                 },
             )
+            sometimes(
+                bool(before),
+                "client history: a strict serializable read was checked against an earlier acknowledged write",
+                {"read": r.op_id, "epoch": epoch, "acked_before": len(before)},
+            )
             if before:
                 gap = r.invoke_rt - (before[-1].complete_rt or 0.0)
                 sometimes(
@@ -681,6 +686,11 @@ def _check_epoch(epoch: int, new: list[Read], db: sqlite3.Connection) -> None:
                     "later": later.op_id,
                     "lost_ids": _sample(lost_indeterminate),
                 },
+            )
+            sometimes(
+                bool(earlier.ids),
+                "client history: snapshot inclusion was checked on a read that observed writes",
+                {"earlier": earlier.op_id, "later": later.op_id},
             )
             sometimes(
                 bool(earlier.ids & known_indeterminate),
