@@ -40,6 +40,35 @@ The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
 
 Without the feature all of these compile to nothing.
 
+## Memory and resource kills
+
+The Antithesis VM has about 10 GiB, and every pod shares it, including two
+environmentd generations and two sets of clusterd replicas during a rollout.
+environmentd is limited to 2 GiB (`environmentdResourceRequirements` in the
+CR), clusterd to 1 GiB per container (the `clusterd-memory` LimitRange, since
+replica sizes carry no memory limit), orchestratord to 512 MiB. The
+dependencies and the workload have no limit.
+
+A kill for memory exits like a crash, so tell them apart before reading a
+dead pod as a Materialize bug:
+
+- A panic reports `Materialize process panicked` from inside the process. An
+  OOM kill or an eviction is a SIGKILL (137) with no panic message. The
+  platform's `No unexpected crashes` and `No unexpected container exits` skip
+  137, and `anytime_pod_restarts` counts it as an explained exit and leaves
+  the verdict to the resource kill check below.
+- `anytime_resource_kills` and `finally_resource_kills` read every pod, the
+  eviction and OOM events, and the node conditions. `No Materialize container
+  is OOM-killed at its own memory limit` means environmentd, clusterd or
+  orchestratord outgrew its own limit while the node had memory: a
+  Materialize finding, with the limit in the details. `No pod is evicted and
+  no process is OOM-killed for lack of node memory` and `The node never
+  reports memory pressure` mean the harness does not fit the VM: fix the
+  sizing, not Materialize. Restarts and failures in the same timeline after
+  one of these are suspect.
+- The platform's `Peak memory usage` fails above 95% of the VM's memory. Its
+  examples list the largest processes, which shows whose growth to look at.
+
 ## Running locally
 
 ```
