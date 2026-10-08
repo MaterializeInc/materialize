@@ -7746,6 +7746,7 @@ dependencies = [
  "axum",
  "axum-server",
  "clap",
+ "data-encoding",
  "futures",
  "gcp_auth",
  "hex",
