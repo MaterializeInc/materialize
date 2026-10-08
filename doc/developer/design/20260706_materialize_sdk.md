@@ -425,14 +425,11 @@ fails every resume, so the SDK will refuse to start durable consumption when the
 object's retention is below the commit lag.
 
 Under durable subscriptions the margin becomes the time since the last
-acknowledgement against the subscription's `ACKNOWLEDGE WITHIN` deadline.
-Acknowledgements advance only when the frontier does. A `REFRESH EVERY` view
-between refreshes, a paused source, or a cluster with no replicas sends no
-progress, and #38468 treats an acknowledgement at the current position as a
-no-op, so the deadline keeps running. The deadline must therefore exceed the
-retry budget, an operator's response to a stall, and the longest time the
-object's frontier can stand still. The SDK will warn at startup when it does
-not.
+acknowledgement against the subscription's `ACKNOWLEDGE WITHIN` deadline. A
+subscription that has caught up does not age (#38468), so a healthy sink on a
+`REFRESH EVERY` view, a paused source, or a cluster with no replicas does not
+expire. The deadline must exceed the retry budget plus an operator's response to
+a stall, and the SDK will warn at startup when it does not.
 
 ### Object identity
 
@@ -441,7 +438,7 @@ The checkpoint fingerprint lets the SDK tell three kinds of change apart:
 | Change | Example | Default | With `refollow` |
 | --- | --- | --- | --- |
 | Different output columns | the view's definition changed | stop with `SchemaMismatch` | stop |
-| Same columns, same storage shard, new catalog id | `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` | resume | resume |
+| Same columns, same storage shard, new catalog id | `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` | re-run the retention-margin check, then resume | same |
 | Same columns, new storage shard | `ALTER SCHEMA ... SWAP` in a blue/green deploy | stop | resume if the new object's history covers the checkpoint, else the history-loss policy |
 | The name resolves to nothing | the object was dropped while the sink was offline | stop with `ObjectDropped` | stop |
 
@@ -450,9 +447,22 @@ that lookup, a name that resolves to nothing fails planning with `XX000`, which
 would be misread as `StreamPoisoned` (`src/adapter/src/error.rs:1003`). `42704`
 arrives only for a drop during a running stream.
 
+The lookup and the `SUBSCRIBE` are two statements, so a swap between them would
+subscribe to the new object after the check passed. Right after `DECLARE`, the
+SDK will compare `referenced_object_ids` in `mz_internal.mz_subscriptions` with
+the fingerprint, and on a mismatch close the cursor and classify the change
+through the table above.
+
 A replacement keeps the storage shard and gives the view a new catalog id
-(`src/adapter/src/catalog/transact.rs:1334`), so its history is continuous. A
-name swap moves the name to a different object. The running stream keeps
+(`src/adapter/src/catalog/transact.rs:1334`), so its data history is continuous.
+It takes its retention and refresh schedule from the replacement object, though
+(`MaterializedView::apply_replacement` in `src/catalog/src/memory/objects.rs`).
+A replacement created without `RETAIN HISTORY` drops the shard to the
+one-second default, so the SDK will re-run the retention-margin check after it
+sees a new catalog id, and deploy tooling has to carry `RETAIN HISTORY` onto the
+replacement. After a successful resume, the SDK will store the new catalog id in
+the checkpoint, so later resumes compare against it. A name swap moves the name
+to a different object. The running stream keeps
 reading the old object until the deploy drops it, which ends the stream with
 `ObjectDropped` (`42704`) and sends it through the same table. Different columns
 always stop, because resuming would mix rows of two shapes in one target, even
@@ -627,9 +637,13 @@ tombstones instead of deleting them, so the same protection holds after a
 re-snapshot. A patch by filter has no `$ref_new`, so it will set constants:
 `deleted = true`, `mz_timestamp` to the snapshot's `AS OF` `t_s`, and
 `written_at` to the current time, on documents matching
-`generation < t_s AND deleted = false`. The patch re-evaluates its filter before
-applying (turbopuffer's guarantees page), so a document a live write moves into
-the new generation meanwhile is left alone.
+`generation < t_s AND deleted = false AND mz_timestamp < t_s`. The last clause
+keeps the sweep from moving a timestamp backwards: a stale worker from before
+the re-snapshot may have written a key at a time after `t_s`, the snapshot's
+older upsert of that key is then skipped, and without the clause the sweep would
+tombstone a correct document. The patch re-evaluates its filter before applying
+(turbopuffer's guarantees page), so a document a live write moves into the new
+generation meanwhile is left alone.
 
 Searches will filter on `deleted = false`. A sweep will remove a tombstone only
 when its `written_at` is older than a grace period and its `mz_timestamp` is
@@ -649,8 +663,13 @@ patches, which never create a document, so a stale worker cannot recreate a
 deleted checkpoint. A worker will take the next epoch with a patch conditional
 on the stored epoch being strictly lower than its own, so of two workers starting
 at once only one wins. It will commit a frontier with a patch conditional on the
-stored epoch being equal to its own, and a patch count of zero means it was
-fenced. The data namespaces hold no reserved documents.
+stored epoch being equal to its own and the stored frontier being lower, so a
+delayed retry of an older commit cannot move the frontier back. The tombstone
+sweep reads that frontier, so it must only move forward. A patch count of zero
+then has two causes, and the worker reads the checkpoint back to tell them apart:
+a different epoch means it was fenced, and the same epoch means the frontier was
+already at or past this commit, which counts as committed. The data namespaces
+hold no reserved documents.
 
 Writes across namespaces are not atomic, and turbopuffer keeps one version of
 each document. Between the writes of one cut, a reader can see one namespace at
@@ -877,16 +896,13 @@ program.
    bounded pieces, so a snapshot or catch-up larger than `max_result_size` can be
    delivered. Durable subscriptions do not change this, because a snapshot is one
    timestamp.
-4. In #38468, a way for a sink on a slow-moving object to keep its subscription
-   alive while healthy, for example an acknowledgement at the current position
-   that refreshes the `ACKNOWLEDGE WITHIN` deadline.
-5. Durable subscriptions (#38468).
-6. Snapshot elision for a projection and filter without a temporal predicate,
+4. Durable subscriptions (#38468).
+5. Snapshot elision for a projection and filter without a temporal predicate,
    which #38468 also needs.
-7. Non-poisoning subscribe errors (database-issues#5182).
-8. Docs that cross-link the durable-subscriptions pattern from every client page
+6. Non-poisoning subscribe errors (database-issues#5182).
+7. Docs that cross-link the durable-subscriptions pattern from every client page
    now, and lead with the SDK once it ships.
-9. A stable WebSocket `SUBSCRIBE`, the gate for browser and function transports.
+8. A stable WebSocket `SUBSCRIBE`, the gate for browser and function transports.
 
 The server-side buffering bound (#37905) has landed and needs no further work.
 
@@ -1016,9 +1032,10 @@ produce.
 7. Object swaps: should `refollow` be the default for a blue/green name swap?
    The new view's history starts at its creation, so `refollow` works only if
    that history covers the sink's checkpoint. Can deploy tooling guarantee that,
-   for example with `RETAIN HISTORY` on staged views? For a replacement
-   materialized view, does a running subscribe end at the switch, and does the
-   new catalog id's readable frontier cover a checkpoint taken before it?
+   for example with `RETAIN HISTORY` on staged views and on replacement
+   materialized views, which take their retention from the replacement? For a
+   replacement, does a running subscribe end at the switch, and does the new
+   catalog id's readable frontier cover a checkpoint taken before it?
 8. Egress cost: data leaves through `environmentd`. What does a sink with a large
    snapshot cost a customer, and does the docs story need a sizing page?
 9. Stateless workers before durable subscriptions: is there demand that cannot
