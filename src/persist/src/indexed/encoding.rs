@@ -673,50 +673,7 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
-        // TODO: It's unclear if the equal case (an empty desc) is
-        // useful/harmful. Feel free to make this a less_than if empty descs end
-        // up making sense.
-        if PartialOrder::less_equal(self.desc.upper(), self.desc.lower()) {
-            return Err(format!("invalid desc: {:?}", self.desc).into());
-        }
-
-        let uncompacted = PartialOrder::less_equal(self.desc.since(), self.desc.lower());
-
-        for time in self.updates.timestamps().values() {
-            let ts = T::decode(time.to_le_bytes());
-            // Check ts against desc.
-            if !self.desc.lower().less_equal(&ts) {
-                return Err(format!(
-                    "timestamp {:?} is less than the batch lower: {:?}",
-                    ts, self.desc
-                )
-                .into());
-            }
-
-            // when since is less than or equal to lower, the upper is a strict bound on the updates'
-            // timestamp because no compaction has been performed. Because user batches are always
-            // uncompacted, this ensures that new updates are recorded with valid timestamps.
-            // Otherwise, we can make no assumptions about the timestamps
-            if uncompacted && self.desc.upper().less_equal(&ts) {
-                return Err(format!(
-                    "timestamp {:?} is greater than or equal to the batch upper: {:?}",
-                    ts, self.desc
-                )
-                .into());
-            }
-        }
-
-        for (row_idx, diff) in self.updates.diffs().values().iter().enumerate() {
-            // TODO: Don't assume diff is an i64, take a D type param instead.
-            let diff: u64 = Codec64::decode(diff.to_le_bytes());
-
-            // Check data invariants.
-            if diff == 0 {
-                return Err(format!("update with 0 diff at row {row_idx}",).into());
-            }
-        }
-
-        Ok(())
+        validate_trace_updates(&self.desc, &self.updates)
     }
 
     /// Encodes an BlobTraceBatchPart into the Parquet format.
@@ -795,6 +752,59 @@ impl<T: Timestamp + Codec64> From<&Description<T>> for ProtoU64Description {
             since: Some(x.since().into()),
         }
     }
+}
+
+/// Asserts the invariants of [`BlobTraceBatchPart`] for `updates` under the
+/// part's inline `desc`. Applies equally to a whole part and to any subset of
+/// its rows.
+pub fn validate_trace_updates<T: Timestamp + Codec64>(
+    desc: &Description<T>,
+    updates: &BlobTraceUpdates,
+) -> Result<(), Error> {
+    // TODO: It's unclear if the equal case (an empty desc) is
+    // useful/harmful. Feel free to make this a less_than if empty descs end
+    // up making sense.
+    if PartialOrder::less_equal(desc.upper(), desc.lower()) {
+        return Err(format!("invalid desc: {:?}", desc).into());
+    }
+
+    let uncompacted = PartialOrder::less_equal(desc.since(), desc.lower());
+
+    for time in updates.timestamps().values() {
+        let ts = T::decode(time.to_le_bytes());
+        // Check ts against desc.
+        if !desc.lower().less_equal(&ts) {
+            return Err(format!(
+                "timestamp {:?} is less than the batch lower: {:?}",
+                ts, desc
+            )
+            .into());
+        }
+
+        // when since is less than or equal to lower, the upper is a strict bound on the updates'
+        // timestamp because no compaction has been performed. Because user batches are always
+        // uncompacted, this ensures that new updates are recorded with valid timestamps.
+        // Otherwise, we can make no assumptions about the timestamps
+        if uncompacted && desc.upper().less_equal(&ts) {
+            return Err(format!(
+                "timestamp {:?} is greater than or equal to the batch upper: {:?}",
+                ts, desc
+            )
+            .into());
+        }
+    }
+
+    for (row_idx, diff) in updates.diffs().values().iter().enumerate() {
+        // TODO: Don't assume diff is an i64, take a D type param instead.
+        let diff: u64 = Codec64::decode(diff.to_le_bytes());
+
+        // Check data invariants.
+        if diff == 0 {
+            return Err(format!("update with 0 diff at row {row_idx}",).into());
+        }
+    }
+
+    Ok(())
 }
 
 /// Encodes the inline metadata for a trace batch into a base64 string.
