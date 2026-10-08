@@ -80,7 +80,8 @@ dataflow imports the index instead of the persist shard
 index's `since` (`src/adapter/src/coord/timestamp_selection.rs:277-297`). An
 index's default window is one second (`src/adapter-types/src/compaction.rs:20`),
 and the view's `RETAIN HISTORY` does not carry over to its indexes. So
-`AS OF F - 1` fails on an indexed view, however long the view's retention. An
+`AS OF F - 1` fails on an indexed view once the checkpoint is more than about a
+second behind, however long the view's retention. An
 index on a different cluster does not count. Index-level `RETAIN HISTORY`
 requires `enable_index_options`, which is off by default.
 
@@ -165,9 +166,10 @@ this document adds.
 | R11 | Sink authors can test without a live environment | Design |
 
 R4 is met in full by targets that can write the whole cut atomically, such as
-one Postgres transaction. A target split into parts with no transaction across
-them, such as several turbopuffer namespaces, gets R4 per part only (see
-"turbopuffer sink").
+one Postgres transaction. A target with no transaction over the whole cut, such
+as turbopuffer, where only one write request is atomic, gets convergence: after
+each completed batch it equals the cut, but readers can see part of a batch
+while it is written (see "turbopuffer sink").
 
 A user following the happy path cannot commit an unclosed timestamp, cannot
 get the `AS OF` arithmetic wrong, and cannot silently lose or duplicate updates
@@ -352,22 +354,33 @@ A frontier advance with no data will yield an empty batch with a fresh token,
 so checkpoints keep moving through quiet hours.
 
 `UP TO` will be supported. On server versions without the SQL-528 fix, the SDK
-will release everything below `UP TO` when a bounded stream ends without error,
-so no closed data is lost. Gating on the server version switches the workaround
-off once the fix ships.
+will release everything below `UP TO` once a bounded stream has ended, so no
+closed data is lost. An empty `FETCH` with a timeout does not prove the end,
+because a timeout and an exhausted cursor return the same empty result
+(`src/pgwire/src/protocol.rs:2607-2624`). So after an empty timed fetch on a
+bounded stream, the SDK will issue a `FETCH` without a timeout, which waits for
+data or the end of the stream (`src/sql/src/plan/statement/scl.rs:262`), and
+only an empty result there counts as the end. Gating on the server version
+switches the workaround off once the fix ships.
 
 ### Checkpoints and fencing
 
-A checkpoint store will have `load(name)` and `commit(name, epoch, frontier)`.
-The target is the recommended store, because writing data and checkpoint in
-one transaction gives exactly-once state (R1, R5). A Materialize-table store and
-a local file store will ship for targets with no transaction. Neither commits
-atomically with the target, so both give `at_least_once` only.
+A checkpoint store will have `load(name)` and
+`commit(name, epoch, expected, frontier)`. The target is the recommended store,
+because writing data and checkpoint in one transaction gives exactly-once state
+(R1, R5). A Materialize-table store and a local file store will ship for targets
+with no transaction. Neither commits atomically with the target, so both give
+`at_least_once` only.
 
-Each worker start will take the next epoch. A commit will be conditional on the
-stored epoch not being newer, and a stale worker will get a typed `Fenced`
-error. Without the fence, a second instance of one sink would overwrite the
-first one's progress.
+Each worker start will take the next epoch. A commit will succeed only if the
+stored epoch equals the worker's and the stored frontier equals `expected`, the
+frontier the batch started from. A stale worker gets a typed `Fenced` error.
+Without the fence, a second instance of one sink would overwrite the first one's
+progress. Under `transactional`, this check runs in the same transaction as the
+data, so a batch whose frontier is already committed rolls back as a whole. That
+matters when a commit succeeds but its response is lost: the retry finds the
+stored frontier already past `expected`, rolls back, and the SDK reads the
+checkpoint and treats the batch as committed instead of applying it twice.
 
 Every durable subscription will require an explicit name, which is its
 checkpoint identity. A default derived from a class name would give two
@@ -420,9 +433,10 @@ below a configured threshold. A connected subscribe holds history only up to
 what it has emitted, not up to what the sink has committed (see "Retention
 window"). The margin therefore has to cover the commit lag (the client buffer,
 `commit_interval`, and the target's write time) as well as the retry budget and
-an operator's response to a stall. An object with the default one-second window
-fails every resume, so the SDK will refuse to start durable consumption when the
-object's retention is below the commit lag.
+an operator's response to a stall. A resume fails once `F - 1` falls below the
+object's `since`. With the default one-second window that happens after about a
+second of commit lag or downtime, so the SDK will refuse to start durable
+consumption when the object's retention is below the commit lag.
 
 Under durable subscriptions the margin becomes the time since the last
 acknowledgement against the subscription's `ACKNOWLEDGE WITHIN` deadline. A
@@ -439,7 +453,7 @@ The checkpoint fingerprint lets the SDK tell three kinds of change apart:
 | --- | --- | --- | --- |
 | Different output columns | the view's definition changed | stop with `SchemaMismatch` | stop |
 | Same columns, same storage shard, new catalog id | `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` | re-run the retention-margin check, then resume | same |
-| Same columns, new storage shard | `ALTER SCHEMA ... SWAP` in a blue/green deploy | stop | resume if the new object's history covers the checkpoint, else the history-loss policy |
+| Same columns, new storage shard | `ALTER SCHEMA ... SWAP` in a blue/green deploy | stop | re-snapshot from the new object, into a new namespace for targets without transactions |
 | The name resolves to nothing | the object was dropped while the sink was offline | stop with `ObjectDropped` | stop |
 
 The SDK will look the name up in the catalog before each `SUBSCRIBE`. Without
@@ -447,11 +461,28 @@ that lookup, a name that resolves to nothing fails planning with `XX000`, which
 would be misread as `StreamPoisoned` (`src/adapter/src/error.rs:1003`). `42704`
 arrives only for a drop during a running stream.
 
+A name swap needs a re-snapshot even when the new object's history covers the
+checkpoint. The target holds the old object's state at `F - 1`, and resuming the
+new object without a snapshot delivers only its changes after that point. A key
+the old object had and the new one never had would then survive forever. The
+generation sweep after the re-snapshot removes such keys from a target that
+writes data and checkpoint in one transaction, because the epoch check in that
+transaction also rolls back a stale worker still reading the old object. A
+target without such a transaction cannot fence those writes per document: a
+stale worker could write a key the new object never has, at a timestamp after
+the snapshot, and nothing would remove it. For such targets, turbopuffer among
+them, `refollow` will write the new object into a new namespace and switch
+readers when the snapshot completes.
+
 The lookup and the `SUBSCRIBE` are two statements, so a swap between them would
-subscribe to the new object after the check passed. Right after `DECLARE`, the
-SDK will compare `referenced_object_ids` in `mz_internal.mz_subscriptions` with
-the fingerprint, and on a mismatch close the cursor and classify the change
-through the table above.
+subscribe to the new object after the check passed. The SDK will therefore
+subscribe by the catalog id it fingerprinted, with the bracket syntax the catalog
+uses for stored definitions: `SUBSCRIBE [u123 AS "db"."schema"."name"]`. That
+resolves by id, not by name, and fails with `InvalidId` once the id is gone
+(`src/sql/src/names.rs:1585-1608`). A swap leaves ids unchanged, so the stream
+keeps reading the object that was checked, and a failed resolution sends the SDK
+back to the name lookup and the table above. The syntax is not documented for
+users, so open question 13 asks whether the SDK can rely on it.
 
 A replacement keeps the storage shard and gives the view a new catalog id
 (`src/adapter/src/catalog/transact.rs:1334`), so its data history is continuous.
@@ -495,8 +526,10 @@ from different timelines are not comparable and the cut would be unsound. Only
 sources with `ENVELOPE MATERIALIZE`, which is behind a flag, get another
 timeline (`src/sql/src/plan/statement/ddl.rs:1000-1004`), and objects built on
 them inherit it. The SDK will reject a member that is such a source or depends
-on one, using `mz_sources.envelope_type` and
-`mz_internal.mz_object_transitive_dependencies`.
+on one, using `mz_sources.envelope_type`, the envelope of source tables in
+`mz_internal.mz_kafka_source_tables.envelope_type` (a table created
+`FROM SOURCE ... ENVELOPE MATERIALIZE` carries the envelope, not its source),
+and `mz_internal.mz_object_transitive_dependencies`.
 
 A multi-view subscription will hold one connection per member. Any member error
 will end all members, and recovery will resume every member at the stored cut.
@@ -573,10 +606,13 @@ snapshot, resume, retry, fencing, and the history-loss policy.
 Keyed-state targets (caches, search indexes, tables) will read the upsert
 envelope. When they re-snapshot, the SDK will write the snapshot under a new
 generation and, at the end, call a sweep that removes keys from older
-generations. The generation is the snapshot's `AS OF`, and writes after the
-snapshot carry it too. It grows across attempts, so a re-snapshot that crashed
-and was retried never reuses a generation, and keys only the failed attempt
-wrote are swept. That removes keys deleted while the sink was offline, which a plain
+generations. The generation is a counter stored in the checkpoint, raised by a
+conditional commit before each re-snapshot attempt starts, and writes after the
+snapshot carry it too. A snapshot's `AS OF` cannot serve as the generation,
+because a retry can pick the same `AS OF` and a new object after a swap can
+have an older one. With a counter, a re-snapshot that crashed and was retried
+never reuses a generation, and keys only the failed attempt wrote are swept.
+That removes keys deleted while the sink was offline, which a plain
 re-snapshot leaves behind. A target that needs the snapshot to appear at once
 will make the new generation visible only at the sweep.
 
@@ -628,7 +664,7 @@ older change then meets a newer document or tombstone and is skipped. Before eac
 request, the sink will net its changes to the latest change per key, because a
 batch spans timestamps and turbopuffer rejects a request that names one id
 twice. The conditions only ever let a newer timestamp win, so dropping the older
-change from a request is safe. Every write is then
+change from a request is safe. While tombstones are kept, every write is then
 safe to repeat and ordered by timestamp, so each namespace reaches exactly-once
 state under `at_least_once` delivery, and a batch can be split across requests.
 
@@ -637,7 +673,8 @@ tombstones instead of deleting them, so the same protection holds after a
 re-snapshot. A patch by filter has no `$ref_new`, so it will set constants:
 `deleted = true`, `mz_timestamp` to the snapshot's `AS OF` `t_s`, and
 `written_at` to the current time, on documents matching
-`generation < t_s AND deleted = false AND mz_timestamp < t_s`. The last clause
+`generation < g AND deleted = false AND mz_timestamp < t_s`, where `g` is the
+attempt's generation. The last clause
 keeps the sweep from moving a timestamp backwards: a stale worker from before
 the re-snapshot may have written a key at a time after `t_s`, the snapshot's
 older upsert of that key is then skipped, and without the clause the sweep would
@@ -645,39 +682,54 @@ tombstone a correct document. The patch re-evaluates its filter before applying
 (turbopuffer's guarantees page), so a document a live write moves into the new
 generation meanwhile is left alone.
 
-Searches will filter on `deleted = false`. A sweep will remove a tombstone only
-when its `written_at` is older than a grace period and its `mz_timestamp` is
-below the sink's committed frontier. The grace period runs from when the
-tombstone was written, not from its `mz_timestamp`, because a sink that is
-catching up writes tombstones for old timestamps. It has to exceed how long a
-fenced worker can keep writing before its next checkpoint commit fails:
-`commit_interval`, the retry budget, and the longest pause a sink process can
-survive. A worker paused for longer could still recreate a swept key, so the
-grace period bounds that risk without removing it. Filter operations are capped
-per call (5 million rows for a delete by filter, 50 thousand for a patch by
-filter), so both sweeps loop.
+Searches will filter on `deleted = false`. By default the sink will keep
+tombstones forever, because removing one reopens the hole: a fenced worker that
+was paused before an older upsert, and resumes after the tombstone is gone,
+recreates the key, and nothing deletes it again until the key changes upstream.
+A sink can opt into a sweep that removes a tombstone only when its `written_at`
+is older than a grace period and its `mz_timestamp` is below the sink's
+committed frontier. The grace period runs from when the tombstone was written,
+not from its `mz_timestamp`, because a sink that is catching up writes tombstones
+for old timestamps. With the sweep on, exactly-once state holds only if no
+worker writes later than the grace period after it was fenced. The SDK cannot
+enforce that bound, because a process can pause between checking its epoch and
+sending a write, so the sink's docs will state the condition and the grace
+period has to exceed `commit_interval`, the retry budget, and the longest pause
+the deployment can see. Filter operations are capped per call (5 million rows
+for a delete by filter, 50 thousand for a patch by filter), so sweeps loop.
 
 The checkpoint will live in a separate checkpoint namespace, one document per
 sink, created once when the sink is set up. Workers will change it only with
 patches, which never create a document, so a stale worker cannot recreate a
 deleted checkpoint. A worker will take the next epoch with a patch conditional
 on the stored epoch being strictly lower than its own, so of two workers starting
-at once only one wins. It will commit a frontier with a patch conditional on the
-stored epoch being equal to its own and the stored frontier being lower, so a
-delayed retry of an older commit cannot move the frontier back. The tombstone
-sweep reads that frontier, so it must only move forward. A patch count of zero
-then has two causes, and the worker reads the checkpoint back to tell them apart:
-a different epoch means it was fenced, and the same epoch means the frontier was
-already at or past this commit, which counts as committed. The data namespaces
-hold no reserved documents.
+at once only one wins. A commit follows the general contract (see "Checkpoints
+and fencing"): a patch conditional on the stored epoch being equal to its own and
+the stored frontier being equal to `expected`. So a delayed retry of an older
+commit cannot move the frontier back, which matters because the tombstone sweep
+reads that frontier. On a patch count of zero the worker reads the checkpoint
+back: a different epoch means `Fenced`, the same epoch with a frontier at or past
+the requested one means the commit already happened, and anything else is a
+conflict that sends the worker back to the stored checkpoint. The data
+namespaces hold no reserved documents.
 
-Writes across namespaces are not atomic, and turbopuffer keeps one version of
-each document. Between the writes of one cut, a reader can see one namespace at
-the new cut and another at the old one. Filtering on `mz_timestamp` cannot
-rebuild an earlier cut, because an upsert replaces the earlier version. Each
-namespace converges to every cut, but the sink does not give a consistent view
-across namespaces, so for turbopuffer R4 holds per namespace only. The sink's
-docs will state this, and open question 12 asks whether that is enough.
+Only one write request is atomic, and turbopuffer keeps one version of each
+document. A batch can span several requests, even within one namespace, and a
+cut spans one request per namespace at least. Between those requests a reader
+can see part of a batch: two keys that changed at the same timestamp, one new
+and one old, or one namespace at the new cut and another at the old one.
+Filtering on `mz_timestamp` cannot rebuild an earlier cut, because an upsert
+replaces the earlier version. The guarantee for turbopuffer is therefore
+convergence: after each completed batch, every namespace equals the cut. The
+sink does not give readers a consistent view while a batch is being written. The
+sink's docs will state this, and open question 12 asks whether that is enough.
+
+After a name swap, the sink writes the new object into new namespaces and
+switches readers when the snapshot completes (see "Object identity"). A stale
+worker still reading the old object keeps writing only to the old namespaces,
+which readers no longer use. The sink deletes them after a grace period. turbopuffer
+creates a namespace on its first write, so a stale write after that recreates an
+unused namespace, which the next cleanup removes.
 
 Embedding cost will follow the existing sink's transform model: a transform
 declares the columns it reads, and runs only for rows where those columns
@@ -713,11 +765,11 @@ catalog transaction (#38468). The SDK will attach to an existing subscription by
 name and will not create one on start. Creating it, and choosing its deadline,
 is a deploy step.
 
-A blue/green cutover needs a new subscription on the new object, created
-`START AT` the sink's checkpoint, which works only if the new object's history
-covers it. Dropping the old object needs `CASCADE` while the old subscription
-exists. Deploy tooling will own both steps, and `refollow` then attaches to the
-new subscription.
+A blue/green cutover needs a new subscription on the new object, and the sink
+re-snapshots from it, for the reason "Object identity" gives. Dropping the old
+object needs `CASCADE` while the old subscription exists. Deploy tooling will own
+both steps, and `refollow` then attaches to the new subscription with a
+snapshot.
 
 Durable subscriptions will remove the retention sizing problem and turn the
 retention-margin check into a deadline check (see "History loss and retention
@@ -801,7 +853,8 @@ protocol core: it decodes each Materialize type into one documented value
 model, and each binding converts that model to the language's native types
 (for example `numeric` to `Decimal` in Python), with the conversions covered by
 the vectors. `mz_timestamp` is a u64, so the Node package will expose it as a
-`BigInt`, which holds every u64 value where a JavaScript `number` does not. Each package will hand-write only the transport over its driver,
+`BigInt`, which holds every u64 value where a JavaScript `number` does not.
+Each package will hand-write only the transport over its driver,
 the idiomatic API surface (iterators in Python, async iterators in Node), and
 the sink modules.
 
@@ -866,9 +919,13 @@ The conformance suite is the contract, whatever the generation strategy.
    `SELECT ... AS OF F - 1` for the committed frontier `F`, for both guarantees.
 4. Fencing test: two workers share one checkpoint, the stale one is refused, and
    the target stays consistent. For turbopuffer, the stale worker also writes
-   an older upsert of a key the live worker has deleted, and the key must stay
-   deleted.
-5. User test kit: the recorded-stream player from the vectors will ship to users,
+   an older upsert of a key the live worker has deleted, and with tombstones
+   kept the key must stay deleted. With the sweep on, the same holds when the
+   stale write comes within the grace period.
+5. Lost-response test: a transactional commit succeeds but its response is
+   dropped, and the retry must find the frontier already committed and apply
+   nothing twice.
+6. User test kit: the recorded-stream player from the vectors will ship to users,
    so sink authors can test their targets offline (R11).
 
 Keeping the vectors and the end-to-end suite next to the server is what lets a
@@ -1023,19 +1080,21 @@ produce.
 3. Generation strategy: is a protocol core with bindings acceptable for
    packaging and support, or do we start with B plus A?
 4. turbopuffer tombstones: searches must filter on `deleted = false`, tombstones
-   need a placeholder vector in namespaces with vectors, and a sweep removes them
-   after a grace period measured from when they were written. What default grace
-   period is safe, and is a placeholder vector acceptable to users?
+   need a placeholder vector in namespaces with vectors, and by default they are
+   kept forever. Is that storage cost acceptable, and is a placeholder vector
+   acceptable to users? For sinks that opt into the sweep, what grace period
+   should the docs recommend?
 5. Retention margin check: can a sink role read the catalog state it needs (the
    object's readable frontier and the cluster's indexes) without extra grants?
 6. `mzq`: a transport under this SDK, or a separate path?
-7. Object swaps: should `refollow` be the default for a blue/green name swap?
-   The new view's history starts at its creation, so `refollow` works only if
-   that history covers the sink's checkpoint. Can deploy tooling guarantee that,
-   for example with `RETAIN HISTORY` on staged views and on replacement
-   materialized views, which take their retention from the replacement? For a
-   replacement, does a running subscribe end at the switch, and does the new
-   catalog id's readable frontier cover a checkpoint taken before it?
+7. Object swaps: should `refollow`, which re-snapshots from the new object, be
+   the default for a blue/green name swap? A re-snapshot after every deploy
+   costs a full snapshot. Could deploy tooling confirm that the old and new
+   objects are equal at the handoff, so the sink can skip it? Deploy tooling also
+   has to carry `RETAIN HISTORY` onto replacement materialized views, which take
+   their retention from the replacement. For a replacement, does a running
+   subscribe end at the switch, and does the new catalog id's readable frontier
+   cover a checkpoint taken before it?
 8. Egress cost: data leaves through `environmentd`. What does a sink with a large
    snapshot cost a customer, and does the docs story need a sizing page?
 9. Stateless workers before durable subscriptions: is there demand that cannot
@@ -1045,6 +1104,11 @@ produce.
     the protocol core, vectors, and end-to-end suite here?
 11. Future-work modules: are any of them worth their maintenance cost, and what
     evidence should trigger one?
-12. turbopuffer across namespaces: is per-namespace convergence enough for
-    search, or do readers need a consistent view across namespaces? That would
-    need versioned documents and a visible-cut pointer that readers filter on.
+12. turbopuffer visibility: is convergence after each batch enough for search,
+    or do readers need a consistent view while a batch is written, within one
+    namespace or across several? That would need versioned documents and a
+    visible-cut pointer that readers filter on.
+13. Subscribing by id: can the SDK rely on the `[u123 AS "db"."schema"."name"]`
+    reference syntax in `SUBSCRIBE`, which the catalog uses for stored
+    definitions but the user docs do not cover? It is what makes the identity
+    check race-free.
