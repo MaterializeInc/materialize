@@ -18,12 +18,15 @@ Three commands share this module:
   promotion, and the candidate's reboot. Only the invocation holding the CR
   lease (`CrLease`) writes the spec. Invocations that cannot take it watch the
   CR for a short while to evaluate the overlap anchors, then exit.
-- `observer_main` (`anytime_rollout_observer`) samples the CR status, the
-  environmentd StatefulSets and pods, and each incarnation's leader status, and
-  checks the deploy safety properties against history kept in SQLite.
+- `observer_main` (`anytime_rollout_observer`) watches the CR and the
+  StatefulSets, samples the environmentd pods and each incarnation's leader
+  status, and checks the deploy safety properties against history kept in
+  SQLite. Status properties are checked on every stored CR version, in order,
+  across invocations (`CrWatcher`).
 - `converge_main` (`eventually_rollout_converges`) checks that, once faults
   and patching stop, the environment settles on one serving generation at the
-  last requested spec.
+  last requested spec. It keeps the CR and StatefulSet watches running, so
+  rollouts it requests are checked too.
 
 The workload is the only writer of the CR spec and never writes its status.
 Every patch is appended to the `submitted` table, keyed by `requestRollout`,
@@ -40,6 +43,7 @@ import re
 import sqlite3
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,10 +60,11 @@ from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize import orchestratord
-from materialize.antithesis import sql
+from materialize.antithesis import kube_watch, sql
 from materialize.antithesis.drivers import counters, history, lifecycle
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
+from materialize.antithesis.kube_watch import ObjectChain
 from materialize.antithesis.quiet import request_quiet_period
 from materialize.antithesis.rng import rng
 from materialize.antithesis.state import open_db
@@ -125,13 +130,19 @@ NON_HOLDER_WATCH_SECONDS = 60.0
 # anchors scan. Drivers append an op when they invoke it and complete it within
 # a statement timeout, so recent acknowledgements are among the latest rows.
 OVERLAP_OPS_SCAN = 5000
-# Wall time of one observer invocation, and its sampling interval. Needs
-# calibration on one simulated core.
+# Wall time of one observer invocation, and the minimum interval between its
+# pod and leader samples. Needs calibration on one simulated core.
 OBSERVER_DURATION_SECONDS = 2 * 60
 OBSERVER_INTERVAL_SECONDS = 1.0
-# Every how many samples the observer also reads `mz_version()`. A SQL round
-# trip per sample would slow sampling whenever environmentd is unreachable.
-VERSION_SAMPLE_EVERY = 5
+# Server-side timeout of one watch request. Watches resume from the last
+# resourceVersion, so this only bounds how long one watch blocks the observer
+# loop when nothing changes.
+WATCH_WINDOW_SECONDS = 1
+# The observer reads `mz_version()` whenever the watched CR's phase, active
+# generation or completed image changed, and otherwise at most this often. A
+# SQL round trip per loop would slow the loop whenever environmentd is
+# unreachable.
+VERSION_SAMPLE_SECONDS = 5.0
 # Observer state older than this is not treated as the previous sample when
 # computing transition reach claims.
 OBSERVER_PREVIOUS_MAX_AGE_SECONDS = 15.0
@@ -1747,41 +1758,235 @@ def check_status_history(db: sqlite3.Connection, snap: Snapshot) -> None:
         kv_set(db, "promoting_at", max(active, promoting_at or active))
 
 
-def check_protected(
-    db: sqlite3.Connection,
-    kube: Kube,
-    snap: Snapshot,
-    leader_gens: list[int],
-    statefulsets: list[EnvdStatefulSet],
+def check_adjacent_versions(snap: Snapshot, previous: Snapshot) -> None:
+    """Checks a CR version against the version stored immediately before it.
+
+    orchestratord's `apply` sends a CR in `Promoting` only to `promote()`,
+    whose only status write is `Applied` at the next generation, and spec
+    patches leave the status as it is. A version without a status is not
+    checked here: whatever restores the status is covered by the
+    order-independent checks in `check_status_history`.
+    """
+    details = {"previous": previous.summary(), "current": snap.summary()}
+    if previous.reason == "Promoting" and previous.active is not None and snap.status:
+        always_or_unreachable(
+            (snap.reason == "Promoting" and snap.active == previous.active)
+            or (snap.reason == "Applied" and snap.active == previous.active + 1),
+            "The CR version after Promoting is Promoting at the same activeGeneration or Applied at the next",
+            details,
+        )
+    sometimes(
+        previous.reason == "Promoting" and snap.reason == "Applied",
+        "Observer saw consecutive CR versions go from Promoting to Applied",
+        details,
+    )
+    sometimes(
+        previous.reason == "ReadyToPromote" and snap.reason == "Promoting",
+        "Observer saw consecutive CR versions go from ReadyToPromote to Promoting",
+        details,
+    )
+
+
+def check_cr_version(
+    db: sqlite3.Connection, snap: Snapshot, previous: Snapshot | None
 ) -> None:
-    """The newest promoted generation's StatefulSet is not deleted until a newer one is promoted."""
-    protected: dict[str, Any] = kv_get(db, "protected") or {
-        "generation": None,
-        "uid": None,
-    }
-    candidate = protected_from(snap, leader_gens)
+    """Checks one stored CR version. `previous` is the version stored
+    immediately before it, or None if that is unknown."""
+    note_phase(snap.reason, snap.summary())
+    check_status_history(db, snap)
+    raise_protected(db, protected_from(snap, []))
+    if previous is not None:
+        check_adjacent_versions(snap, previous)
+
+
+class CrWatcher:
+    """Runs `check_cr_version` on every stored version of the CR, in order.
+
+    The chain (`kube_watch.ObjectChain`) lives in the observer database, so
+    the next invocation resumes where the last one stopped, and versions
+    written while no observer ran are still checked unless the API server has
+    since dropped them (a relist). Each version is checked and the chain
+    advanced in one transaction that first compares the stored chain with
+    this watcher's, so concurrent watchers check each version once: a watcher
+    that finds the chain moved adopts it and resumes from there.
+    """
+
+    def __init__(self, kube: Kube, db: sqlite3.Connection) -> None:
+        self.kube = kube
+        self.db = db
+        self.watch = kube_watch.ResourceWatch(
+            kube.custom.list_namespaced_custom_object,
+            orchestratord.GROUP,
+            orchestratord.VERSION,
+            kube.namespace,
+            orchestratord.PLURAL,
+            field_selector=f"metadata.name={kube.name}",
+            window_seconds=WATCH_WINDOW_SECONDS,
+            request_timeout=K8S_TIMEOUT_SECONDS,
+        )
+        self.chain = self._stored()
+
+    @property
+    def latest(self) -> Snapshot | None:
+        return Snapshot(self.chain.last) if self.chain.last is not None else None
+
+    def _stored(self) -> ObjectChain:
+        return ObjectChain.from_json(kv_get(self.db, "cr_chain"))
+
+    def _commit(self, apply: Callable[[ObjectChain], ObjectChain]) -> bool:
+        """Stores `apply(chain)` if the stored chain is still this watcher's.
+        Otherwise adopts the stored one and returns False."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            stored = self._stored()
+            if stored.key() != self.chain.key():
+                self.db.execute("ROLLBACK")
+                self.chain = stored
+                return False
+            chain = apply(self.chain)
+            kv_set(self.db, "cr_chain", chain.to_json())
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+        self.chain = chain
+        return True
+
+    def _advance(self, chain: ObjectChain, item: kube_watch.Item) -> ObjectChain:
+        chain, step = chain.advance(item)
+        if step is None:
+            return chain
+        if isinstance(item, kube_watch.Relist):
+            log(f"CR relisted at {item.resource_version}; not adjacent to the last")
+        if step.current is not None:
+            check_cr_version(
+                self.db,
+                Snapshot(step.current),
+                Snapshot(step.predecessor) if step.predecessor else None,
+            )
+        return chain
+
+    def window(self) -> None:
+        window = self.watch.window(self.chain.resource_version)
+        if window.error is not None:
+            log(f"CR watch: {window.error}")
+        for item in window.items:
+            if not self._commit(lambda chain: self._advance(chain, item)):
+                return
+        self._commit(lambda chain: chain.resume_at(window.resource_version))
+
+
+def uid_of(obj: dict[str, Any]) -> str | None:
+    return (obj.get("metadata") or {}).get("uid")
+
+
+def statefulset_gone(item: kube_watch.Item, uid: str, seen: bool) -> str | None:
+    """How `item` shows the StatefulSet with `uid` deleted, or None if it does not.
+
+    `seen` says whether an earlier item of the same watch held `uid`. Only
+    then does a relist without it prove a deletion: the protected UID may
+    have been bound, by another observer, to a StatefulSet created after the
+    relist was read.
+    """
+    if isinstance(item, kube_watch.Relist):
+        objs = [o for o in item.items if uid_of(o) == uid]
+        if not objs:
+            return "absent from a relist" if seen else None
+    else:
+        if uid_of(item.obj) != uid:
+            return None
+        if item.type == "DELETED":
+            return "deleted"
+        objs = [item.obj]
+    if (objs[0].get("metadata") or {}).get("deletionTimestamp") is not None:
+        return "deletion requested"
+    return None
+
+
+class StatefulSetWatcher:
+    """Checks the protected generation's StatefulSet on every StatefulSet
+    change and relist in the environment namespace.
+
+    The resume point is per invocation. A deletion made while no observer ran
+    is left to the listing in `check_protected`.
+    """
+
+    def __init__(self, kube: Kube, db: sqlite3.Connection) -> None:
+        self.kube = kube
+        self.db = db
+        self.watch = kube_watch.ResourceWatch(
+            kube.apps.list_namespaced_stateful_set,
+            kube.namespace,
+            window_seconds=WATCH_WINDOW_SECONDS,
+            request_timeout=K8S_TIMEOUT_SECONDS,
+        )
+        self.resource_version: str | None = None
+        self.seen: set[str] = set()
+
+    def window(self) -> None:
+        window = self.watch.window(self.resource_version)
+        if window.error is not None:
+            log(f"StatefulSet watch: {window.error}")
+        for item in window.items:
+            # A failure leaves the resume point before `item`, so the next
+            # window delivers it again.
+            self._check(item)
+            if isinstance(item, kube_watch.Relist):
+                self.seen = {u for u in map(uid_of, item.items) if u is not None}
+            elif (uid := uid_of(item.obj)) is not None:
+                if item.type == "DELETED":
+                    self.seen.discard(uid)
+                else:
+                    self.seen.add(uid)
+            self.resource_version = item.resource_version or self.resource_version
+        self.resource_version = window.resource_version
+
+    def _check(self, item: kube_watch.Item) -> None:
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            protected = protected_state(self.db)
+            uid = protected["uid"]
+            how = (
+                statefulset_gone(item, uid, uid in self.seen)
+                if uid is not None
+                else None
+            )
+            if how is not None:
+                protected = check_protected_present(
+                    self.kube, protected, False, {"seen": how}
+                )
+                kv_set(self.db, "protected", protected)
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+
+
+def protected_state(db: sqlite3.Connection) -> dict[str, Any]:
+    return kv_get(db, "protected") or {"generation": None, "uid": None}
+
+
+def raise_protected(db: sqlite3.Connection, candidate: int | None) -> None:
+    """Protects `candidate` instead, if it is newer than the protected generation."""
+    protected = protected_state(db)
     if candidate is not None and (
         protected["generation"] is None or candidate > protected["generation"]
     ):
-        protected = {"generation": candidate, "uid": None}
-    if protected["generation"] is None:
-        return
-    by_uid = {s.uid: s for s in statefulsets}
-    if protected["uid"] is None:
-        match = next(
-            (s for s in statefulsets if s.generation == protected["generation"]), None
-        )
-        if match is not None:
-            protected["uid"] = match.uid
-        kv_set(db, "protected", protected)
-        return
-    present = protected["uid"] in by_uid
+        kv_set(db, "protected", {"generation": candidate, "uid": None})
+
+
+def check_protected_present(
+    kube: Kube, protected: dict[str, Any], present: bool, details: dict[str, Any]
+) -> dict[str, Any]:
+    """Asserts the protected StatefulSet is present or a newer generation is
+    protected, and returns the protected state to store."""
     superseded = False
     later: Snapshot | None = None
+    newer: int | None = None
     if not present:
         # A legitimate teardown of the protected generation happens only after
         # `Promoting` for its successor was written, so a CR read after the
-        # StatefulSet listing reflects that successor if the teardown was
+        # deletion was observed reflects that successor if the teardown was
         # legitimate.
         later = kube.snapshot()
         newer = protected_from(later, [])
@@ -1792,14 +1997,50 @@ def check_protected(
         {
             "protected_generation": protected["generation"],
             "protected_uid": protected["uid"],
-            "statefulsets": [[s.generation, s.uid] for s in statefulsets],
-            "status": snap.summary(),
+            **details,
             "status_after_listing": later.summary() if later else None,
         },
     )
-    if superseded and later is not None:
-        newer = protected_from(later, [])
-        protected = {"generation": newer, "uid": None}
+    if superseded:
+        return {"generation": newer, "uid": None}
+    return protected
+
+
+def check_protected(
+    db: sqlite3.Connection,
+    kube: Kube,
+    snap: Snapshot,
+    leader_gens: list[int],
+    statefulsets: list[EnvdStatefulSet],
+) -> None:
+    """The newest promoted generation's StatefulSet is not deleted until a newer one is promoted.
+
+    Binds the protected generation to a StatefulSet UID from a listing taken
+    after `snap`, so the UID is the promoted one rather than a candidate torn
+    down before promotion. `StatefulSetWatcher` checks the bound UID on every
+    change; this checks it against `statefulsets` too.
+    """
+    raise_protected(db, protected_from(snap, leader_gens))
+    protected = protected_state(db)
+    if protected["generation"] is None:
+        return
+    if protected["uid"] is None:
+        match = next(
+            (s for s in statefulsets if s.generation == protected["generation"]), None
+        )
+        if match is not None:
+            protected["uid"] = match.uid
+        kv_set(db, "protected", protected)
+        return
+    protected = check_protected_present(
+        kube,
+        protected,
+        protected["uid"] in {s.uid for s in statefulsets},
+        {
+            "statefulsets": [[s.generation, s.uid] for s in statefulsets],
+            "status": snap.summary(),
+        },
+    )
     kv_set(db, "protected", protected)
 
 
@@ -2025,8 +2266,6 @@ def observe_once(db: sqlite3.Connection, kube: Kube) -> None:
     db.execute("BEGIN IMMEDIATE")
     try:
         snap = kube.snapshot()
-        note_phase(snap.reason, snap.summary())
-        check_status_history(db, snap)
         observation = (kv_get(db, "observations") or 0) + 1
         kv_set(db, "observations", observation)
         pods, samples = consistent_leader_samples(kube)
@@ -2046,12 +2285,19 @@ def observe_once(db: sqlite3.Connection, kube: Kube) -> None:
         raise
 
 
-def check_serving_version(db: sqlite3.Connection, env: Environment) -> None:
+def check_serving_version(
+    db: sqlite3.Connection, env: Environment, cr: Snapshot | None
+) -> None:
     """Once a version has served SQL, no older version serves it again.
 
     The query runs outside the observer lock, so concurrent observers can
     record samples out of order. A sample only counts against the highest
     version if its query started after the highest version's query finished.
+
+    `cr` is the newest CR version the caller has watched, read before the
+    query started. It only annotates the sample: the Service can still route
+    to a generation the CR no longer names, so the served version is not
+    asserted against it.
     """
     started = time.time()
     with sql.connection(
@@ -2063,6 +2309,18 @@ def check_serving_version(db: sqlite3.Connection, env: Environment) -> None:
     served = parse_mz_version(raw)
     if served is None:
         return
+    details: dict[str, Any] = {
+        "served": raw,
+        "started": started,
+        "cr": cr.summary() if cr else None,
+    }
+    sometimes(
+        cr is not None
+        and cr.reason in REASONS_IN_PROGRESS
+        and cr.spec.get("environmentdImageRef") != cr.last_completed_image,
+        "Observer read the serving version while a rollout to a different image was in progress",
+        details,
+    )
     db.execute("BEGIN IMMEDIATE")
     try:
         highest = kv_get(db, "highest_served_version")
@@ -2071,12 +2329,12 @@ def check_serving_version(db: sqlite3.Connection, env: Environment) -> None:
             always(
                 not (served < highest_version and started > highest["finished"]),
                 "The environmentd version serving SQL never goes backwards",
-                {"served": raw, "highest": highest, "started": started},
+                {**details, "highest": highest},
             )
             if served > highest_version:
                 reachable(
                     "SQL served by a newer environmentd version than before",
-                    {"served": raw, "previous": highest["version"]},
+                    {**details, "previous": highest["version"]},
                 )
         if highest_version is None or served > highest_version:
             kv_set(
@@ -2090,24 +2348,48 @@ def check_serving_version(db: sqlite3.Connection, env: Environment) -> None:
         raise
 
 
+def run_watches(watchers: list[CrWatcher | StatefulSetWatcher]) -> None:
+    """One window of each watch. Watch failures are expected under faults."""
+    for watcher in watchers:
+        try:
+            watcher.window()
+        except TRANSIENT_ERRORS as e:
+            log(f"watch window interrupted: {e}")
+
+
 def observer_main() -> int:
     env = Environment()
     kube = Kube(env)
     db = observer_db(env)
+    cr = CrWatcher(kube, db)
+    watchers = [cr, StatefulSetWatcher(kube, db)]
     deadline = time.monotonic() + OBSERVER_DURATION_SECONDS
-    sample = 0
+    next_observation = 0.0
+    version_key: tuple[Any, ...] | None = None
+    next_version = 0.0
     while time.monotonic() < deadline:
-        try:
-            observe_once(db, kube)
-        except TRANSIENT_ERRORS as e:
-            log(f"observation skipped: {e}")
-        if sample % VERSION_SAMPLE_EVERY == 0:
+        run_watches(watchers)
+        now = time.monotonic()
+        if now >= next_observation:
+            next_observation = now + OBSERVER_INTERVAL_SECONDS
             try:
-                check_serving_version(db, env)
+                observe_once(db, kube)
+            except TRANSIENT_ERRORS as e:
+                log(f"observation skipped: {e}")
+        latest = cr.latest
+        key = (
+            (latest.reason, latest.active, latest.last_completed_image)
+            if latest
+            else None
+        )
+        now = time.monotonic()
+        if key != version_key or now >= next_version:
+            version_key = key
+            next_version = now + VERSION_SAMPLE_SECONDS
+            try:
+                check_serving_version(db, env, latest)
             except TRANSIENT_ERRORS as e:
                 log(f"version sample skipped: {e}")
-        sample += 1
-        time.sleep(OBSERVER_INTERVAL_SECONDS)
     return 0
 
 
@@ -2264,6 +2546,8 @@ def converge_main() -> int:
     start = time.monotonic()
     deadline = start + CONVERGENCE_WEDGED_SECONDS
     unstick = OperatorUnstick(ctx, "converge")
+    observer = observer_db(env)
+    watchers = [CrWatcher(kube, observer), StatefulSetWatcher(kube, observer)]
     failures: dict[str, Any] = {"never_checked": True}
     last: Snapshot | None = None
     while time.monotonic() < deadline:
@@ -2278,7 +2562,11 @@ def converge_main() -> int:
         except TRANSIENT_ERRORS as e:
             failures = {"error": str(e)}
         log(f"not converged: {failures}")
-        time.sleep(5)
+        # Waits by watching, so the rollouts this command requests are checked
+        # like any other.
+        retry_at = time.monotonic() + 5
+        while time.monotonic() < retry_at:
+            run_watches(watchers)
     converged = not failures
     elapsed = time.monotonic() - start
     submitted = db.execute(
