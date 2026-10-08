@@ -56,11 +56,13 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
+use crate::catalog::Catalog;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CoordinatorClient;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
-use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse};
+use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse, PeekClient};
 
 /// A peek is a request to read data from a maintained arrangement.
 #[derive(Debug)]
@@ -1023,6 +1025,30 @@ impl crate::coord::Coordinator {
             instance_id: compute_instance,
             strategy,
         })
+    }
+
+    /// Returns a [`PeekClient`] for coordinator-owned queries, which have to
+    /// run off the main loop because the client calls back into it.
+    ///
+    /// The client holds no session [`Client`](crate::Client), so it does not
+    /// keep the coordinator alive.
+    pub(crate) fn background_peek_client(&self, catalog: &Arc<Catalog>) -> PeekClient {
+        let build_version = catalog.state().config().build_info.human_version(None);
+        PeekClient::new(
+            CoordinatorClient::Background {
+                tx: self.internal_cmd_tx.clone(),
+                metrics: self.metrics.clone(),
+            },
+            catalog,
+            Arc::clone(&self.controller.storage_collections),
+            Arc::clone(&self.transient_id_gen),
+            self.optimizer_metrics.clone(),
+            self.persist_client.clone(),
+            self.statement_logging.create_frontend(build_version),
+            Arc::clone(&self.occ_write_semaphore),
+            self.group_commit_tx.clone(),
+            self.controller.read_only(),
+        )
     }
 
     /// Creates an async stream that processes peek responses and yields rows.

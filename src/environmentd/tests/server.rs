@@ -7528,11 +7528,6 @@ fn test_shutdown_with_inflight_writes() {
     }
 }
 
-/// Changing a startup-only parameter is allowed and warns that it only takes
-/// effect after a restart. The running process keeps its sampled value, so the
-/// routing decision cannot change underneath open sessions. A change that is
-/// rejected, or a `RESET ALL` that leaves the parameter where it was, must not
-/// warn.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_startup_only_system_var_warns() {
@@ -7555,8 +7550,8 @@ fn test_startup_only_system_var_warns() {
     };
 
     for stmt in [
-        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
-        "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
+        "ALTER SYSTEM SET max_concurrent_occ_writes = 17",
+        "ALTER SYSTEM RESET max_concurrent_occ_writes",
     ] {
         client.batch_execute(stmt).unwrap();
         let notices = drain(&mut rx);
@@ -7597,9 +7592,8 @@ fn test_startup_only_system_var_warns() {
         "unexpected error: {err:?}"
     );
 
-    // `RESET ALL` also goes through, and warns for the parameter it changes.
     client
-        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 17")
         .unwrap();
     let _ = drain(&mut rx);
     client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
@@ -7609,8 +7603,6 @@ fn test_startup_only_system_var_warns() {
         "RESET ALL did not warn, notices: {notices:?}"
     );
 
-    // Everything is at its effective default now, so a second `RESET ALL`
-    // changes no startup-only parameter and must stay quiet about them.
     client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
     let notices = drain(&mut rx);
     assert!(

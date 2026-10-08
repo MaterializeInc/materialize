@@ -63,6 +63,10 @@ impl ClientConfig {
     /// Adds a trusted root TLS certificate.
     ///
     /// Certificates in the system's certificate store are trusted by default.
+    /// A server certificate identical to `cert` is trusted even if it is not
+    /// a valid end-entity certificate, for example a self-signed CA. Its name
+    /// and validity period are still checked, and its name may match any
+    /// subject common name if it has no DNS or IP subjectAltName.
     pub fn add_root_certificate(mut self, cert: Certificate) -> ClientConfig {
         self.root_certs.push(cert);
         self
@@ -106,11 +110,13 @@ impl ClientConfig {
     pub fn build(self) -> Result<Client, anyhow::Error> {
         let mut builder = reqwest::ClientBuilder::new();
 
-        for root_cert in self.root_certs {
-            builder = builder.add_root_certificate(root_cert.into());
-        }
-
-        if let Some(ident) = self.identity {
+        // NOTE: A preconfigured TLS backend makes reqwest ignore all of its TLS
+        // builder settings (roots, identity, ALPN, SNI, TLS versions, CRLs), so
+        // any such setting must go into `rustls_config` instead.
+        if !self.root_certs.is_empty() {
+            let tls = crate::tls::rustls_config(&self.root_certs, self.identity.as_ref())?;
+            builder = builder.tls_backend_preconfigured(tls);
+        } else if let Some(ident) = self.identity {
             builder = builder.identity(ident.into());
         }
 

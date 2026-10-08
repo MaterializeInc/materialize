@@ -3053,6 +3053,148 @@ def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
+def _pids(c: Composition, mz_service: str, command: str) -> set[str]:
+    """Returns the PIDs of processes named *command* in *mz_service*."""
+    return set(
+        c.exec(
+            mz_service,
+            "bash",
+            "-c",
+            f"ps -eo pid=,comm= | awk '$2 == \"{command}\" {{ print $1 }}'",
+            capture=True,
+            silent=True,
+        ).stdout.split()
+    )
+
+
+def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
+    """Verify a DDL-triggered restart of mz_new keeps its stability progress.
+
+    mz_new's replicas outlive the restart, and the stability gate reads their
+    hydration times from the replicas, so the period keeps counting from the
+    original hydration. Restarting the period would make mz_new ready no
+    earlier than the restart plus a full period.
+    """
+    period = 120
+    ddl_after = 60
+
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    # Poll for DDL every second, so the restart comes right after the DDL and
+    # not at the end of the period.
+    c.sql(
+        f"""
+        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '{period}s';
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE CLUSTER stable SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER stable AS SELECT * FROM t;
+        CREATE INDEX mv_idx IN CLUSTER stable ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    time.sleep(ddl_after)
+    environmentd = _pids(c, "mz_new", "environmentd")
+    replicas = _pids(c, "mz_new", "clusterd")
+
+    # A table has no dataflow, so no replica gets a new export to hydrate.
+    c.sql("CREATE TABLE unrelated (a int)", service="mz_old")
+
+    deadline = time.time() + 60
+    while True:
+        pids = _pids(c, "mz_new", "environmentd")
+        if pids and pids != environmentd:
+            break
+        assert time.time() < deadline, "the DDL did not restart mz_new"
+        time.sleep(0.5)
+    restarted = time.time()
+
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    ready_after = time.time() - restarted
+
+    assert (
+        _pids(c, "mz_new", "clusterd") == replicas
+    ), "mz_new's replicas did not survive its restart"
+    assert (
+        ready_after < period
+    ), f"mz_new became ready {ready_after:.0f}s after its restart, so the restart reset the stability period"
+
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
+    """Verify the stability gate does not wait on hydration no replica reports.
+
+    A materialized view past its last refresh has a sealed shard, so mz_new
+    never runs a dataflow for it. A materialized view pinned to one replica
+    runs only there. Neither may keep any replica of the cluster from counting
+    as hydrated.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        """
+        ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '0s';
+        ALTER SYSTEM SET enable_replica_targeted_materialized_views = true;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE CLUSTER pinned REPLICAS (
+            r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+        );
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW sealed IN CLUSTER pinned
+            WITH (REFRESH AT mz_now()::string::int8) AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW on_r1 IN CLUSTER pinned REPLICA r1
+            AS SELECT count(*) FROM t;
+        """,
+        service="mz_old",
+    )
+
+    # Wait for the refresh to seal `sealed`, so mz_new starts with an empty
+    # as_of for it.
+    for _ in range(120):
+        sealed = c.sql_query(
+            """
+            SELECT f.write_frontier IS NULL
+            FROM mz_internal.mz_frontiers f
+            JOIN mz_materialized_views mv ON f.object_id = mv.id
+            WHERE mv.name = 'sealed'
+            """,
+            service="mz_old",
+        )
+        if sealed and sealed[0][0]:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("materialized view `sealed` never sealed its shard")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(
+        DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
+    )
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     """Verify that DDL detection works correctly with batch-allocated user IDs.
 
@@ -3145,6 +3287,95 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             > SELECT * FROM pool_mv;
             1
             """))
+
+
+def workflow_ddl_detection_drops(c: Composition) -> None:
+    """Drop-only DDL must restart the follower and release dropped replicas."""
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE TABLE dropped_table (a int);
+        CREATE CLUSTER dropped_replica REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+        """,
+        service="mz_old",
+    )
+    replica_id = c.sql_query(
+        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+        "WHERE c.name = 'dropped_replica' AND r.name = 'r1'",
+        service="mz_old",
+    )[0][0]
+
+    def replica_process_exists() -> bool:
+        return bool(
+            c.exec(
+                "mz_new",
+                "bash",
+                "-c",
+                f"ps aux | grep -v grep | grep -w 'replica_id={replica_id}' || true",
+                capture=True,
+            ).stdout.strip()
+        )
+
+    # Keep DDL polling active regardless of how quickly the follower catches up.
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            environment_extra=["FAILPOINTS=0dt_caught_up_check=return"],
+            default_replication_factor=2,
+        )
+    ):
+        c.up("mz_new")
+        for statement, reason in [
+            ("DROP TABLE dropped_table", "Dropped objects:"),
+            ("DROP CLUSTER REPLICA dropped_replica.r1", "Dropped replicas:"),
+        ]:
+            # Wait for the follower to finish its current boot before dropping.
+            # A fresh connection each attempt, because the cached one died with
+            # the previous boot.
+            deadline = time.time() + 120
+            while True:
+                try:
+                    c.sql("SELECT 1", service="mz_new", reuse_connection=False)
+                    break
+                except (OperationalError, CommandFailureCausedUIError):
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(0.5)
+            logs = c.invoke("logs", "mz_new", capture=True).stdout
+            boots = logs.count("waiting for deployment to be caught up")
+            assert _leader_status(c, "mz_new") == DeploymentStatus.INITIALIZING.value
+            assert replica_process_exists(), "follower never started the replica"
+            c.sql(statement, service="mz_old")
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                logs = c.invoke("logs", "mz_new", capture=True).stdout
+                if (
+                    reason in logs
+                    and logs.count("waiting for deployment to be caught up") > boots
+                ):
+                    break
+                time.sleep(0.5)
+            else:
+                raise AssertionError(f"follower did not restart after {statement}")
+            c.up("mz_new")
+            if reason == "Dropped replicas:":
+                deadline = time.time() + 120
+                while replica_process_exists():
+                    if time.time() > deadline:
+                        raise AssertionError("follower retained the dropped replica")
+                    time.sleep(0.5)
 
 
 def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:

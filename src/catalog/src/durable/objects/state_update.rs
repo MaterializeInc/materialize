@@ -37,7 +37,7 @@ use std::fmt::Debug;
 use std::sync::LazyLock;
 
 use mz_ore::collections::HashSet;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_repr::Diff;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_storage_types::StorageDiff;
@@ -47,7 +47,7 @@ use proptest_derive::Arbitrary;
 use tracing::error;
 
 use crate::durable::debug::CollectionType;
-use crate::durable::objects::serialization::proto;
+use crate::durable::objects::serialization::{ProtoType, RustType, proto};
 use crate::durable::objects::{DurableType, FenceToken};
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;

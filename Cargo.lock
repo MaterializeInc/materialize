@@ -998,9 +998,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.150.0"
+version = "1.151.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fecaa77c862fa1e9d636d54fa06e0049a19a4f071b0d72ea1b9086887d09359"
+checksum = "c82d4b41fe41bfca3c9e1de55645d9a525868ef5ce5e14cee9499ccaf1fc7225"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1339,9 +1339,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.18.0"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb0deb40a69de59f7809251cfe1ab16de135f42c49d222d1202b4d0ce19720f"
+checksum = "c0730c16f91124c6a2abb4932c77e299288b3dd9f967ea2e9ec48cc6731e87a4"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api-macros",
@@ -1724,7 +1724,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -3159,8 +3159,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid 0.9.6",
+ "der_derive",
+ "flagset",
  "pem-rfc7468",
  "zeroize",
+]
+
+[[package]]
+name = "der_derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034092389675178f570469e6c3b0465d3d30b4505c294a6550db47f3c17ad18"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3337,7 +3350,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3883,6 +3896,12 @@ name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
+name = "flagset"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 
 [[package]]
 name = "flatbuffers"
@@ -4621,11 +4640,9 @@ dependencies = [
  "headers",
  "http 1.5.0",
  "hyper",
- "hyper-rustls",
  "hyper-util",
  "pin-project-lite",
  "tokio",
- "tokio-rustls",
  "tower-service",
 ]
 
@@ -5029,7 +5046,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5389,7 +5406,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower 0.5.3",
- "tower-http 0.6.11",
+ "tower-http",
  "tracing",
 ]
 
@@ -5465,7 +5482,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-http-proxy",
- "hyper-rustls",
  "hyper-timeout",
  "hyper-util",
  "log",
@@ -6146,6 +6162,7 @@ dependencies = [
  "launchdarkly-server-sdk",
  "maplit",
  "mz-adapter-types",
+ "mz-alloc-default",
  "mz-audit-log",
  "mz-auth",
  "mz-build-info",
@@ -6159,6 +6176,7 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-dyncfg",
+ "mz-dyncfg-launchdarkly",
  "mz-expr",
  "mz-kafka-util",
  "mz-license-keys",
@@ -6178,7 +6196,6 @@ dependencies = [
  "mz-rocksdb-types",
  "mz-secrets",
  "mz-segment",
- "mz-service",
  "mz-sql",
  "mz-sql-parser",
  "mz-sql-server-util",
@@ -6216,16 +6233,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-adapter-dyncfgs"
+version = "0.0.0"
+dependencies = [
+ "mz-dyncfg",
+ "mz-ore",
+ "serde_json",
+]
+
+[[package]]
 name = "mz-adapter-types"
 version = "0.0.0"
 dependencies = [
+ "mz-adapter-dyncfgs",
  "mz-compute-types",
- "mz-dyncfg",
  "mz-ore",
  "mz-repr",
  "mz-storage-types",
  "serde",
- "serde_json",
  "timely",
 ]
 
@@ -6387,7 +6412,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6523,7 +6548,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6539,7 +6564,8 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
- "mz-service",
+ "mz-secrets-cli",
+ "mz-secrets-loader",
  "mz-sql",
  "mz-storage-types",
  "serde",
@@ -6568,16 +6594,8 @@ dependencies = [
  "anyhow",
  "hex",
  "md-5",
- "mz-audit-log",
  "mz-catalog-protos",
- "mz-compute-types",
- "mz-controller-types",
- "mz-expr",
  "mz-ore",
- "mz-proto",
- "mz-repr",
- "mz-sql",
- "mz-storage-types",
  "num_enum 0.7.6",
  "proptest",
  "proptest-derive",
@@ -6603,12 +6621,15 @@ dependencies = [
  "prost-build",
  "reqwest 0.13.5",
  "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-openssl",
  "tracing",
  "url",
+ "x509-cert",
  "zeroize",
 ]
 
@@ -6682,11 +6703,13 @@ name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-cluster-client",
  "mz-ore",
- "mz-repr",
  "prometheus",
+ "proptest",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
 ]
 
@@ -6708,7 +6731,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6731,6 +6754,8 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-prof-http",
+ "mz-secrets-cli",
+ "mz-secrets-loader",
  "mz-service",
  "mz-storage",
  "mz-storage-types",
@@ -6789,6 +6814,7 @@ dependencies = [
  "futures",
  "itertools 0.15.0",
  "lgalloc",
+ "mz-alloc-default",
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
@@ -6908,7 +6934,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-repr",
- "mz-service",
+ "mz-secrets-cli",
  "mz-storage-client",
  "mz-storage-controller",
  "mz-storage-types",
@@ -6927,7 +6953,6 @@ name = "mz-controller-types"
 version = "0.0.0"
 dependencies = [
  "mz-cluster-client",
- "mz-compute-types",
  "mz-dyncfg",
 ]
 
@@ -7063,11 +7088,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "humantime",
+ "hyper-rustls",
  "launchdarkly-sdk-transport",
  "launchdarkly-server-sdk",
  "mz-build-info",
  "mz-dyncfg",
  "mz-ore",
+ "rustls",
  "tokio",
  "tracing",
 ]
@@ -7088,7 +7115,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -7162,6 +7189,7 @@ dependencies = [
  "mz-prometheus-protobuf",
  "mz-repr",
  "mz-secrets",
+ "mz-secrets-cli",
  "mz-segment",
  "mz-server-core",
  "mz-service",
@@ -7206,7 +7234,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tower 0.5.3",
- "tower-http 0.7.1",
+ "tower-http",
  "tower-sessions",
  "tracing",
  "tracing-capture",
@@ -7244,6 +7272,7 @@ dependencies = [
  "itertools 0.15.0",
  "md-5",
  "murmur2",
+ "mz-alloc-default",
  "mz-build-tools",
  "mz-catalog-decode",
  "mz-expr",
@@ -7396,7 +7425,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower 0.5.3",
- "tower-http 0.7.1",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -7414,6 +7443,7 @@ dependencies = [
  "differential-dataflow",
  "itertools 0.15.0",
  "maplit",
+ "mz-alloc-default",
  "mz-avro",
  "mz-aws-glue-schema-registry",
  "mz-build-tools",
@@ -7489,7 +7519,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7572,6 +7602,7 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-ssh-util",
  "proptest",
  "proptest-derive",
@@ -7708,7 +7739,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7745,7 +7776,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
- "tower-http 0.7.1",
+ "tower-http",
  "tracing",
  "uuid",
 ]
@@ -7779,6 +7810,7 @@ dependencies = [
  "lgalloc",
  "libc",
  "lz4_flex 0.14.0",
+ "mz-alloc-default",
  "mz-ore",
  "mz-ore-proc",
  "native-tls",
@@ -7890,7 +7922,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.8",
@@ -7907,6 +7939,7 @@ dependencies = [
  "futures-util",
  "hex",
  "itertools 0.15.0",
+ "mz-alloc-default",
  "mz-build-info",
  "mz-build-tools",
  "mz-dyncfg",
@@ -7924,6 +7957,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rand 0.10.3",
+ "regex",
  "semver",
  "serde",
  "serde_json",
@@ -7997,7 +8031,6 @@ dependencies = [
  "itertools 0.15.0",
  "mz-ore",
  "mz-pgrepr-consts",
- "mz-pgwire-common",
  "mz-repr",
  "postgres-types",
  "proptest",
@@ -8086,6 +8119,7 @@ dependencies = [
  "bytesize",
  "derivative",
  "mz-ore",
+ "mz-pgrepr-consts",
  "mz-server-core",
  "tokio",
  "tokio-openssl",
@@ -8117,11 +8151,11 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
  "openssl",
- "postgres-protocol",
  "postgres_array",
  "proptest",
  "proptest-derive",
@@ -8243,6 +8277,7 @@ dependencies = [
  "hex",
  "insta",
  "itertools 0.15.0",
+ "mz-alloc-default",
  "mz-build-tools",
  "mz-ore",
  "mz-persist",
@@ -8250,7 +8285,6 @@ dependencies = [
  "mz-pgtz",
  "mz-proto",
  "mz-repr",
- "mz-sql-parser",
  "mz-timely-util",
  "num-traits",
  "num_enum 0.7.6",
@@ -8353,6 +8387,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-secrets-cli"
+version = "0.0.0"
+dependencies = [
+ "clap",
+]
+
+[[package]]
+name = "mz-secrets-loader"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-aws-secrets-controller",
+ "mz-orchestrator-kubernetes",
+ "mz-orchestrator-process",
+ "mz-secrets",
+ "mz-secrets-cli",
+]
+
+[[package]]
 name = "mz-segment"
 version = "0.0.0"
 dependencies = [
@@ -8398,15 +8451,10 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bincode",
- "clap",
  "futures",
  "itertools 0.15.0",
- "mz-aws-secrets-controller",
  "mz-build-info",
- "mz-orchestrator-kubernetes",
- "mz-orchestrator-process",
  "mz-ore",
- "mz-secrets",
  "os_info",
  "pin-project",
  "prometheus",
@@ -8419,6 +8467,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
+]
+
+[[package]]
+name = "mz-source-schema-change"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "postgres-protocol",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -8620,8 +8678,8 @@ dependencies = [
  "mz-pgrepr",
  "mz-repr",
  "mz-secrets",
+ "mz-secrets-cli",
  "mz-server-core",
- "mz-service",
  "mz-sql",
  "mz-sql-parser",
  "mz-storage-types",
@@ -8637,7 +8695,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
- "tower-http 0.7.1",
+ "tower-http",
  "tracing",
  "uuid",
  "walkdir",
@@ -8900,11 +8958,13 @@ dependencies = [
  "insta",
  "itertools 0.15.0",
  "mysql_async",
+ "mz-alloc-default",
  "mz-aws-glue-schema-registry",
  "mz-aws-util",
  "mz-build-tools",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
@@ -8919,7 +8979,6 @@ dependencies = [
  "mz-repr",
  "mz-rocksdb-types",
  "mz-secrets",
- "mz-service",
  "mz-sql-parser",
  "mz-sql-server-util",
  "mz-ssh-util",
@@ -8965,7 +9024,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.45.0-dev.0"
+version = "26.46.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow 58.4.0",
@@ -9055,6 +9114,7 @@ dependencies = [
  "futures-util",
  "itertools 0.15.0",
  "lz4_flex 0.14.0",
+ "mz-alloc-default",
  "mz-ore",
  "num-traits",
  "proptest",
@@ -9077,7 +9137,7 @@ dependencies = [
  "deadpool-postgres",
  "dec",
  "futures",
- "mz-adapter-types",
+ "mz-adapter-dyncfgs",
  "mz-ore",
  "mz-pgrepr",
  "mz-postgres-client",
@@ -11173,7 +11233,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11645,7 +11705,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tower 0.5.3",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -11691,7 +11751,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -11996,7 +12056,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -12039,9 +12099,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-platform-verifier"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26d1e2536ce4f35f4846aa13bff16bd0ff40157cdb14cc056c7b14ba41233ba0"
+checksum = "1167586491e2b18b8bfbb293e8180ec17c201c4f076d7cb3070ca964e7598f98"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
@@ -12055,14 +12115,14 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "rustls-platform-verifier-android"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
+checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
@@ -13182,10 +13242,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13204,7 +13264,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13825,37 +13885,16 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
- "base64 0.22.1",
- "bitflags 2.13.2",
- "bytes",
- "futures-util",
- "http 1.5.0",
- "http-body",
- "mime",
- "pin-project-lite",
- "tower 0.5.3",
- "tower-layer",
- "tower-service",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
-dependencies = [
  "async-compression",
  "base64 0.22.1",
  "bitflags 2.13.2",
  "bytes",
  "futures-core",
+ "futures-util",
  "http 1.5.0",
  "http-body",
  "http-body-util",
  "mime",
- "percent-encoding",
  "pin-project-lite",
  "tokio",
  "tokio-util",
@@ -13863,6 +13902,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -15123,6 +15163,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
+]
+
+[[package]]
+name = "x509-cert"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
+dependencies = [
+ "const-oid 0.9.6",
+ "der",
+ "spki",
 ]
 
 [[package]]

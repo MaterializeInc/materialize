@@ -1,6 +1,6 @@
 ---
 source: src/cluster/src/client.rs
-revision: c475f3b2ff
+revision: bb5c454adc01868b58a0754a26274cbef45045f0
 ---
 
 # client
@@ -10,3 +10,4 @@ Manages the lifecycle of a local Timely cluster and the client connection to it.
 `ClusterSpec` is the trait compute and storage implement: they supply `Command`/`Response` types, a cluster name, and a `run_worker` function that drives each Timely worker.
 `build_cluster` is a provided method on `ClusterSpec` that initializes Timely networking (optionally with lgalloc-backed zero-copy buffers), launches worker threads with disambiguated OS thread names, and returns a `TimelyContainer` that keeps them alive.
 `GuestClusterClient` is a client to a secondary ("guest") command stream served by an existing Timely cluster. Unlike `ClusterClient`, which owns a `TimelyContainer`, `GuestClusterClient` receives its per-worker channel senders and worker thread handles from an external source, allowing additional command types to share the same Timely workers without owning them.
+`register_exert_policy_metrics` registers process-wide Prometheus gauges for the arrangement exertion policy: `mz_arrangement_exert_policy_calls_total` counts policy evaluations, and `mz_arrangement_exert_policy_grants_total{reason}` counts evaluations that returned effort, broken down by reason (`active_merge` or `consolidation`). The counters are backed by process-wide atomics incremented inside the `ExertionLogic` closure, and registration is guarded by a `OnceLock` so repeated calls are safe.

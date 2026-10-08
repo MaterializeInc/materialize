@@ -48,6 +48,7 @@ mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }
 mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
+mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
 mz-expr = { path = "../expr" }
 mz-license-keys = { path = "../license-keys" }
 mz-kafka-util = { path = "../kafka-util" }
@@ -66,7 +67,6 @@ mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
-mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util"}
@@ -104,6 +104,7 @@ uuid.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 datadriven.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 mz-persist = { path = "../persist", features = ["turmoil"] }
 mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
 turmoil.workspace = true

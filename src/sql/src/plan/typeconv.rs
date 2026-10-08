@@ -1555,9 +1555,6 @@ pub fn plan_cast(
             .map_err(|e| e.into_plan_error(ecx.name.into()))
     };
 
-    // Get cast which might include parameter rewrites + generating intermediate
-    // expressions.
-    //
     // String-like types get special handling to match PostgreSQL.
     // See: https://github.com/postgres/postgres/blob/6b04abdfc/
     //   src/backend/parser/parse_coerce.c#L3205-L3223
@@ -1565,7 +1562,19 @@ pub fn plan_cast(
     let to_category = TypeCategory::from_type(to);
     if from_category == TypeCategory::String && to_category != TypeCategory::String {
         // Converting from stringlike to something non-stringlike. Handle as if
-        // `from` were a `SqlScalarType::String.
+        // `from` were a `SqlScalarType::String`.
+        //
+        // `"char"` is string-like but stores a byte (`Datum::UInt8`), so the
+        // string-source cast functions cannot consume it directly. Use its
+        // registered cast when one exists (`int4`, by byte value) and
+        // otherwise render it to text first.
+        let expr = match from {
+            SqlScalarType::PgLegacyChar => match get_cast(ecx, ccx, &from, to) {
+                Ok(cast) => return Ok(cast(expr)),
+                Err(_) => cast_inner(&from, &SqlScalarType::String, expr)?,
+            },
+            _ => expr,
+        };
         cast_inner(&SqlScalarType::String, to, expr)
     } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
         // Converting from non-stringlike to something stringlike. Convert to a

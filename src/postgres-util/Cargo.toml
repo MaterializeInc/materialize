@@ -15,12 +15,12 @@ mz-cloud-resources = { path = "../cloud-resources", optional = true }
 mz-ore = { path = "../ore", default-features = false, features = ["async"], optional = true }
 mz-proto = { path = "../proto", optional = true }
 mz-repr = { path = "../repr", optional = true }
+mz-source-schema-change = { path = "../source-schema-change", optional = true }
 mz-ssh-util = { path = "../ssh-util", optional = true }
 mz-tls-util = { path = "../tls-util", default-features = false }
 openssl.workspace = true
 openssh = { workspace = true, optional = true }
 postgres_array = { workspace = true, optional = true }
-postgres-protocol = { workspace = true, optional = true }
 proptest = { workspace = true, optional = true }
 proptest-derive.workspace = true
 prost = { workspace = true, optional = true }
@@ -33,7 +33,7 @@ tracing.workspace = true
 [features]
 default = ["mz-build-tools/default", "replication", "schemas", "tunnel"]
 replication = ["tunnel"]
-schemas = ["postgres-protocol", "prost", "serde", "proptest", "mz-proto", "tunnel"]
+schemas = ["mz-source-schema-change", "prost", "serde", "proptest", "mz-proto", "tunnel"]
 tunnel = [
     "mz-cloud-resources",
     "serde",

@@ -15,7 +15,7 @@ async-trait.workspace = true
 dec.workspace = true
 deadpool-postgres.workspace = true
 futures.workspace = true
-mz-adapter-types = { path = "../adapter-types" }
+mz-adapter-dyncfgs = { path = "../adapter-dyncfgs" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }

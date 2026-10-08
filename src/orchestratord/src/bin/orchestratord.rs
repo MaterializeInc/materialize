@@ -333,6 +333,9 @@ pub struct Args {
     #[clap(long, hide = true)]
     disable_license_key_checks: bool,
 
+    #[clap(long)]
+    disable_database_network_policies: bool,
+
     #[clap(flatten)]
     tracing: TracingCliArgs,
 
@@ -724,6 +727,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .environmentd_internal_persist_pubsub_port,
             default_certificate_specs: args.default_certificate_specs.clone(),
             disable_license_key_checks: args.disable_license_key_checks,
+            disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
         };

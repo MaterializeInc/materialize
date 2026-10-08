@@ -240,7 +240,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
-    enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
     enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
@@ -306,12 +305,14 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
+    kafka_offset_commit_refresh_interval
     kafka_poll_max_wait
     kafka_reconnect_backoff
     kafka_reconnect_backoff_max
     kafka_retry_backoff
     kafka_retry_backoff_max
     kafka_sink_batch_num_messages
+    kafka_sink_emit_sink_id_header
     kafka_socket_keepalive
     keep_n_privatelink_status_history_entries
     keep_n_sink_status_history_entries

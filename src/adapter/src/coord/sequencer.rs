@@ -58,7 +58,7 @@ use tracing::{Instrument, Level, Span, event, warn};
 use crate::ExecuteContext;
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::appends::{DeferredOp, DeferredPlan};
+use crate::coord::appends::DeferredPlan;
 use crate::coord::validity::PlanValidity;
 use crate::coord::{
     Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
@@ -130,15 +130,10 @@ impl Coordinator {
                     ctx,
                     plan,
                     validity,
-                    requires_locks: BTreeSet::default(),
                     resolved_ids,
                     sql_impl_resolved_ids,
                 };
-                // Defer op accepts an optional write lock, but there aren't any writes occurring
-                // here, since the map to `None`.
-                let acquire_future = wait_future.map(|()| None);
-
-                self.defer_op(acquire_future, DeferredOp::Plan(deferred_plan));
+                self.defer_plan(wait_future, deferred_plan);
 
                 // Return early because our op is deferred on waiting for the builtin writes to
                 // complete.
@@ -452,11 +447,10 @@ impl Coordinator {
                     self.sequence_explain_timestamp(ctx, plan, target_cluster)
                         .await;
                 }
-                Plan::Insert(plan) => {
-                    self.sequence_insert(ctx, plan).await;
-                }
-                Plan::ReadThenWrite(plan) => {
-                    self.sequence_read_then_write(ctx, plan).await;
+                Plan::Insert(_) | Plan::ReadThenWrite(_) => {
+                    ctx.retire(Err(AdapterError::Internal(
+                        "coordinator read-then-write reached despite frontend routing".into(),
+                    )));
                 }
                 Plan::AlterNoop(plan) => {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
@@ -882,7 +876,11 @@ impl Coordinator {
                     returning: Vec::new(),
                     max_result_size: catalog.system_config().max_result_size(),
                 };
-                Self::send_diffs(session, diffs_plan)
+                let result = Self::send_diffs(session, diffs_plan);
+                // Let schema-fencing tests land an ALTER after packing rows
+                // against this descriptor but before the transaction commits.
+                fail::fail_point!("insert_after_pack_before_commit");
+                result
             }
             None => panic!(
                 "tried using sequence_insert_constant on non-constant MirRelationExpr\n{}",

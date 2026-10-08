@@ -184,6 +184,13 @@ def get_minimal_system_parameters(
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 
+    # Keep older baselines and mixed-version runs on the same read-then-write
+    # path as current binaries, where frontend OCC is unconditional.
+    if version < MzVersion.parse_mz("v26.46.0-dev"):
+        config["enable_adapter_frontend_occ_read_then_write"] = (
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false"
+        )
+
     # The cluster controller's break-glass gate. Removed in v26.38, where the
     # controller runs unconditionally. Older binaries still read it, and
     # defaulted it off before v26.29, so pin it on for them to keep mixed-version
@@ -350,11 +357,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_adapter_frontend_occ_read_then_write",
-            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "enable_cast_elimination",
             "true",
             ["true", "false"],
@@ -422,6 +424,15 @@ def get_variable_system_parameters(
             "true" if force_source_table_syntax else "false",
             ["true", "false"] if force_source_table_syntax else ["false"],
         ),
+        # Low default so CI exercises the periodic recommit, which production
+        # only reaches after ten minutes.
+        VariableSystemParameter(
+            "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
+        ),
+        # On by default so CI exercises the sink id header path.
+        VariableSystemParameter(
+            "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
@@ -462,6 +473,16 @@ def get_variable_system_parameters(
             ],
         ),
         VariableSystemParameter("persist_stats_audit_panic", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "persist_shard_metrics",
+            "summary",
+            ["none", "summary", "per_shard", "both"],
+        ),
+        VariableSystemParameter(
+            "persist_per_shard_metrics_enable_regex",
+            "",
+            ["", "^u1", ".*"],
+        ),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),

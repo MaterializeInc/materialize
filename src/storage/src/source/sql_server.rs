@@ -36,7 +36,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{Probe, SourceMessage, SourceRender, StackedCollection};
+use crate::source::types::{Probe, ResumeUppers, SourceMessage, SourceRender, StackedCollection};
 
 mod progress;
 mod replication;
@@ -123,7 +123,7 @@ impl SourceRender for SqlServerSourceConnection {
         self,
         scope: Scope<'scope, Lsn>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<Lsn>> + 'static,
         _start_signal: impl Future<Output = ()> + 'static,
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.

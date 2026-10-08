@@ -108,6 +108,13 @@ async fn sync_scoped_params(
     frontend: &SystemParameterFrontend,
     params: &SynchronizedParameters,
 ) {
+    // The reconcile prunes every override absent from the desired state, so
+    // running it without one would durably drop every scoped override until the
+    // config-sync file is readable again.
+    if !frontend.has_scoped_desired_state() {
+        return;
+    }
+
     let catalog = client.catalog_snapshot_expensive().await;
 
     // Push the desired state to the coordinator, which holds the working copy

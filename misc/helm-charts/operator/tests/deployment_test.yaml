@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v26.43.0
+      value: materialize/orchestratord:v26.44.1
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -119,10 +119,10 @@ tests:
     storage.storageClass.name: ""
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]      # Index of the environmentd-cluster-replica-sizes argument
+      path: spec.template.spec.containers[0].args[14]      # Index of the environmentd-cluster-replica-sizes argument
       pattern: disk_limit":"0"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: is_cc":true
 
 - it: should have a cluster with disk limit to 1552MiB when storage class is configured and swap disabled
@@ -131,25 +131,25 @@ tests:
     operator.clusters.swap_enabled: false
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: disk_limit":"1552MiB"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: is_cc":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: materialize.cloud/scratch-fs":"true"
 
 - it: should have a cluster with swap_enabled
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: is_cc":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: swap_enabled":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: materialize.cloud/swap":"true"
 
 - it: should handle default of swap_enabled, but some sizes without
@@ -165,13 +165,13 @@ tests:
       memory_limit: "776MiB"
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: '"mysize":{"cpu_exclusive":false,"cpu_limit":0.1,"credits_per_hour":"0.00","disk_limit":"0","is_cc":true,"memory_limit":"776MiB","scale":1,"selectors":{},"swap_enabled":false,"workers":1}'
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: swap_enabled":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[14]
       pattern: materialize.cloud/swap":"true"
 
 - it: should configure for AWS provider correctly
@@ -327,6 +327,20 @@ tests:
   - notContains:
       path: spec.template.spec.containers[0].args
       content: "--disable-license-key-checks"
+
+- it: should have database network policies disabled by default
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--disable-database-network-policies"
+
+- it: should support enabling database network policies
+  set:
+    operator.args.enableDatabaseNetworkPolicies: true
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--disable-database-network-policies"
 
 - it: should pass the pod name for the leader election identity
   asserts:

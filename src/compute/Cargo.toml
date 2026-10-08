@@ -56,10 +56,11 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-core_affinity = "0.8.3"
+core_affinity.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true

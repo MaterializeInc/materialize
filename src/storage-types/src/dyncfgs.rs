@@ -114,6 +114,16 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// How often Kafka sources recommit offsets that have not changed, so that brokers do not expire
+/// them. Must stay well below the broker's `offsets.retention.minutes`. Zero disables it.
+pub const KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL: Config<Duration> = Config::new(
+    "kafka_offset_commit_refresh_interval",
+    Duration::from_secs(10 * 60),
+    "How often Kafka sources recommit offsets that have not changed, which must stay well below \
+    the broker's offsets.retention.minutes. Zero disables it.",
+    ParameterScope::Replica,
+);
+
 /// Whether to check the low watermark for Kafka sources and error if the start offset/resume
 /// upper has been compacted away.
 /// Environment-scoped because it decides whether a definite error is emitted.
@@ -216,6 +226,17 @@ pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
     "kafka_sink_batch_num_messages",
     10_000,
     "Sets batch.num.messages in librdkafka for Kafka sink producers.",
+    ParameterScope::Environment,
+);
+
+/// Whether Kafka sinks attach a `materialize-sink-id` header, holding the
+/// sink's `GlobalId`, to every message they produce.
+///
+/// Environment-scoped because it changes the messages the sink produces.
+pub const KAFKA_SINK_EMIT_SINK_ID_HEADER: Config<bool> = Config::new(
+    "kafka_sink_emit_sink_id_header",
+    false,
+    "Whether Kafka sinks attach a `materialize-sink-id` header to every message they produce.",
     ParameterScope::Environment,
 );
 
@@ -399,13 +420,12 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
 /// The spill mechanism depends on the stash flavor
 /// ([`ENABLE_UPSERT_CHUNKED_STASH`]):
 ///
-/// * Chunked: sets storage's leg of the process-wide chunk spill gate
-///   (`mz_timely_util::columnar::chunk`). The gate is the OR of a compute
-///   leg (`enable_column_paged_batcher_spill`) and this storage leg: chunks
-///   spill while either is set, so this flag cannot veto spilling that the
-///   compute flag has enabled. Spilled chunks draw on the one shared pool
-///   budget, and the gate is consulted at every chunk commit, so flips
-///   apply to running dataflows.
+/// * Chunked: sets the storage chunk spill gate
+///   (`mz_timely_util::columnar::chunk::StorageSpill`), which only upsert's
+///   chunks read, independently of compute's
+///   `enable_column_paged_batcher_spill`. Spilled chunks draw on the one
+///   shared pool budget, and the gate is consulted at every chunk commit, so
+///   flips apply to running dataflows.
 /// * Paged: gates the storage-owned column pager the stash and feedback
 ///   arrangement route their chains through, independently of compute's
 ///   `enable_column_paged_batcher_spill`. Captured at operator
@@ -562,6 +582,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
         .add(&KAFKA_LOW_WATERMARK_CHECK)
+        .add(&KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_RETRY_BACKOFF)
         .add(&KAFKA_RETRY_BACKOFF_MAX)
@@ -570,6 +591,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
+        .add(&KAFKA_SINK_EMIT_SINK_ID_HEADER)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)

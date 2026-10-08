@@ -117,6 +117,12 @@ COMPATIBLE_TESTDRIVE_FILES = [
     # "webhook.td",
 ]
 
+# Testdrive files of this composition, which run after the requested files.
+# They live in a subdirectory of test/testdrive: testdrive only finds files
+# below its working directory, and the testdrive suite's `*.td` glob
+# (test/testdrive/mzcompose.py) does not descend into subdirectories.
+TERRAFORM_TESTDRIVE_FILES = ["terraform/hedged-blob-gets.td"]
+
 
 def add_arguments_temporary_test(parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
@@ -622,7 +628,7 @@ class State:
         if run_testdrive_files:
             with c.override(testdrive(no_reset=False)):
                 c.up(Service("testdrive", idle=True))
-                c.run_testdrive_files(*TD_CMD, *files)
+                c.run_testdrive_files(*TD_CMD, *files, *TERRAFORM_TESTDRIVE_FILES)
 
     def _find_service(self, pattern: str) -> str:
         """Find a service in materialize-environment namespace by name pattern."""

@@ -1,13 +1,13 @@
 ---
 source: src/compute/src/sink/correction_v2.rs
-revision: 07d9506f7e
+revision: beb7f6c04b
 ---
 
 # mz-compute::sink::correction_v2
 
 An implementation of the correction buffer (`CorrectionV2`) used by the MV sink's `write_batches` operator with a chain-based design for amortized-efficient insertion, compaction, and iteration.
 
-Updates are stored as sorted, consolidated `Chunk`s grouped into `Chain`s. Each `Chunk` is backed by a columnar body that is offered to the process buffer pool (`mz_ore::pool`) on construction; the pool may spill it under memory pressure, controlled by the `ENABLE_CORRECTION_V2_SPILL` dyncfg. A "chain invariant" ensures each chain in a bucket has at least `chain_proportionality` times as many updates as the next, producing a logarithmic hierarchy similar to an LSM tree. New updates are first accumulated in a `Stage` buffer that grows on demand; once the staged bytes (heap included) reach the configured `chunk_size`, they are sorted, consolidated, and routed.
+Updates are stored as sorted, consolidated `Chunk`s grouped into `Chain`s. Each `Chunk` holds a `ColumnBody` that is offered to the process buffer pool (`mz_ore::pool`) on construction; the pool may spill it under memory pressure, controlled by the `ENABLE_CORRECTION_V2_SPILL` dyncfg. Chunks are spilled at a depth that reflects how many chain merges they have survived: freshly staged chunks start at depth 0, and a bucket merge writes its output one generation deeper than the deepest input, so deeply merged chunks land in cooler eviction bands and are eligible for compression. A "chain invariant" ensures each chain in a bucket has at least `chain_proportionality` times as many updates as the next, producing a logarithmic hierarchy similar to an LSM tree. New updates are first accumulated in a `Stage` buffer that grows on demand; once the staged bytes (heap included) reach the configured `chunk_size`, they are sorted, consolidated, and routed.
 
 `CorrectionV2` holds updates in three places:
 - A `BucketChain` partitions times at or beyond the `boundary` (the largest read `upper` seen so far) into buckets of exponentially growing time ranges. Reads only touch buckets below their `upper`, so far-future updates such as temporal-filter retractions are rarely accessed.

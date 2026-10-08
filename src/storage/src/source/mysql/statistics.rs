@@ -24,7 +24,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 
-use crate::source::types::Probe;
+use crate::source::types::{Probe, ResumeUppers};
 use crate::source::{RawSourceCreationConfig, probe};
 
 use super::{ReplicationError, TransientError};
@@ -36,7 +36,7 @@ pub(crate) fn render<'scope>(
     scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
+    resume_uppers: impl futures::Stream<Item = ResumeUppers<GtidPartition>> + 'static,
     replication_errors: StreamVec<'scope, GtidPartition, ReplicationError>,
 ) -> (
     StreamVec<'scope, GtidPartition, ReplicationError>,
@@ -111,10 +111,11 @@ pub(crate) fn render<'scope>(
                 }
             };
             let commit_loop = async {
-                while let Some(committed_frontier) = resume_uppers.next().await {
-                    let offset_committed = aggregate_mysql_frontier(&committed_frontier);
-                    for stat in config.statistics.values() {
-                        stat.set_offset_committed(offset_committed);
+                while let Some(uppers) = resume_uppers.next().await {
+                    for (id, frontier) in &uppers.exports {
+                        if let Some(stat) = config.statistics.get(id) {
+                            stat.set_offset_committed(aggregate_mysql_frontier(frontier));
+                        }
                     }
                 }
             };

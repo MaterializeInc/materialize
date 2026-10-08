@@ -234,7 +234,6 @@ impl Coordinator {
                 self.pending_writes.push(PendingWriteTxn::User {
                     span: Span::current(),
                     writes,
-                    write_locks: None,
                     responder: UserWriteResponder::Internal {
                         conn_id,
                         target: WriteTarget {

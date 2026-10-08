@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/alloc-default",
@@ -94,9 +95,12 @@ members = [
     "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
+    "src/secrets-cli",
+    "src/secrets-loader",
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
     "src/sql-anonymize",
     "src/sql-lexer",
@@ -130,6 +134,7 @@ members = [
 # from the workspace's default members.
 default-members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/arrow-util",
@@ -221,9 +226,12 @@ default-members = [
     "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
+    "src/secrets-cli",
+    "src/secrets-loader",
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
     "src/sql-anonymize",
     "src/sql-lexer",
@@ -326,6 +334,7 @@ columnation = "0.1.2"
 compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
 console-subscriber = "0.5.0"
+core_affinity = "0.8.3"
 crc32fast = "1.5.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam = "0.8.4"
@@ -377,6 +386,9 @@ httparse = "1.8.0"
 humantime = "2.4.0"
 hyper = { version = "1.11.1", features = ["http1", "server"] }
 hyper-openssl = { version = "0.10.2", features = ["client-legacy", "tokio"] }
+# Backs the LaunchDarkly HTTPS transport, see `mz_dyncfg_launchdarkly::https_transport`.
+hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "native-tokio", "http1", "http2", "tls12"] }
+hyper-tls = "0.6.0"
 hyper-util = "0.1.20"
 iceberg = "0.10.1"
 iceberg-catalog-rest = "0.10.1"
@@ -394,8 +406,12 @@ junit-report = "0.9.1"
 k8s-controller = "0.13.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_34"] }
 kube = { version = "3.1.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
-launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"] }
-launchdarkly-sdk-transport = "0.1.4"
+# Only the `hyper` feature on both LaunchDarkly crates. `hyper-rustls-native-roots`
+# would enable the transport crate's `hyper-rustls` dependency, which it
+# hardcodes to the `ring` provider.
+# `mz_dyncfg_launchdarkly::https_transport` injects an aws-lc-rs connector.
+launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper", "crypto-aws-lc-rs"] }
+launchdarkly-sdk-transport = { version = "0.1.4", default-features = false, features = ["hyper"] }
 lgalloc = "0.6.0"
 libc = "0.2.186"
 lru = "0.18.5"
@@ -478,12 +494,14 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.38"
+rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
 seahash = "4.1.0"
+security-framework = "3.7.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
 semver = "1.0.28"
 sentry = { version = "0.49.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "reqwest", "rustls"] }
@@ -540,7 +558,7 @@ tonic = { version = "0.14.6", features = ["gzip", "transport"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-http = { version = "0.7.1", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.11", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
 tower-sessions = "0.15.0"
 tower-sessions-memory-store = "0.14.0"
@@ -566,6 +584,7 @@ uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
 which = "8"
+x509-cert = { version = "0.2.5", default-features = false }
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }

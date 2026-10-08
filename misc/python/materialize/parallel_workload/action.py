@@ -2940,6 +2940,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
@@ -2975,6 +2976,20 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
             "arrow",
+        ]
+        self.flags_with_values["persist_shard_metrics"] = [
+            "none",
+            "summary",
+            "per_shard",
+            "both",
+        ]
+        # Only has an effect while persist_shard_metrics leaves the per-shard
+        # families out. Shard names are GlobalIds, so "^u1" keeps a subset of
+        # the user collections.
+        self.flags_with_values["persist_per_shard_metrics_enable_regex"] = [
+            "''",
+            "'^u1'",
+            "'.*'",
         ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
@@ -3250,10 +3265,6 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
-            # Read once at environmentd startup, so an ALTER SYSTEM SET only
-            # takes effect after a restart. Flipping it here would be a no-op
-            # for the running process.
-            "enable_adapter_frontend_occ_read_then_write",
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
@@ -3400,6 +3411,7 @@ class FlipFlagsAction(Action):
             "wallclock_lag_history_retention_interval",
             "wallclock_global_lag_histogram_retention_interval",
             "kafka_client_id_enrichment_rules",
+            "kafka_offset_commit_refresh_interval",
             "kafka_poll_max_wait",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",
@@ -5934,15 +5946,6 @@ class AlterClusterSetAction(Action):
     Resizing or changing the replica count of a cluster hosting indexes, MVs,
     sources, and sinks forces rehydration and replica teardown/spin-up under
     concurrent DDL and DML."""
-
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            # A SET (SIZE) here or a ReconfigureCluster on the same cluster
-            # leaves a reconfiguration record in flight past the statement
-            # that started it. Replication factor is folded in at cut-over,
-            # so changing it meanwhile is refused.
-            "cannot change replication factor while a reconfiguration is in progress",
-        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:

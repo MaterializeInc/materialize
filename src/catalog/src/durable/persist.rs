@@ -37,7 +37,7 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_repr::Diff;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
@@ -54,6 +54,7 @@ use crate::durable::initialize::{
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
+use crate::durable::objects::serialization::RustType;
 use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
@@ -553,6 +554,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let updates_applied_before = self.updates_applied;
 
         // Reset the amortized consolidation tracker so it picks up the
         // current snapshot size as its baseline.
@@ -596,8 +598,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
-        // Always consolidate at the end to ensure the snapshot is clean.
-        self.consolidate();
+        // Only consolidate when there are actual updates.
+        if self.updates_applied != updates_applied_before {
+            self.consolidate();
+        }
         Ok(())
     }
 

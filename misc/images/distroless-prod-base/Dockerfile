@@ -35,7 +35,7 @@ RUN groupadd --system --gid=999 materialize \
 # `debug-nonroot` adds a busybox shell (`/busybox/sh`), kept intentionally so
 # entrypoint.sh and `kubectl exec` keep working. A later step can drop to the
 # shell-less variant. The digest pin is bumped by dependabot.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:f525a9a37aed3e8a848f46cfe055999782d66ed797e9e2886928c8caaaa4fc52
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:984d31d4bd6e71bb9469353d93e73c68f7b3c17142b2aec45f2a960489095b22
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1

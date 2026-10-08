@@ -114,7 +114,7 @@ use mz_timely_util::builder_async::{
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::body::ColumnBody;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk};
+use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk, StorageSpill};
 use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
 use mz_timely_util::columnar::unload::UnloadBatch;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
@@ -222,7 +222,7 @@ type FeedbackUpdate<T> = ((UpsertKey, Row), T, Diff);
 /// of RSS under the pool's budget, and the drain reads it back through the
 /// bulk [`UnloadChunk`](mz_timely_util::columnar::unload::UnloadChunk)
 /// surface: copy-out probes, no cursor borrows.
-type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff>;
+type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff, StorageSpill>;
 
 /// The feedback arrangement's trace: a funded spine of `Rc`-shared chunk
 /// batches. See [`mz_timely_util::funded_spine`].
@@ -293,7 +293,7 @@ type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
 
 /// One stash chunk: a sorted, consolidated run of updates, resident or
 /// spilled to the buffer pool.
-type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>>;
+type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>, StorageSpill>;
 
 /// The chunked flavor's stash: differential's chunk merge batcher over
 /// `ColumnChunk`s. Data is pushed in unsorted. The batcher maintains
@@ -449,12 +449,12 @@ where
     match flavor {
         UpsertStashFlavor::Chunked => {
             // Chains and sealed batches alike are `FeedbackChunk`s whose
-            // bodies spill to the buffer pool, behind the same process spill
+            // bodies spill to the buffer pool, behind the same storage spill
             // gate as the source stash.
             let persist_arranged = arrange_core::<
                 _,
                 _,
-                ChunkChunker<(UpsertKey, Row), T, Diff>,
+                ChunkChunker<(UpsertKey, Row), T, Diff, StorageSpill>,
                 ChunkBatcher<FeedbackChunk<T>>,
                 ChunkBuilder<FeedbackChunk<T>>,
                 FeedbackSpine<T>,
