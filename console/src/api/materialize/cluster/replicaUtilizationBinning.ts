@@ -10,13 +10,26 @@
 import * as Sentry from "@sentry/react";
 import { flatGroup, greatest } from "d3";
 
-import { OfflineEvent as ChartOfflineEvent } from "~/platform/clusters/ClusterOverview/types";
+import {
+  OfflineEvent as ChartOfflineEvent,
+  ReplicaData,
+} from "~/platform/clusters/ClusterOverview/types";
 
 export type OfflineEvent = {
   replicaId: string;
   occurredAt: string;
   status: string;
   reason: string | null;
+};
+
+/**
+ * A replica's worst-process swap and heap limit, as fractions of one process's
+ * RAM, taken from the bucket's max-heap sample.
+ */
+export type MemoryBreakdown = {
+  swapOfRamPercent: number | null;
+  /** Where RAM plus swap runs out. 1.0 means the size has no swap. */
+  heapLimitPercent: number | null;
 };
 
 export type Bucket = {
@@ -52,6 +65,8 @@ export type Bucket = {
     percent: number | null;
     occurredAt: Date;
   };
+  /** Absent unless the query selected the swap columns. */
+  memoryBreakdown?: MemoryBreakdown;
 
   offlineEvents: OfflineEvent[] | null;
 };
@@ -67,6 +82,8 @@ export interface UtilizationSample {
   diskPercent: number | null;
   heapPercent: number | null;
   memoryAndDiskPercent: number | null;
+  swapOfRamPercent?: number | null;
+  heapLimitPercent?: number | null;
 }
 
 /** A (replica, bucket) rollup, matching the binned `_overview*` views' output. */
@@ -90,6 +107,8 @@ export interface UtilizationBucketRow {
   maxMemoryAndDiskDiskPercent: number | null;
   maxMemoryAndDiskAt: Date;
   offlineEvents: OfflineEvent[] | null;
+  swapOfRamPercent?: number | null;
+  heapLimitPercent?: number | null;
 }
 
 /**
@@ -187,6 +206,9 @@ export function rebucketUtilizationSamples(
         maxMemoryAndDiskDiskPercent: memoryAndDisk.diskPercent,
         maxMemoryAndDiskAt: memoryAndDisk.occurredAt,
         offlineEvents: null,
+        // Take swap from the max-heap sample, as the binned views do.
+        swapOfRamPercent: heap.swapOfRamPercent,
+        heapLimitPercent: heap.heapLimitPercent,
       };
     },
   );
@@ -228,8 +250,7 @@ export function attachOfflineEvents(
 /**
  * Group per-(replica, bucket) rows into `Bucket[]` by replica, tracking the
  * overall min/max bounds. `resolveCurrentDeployment` maps a past cluster id to its
- * current blue-green deployment; omitted (the SUBSCRIBE path resolves lineage in
- * SQL) it defaults to the row's own `clusterId`.
+ * current blue-green deployment; omitted, it defaults to the row's own `clusterId`.
  */
 export function bucketRowsToBucketsByReplicaId(
   rows: UtilizationBucketRow[],
@@ -272,7 +293,7 @@ export function bucketRowsToBucketsByReplicaId(
     const currentDeploymentClusterId =
       resolveCurrentDeployment?.(clusterId) ?? clusterId;
 
-    const newBucket = {
+    const newBucket: Bucket = {
       size,
       bucketStart,
       bucketEnd,
@@ -303,6 +324,13 @@ export function bucketRowsToBucketsByReplicaId(
         diskPercent: row.maxMemoryAndDiskDiskPercent,
         occurredAt: row.maxMemoryAndDiskAt,
       },
+      memoryBreakdown:
+        row.heapLimitPercent === undefined
+          ? undefined
+          : {
+              swapOfRamPercent: row.swapOfRamPercent ?? null,
+              heapLimitPercent: row.heapLimitPercent,
+            },
     };
 
     if (buckets) {
@@ -318,6 +346,22 @@ export function bucketRowsToBucketsByReplicaId(
     bucketsByReplicaId,
   };
 }
+
+// Rescales shares of RAM to percentages of the heap limit, `heapPercent`'s
+// scale. Null checks, not truthiness: 0% swap is a reading, not a gap.
+const toHeapLimitPercents = (breakdown: MemoryBreakdown | undefined) => {
+  if (!breakdown?.heapLimitPercent) {
+    return { swapPercent: null, ramLimitPercent: null };
+  }
+  const heapLimit = breakdown.heapLimitPercent;
+  return {
+    swapPercent:
+      breakdown.swapOfRamPercent === null
+        ? null
+        : (breakdown.swapOfRamPercent / heapLimit) * 100,
+    ramLimitPercent: 100 / heapLimit,
+  };
+};
 
 /**
  * Shape `bucketsByReplicaId` into the chart's per-replica series plus the flat
@@ -346,6 +390,7 @@ export function toReplicaUtilizationGraphData(
             maxCpu,
             maxDisk,
             maxMemoryAndDisk,
+            memoryBreakdown,
             size,
             offlineEvents,
             name,
@@ -362,6 +407,7 @@ export function toReplicaUtilizationGraphData(
               ? maxMemoryAndDisk.percent * 100
               : null,
             heapPercent: maxHeap?.percent ? maxHeap.percent * 100 : null,
+            ...toHeapLimitPercents(memoryBreakdown),
             size,
             offlineEvents:
               offlineEvents?.map((event) => ({
@@ -416,3 +462,16 @@ export function toReplicaUtilizationGraphData(
     offlineEvents,
   };
 }
+
+/**
+ * Whether every replica's CPU, memory and disk readings are empty or zero,
+ * which points at broken metrics collection rather than idle replicas.
+ */
+export const hasNoUtilizationMetrics = (graphData: ReplicaData[]) =>
+  graphData.length > 0 &&
+  graphData.every(({ data }) =>
+    data.every(
+      (point) =>
+        !point.cpuPercent && !point.memoryPercent && !point.diskPercent,
+    ),
+  );
