@@ -83,12 +83,13 @@ structural invalidation. Stale opens and CAS losses still occur despite that
 refresh and continued dispatch. Sampled bounds and reclamations keep their original
 prefix checks. Adapter candidates remain substantially slower than replica
 candidates, although both use the same machinery and their delta sizes differ.
-Measured cost lies in aggregate expansion and the two state applications, not
-storage acknowledgement. Reuse the preliminary state and effects only when it
-absorbed one batch and no later updates were staged. Keep all admission and
-validation against the original base/candidate pair, and retain consolidated
-final application for derived or multiple batches. Verify candidate cost and
-foreground/renewal progress together in the existing workloads.
+CI138291 verifies exact candidate reuse and its boundary coverage. Duplicate final
+application is eliminated for single-batch publications, but workload stalls remain.
+The measured next cost is losing durable appends and conflict catch-up. Skip batch
+construction only when Persist's cached upper proves the append already lost.
+Keep the same fencing catch-up, refreshed conflict classification and real CAS
+otherwise. Verify hit rate, retry cost and foreground/renewal progress together
+in the existing workloads, without inferring liveness from cheaper candidates.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.
@@ -134,10 +135,12 @@ remain in the PR, not additional investigation campaigns.
 
 Alongside renewal, resolve the CREATE MV end-to-end wait in the existing parallel
 workload. The earlier 292s statement's pre-admission interval remains unpartitioned.
-Statement-correlated captures now demonstrate queued MVs blocked by another MV's
-DDL guard while its commit repeatedly yields. Most retry-ready handoff time is
-occupied by catalog maintenance and introspection protection work, not MV
-optimization. Repair the measured catalog costs before changing scheduling.
+Statement-correlated captures demonstrate cumulative DDL queueing and repeated
+commit attempts while holding the guard. CI138291 partitions a successful 200s
+CREATE: most retry-ready handoff time is occupied by client/bounds publication,
+whose losing durable appends cost more than candidate work. Earlier captures
+also identify introspection protection work. Repair these measured catalog costs
+before changing scheduling.
 Commit-count reduction alone does not close the user-visible latency gap.
 
 Keep the approved Persist-arbitrated OCC contract: subscribe-certified targets,

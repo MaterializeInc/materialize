@@ -1572,11 +1572,12 @@ async fn test_persist_committed_row_traffic() {
     assert_eq!(traffic(&registry), after);
 
     // Fence a transaction after it is prepared, so its durable append fails.
+    let requirements_before_failure = state.snapshot().await.unwrap().maintained_read_requirements;
     let mut txn = state.transaction().await.unwrap();
     txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(30.into()))
         .unwrap();
     let _ = txn.get_and_commit_op_updates();
-    let replacement = builder
+    let mut replacement = builder
         .unwrap_build()
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
@@ -1589,6 +1590,15 @@ async fn test_persist_committed_row_traffic() {
         CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
     ));
     assert_eq!(traffic(&registry), before_failure);
+    replacement.sync_to_current_updates().await.unwrap();
+    assert_eq!(
+        replacement
+            .snapshot()
+            .await
+            .unwrap()
+            .maintained_read_requirements,
+        requirements_before_failure
+    );
     Box::new(replacement).expire().await;
     Box::new(savepoint).expire().await;
     Box::new(reader).expire().await;

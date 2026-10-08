@@ -44,6 +44,7 @@ use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
+use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -641,17 +642,24 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             phase = "persist_cas",
             "durable catalog phase start",
         );
-        let res = self
-            .write_handle
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(self.upper),
-                Antichain::from_elem(next_upper),
-            )
-            .await;
+        let expected = Antichain::from_elem(self.upper);
+        let current = self.write_handle.shared_upper();
+        let known_stale = PartialOrder::less_than(&expected, &current);
+        let res = if known_stale {
+            // Cached progress can only understate the durable upper. Avoid
+            // building and deleting a batch whose append must already lose.
+            // The mismatch's current upper is a lower bound. Both paths still
+            // catch up below to detect fences and classify the refreshed state.
+            Ok(Err(UpperMismatch { expected, current }))
+        } else {
+            self.write_handle
+                .compare_and_append(updates, expected, Antichain::from_elem(next_upper))
+                .await
+        };
         debug!(
             target: "mz_adapter::frontend_read_then_write",
             phase = "persist_cas",
+            known_stale,
             elapsed = ?phase_started.elapsed(),
             outcome = match &res {
                 Ok(Ok(_)) => "ok",
