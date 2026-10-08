@@ -64,8 +64,7 @@ use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
-    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
-    validate_selection_dependencies,
+    WriteAttemptState, WriteCancellation, contains_mz_now, validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
@@ -826,7 +825,7 @@ impl SessionClient {
     ) -> Result<ExecuteResponse, AdapterError> {
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
         // flows through `try_peek` /
-        // `try_frontend_read_then_write` below, rather than being
+        // `try_read_then_write` below, rather than being
         // re-dispatched via `Command::Execute` from the coordinator's
         // `Plan::Execute` handler. Without this, a prepared statement
         // would route differently from the same statement issued
@@ -851,7 +850,7 @@ impl SessionClient {
 
         // Attempt read-then-write sequencing in the session task.
         let rtw_result = self
-            .try_frontend_read_then_write_with_cancel(&portal_name, logging, cancel_future.clone())
+            .try_read_then_write_with_cancel(&portal_name, logging, cancel_future.clone())
             .await?;
         if let Some(resp) = rtw_result {
             debug!("frontend read-then-write succeeded");
@@ -878,7 +877,7 @@ impl SessionClient {
     /// prepared statement, install a fresh portal for the inner statement
     /// (carrying the EXECUTE's actual parameter values), and return that
     /// portal's name so the caller can run `try_peek` /
-    /// `try_frontend_read_then_write` against it.
+    /// `try_read_then_write` against it.
     ///
     /// Only ever unrolls one level: the parser rejects
     /// `PREPARE foo AS EXECUTE bar` (matching Postgres), so the inner
@@ -897,7 +896,7 @@ impl SessionClient {
             let portal = match session.get_portal_unverified(&portal_name) {
                 Some(p) => p,
                 // No portal: let `try_peek` /
-                // `try_frontend_read_then_write` surface the
+                // `try_read_then_write` surface the
                 // standard "missing portal" error.
                 None => return Ok(portal_name),
             };
@@ -1460,7 +1459,7 @@ impl SessionClient {
     /// the peek path is tested against it. Everything expensive, including the
     /// coordinator round-trip that registers the connection cancel watch, sits
     /// behind it.
-    fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
+    fn read_then_write_applies(&self, portal_name: &str) -> bool {
         let session = self.session.as_ref().expect("SessionClient invariant");
         match session.get_portal_unverified(portal_name) {
             Some(portal) => portal
@@ -1476,12 +1475,12 @@ impl SessionClient {
     ///
     /// Returns `Ok(None)` when the statement is not eligible for this path and
     /// the caller must fall back to the coordinator, either because
-    /// `try_frontend_read_then_write` declined it or because this wrapper did.
+    /// `try_read_then_write` declined it or because this wrapper did.
     ///
     /// Cancellation and statement timeout are never reported for a write that
     /// may have committed. Once a write has been submitted we await its
     /// definitive result instead of returning the cancellation.
-    async fn try_frontend_read_then_write_with_cancel(
+    async fn try_read_then_write_with_cancel(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
@@ -1491,14 +1490,14 @@ impl SessionClient {
         // synchronous round-trip through the coordinator's command loop. A
         // statement this path will not take over must not pay for it, and must
         // not add queueing latency for other sessions either.
-        if !self.frontend_read_then_write_applies(portal_name) {
+        if !self.read_then_write_applies(portal_name) {
             return Ok(None);
         }
 
         let conn_id = self.session().conn_id().clone();
         let statement_timeout = *self.session().vars().statement_timeout();
         let inner_client = self.inner().clone();
-        let attempt_state = Arc::new(FrontendWriteAttemptState::new());
+        let attempt_state = Arc::new(WriteAttemptState::new());
 
         let mut cancel_future = pin::pin!(cancel_future);
         let statement_timeout = async move {
@@ -1549,15 +1548,15 @@ impl SessionClient {
         };
         tokio::pin!(connection_cancel);
 
-        let frontend_read_then_write =
-            self.try_frontend_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
-        tokio::pin!(frontend_read_then_write);
+        let read_then_write =
+            self.try_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
+        tokio::pin!(read_then_write);
 
         let requested = tokio::select! {
-            response = &mut frontend_read_then_write => return response,
-            _ = &mut cancel_future => FrontendWriteCancellation::Canceled,
-            _ = &mut connection_cancel => FrontendWriteCancellation::Canceled,
-            _ = &mut statement_timeout => FrontendWriteCancellation::StatementTimeout,
+            response = &mut read_then_write => return response,
+            _ = &mut cancel_future => WriteCancellation::Canceled,
+            _ = &mut connection_cancel => WriteCancellation::Canceled,
+            _ = &mut statement_timeout => WriteCancellation::StatementTimeout,
         };
 
         attempt_state.request(requested);
@@ -1571,7 +1570,7 @@ impl SessionClient {
 
         // A submitted write can already be durable. Await its definitive result
         // rather than reporting cancellation or timeout incorrectly.
-        frontend_read_then_write.await
+        read_then_write.await
     }
 
     /// Attempt to sequence a read-then-write (DELETE/UPDATE/INSERT INTO ..
@@ -1580,13 +1579,13 @@ impl SessionClient {
     /// Returns `Ok(Some(response))` if we handled the operation, or `Ok(None)`
     /// to fall back to the Coordinator's sequencing. If it returns an error, it
     /// should be returned to the user.
-    async fn try_frontend_read_then_write(
+    async fn try_read_then_write(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
-        attempt_state: Arc<FrontendWriteAttemptState>,
+        attempt_state: Arc<WriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
+        let catalog = self.catalog_snapshot("try_read_then_write").await;
 
         let stmt = {
             let session = self.session.as_ref().expect("SessionClient invariant");
@@ -1775,7 +1774,7 @@ impl SessionClient {
         // `allows_writes` is only defined inside a transaction, which is also
         // the only place it can be false: outside one the session task opens a
         // fresh transaction with no ops. Autocommit statements therefore rely on
-        // the check in `PeekClient::frontend_read_then_write` instead.
+        // the check in `PeekClient::session_read_then_write` instead.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
             if session.transaction().is_in_multi_statement_transaction()
@@ -1914,7 +1913,7 @@ impl SessionClient {
         };
 
         // The syntactic predicate for "reads persisted state", see the module
-        // docs on `frontend_read_then_write`. Inside a transaction, only a write
+        // docs on `session_read_then_write`. Inside a transaction, only a write
         // that reads nothing can run on this path.
         //
         // The AST gate above is not enough to establish this. It admits
@@ -1948,7 +1947,7 @@ impl SessionClient {
 
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
-            .frontend_read_then_write(
+            .session_read_then_write(
                 session,
                 rtw_plan,
                 target_cluster,
