@@ -372,6 +372,20 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL COLUMNS)
                                                                    ^
 
 parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (ALL COLUMNS NULLABLE)
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (ALL COLUMNS NULLABLE)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: AllColumnsNullable, value: None }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (ALL CONSTRAINTS NULLABLE)
+----
+error: Expected COLUMNS, found CONSTRAINTS
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (ALL CONSTRAINTS NULLABLE)
+                                                           ^
+
+parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS (foo))
 ----
 error: Expected literal string, found identifier "foo"

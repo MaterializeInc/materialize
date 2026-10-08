@@ -386,6 +386,7 @@ pub(super) async fn purify_source_exports(
     mut text_columns: Vec<UnresolvedItemName>,
     mut exclude_columns: Vec<UnresolvedItemName>,
     filter_constraints: &FilterConstraints,
+    all_columns_nullable: bool,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
     initial_lsn: MzOffset,
@@ -527,6 +528,11 @@ pub(super) async fn purify_source_exports(
                     for c in &mut desc.columns {
                         c.nullable = true;
                     }
+                }
+            }
+            if all_columns_nullable {
+                for c in &mut desc.columns {
+                    c.nullable = true;
                 }
             }
 

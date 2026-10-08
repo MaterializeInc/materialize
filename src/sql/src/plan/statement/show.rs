@@ -1169,6 +1169,7 @@ fn humanize_sql_for_show_create(
                 TableFromSourceOptionName::ExcludeColumns => true,
                 TableFromSourceOptionName::ExcludeConstraints => true,
                 TableFromSourceOptionName::ExcludeAllConstraints => true,
+                TableFromSourceOptionName::AllColumnsNullable => true,
                 // Drop details, which does not roundtrip.
                 TableFromSourceOptionName::Details => false,
                 TableFromSourceOptionName::PartitionBy => true,

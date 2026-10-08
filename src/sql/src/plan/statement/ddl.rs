@@ -1752,6 +1752,7 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeConstraints, Vec::<String>, Default(vec![])),
     (ExcludeAllConstraints, bool, Default(false)),
+    (AllColumnsNullable, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Details, String)
@@ -1785,6 +1786,7 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         exclude_constraints: _,
         exclude_all_constraints: _,
+        all_columns_nullable: _,
         retain_history,
         partition_by,
         details,

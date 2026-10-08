@@ -1043,6 +1043,7 @@ async fn purify_create_source(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 source_name,
                 &reference_policy,
                 initial_lsn,
@@ -1614,6 +1615,7 @@ async fn purify_alter_source_add_subsources(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
                 initial_lsn,
@@ -1911,6 +1913,7 @@ async fn purify_create_table_from_source(
         exclude_columns,
         exclude_constraints,
         exclude_all_constraints,
+        all_columns_nullable,
         retain_history: _,
         details,
         partition_by: _,
@@ -1923,6 +1926,9 @@ async fn purify_create_table_from_source(
     let filter_constraints =
         FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
     if filter_constraints.excludes_any() {
+        scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
+    }
+    if all_columns_nullable {
         scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
     }
 
@@ -2018,6 +2024,7 @@ async fn purify_create_table_from_source(
                 qualified_text_columns,
                 qualified_exclude_columns,
                 &filter_constraints,
+                all_columns_nullable,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
                 initial_lsn,

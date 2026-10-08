@@ -247,3 +247,61 @@ contains:not available
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_exclude_constraints_option = true
+
+#
+# ALL COLUMNS NULLABLE: keys and uniqueness remain, but every column nullable, so
+# DROP NOT NULL is a non-event.
+#
+
+> CREATE TABLE all_nullable
+  FROM SOURCE mz_source (REFERENCE public.excl_combo)
+  WITH (ALL COLUMNS NULLABLE);
+
+> CREATE DEFAULT INDEX ON all_nullable;
+> SELECT key FROM (SHOW INDEXES ON all_nullable);
+{id}
+
+# All columns except id should be nullable, but id is a PK and cannot be NULL
+> SELECT name, nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'all_nullable');
+id false
+u true
+val true
+
+> CREATE TABLE all_nullable_combo
+  FROM SOURCE mz_source (REFERENCE public.excl_combo)
+  WITH (ALL COLUMNS NULLABLE, EXCLUDE CONSTRAINTS ('excl_combo_pkey'));
+
+> CREATE DEFAULT INDEX ON all_nullable_combo;
+> SELECT key FROM (SHOW INDEXES ON all_nullable_combo);
+{id,u,val}
+
+# All columns except id should be nullable, but id is a PK and cannot be NULL
+> SELECT name, nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'all_nullable_combo');
+id true
+u true
+val true
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_combo ALTER COLUMN val DROP NOT NULL;
+INSERT INTO excl_combo VALUES (2, 20, NULL);
+
+> SELECT * FROM all_nullable;
+1 10 a
+2 20 <null>
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_combo DROP CONSTRAINT excl_combo_pkey;
+INSERT INTO excl_combo VALUES (3, 30, 'c');
+
+! SELECT * FROM all_nullable;
+regex:incompatible schema change on public\.excl_combo \(oid \d+\): PRIMARY KEY constraint "excl_combo_pkey" \(id\) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('excl_combo_pkey')) before the upstream drop
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+3 30 c
