@@ -20,15 +20,18 @@ To serve results, you can:
 - [Query using `SELECT` and `SUBSCRIBE`
   statements](/serve-results/query-results/)
 
+- [Understand the query lifecycle](/serve-results/query-lifecycle/)
+
 - [Use BI/data collaboration tools](/serve-results/bi-tools/)
 
-- [Sink results to to external systems](/export-data/)
+- [Sink results to external systems](/export-data/)
 
 - [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
 
 {{< multilinkbox >}}
 {{< linkbox title="SELECT/SUBSCRIBE statements" >}}
 - [Query using `SELECT` and `SUBSCRIBE`](/serve-results/query-results/)
+- [Query lifecycle](/serve-results/query-lifecycle/)
 - [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
 {{</ linkbox >}}
 {{< linkbox title="External BI tools" >}}
