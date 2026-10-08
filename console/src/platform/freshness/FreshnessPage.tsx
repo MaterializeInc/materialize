@@ -26,6 +26,7 @@ import React from "react";
 import { isSystemCluster } from "~/api/materialize";
 import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
+import ErrorBox from "~/components/ErrorBox";
 import { DataPoint } from "~/components/FreshnessGraph/types";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import SearchableSelect, {
@@ -45,6 +46,7 @@ import {
   PageHeading,
 } from "~/layouts/BaseLayout";
 import {
+  FreshnessData,
   useClusterFreshness,
   useFreshnessObjects,
 } from "~/platform/clusters/queries";
@@ -61,7 +63,7 @@ import {
   PREDICATE_LABELS,
 } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
-import { useFreshnessHydration } from "./queries";
+import { HydrationCounts, useFreshnessHydration } from "./queries";
 import { parsePredicate, useFreshnessParams } from "./useFreshnessParams";
 import { useFreshnessRows } from "./useFreshnessRows";
 
@@ -92,41 +94,88 @@ const SectionHeader = ({
   );
 };
 
-const FreshnessContent = ({
-  clusterId,
-  lookbackMs,
-  rangeLabel,
-  predicate,
-  thresholdControl,
-  typeFilters,
-}: {
-  clusterId: string;
-  lookbackMs: number;
+// Shared so that every render before hydration lands passes the same map, which
+// keeps the rows cache in `useFreshnessRows` from rebuilding each time.
+const NO_HYDRATION = new Map<string, HydrationCounts>();
+
+interface FreshnessViewOptions {
   rangeLabel: string;
   predicate: Predicate;
   thresholdControl: ThresholdControl;
   typeFilters: string[];
+}
+
+const FreshnessContent = ({
+  clusterId,
+  lookbackMs,
+  ...viewOptions
+}: FreshnessViewOptions & {
+  clusterId: string;
+  lookbackMs: number;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const objects = useFreshnessObjects(clusterId);
   // Distinguishes a cluster that has nothing on it from one whose objects have
   // not arrived yet. Both are an empty list, and they are not the same state.
   const { snapshotComplete } = useAllObjects();
-  const {
-    data: {
-      historicalData,
-      startTime,
-      endTime,
-      lines,
-      objectsById,
-      latestByObjectId,
-    },
-  } = useClusterFreshness({ lookbackMs, objects });
-
-  const { data: hydrationByObjectId } = useFreshnessHydration(
+  const freshness = useClusterFreshness({ lookbackMs, objects });
+  const hydration = useFreshnessHydration(
     objects.map((object) => object.objectId),
   );
 
+  // Before the headline, the graph and the tables, because each of them would
+  // otherwise render its own "0" and the page would read as a passing health
+  // check for a cluster with nothing on it.
+  if (objects.length === 0 && snapshotComplete) {
+    return (
+      <Box padding="4" color={colors.foreground.secondary}>
+        No objects on this cluster.
+      </Box>
+    );
+  }
+
+  // An error only replaces the page when there is nothing to show. A failed
+  // refetch keeps the last good readings on screen.
+  if (!freshness.data || objects.length === 0) {
+    return freshness.isError ? (
+      <ErrorBox message="An error occurred fetching freshness data." />
+    ) : (
+      <Box height="320px" width="100%">
+        <LoadingContainer />
+      </Box>
+    );
+  }
+
+  // A failed hydration request leaves the column at "—" rather than taking the
+  // page down: the lag readings are what the page is for.
+  return (
+    <FreshnessView
+      data={freshness.data}
+      hydrationByObjectId={hydration.data ?? NO_HYDRATION}
+      {...viewOptions}
+    />
+  );
+};
+
+const FreshnessView = ({
+  data: {
+    historicalData,
+    startTime,
+    endTime,
+    lines,
+    objectsById,
+    latestByObjectId,
+  },
+  hydrationByObjectId,
+  rangeLabel,
+  predicate,
+  thresholdControl,
+  typeFilters,
+}: FreshnessViewOptions & {
+  data: FreshnessData;
+  hydrationByObjectId: Map<string, HydrationCounts>;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
   const { judged, rows, breaching } = useFreshnessRows({
     lines,
     historicalData,
@@ -143,21 +192,6 @@ const FreshnessContent = ({
     predicate,
     rangeLabel,
   );
-
-  // Before the headline, the graph and the tables, because each of them would
-  // otherwise render its own "0" and the page would read as a passing health
-  // check for a cluster with nothing on it.
-  if (objects.length === 0) {
-    return snapshotComplete ? (
-      <Box padding="4" color={colors.foreground.secondary}>
-        No objects on this cluster.
-      </Box>
-    ) : (
-      <Box height="320px" width="100%">
-        <LoadingContainer />
-      </Box>
-    );
-  }
 
   return (
     <VStack alignItems="stretch" width="100%" spacing="4">
@@ -387,31 +421,15 @@ const FreshnessPage = () => {
             above.
           </Text>
         ) : selected ? (
-          // The key is on the boundary, not on the content: once a boundary
-          // has caught an error it renders its fallback instead of its
-          // children, so re-keying a child it is no longer rendering does
-          // nothing. A failed query would otherwise survive a change of
-          // cluster or range until a reload.
-          <AppErrorBoundary
-            key={`${selected.id}:${timePeriodMinutes}`}
-            message="An error occurred fetching freshness data."
-          >
-            <React.Suspense
-              fallback={
-                <Box height="320px" width="100%">
-                  <LoadingContainer />
-                </Box>
-              }
-            >
-              <FreshnessContent
-                clusterId={selected.id}
-                lookbackMs={timePeriodMinutes * 60_000}
-                rangeLabel={rangeLabel}
-                predicate={predicate}
-                thresholdControl={thresholdControl}
-                typeFilters={objectTypes}
-              />
-            </React.Suspense>
+          <AppErrorBoundary message="An error occurred fetching freshness data.">
+            <FreshnessContent
+              clusterId={selected.id}
+              lookbackMs={timePeriodMinutes * 60_000}
+              rangeLabel={rangeLabel}
+              predicate={predicate}
+              thresholdControl={thresholdControl}
+              typeFilters={objectTypes}
+            />
           </AppErrorBoundary>
         ) : (
           <Text textStyle="text-small" color={colors.foreground.secondary}>

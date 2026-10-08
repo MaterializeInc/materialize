@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   buildQueryKeyPart,
@@ -43,11 +43,10 @@ export const freshnessQueryKeys = {
  * is shared with pages that never show hydration.
  *
  * The caller passes the objects it means to show, not the ones the lag query
- * returned. Reading them from that result would make this request wait for it,
- * since a suspending query stops the component before this line is reached.
+ * returned. Reading them from that result would make this request wait for it.
  */
 export function useFreshnessHydration(objectIds: string[]) {
-  return useSuspenseQuery({
+  return useQuery({
     queryKey: freshnessQueryKeys.hydrationCounts(objectIds),
     queryFn: async ({ queryKey, signal }) => {
       if (objectIds.length === 0) return new Map<string, HydrationCounts>();

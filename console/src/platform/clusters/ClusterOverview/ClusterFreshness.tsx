@@ -28,6 +28,7 @@ import {
   NULL_LAG_TEXT,
 } from "~/api/materialize/freshness/lagHistory";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
+import ErrorBox from "~/components/ErrorBox";
 import { FreshnessGraph } from "~/components/FreshnessGraph/FreshnessGraph";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
@@ -116,9 +117,22 @@ const FreshnessGraphWrapper = ({
   clusterId: string;
 }) => {
   const objects = useFreshnessObjects(clusterId);
-  const {
-    data: { historicalData, currentData, startTime, endTime, lines },
-  } = useClusterFreshness({ lookbackMs, objects });
+  const { data, isError } = useClusterFreshness({ lookbackMs, objects });
+
+  if (!data) {
+    return isError ? (
+      <ErrorBox
+        message="An error occurred fetching freshness data."
+        padding="4"
+      />
+    ) : (
+      <Box height="240px" width="100%">
+        <LoadingContainer />
+      </Box>
+    );
+  }
+
+  const { historicalData, currentData, startTime, endTime, lines } = data;
 
   return (
     <VStack alignItems="flex-start" width="100%" spacing="0" padding="4">
@@ -193,19 +207,11 @@ const ClusterFreshness = ({ clusterId }: { clusterId: string }) => {
           padding: "4",
         }}
       >
-        <React.Suspense
-          fallback={
-            <Box height="240px" width="100%">
-              <LoadingContainer />
-            </Box>
-          }
-        >
-          <FreshnessGraphWrapper
-            lookbackMs={lookbackMs}
-            bucketSizeMs={bucketSizeMs}
-            clusterId={clusterId}
-          />
-        </React.Suspense>
+        <FreshnessGraphWrapper
+          lookbackMs={lookbackMs}
+          bucketSizeMs={bucketSizeMs}
+          clusterId={clusterId}
+        />
       </AppErrorBoundary>
     </VStack>
   );

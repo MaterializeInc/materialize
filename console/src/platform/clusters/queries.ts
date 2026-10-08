@@ -1136,7 +1136,10 @@ export function useClusterFreshness({
   // point.
   const binSizeMs = calculateBucketSizeFromLookback(lookbackMs);
 
-  const series = useSuspenseQuery({
+  // NOTE: `useQuery`, not `useSuspenseQuery`. A suspending query stops the
+  // component before the next hook runs, so each request would wait for the
+  // one above it, including a caller's own queries after this hook.
+  const series = useQuery({
     queryKey: clusterQueryKeys.clusterFreshnessSeries({
       lookbackMs,
       objectIds,
@@ -1156,7 +1159,7 @@ export function useClusterFreshness({
     refetchInterval: binSizeMs,
   });
 
-  const latest = useSuspenseQuery({
+  const latest = useQuery({
     queryKey: clusterQueryKeys.clusterFreshnessLatest({ objectIds }),
     queryFn: async ({ queryKey, signal }): Promise<LatestReading[]> => {
       if (objectIds.length === 0) return [];
@@ -1174,21 +1177,24 @@ export function useClusterFreshness({
     refetchInterval: LATEST_READING_INTERVAL_MS,
   });
 
-  // Only `data` is returned. Spreading a query object would make every
-  // consumer observe all of its state, and suspense already covers loading and
-  // errors for these callers.
+  // Undefined until both have answered. Building from one alone would show a
+  // graph whose "Now" column disagrees with it.
   const data = useMemo(
     () =>
-      buildFreshnessData(
-        { readings: series.data, latest: latest.data },
-        objects,
-      ),
+      series.data && latest.data
+        ? buildFreshnessData(
+            { readings: series.data, latest: latest.data },
+            objects,
+          )
+        : undefined,
     [series.data, latest.data, objects],
   );
 
-  return { data };
+  // Only these fields are returned. Spreading a query object would make every
+  // consumer observe all of its state.
+  return { data, isError: series.isError || latest.isError };
 }
 
-export type CurrentClusterFreshnessData = Awaited<
-  ReturnType<typeof useClusterFreshness>["data"]
->["currentData"][0];
+export type FreshnessData = ReturnType<typeof buildFreshnessData>;
+
+export type CurrentClusterFreshnessData = FreshnessData["currentData"][0];
