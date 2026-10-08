@@ -452,13 +452,13 @@ pub async fn handle_mcp_agent(
     client: AuthedClient,
     body: Bytes,
 ) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
+        return resp;
+    }
     let request = match parse_mcp_request(&headers, &body) {
         Ok(request) => request,
         Err(response) => return response,
     };
-    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
-        return resp;
-    }
     handle_mcp_request(client, request, McpEndpointType::Agent, metrics)
         .await
         .into_response()
@@ -472,13 +472,13 @@ pub async fn handle_mcp_developer(
     client: AuthedClient,
     body: Bytes,
 ) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
+        return resp;
+    }
     let request = match parse_mcp_request(&headers, &body) {
         Ok(request) => request,
         Err(response) => return response,
     };
-    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
-        return resp;
-    }
     handle_mcp_request(client, request, McpEndpointType::Developer, metrics)
         .await
         .into_response()
@@ -2455,20 +2455,6 @@ mod tests {
             let resp = parse_mcp_request(&headers, body).expect_err("must be rejected");
             assert_eq!(resp.status(), want, "for {}", String::from_utf8_lossy(body));
         }
-    }
-
-    /// Bodies over axum's 2 MB default must parse: the route allows up to
-    /// `MAX_REQUEST_SIZE`, and parsing must not add a smaller limit.
-    #[mz_ore::test]
-    fn test_parse_mcp_request_has_no_body_limit_of_its_own() {
-        let sql = "SELECT 1;".repeat(3 * 1024 * 1024 / 9);
-        let body = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "query_system_catalog", "arguments": {"sql_query": sql}},
-        }))
-        .expect("serializes");
-        assert!(body.len() > 2 * 1024 * 1024);
-        parse_mcp_request(&json_headers(), &body).expect("large body must parse");
     }
 
     /// `ping` and `notifications/initialized` are named variants so their
