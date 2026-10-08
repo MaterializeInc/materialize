@@ -207,9 +207,6 @@ impl Coordinator {
                     .boxed_local()
                     .await;
             }
-            Message::PeekStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
-            }
             Message::CreateIndexStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }

@@ -119,7 +119,7 @@ use mz_controller::clusters::{
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_dyncfg::{ConfigUpdates, ParameterScope};
-use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
@@ -203,10 +203,9 @@ use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedM
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
-use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
@@ -404,11 +403,6 @@ pub enum Message {
         stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
     },
-    PeekStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: PeekStage,
-    },
     CreateIndexStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -556,7 +550,6 @@ impl Message {
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
-            Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
@@ -624,24 +617,6 @@ pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>
 pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
-pub enum PeekStage {
-    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
-    LinearizeTimestamp(PeekStageLinearizeTimestamp),
-    RealTimeRecency(PeekStageRealTimeRecency),
-    TimestampReadHold(PeekStageTimestampReadHold),
-    Optimize(PeekStageOptimize),
-    /// Final stage for a peek.
-    Finish(PeekStageFinish),
-    /// Final stage for an explain.
-    ExplainPlan(PeekStageExplainPlan),
-    ExplainPushdown(PeekStageExplainPushdown),
-    /// Preflight checks for a copy to operation.
-    CopyToPreflight(PeekStageCopyTo),
-    /// Final stage for a copy to which involves shipping the dataflow.
-    CopyToDataflow(PeekStageCopyTo),
-}
-
-#[derive(Debug)]
 pub struct CopyToContext {
     /// The `RelationDesc` of the data to be copied.
     pub desc: RelationDesc,
@@ -657,114 +632,9 @@ pub struct CopyToContext {
     pub max_file_size: u64,
     /// Number of batches the output of the COPY TO will be partitioned into
     /// to distribute the load across workers deterministically.
-    /// This is only an option since it's not set when CopyToContext is instantiated
-    /// but immediately after in the PeekStageValidate stage.
+    /// Not set when the context is created, but during sequencing, to the
+    /// largest worker count among the target cluster's replicas.
     pub output_batch_count: Option<u64>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageLinearizeTimestamp {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageRealTimeRecency {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageTimestampReadHold {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimize {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageFinish {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination,
-    cluster_id: ComputeInstanceId,
-    finishing: RowSetFinishing,
-    /// When present, an optimizer trace to be used for emitting a plan insights
-    /// notice.
-    plan_insights_optimizer_trace: Option<OptimizerTrace>,
-    insights_ctx: Option<Box<PlanInsightsContext>>,
-    global_lir_plan: optimize::peek::GlobalLirPlan,
-    optimization_finished_at: EpochMillis,
-}
-
-#[derive(Debug)]
-pub struct PeekStageCopyTo {
-    validity: PlanValidity,
-    optimizer: optimize::copy_to::Optimizer,
-    global_lir_plan: optimize::copy_to::GlobalLirPlan,
-    optimization_finished_at: EpochMillis,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageExplainPlan {
-    validity: PlanValidity,
-    optimizer: optimize::peek::Optimizer,
-    df_meta: DataflowMetainfo,
-    explain_ctx: ExplainPlanContext,
-    insights_ctx: Option<Box<PlanInsightsContext>>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageExplainPushdown {
-    validity: PlanValidity,
-    determination: TimestampDetermination,
-    imports: BTreeMap<GlobalId, MapFilterProject>,
 }
 
 #[derive(Debug)]
