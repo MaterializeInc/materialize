@@ -94,9 +94,12 @@ opportunities and their existing retry gates. The CREATE INDEX holders dominatin
 the timed-out MV's DDL queue repeatedly lose content attempts to peer metadata.
 Their creator publication also carries unrelated advancing client requirements.
 Creator grants now extend committed protection, leaving advancement and release
-to aggregate publication. Verify this boundary correction in the existing workload
-before choosing another repair. It does not bypass catalog conflicts or establish
-fairness. Keep durable renewal and end-to-end SQL progress as separate outcomes,
+to aggregate publication. The remaining MV holder spends much of its continuation
+wait behind introspection acquisition that still flushes unrelated advancements.
+Apply the same grant-only preparation at the shared acquisition owner and verify
+foreground progress in the existing workload before choosing another repair.
+This does not bypass catalog conflicts or establish fairness.
+Keep durable renewal and end-to-end SQL progress as separate outcomes,
 crediting heartbeat-only and full publications only after commit.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.

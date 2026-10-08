@@ -48,9 +48,9 @@ Two contracts on the implications phase:
 Read-protection acquisition can itself publish catalog metadata. Keep pending
 timeline acquisitions with timeline maintenance, not inside committed-diff
 enactment. Creator birth grants stay live through implications and transfer into
-timeline holds during transaction completion. Their content transaction extends
-committed protection without flushing unrelated advancement or release, which
-remain owned by aggregate publication. A retryable acquisition must not
+timeline holds during transaction completion. Acquisition and creator transactions
+extend committed protection without flushing unrelated advancement or release,
+which remain owned by aggregate publication. A retryable acquisition must not
 turn a committed statement's completion into a reason to replay that statement.
 
 Prepared DDL may retain selected plans and input holds across a definitive

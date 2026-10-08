@@ -791,6 +791,8 @@ impl Coordinator {
 
     /// No pending publication survives a definitive return. A caller requesting
     /// one attempt owns resampling and resumption after a catalog conflict.
+    /// Acquisition extends committed protection without flushing unrelated
+    /// advancement or release from active tokens.
     async fn try_acquire_prepared_read(
         &mut self,
         client: &Arc<QueryClient>,
@@ -826,7 +828,7 @@ impl Coordinator {
             .catalog(self)
             .state()
             .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
-        let requirements = client.protection.prepare_publication(extra);
+        let requirements = client.protection.prepare_grant_publication(extra);
         let op = Op::PublishClientReadRequirements {
             incarnation,
             requirements,
