@@ -166,7 +166,7 @@ describe("store/environments", () => {
     it("should return blocked if the environment returns an organization blocked response", async () => {
       server.use(
         http.post("*/api/sql", () => {
-          return new Promise<HttpResponse>((resolve) => {
+          return new Promise<Response>((resolve) => {
             return resolve(
               HttpResponse.json(
                 {
@@ -190,7 +190,7 @@ describe("store/environments", () => {
     it("should return blocked if the environment returns a network policy blocked response", async () => {
       server.use(
         http.post("*/api/sql", () => {
-          return new Promise<HttpResponse>((resolve) => {
+          return new Promise<Response>((resolve) => {
             return resolve(
               HttpResponse.json(
                 {

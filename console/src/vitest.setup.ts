@@ -108,7 +108,7 @@ beforeAll(async () => {
 
   Sentry.init({});
 
-  server.listen({ onUnhandledRequest: "error" });
+  server.listen({ onUnhandledFrame: "error" });
 });
 
 beforeEach(async () => {
