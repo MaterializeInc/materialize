@@ -21,6 +21,9 @@ export const regionPath = (regionSlug: string) => {
   return `/regions/${regionSlug}`;
 };
 
+export const maintainedObjectPath = (regionSlug: string, objectId: string) =>
+  `${regionPath(regionSlug)}/maintained-objects/${objectId}`;
+
 export type ClusterPathParams = {
   id: string;
   name: string;
