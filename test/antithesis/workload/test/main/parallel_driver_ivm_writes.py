@@ -11,17 +11,6 @@
 
 import sys
 
-from materialize.antithesis.drivers import (
-    configure,
-    ivm,
-    kafka_sinks,
-    kafka_sources,
-    postgres_sources,
-)
+from materialize.antithesis.drivers.ivm import load_main
 
-status = configure.main()
-postgres_sources.setup_main()
-kafka_sources.setup_main()
-kafka_sinks.setup_main()
-ivm.setup_main()
-sys.exit(status)
+sys.exit(load_main())
