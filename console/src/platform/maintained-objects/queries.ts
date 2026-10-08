@@ -71,9 +71,9 @@ export interface MaintainedObjectLag {
  * initial snapshot.
  */
 export interface MaintainedObjectSourceStatus {
-  /** One of `created`, `starting`, `running`, `paused`, `stalled`, `failed`. */
+  /** One of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`. */
   status: string;
-  /** Populated when the source is `stalled` or `failed`. */
+  /** Populated when the source is `stalled`. */
   error: string | null;
   /** Null while no replica has reported statistics yet. */
   snapshotCommitted: boolean | null;
