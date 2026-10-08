@@ -92,15 +92,21 @@ without preparing or acknowledging the full advancing aggregate. Both adapter an
 replica owners retain committed grants, pending acquisition barriers, advancement
 opportunities and their existing retry gates. The CREATE INDEX holders dominating
 the timed-out MV's DDL queue repeatedly lose content attempts to peer metadata.
-Their creator publication also carries unrelated advancing client requirements.
-Creator grants now extend committed protection, leaving advancement and release
-to aggregate publication. The remaining MV holder spends much of its continuation
-wait behind introspection acquisition that still flushes unrelated advancements.
-Apply the same grant-only preparation at the shared acquisition owner and verify
-foreground progress in the existing workload before choosing another repair.
-This does not bypass catalog conflicts or establish fairness.
-Keep durable renewal and end-to-end SQL progress as separate outcomes,
-crediting heartbeat-only and full publications only after commit.
+Creator and acquisition grants extend committed protection, leaving advancement
+and release to aggregate publication. Their small deltas do not close the
+plain-view timeout. Aggregate client and bounds maintenance dominate measured
+DDL-holder waits without making progress themselves. Follow their repeated
+refresh/open failures before choosing another repair. The examined catch-up path
+is incremental. A Persist batch-history lookup rescan remains unattributed, not
+a justified repair. Do not substitute another grant-size fix or skip freshness.
+Keep durable renewal, aggregate advancement and end-to-end SQL progress separate.
+Credit publications only after commit. The plain view's exact queue residence
+remains unmeasured.
+Failed background advancement/bounds publication returns at the existing staggered
+publication cadence without deferring independent heartbeat renewal. Verify this
+bounded timer correction in the existing workloads. Acquisition, DDL retries,
+replica timing and safety checks remain unchanged. Keep stalled advancement open
+even if SQL starts passing. No broader scheduling or protocol change is approved.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.

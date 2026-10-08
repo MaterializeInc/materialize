@@ -5102,31 +5102,23 @@ impl Coordinator {
                         if self.query_client.is_some()
                             || (self.catalog().state().catalog_read_protection_enabled()
                                 && !self.controller.read_only()) => {
-                        let mut conflict = false;
                         if let Err(error) = trace_maintenance(
                             "publication_client", self.publish_client_read_protection()
                         ).await {
-                            conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to publish query client protection");
                         }
                         if let Err(error) = trace_maintenance(
                             "publication_bounds", self.publish_read_protection()
                         ).await {
-                            conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to publish catalog read protection");
                         }
                         // Only definitive outcomes reach here. Rebuild proposals on
                         // the next turn, retaining committed protection meanwhile.
-                        if conflict {
-                            read_protection::defer_protection_retry(
-                                publication_timer.as_mut(),
-                                client_heartbeat_timer.as_mut(),
-                                self.read_protection_conflict_delay(),
-                            );
-                        } else {
-                            let delay = mz_catalog::retry::periodic_delay(publication_delay);
-                            publication_timer.set(tokio::time::sleep(delay));
-                        }
+                        // Conflicts retain the publication cadence rather than
+                        // accelerating costly advancement attempts. Do not defer
+                        // the independent heartbeat timer with advancement work.
+                        let delay = mz_catalog::retry::periodic_delay(publication_delay);
+                        publication_timer.set(tokio::time::sleep(delay));
                     }
                     // Polling the pinned Sleep is cancellation-safe. Snapshot
                     // observations, not permissions or controller installation.
