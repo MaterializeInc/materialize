@@ -17,8 +17,9 @@ import { ThresholdLineGraph } from "./ThresholdLineGraph";
 
 // ParentSize measures a DOM box, and jsdom lays nothing out, so without this
 // the graph renders at zero width and every geometric assertion is vacuous.
-vi.mock("@visx/responsive/lib/components/ParentSize", () => ({
-  default: ({
+vi.mock("@visx/responsive", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@visx/responsive")>()),
+  ParentSize: ({
     children,
   }: {
     children: (size: { width: number; height: number }) => React.ReactNode;
