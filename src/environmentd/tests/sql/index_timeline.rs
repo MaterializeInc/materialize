@@ -21,7 +21,10 @@ use mz_postgres_util::{batch_execute, sql};
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn creation_protects_timelines_before_installation() {
     let test_case = async {
-        let server = TestHarness::default().start().await;
+        let server = TestHarness::default()
+            .enable_feature_flags(&["enable_refresh_every_mvs"])
+            .start()
+            .await;
         let client = server.connect().await.unwrap();
         let persist = server
             .persist_clients
