@@ -21,8 +21,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.45.0
-*Released to Materialize Cloud: 2026-10-08* <br>
-*Released to Materialize Self-Managed: 2026-10-09* <br>
+*Released to Materialize Cloud: 2026-10-07* <br>
+*Released to Materialize Self-Managed: 2026-10-08* <br>
 
 ### Improvements {#v26.45-improvements}
 - **Quieter logins with identity-provider group sync**: A login whose token carries organization groups with no matching database role no longer sends the client a `NOTICE` for each one, since roles are now created in Materialize rather than mirrored from the identity provider and unmatched groups are expected; notices for groups that map to reserved role names, and for sync errors in fail-open mode, are unchanged.
@@ -35,6 +35,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **Kubernetes events from the Materialize operator**: The operator now publishes Kubernetes events on `Materialize`, `Balancer`, and `Console` resources when it fails to reconcile them, and on each `Materialize` rollout phase, so `kubectl describe` shows why a resource is not progressing; its ClusterRole gains `create` and `patch` on `events.k8s.io` events.
 
 ### Agent Skills {#v26.45-agent-skills}
+- **`mz-debug-freshness`**: Two corrections to how the skill reads a replica — its operator cost and skew queries now count each plan node's outermost operators only, instead of summing a region's elapsed time on top of the operators nested inside it, which had overstated joins, reductions, and TopK by 1.5x to 3x; and it now judges replica headroom from `heap_percent`, which counts RAM and swap together, rather than `memory_percent`, which counts RAM only and can sit near 100 while a swapping replica still has room.
 - **`mz-demo-data`**: A new skill that stands up continuously-updating, realistic synthetic data inside a running Materialize instance using nothing but views over `mz_now()` — no Kafka, no external load generator, and no seed scripts — in a dedicated `materialize_demo` schema that one `DROP SCHEMA` removes.
 
 ### Bug Fixes {#v26.45-bug-fixes}
