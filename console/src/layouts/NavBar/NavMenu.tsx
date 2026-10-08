@@ -43,7 +43,7 @@ import { HideIfEnvironmentDisabled, NavItem } from "./NavItem";
 export type NavItemType = {
   href: string;
   state?: object;
-  icon?: JSX.Element;
+  icon?: React.JSX.Element;
   label: string;
   navItems?: NavItemType[];
   onClick?: () => void;

@@ -41,7 +41,7 @@ describe("ClusterOverview", () => {
 
   it("Displays validation errors", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormWithClusterProvider />);
+    await renderComponent(<FormWithClusterProvider />);
 
     const replicasInput = await screen.findByLabelText("Replicas");
     // Validation won't fire unless we focus and then blur
@@ -72,7 +72,7 @@ describe("ClusterOverview", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<FormWithClusterProvider />);
+    await renderComponent(<FormWithClusterProvider />);
 
     await user.click(
       await screen.findByRole("button", { name: "Alter cluster" }),
@@ -92,7 +92,7 @@ describe("ClusterOverview", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<FormWithClusterProvider />);
+    await renderComponent(<FormWithClusterProvider />);
 
     await user.click(
       await screen.findByRole("button", { name: "Alter cluster" }),

@@ -52,7 +52,7 @@ describe("MfaAlert", () => {
   });
 
   it("renders the MFA alert when conditions are met", async () => {
-    renderComponent(<MfaAlert />);
+    await renderComponent(<MfaAlert />);
 
     expect(await screen.findByTestId("mfa-required-alert")).toBeVisible();
     expect(screen.getByText(/Please for your organization./i)).toBeVisible();
@@ -61,7 +61,7 @@ describe("MfaAlert", () => {
 
   it("clicking the close button works", async () => {
     const user = userEvent.setup();
-    renderComponent(<MfaAlert />);
+    await renderComponent(<MfaAlert />);
 
     expect(await screen.findByTestId("mfa-required-alert")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Close" }));
@@ -73,7 +73,7 @@ describe("MfaAlert", () => {
       MFA_DISMISSED_KEY,
       JSON.stringify(subDays(new Date(), 30)),
     );
-    renderComponent(<MfaAlert />);
+    await renderComponent(<MfaAlert />);
 
     expect(await screen.findByTestId("mfa-required-alert")).toBeVisible();
   });
@@ -84,7 +84,7 @@ describe("MfaAlert", () => {
       // Get rid of Admin role
       roles: [],
     });
-    renderComponent(<MfaAlert />);
+    await renderComponent(<MfaAlert />);
 
     expect(screen.queryByTestId("mfa-required-alert")).not.toBeInTheDocument();
   });
@@ -96,7 +96,7 @@ describe("MfaAlert", () => {
     });
     server.use(dontForceMfaPolicyHandler);
 
-    renderComponent(<MfaAlert />);
+    await renderComponent(<MfaAlert />);
 
     expect(screen.queryByTestId("mfa-required-alert")).not.toBeInTheDocument();
   });
@@ -104,7 +104,7 @@ describe("MfaAlert", () => {
   it("does not render the MFA alert when MFA is already enforced", async () => {
     server.use(forceMfaPolicyHandler);
 
-    renderComponent(<MfaAlert />);
+    await renderComponent(<MfaAlert />);
 
     expect(screen.queryByTestId("mfa-required-alert")).not.toBeInTheDocument();
   });

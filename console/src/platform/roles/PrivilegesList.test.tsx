@@ -47,7 +47,7 @@ describe("PrivilegesList", () => {
       ),
     );
 
-    renderComponent(<PrivilegesList roleName="test_role" />);
+    await renderComponent(<PrivilegesList roleName="test_role" />);
 
     await waitFor(() => {
       expect(screen.getByTestId("loading-spinner")).toBeVisible();
@@ -68,7 +68,7 @@ describe("PrivilegesList", () => {
       }),
     );
 
-    renderComponent(<PrivilegesList roleName="test_role" />);
+    await renderComponent(<PrivilegesList roleName="test_role" />);
 
     await waitFor(() => {
       expect(
@@ -100,7 +100,7 @@ describe("PrivilegesList", () => {
       }),
     );
 
-    renderComponent(<PrivilegesList roleName="test_role" />);
+    await renderComponent(<PrivilegesList roleName="test_role" />);
 
     expect(
       await screen.findByText("No privileges assigned to this role."),
@@ -128,7 +128,7 @@ describe("PrivilegesList", () => {
       }),
     );
 
-    renderComponent(<PrivilegesList roleName="test_role" />);
+    await renderComponent(<PrivilegesList roleName="test_role" />);
 
     expect(await screen.findByText("my_table")).toBeVisible();
     expect(await screen.findByText("Table")).toBeVisible();
@@ -157,7 +157,7 @@ describe("PrivilegesList", () => {
       }),
     );
 
-    renderComponent(<PrivilegesList roleName="test_role" />);
+    await renderComponent(<PrivilegesList roleName="test_role" />);
 
     expect(await screen.findByText("inherited_table")).toBeVisible();
     expect(await screen.findByText("parent_role")).toBeVisible();
@@ -193,7 +193,7 @@ describe("PrivilegesList", () => {
       }),
     );
 
-    renderComponent(<PrivilegesList roleName="test_role" />);
+    await renderComponent(<PrivilegesList roleName="test_role" />);
 
     expect(await screen.findByText("private_table")).toBeVisible();
     expect(screen.queryByText("public_table")).not.toBeInTheDocument();

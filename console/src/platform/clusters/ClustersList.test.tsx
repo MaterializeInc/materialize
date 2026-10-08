@@ -183,7 +183,7 @@ const REPLICAS_UNFILTERED = "/?replicas=0";
 
 const renderClustersList = async (clusters: Cluster[], url = "/") => {
   getStore().set(allClusters, mockSubscribeState({ data: clusters }));
-  const rendered = renderComponent(
+  const rendered = await renderComponent(
     <RenderWithPathname>
       <ClustersListPage />
     </RenderWithPathname>,
@@ -215,7 +215,7 @@ const RenderWithSearch = ({ children }: { children: React.ReactNode }) => {
  */
 const renderAt = async (clusters: Cluster[], url = "/") => {
   getStore().set(allClusters, mockSubscribeState({ data: clusters }));
-  const rendered = renderComponent(
+  const rendered = await renderComponent(
     <RenderWithSearch>
       <ClustersListPage />
     </RenderWithSearch>,
@@ -2046,7 +2046,7 @@ describe("ClustersList filter chips", () => {
 
   it("offers a chip for a filter restored from the URL", async () => {
     getStore().set(allClusters, mockSubscribeState({ data: twoClusters() }));
-    renderComponent(<ClustersListPage />, {
+    await renderComponent(<ClustersListPage />, {
       initialRouterEntries: ["/?cpu=40&replicas=0"],
     });
     await screen.findByRole("table");

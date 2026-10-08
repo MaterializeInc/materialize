@@ -39,7 +39,7 @@ const renderEnvironmentSelect = ({
 
 describe("EnvironmentSelect", () => {
   it("shows nothing if you don't have environment permissions", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       user: {
         ...dummyValidUser,
         permissions: [],
@@ -53,7 +53,7 @@ describe("EnvironmentSelect", () => {
   });
 
   it("show nothing if you don't have any regions enabled", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", disabledEnvironment),
     });
@@ -62,7 +62,7 @@ describe("EnvironmentSelect", () => {
   });
 
   it("shows the current region and state", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
     });
@@ -73,7 +73,7 @@ describe("EnvironmentSelect", () => {
   });
 
   it("shows creating state", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", creatingEnvironment),
     });
@@ -83,7 +83,7 @@ describe("EnvironmentSelect", () => {
   });
 
   it("shows booting state", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", {
           ...healthyEnvironment,
@@ -96,7 +96,7 @@ describe("EnvironmentSelect", () => {
   });
 
   it("shows blocked state", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", {
           ...healthyEnvironment,
@@ -109,7 +109,7 @@ describe("EnvironmentSelect", () => {
   });
 
   it("shows crashed state when environment is crashed", async () => {
-    renderEnvironmentSelect({
+    await renderEnvironmentSelect({
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", {
           ...healthyEnvironment,

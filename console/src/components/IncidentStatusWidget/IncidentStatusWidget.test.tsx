@@ -61,7 +61,7 @@ describe("IncidentStatusWidget", () => {
   it("displays a toast", async () => {
     const incident = getIncident();
     server.use(buildStatusResponse({ incidents: [incident] }));
-    renderComponent(<IncidentStatusWidget />);
+    await renderComponent(<IncidentStatusWidget />);
     await waitFor(async () =>
       expect(await screen.findByText(incident.name)).toBeVisible(),
     );
@@ -79,7 +79,7 @@ describe("IncidentStatusWidget", () => {
       id: "incident-2",
     };
     server.use(buildStatusResponse({ incidents: [incident1, incident2] }));
-    renderComponent(<IncidentStatusWidget />);
+    await renderComponent(<IncidentStatusWidget />);
     await waitFor(async () =>
       expect(await screen.findByText(incident1.name)).toBeVisible(),
     );
@@ -92,7 +92,7 @@ describe("IncidentStatusWidget", () => {
     const user = userEvent.setup();
     const incident = getIncident();
     server.use(buildStatusResponse({ incidents: [incident] }));
-    renderComponent(<IncidentStatusWidget />);
+    await renderComponent(<IncidentStatusWidget />);
     await waitFor(async () =>
       expect(await screen.findByText(incident.name)).toBeVisible(),
     );

@@ -136,7 +136,7 @@ type StepProps = {
 
 const stepsData: Array<{
   title: string;
-  render: (props: StepProps) => JSX.Element;
+  render: (props: StepProps) => React.JSX.Element;
 }> = [
   {
     title: "Introduction",

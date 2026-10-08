@@ -239,22 +239,18 @@ const IntegrationsGallery = ({
   );
 };
 
-const CategoryButton = (
-  {
-    category,
-    activeCategory,
-    onClick,
-  }: {
-    category: Category;
-    activeCategory: string;
-    onClick: () => void;
-  },
-  props: any,
-) => {
+const CategoryButton = ({
+  category,
+  activeCategory,
+  onClick,
+}: {
+  category: Category;
+  activeCategory: string;
+  onClick: () => void;
+}) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <Box
-      {...props}
       as="button"
       userSelect="none"
       px={4}

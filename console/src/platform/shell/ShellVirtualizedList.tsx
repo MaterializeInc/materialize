@@ -169,7 +169,7 @@ export const ShellVirtualizedListProvider = ({
       const domEl = listOuterRef.current;
       if (domEl) {
         domEl.scrollTo({
-          top: listOuterRef.current.scrollHeight,
+          top: domEl.scrollHeight,
           behavior: "smooth",
         });
       }

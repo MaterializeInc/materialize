@@ -45,7 +45,7 @@ export const ReadOnlyCommandBlock = ({
   const { colors, colorMode } = useTheme<MaterializeTheme>();
 
   const container = useRef<HTMLDivElement | null>(null);
-  const editorView = useRef<EditorView | undefined>();
+  const editorView = useRef<EditorView | undefined>(undefined);
   const initialValue = useValueOnMount(value);
 
   useEffect(() => {

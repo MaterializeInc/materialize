@@ -82,7 +82,7 @@ describe("NewCsrConnectionModal", () => {
 
   it("can fill out the basic form", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("Configure connection")).toBeVisible();
 
     await fillRequiredFormFields(user);
@@ -91,7 +91,7 @@ describe("NewCsrConnectionModal", () => {
 
   it("can fill out the basic form with SSL Authentication", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("Configure connection")).toBeVisible();
 
     await fillRequiredFormFields(user);
@@ -105,7 +105,7 @@ describe("NewCsrConnectionModal", () => {
 
   it("can fill out the basic form with SSL Authentication and a CA", async () => {
     const user = userEvent.setup();
-    renderComponent(<FormComponent />);
+    await renderComponent(<FormComponent />);
     expect(await screen.findByText("Configure connection")).toBeVisible();
 
     await fillRequiredFormFields(user);

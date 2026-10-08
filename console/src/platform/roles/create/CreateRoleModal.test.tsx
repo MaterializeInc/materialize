@@ -70,7 +70,7 @@ describe("CreateRoleModal", () => {
   });
 
   it("renders modal with 'Create Role' title and wizard step", async () => {
-    renderCreateRoleModal();
+    await renderCreateRoleModal();
 
     await waitFor(() => {
       expect(screen.getByText("Create Role")).toBeVisible();
@@ -91,7 +91,7 @@ describe("CreateRoleModal", () => {
     );
 
     const user = userEvent.setup();
-    renderCreateRoleModal();
+    await renderCreateRoleModal();
 
     await waitFor(() => {
       expect(screen.getByText("Create Role")).toBeVisible();
@@ -131,7 +131,7 @@ describe("CreateRoleModal", () => {
     );
 
     const user = userEvent.setup();
-    renderCreateRoleModal();
+    await renderCreateRoleModal();
 
     await waitFor(() => {
       expect(screen.getByText("Create Role")).toBeVisible();
@@ -154,7 +154,7 @@ describe("CreateRoleModal", () => {
 
   it("close/cancel button navigates back", async () => {
     const user = userEvent.setup();
-    renderCreateRoleModal();
+    await renderCreateRoleModal();
 
     await waitFor(() => {
       expect(screen.getByText("Create Role")).toBeVisible();
@@ -170,7 +170,7 @@ describe("CreateRoleModal", () => {
   });
 
   it("submit button disabled when name is empty", async () => {
-    renderCreateRoleModal();
+    await renderCreateRoleModal();
 
     await waitFor(() => {
       expect(screen.getByText("Create Role")).toBeVisible();
@@ -195,7 +195,7 @@ describe("CreateRoleModal", () => {
     );
 
     const user = userEvent.setup();
-    renderCreateRoleModal();
+    await renderCreateRoleModal();
 
     await waitFor(() => {
       expect(screen.getByText("Create Role")).toBeVisible();

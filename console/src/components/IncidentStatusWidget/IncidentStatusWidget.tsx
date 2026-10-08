@@ -60,7 +60,7 @@ const StatusEventToast = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   let bgColor = colors.background.tertiary;
-  let category: string | JSX.Element = "Unknown";
+  let category: string | React.JSX.Element = "Unknown";
   let incidentType: keyof LastDismissedEvents;
   if (isIncident(event)) {
     bgColor = colors.background.error;

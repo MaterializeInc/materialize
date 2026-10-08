@@ -96,7 +96,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     expect(await screen.findByTestId("license-expired-alert")).toBeVisible();
     expect(
@@ -111,7 +111,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE(), "someone@example.com"));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     expect(await screen.findByTestId("license-expired-alert")).toBeVisible();
     expect(
@@ -136,7 +136,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(false));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     // Wait for the super user query to resolve, then assert the banner stays hidden.
     await waitFor(() =>
@@ -153,7 +153,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(ACTIVE_DATE()));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     // Wait for both queries to resolve, then assert the banner stays hidden.
     await waitFor(() =>
@@ -175,7 +175,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(null));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     await waitFor(() =>
       expect(
@@ -192,7 +192,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     expect(await screen.findByTestId("license-expired-alert")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Close" }));
@@ -209,7 +209,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     await waitFor(() =>
       expect(
@@ -229,7 +229,7 @@ describe("LicenseExpiredBanner", () => {
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
     expect(await screen.findByTestId("license-expired-alert")).toBeVisible();
   });

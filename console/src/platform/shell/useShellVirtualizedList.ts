@@ -15,8 +15,8 @@ export type ShellVirtualizedListContextData = {
   scrollToBottom: () => void;
   isScrolledToBottom: () => boolean;
   setSize: (index: number, newSize: number) => void;
-  variableSizeListRef: RefObject<VariableSizeList>;
-  listOuterRef: RefObject<HTMLDivElement>;
+  variableSizeListRef: RefObject<VariableSizeList | null>;
+  listOuterRef: RefObject<HTMLDivElement | null>;
 
   /**
    * If shouldAutoScroll returns false, we don't automatically scroll down when someone runs a command function.

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React, { ReactElement } from "react";
@@ -38,7 +38,7 @@ const Wrapper = await createProviderWrapper({
 });
 
 const renderComponent = (element: ReactElement) => {
-  return render(<Wrapper>{element}</Wrapper>);
+  return act(async () => render(<Wrapper>{element}</Wrapper>));
 };
 
 // Wrap accounts in a single UTC-day bucket — the minimal `/api/costs/breakdown/
@@ -130,7 +130,7 @@ describe("UsagePage", () => {
         },
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     const breakdown = within(
       await screen.findByTestId(
@@ -224,7 +224,7 @@ describe("UsagePage", () => {
         .toISOString()
         .slice(0, 10);
 
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
     // The page fires two breakdown queries: the selected range (default
     // "Last 7 days") and the fixed 30-day plan-details window.
     await waitFor(() => expect(captured.length).toBeGreaterThanOrEqual(2));
@@ -244,7 +244,7 @@ describe("UsagePage", () => {
 
   it("shows an error state when the breakdown request fails", async () => {
     server.use(buildDailyCostBreakdownResponse({ status: 500 }));
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
     expect(
       await screen.findByText("An error occurred loading your usage"),
     ).toBeVisible();
@@ -252,7 +252,7 @@ describe("UsagePage", () => {
 
   it("shows an empty state when the window has no usage", async () => {
     // beforeEach's default handler already returns { days: [] }.
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
     expect(await screen.findByTestId("account-breakdown-empty")).toBeVisible();
   });
 
@@ -293,7 +293,7 @@ describe("UsagePage", () => {
         },
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     const ledger = within(
       await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
@@ -351,7 +351,7 @@ describe("UsagePage", () => {
         },
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     const planDetails = within(
       await screen.findByTestId("account-plan-details", {}, { timeout: 5_000 }),
@@ -414,7 +414,7 @@ describe("UsagePage", () => {
         },
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     const ledger = within(
       await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
@@ -462,7 +462,7 @@ describe("UsagePage", () => {
         },
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     const ledger = within(
       await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
@@ -512,7 +512,7 @@ describe("UsagePage", () => {
         },
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     const ledger = within(
       await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
@@ -580,7 +580,7 @@ describe("UsagePage", () => {
         ],
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
     await waitFor(async () =>
       expect(await screen.findByTestId("invoice-table")).toBeVisible(),
     );
@@ -588,7 +588,7 @@ describe("UsagePage", () => {
 
   it("hides the invoice history section entirely for an account with no invoices (e.g. an Orb hierarchy leaf account, which never has its own)", async () => {
     server.use(buildInvoicesResponse({ invoices: [] }));
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
     await waitFor(async () =>
       expect(
         await screen.findByTestId("account-spend-breakdown"),
@@ -609,7 +609,7 @@ describe("UsagePage", () => {
         }),
       }),
     );
-    renderComponent(<UsagePage />);
+    await renderComponent(<UsagePage />);
 
     await waitFor(async () =>
       expect(await screen.findByTestId("aws-marketplace-banner")).toBeVisible(),

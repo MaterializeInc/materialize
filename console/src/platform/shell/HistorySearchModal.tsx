@@ -274,7 +274,7 @@ const HistorySearchModal = ({
   isOpen: boolean;
   onClose: () => void;
   onSelect: (command: string) => void;
-  finalFocusRef: React.RefObject<FocusableElement>;
+  finalFocusRef: React.RefObject<FocusableElement | null>;
 }) => {
   const searchQueryRef = useRef<ElementRef<"input">>(null);
   return (

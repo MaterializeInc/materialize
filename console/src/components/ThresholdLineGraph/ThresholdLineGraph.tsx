@@ -12,9 +12,7 @@ import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { localPoint } from "@visx/event";
 import { GridRows } from "@visx/grid";
 import { Group } from "@visx/group";
-import ParentSize, {
-  ParentSizeProvidedProps,
-} from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize, ParentSizeProvidedProps } from "@visx/responsive";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { Line, LinePath } from "@visx/shape";
 import { max } from "d3";

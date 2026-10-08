@@ -10,7 +10,7 @@
 import { EnvironmentProvider, ToastProvider } from "@chakra-ui/react";
 import { ThemeProvider } from "@chakra-ui/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createStore, Provider as JotaiProvider, Setter } from "jotai";
 import { DelayMode } from "msw";
@@ -150,7 +150,9 @@ export const renderComponent = async (
     queryClient: options.queryClient,
   });
 
-  return render(<ProviderWrapper>{element}</ProviderWrapper>);
+  // NOTE: React 19 queues a suspended component's retry on act's queue, and a
+  // sync act (like a bare render) drops it, leaving the Suspense fallback up.
+  return act(async () => render(<ProviderWrapper>{element}</ProviderWrapper>));
 };
 
 export interface ProviderWrapperProps {

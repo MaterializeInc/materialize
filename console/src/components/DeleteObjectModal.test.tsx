@@ -59,7 +59,7 @@ describe("DeleteObjectModal", () => {
     });
 
     it("shows a validation error when the name is not entered correctly", async () => {
-      renderComponent(
+      await renderComponent(
         <DeleteObjectModal
           isOpen
           onClose={closeMock}
@@ -90,7 +90,7 @@ describe("DeleteObjectModal", () => {
     });
 
     it("shows the delete confirmation and closes the model when complete", async () => {
-      renderComponent(
+      await renderComponent(
         <DeleteObjectModal
           isOpen
           onClose={closeMock}
@@ -136,7 +136,7 @@ describe("DeleteObjectModal", () => {
     });
 
     it("shows the number of dependencies and requires confirmation", async () => {
-      renderComponent(
+      await renderComponent(
         <DeleteObjectModal
           isOpen
           onClose={closeMock}

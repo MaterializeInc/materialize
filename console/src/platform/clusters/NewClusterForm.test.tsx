@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
@@ -35,6 +35,11 @@ const ClusterFormRoutes = ({ children }: { children: React.ReactNode }) => {
     </Routes>
   );
 };
+
+// The modal moves focus to itself shortly after it opens, which drops any
+// keystrokes typed before then.
+const waitForModalFocus = () =>
+  waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
 
 describe("NewClusterForm", () => {
   beforeEach(() => {
@@ -83,7 +88,7 @@ describe("NewClusterForm", () => {
     );
     server.use(validClustersResponse);
     const user = userEvent.setup();
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -93,6 +98,7 @@ describe("NewClusterForm", () => {
     );
 
     const clusterNameInput = await screen.findByLabelText("Name");
+    await waitForModalFocus();
     await user.type(clusterNameInput, "test_cluster");
 
     const clusterSizeInput = await screen.findByLabelText("Size");
@@ -134,7 +140,7 @@ describe("NewClusterForm", () => {
     );
 
     const user = userEvent.setup();
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -152,7 +158,7 @@ describe("NewClusterForm", () => {
 
   it("shows an error for missing cluster names", async () => {
     const user = userEvent.setup();
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -182,7 +188,7 @@ describe("NewClusterForm", () => {
 
     const user = userEvent.setup();
 
-    renderComponent(
+    await renderComponent(
       <ClusterFormRoutes>
         <NewClusterForm />
       </ClusterFormRoutes>,
@@ -192,6 +198,7 @@ describe("NewClusterForm", () => {
     );
 
     const clusterNameInput = await screen.findByText("Name");
+    await waitForModalFocus();
     await user.type(clusterNameInput, "default");
     await user.click(screen.getByText("Create cluster"));
 

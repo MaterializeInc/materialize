@@ -44,7 +44,7 @@ describe("DropRoleModal", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<DropRoleModal {...defaultProps} />);
+    await renderComponent(<DropRoleModal {...defaultProps} />);
 
     // Shows confirmation message
     await waitFor(() => expect(screen.getByText("Drop Role")).toBeVisible());
@@ -64,7 +64,9 @@ describe("DropRoleModal", () => {
   });
 
   it("shows warning and disables drop when role owns objects", async () => {
-    renderComponent(<DropRoleModal {...defaultProps} ownedObjectsCount={3} />);
+    await renderComponent(
+      <DropRoleModal {...defaultProps} ownedObjectsCount={3} />,
+    );
 
     await waitFor(() => expect(screen.getByText("Drop Role")).toBeVisible());
 
@@ -97,7 +99,7 @@ describe("DropRoleModal", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<DropRoleModal {...defaultProps} />);
+    await renderComponent(<DropRoleModal {...defaultProps} />);
 
     await user.click(await screen.findByRole("button", { name: "Drop role" }));
 
@@ -130,7 +132,7 @@ describe("DropRoleModal", () => {
       }),
     );
     const user = userEvent.setup();
-    renderComponent(<DropRoleModal {...defaultProps} />);
+    await renderComponent(<DropRoleModal {...defaultProps} />);
 
     await user.click(await screen.findByRole("button", { name: "Drop role" }));
 

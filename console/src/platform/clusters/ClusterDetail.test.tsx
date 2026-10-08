@@ -40,7 +40,7 @@ describe("ClusterRoutes", () => {
         ],
       }),
     );
-    renderComponent(
+    await renderComponent(
       <RenderWithPathname>
         <Routes>
           <Route path=":clusterId/:clusterName">

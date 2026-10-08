@@ -94,7 +94,7 @@ const buildCluster = (overrides: Partial<Cluster> = {}): Cluster => ({
 
 const renderClustersList = async (clusters: Cluster[]) => {
   getStore().set(allClusters, mockSubscribeState({ data: clusters }));
-  const rendered = renderComponent(
+  const rendered = await renderComponent(
     <RenderWithPathname>
       <ClustersListPage />
     </RenderWithPathname>,

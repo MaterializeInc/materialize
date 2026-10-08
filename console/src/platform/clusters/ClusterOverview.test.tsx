@@ -61,7 +61,7 @@ describe("ClusterOverview", () => {
       }),
     );
 
-    renderComponent(<ClusterOverviewWithRoute />, {
+    await renderComponent(<ClusterOverviewWithRoute />, {
       initializeState: ({ set }) =>
         setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
       initialRouterEntries: detailPageInitialRouteEntries,

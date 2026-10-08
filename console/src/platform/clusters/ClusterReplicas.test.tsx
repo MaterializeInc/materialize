@@ -21,7 +21,7 @@ import server from "~/api/mocks/server";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
-import { renderComponent } from "~/test/utils";
+import { MSW_HANDLER_LOADING_WAIT_TIME, renderComponent } from "~/test/utils";
 
 import ClusterReplicas from "./ClusterReplicas";
 import { detailPageSetupHelpers } from "./clustersTestUtils";
@@ -90,8 +90,21 @@ describe("ClusterReplicas", () => {
   });
 
   it("shows a spinner initially", async () => {
-    server.use(emptyReplicaListHandler);
-    renderComponent(<ClusterReplicasWithRoute />, {
+    server.use(
+      buildSqlQueryHandlerV2(
+        {
+          queryKey: clusterQueryKeys.replicasWithUtilization({
+            clusterId: detailPageCluster.id,
+          }),
+          results: mapKyselyToTabular({
+            rows: [],
+            columns: replicasWithUtilizationColumns,
+          }),
+        },
+        { waitTimeMs: MSW_HANDLER_LOADING_WAIT_TIME },
+      ),
+    );
+    await renderComponent(<ClusterReplicasWithRoute />, {
       initialRouterEntries: detailPageInitialRouteEntries,
     });
 
@@ -115,7 +128,7 @@ describe("ClusterReplicas", () => {
         },
       }),
     );
-    renderComponent(<ClusterReplicasWithRoute />, {
+    await renderComponent(<ClusterReplicasWithRoute />, {
       initialRouterEntries: detailPageInitialRouteEntries,
     });
 
@@ -124,7 +137,7 @@ describe("ClusterReplicas", () => {
 
   it("shows the empty state when there are no results", async () => {
     server.use(emptyReplicaListHandler);
-    renderComponent(<ClusterReplicasWithRoute />, {
+    await renderComponent(<ClusterReplicasWithRoute />, {
       initialRouterEntries: detailPageInitialRouteEntries,
     });
 
@@ -135,7 +148,7 @@ describe("ClusterReplicas", () => {
 
   it("renders the cluster replicas list", async () => {
     server.use(validReplicaListHandler);
-    renderComponent(<ClusterReplicasWithRoute />, {
+    await renderComponent(<ClusterReplicasWithRoute />, {
       initialRouterEntries: detailPageInitialRouteEntries,
     });
 

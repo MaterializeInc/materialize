@@ -11,6 +11,9 @@
 window.crypto.getRandomValues = () => new Uint32Array(1);
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 window.scrollTo = function () {};
+// jsdom lacks Element.scrollTo, which Chakra's Menu calls when it closes.
+// eslint-disable-next-line @typescript-eslint/no-empty-function
+Element.prototype.scrollTo = function () {};
 window.__BASENAME__ = "";
 window.__CONSOLE_DEPLOYMENT_MODE__ = "mz-cloud";
 window.__DEFAULT_STACK__ = "test";
