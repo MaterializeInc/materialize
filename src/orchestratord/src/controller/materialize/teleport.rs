@@ -207,7 +207,10 @@ pub(super) fn apply_teleport_registration(
     );
     annotations.insert(
         "teleport.dev/app-rewrite".to_string(),
-        serde_yaml::to_string(&rewrite).expect("Rewrite has no non-serializable fields"),
+        // Teleport's reference documents this annotation as YAML, but its decoder
+        // (Kubernetes' YAMLOrJSONDecoder) dispatches on a leading `{` and takes
+        // JSON too. JSON keeps significant whitespace out of an annotation value.
+        serde_json::to_string(&rewrite).expect("Rewrite has no non-serializable fields"),
     );
 }
 
@@ -270,6 +273,20 @@ mod tests {
                  is not a valid DNS-1035 label: longer than 63 characters"
                     .to_string()
             ),
+        );
+    }
+
+    #[mz_ore::test]
+    fn app_rewrite_serializes_to_one_json_line() {
+        let rewrite = Rewrite {
+            headers: vec![RewriteHeader {
+                name: TELEPORT_REWRITE_HEADER_NAME.to_string(),
+                value: TELEPORT_REWRITE_HEADER_VALUE.to_string(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_string(&rewrite).expect("serializable"),
+            r#"{"headers":[{"name":"X-Materialize-User","value":"mz_support"}]}"#,
         );
     }
 
