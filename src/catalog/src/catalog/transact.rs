@@ -1163,33 +1163,14 @@ impl Catalog {
         tx: &mut Transaction<'_>,
         state: &CatalogState,
     ) -> Result<Option<TransactInnerResult>, CatalogError> {
-        // We come up with new catalog state, builtin state updates, and parsed
-        // catalog updates (for deriving catalog implications) in two phases:
-        //
-        // 1. We (cow)-clone catalog state as `preliminary_state` and apply ops
-        //    one-by-one. This will give us the full list of updates to apply to
-        //    the catalog, which will allow us to apply it in one batch, which
-        //    in turn will allow the apply machinery to consolidate the updates.
-        // 2. We do one final apply call with all updates, which gives us the
-        //    final builtin table updates and parsed catalog updates.
-        //
-        // The reason is that the loop that is working off ops first does a
-        // transact_op to derive the state updates for that op, and then calls
-        // apply_updates on the catalog state. And successive ops might expect
-        // the catalog state to reflect the modified state _after_ applying
-        // previous ops.
-        //
-        // We want to, however, have one final apply_state that takes all the
-        // accumulated updates to derive the required controller updates and the
-        // builtin table updates.
-        //
-        // We won't win any DDL throughput benchmarks, but so far that's not
-        // what we're optimizing for and there would probably be other
-        // bottlenecks before we hit this one as a bottleneck.
-        //
-        // We could work around this by refactoring how the interplay of
-        // transact_op and apply_updates works, but that's a larger undertaking.
+        // Each operation sees preceding operations in the preliminary state.
+        // Final state and effects must instead describe the consolidated batch,
+        // including mutations derived by admission and storage preparation.
+        // If exactly one batch was applied and no later mutations were staged,
+        // that candidate and its effects already describe the final batch.
         let mut preliminary_state = Cow::Borrowed(state);
+        let mut preliminary_apply_count = 0;
+        let mut preliminary_outputs = None;
 
         // The final state that we will return, if modified.
         let mut state = Cow::Borrowed(state);
@@ -1278,10 +1259,12 @@ impl Catalog {
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
                 let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-                let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
+                let outputs = preliminary_state
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
                     .await;
+                preliminary_apply_count += 1;
+                preliminary_outputs = (preliminary_apply_count == 1).then_some(outputs);
                 debug!(target: "mz_adapter::frontend_read_then_write",
                     phase = "candidate_preliminary_apply", update_count,
                     elapsed = ?started.elapsed(), "catalog candidate section complete");
@@ -1434,10 +1417,12 @@ impl Catalog {
             // them visible to the same validators as explicitly selected births.
             let mut admission_updates = tx.get_and_commit_op_updates();
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (_builtin_updates, _catalog_updates) = preliminary_state
+            let outputs = preliminary_state
                 .to_mut()
                 .apply_updates(admission_updates.clone(), &mut local_expr_cache)
                 .await;
+            preliminary_apply_count += 1;
+            preliminary_outputs = (preliminary_apply_count == 1).then_some(outputs);
             updates.append(&mut admission_updates);
         }
         // Validate the final requirement, including a creator's optional frontier
@@ -1497,7 +1482,9 @@ impl Catalog {
         // Storage preparation can retract permission staged by an earlier op
         // when it deletes metadata. Derive implications from the consolidated
         // final batch, never from such intermediate permission.
-        updates.extend(tx.get_and_commit_op_updates());
+        let late_updates = tx.get_and_commit_op_updates();
+        let reuse_preliminary = preliminary_apply_count == 1 && late_updates.is_empty();
+        updates.extend(late_updates);
         // Classify raw updates, not parsed implications, which omit
         // planning-visible changes.
         let planning_changed = updates
@@ -1506,18 +1493,26 @@ impl Catalog {
         if !updates.is_empty() {
             let started = Instant::now();
             let update_count = updates.len();
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (op_builtin_table_updates, op_catalog_updates) = state
-                .to_mut()
-                .apply_updates(updates.clone(), &mut local_expr_cache)
-                .await;
+            let (op_builtin_table_updates, op_catalog_updates) = if reuse_preliminary {
+                // Planning impact and base/candidate validation above still use
+                // the original state. Only the final projection can be reused.
+                state = preliminary_state;
+                preliminary_outputs.expect("one preliminary application retains its outputs")
+            } else {
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut local_expr_cache)
+                    .await
+            };
             let op_builtin_table_updates = state
                 .to_mut()
                 .resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
             parsed_catalog_updates.extend(op_catalog_updates);
             debug!(target: "mz_adapter::frontend_read_then_write",
-                phase = "candidate_final_apply", update_count, elapsed = ?started.elapsed(),
+                phase = "candidate_final_apply", update_count, reused = reuse_preliminary,
+                elapsed = ?started.elapsed(),
                 "catalog candidate section complete");
         }
 
@@ -5146,6 +5141,29 @@ mod tests {
             )
             .await
             .expect("client protection");
+        let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
+        let planning_position = catalog.planning_position();
+        let ts = catalog.current_upper().await;
+        let renewed = catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements: BTreeMap::from([(global_id, birth)]),
+                }],
+            )
+            .await
+            .expect("unchanged protection still renews the client");
+        assert_eq!(
+            catalog.state().client_incarnations()[&incarnation].heartbeat,
+            heartbeat + 1
+        );
+        assert_eq!(catalog.state().client_read_frontier(global_id), Some(birth));
+        assert_eq!(catalog.planning_position(), planning_position);
+        assert!(renewed.builtin_table_updates.is_empty());
+        assert!(renewed.catalog_updates.is_empty());
         let mut batched_follower =
             Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
                 .await

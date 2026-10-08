@@ -82,9 +82,13 @@ allocation, immediately before commit, retaining terminal fencing and yielding o
 structural invalidation. Stale opens and CAS losses still occur despite that
 refresh and continued dispatch. Sampled bounds and reclamations keep their original
 prefix checks. Adapter candidates remain substantially slower than replica
-candidates, although both use the same machinery. Temporary section timings
-separate aggregate expansion/staging, catalog-state application, storage
-acknowledgement and validation. Locate the cost before choosing a repair.
+candidates, although both use the same machinery and their delta sizes differ.
+Measured cost lies in aggregate expansion and the two state applications, not
+storage acknowledgement. Reuse the preliminary state and effects only when it
+absorbed one batch and no later updates were staged. Keep all admission and
+validation against the original base/candidate pair, and retain consolidated
+final application for derived or multiple batches. Verify candidate cost and
+foreground/renewal progress together in the existing workloads.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.
@@ -128,13 +132,13 @@ progress, not grace or closure checks. Keep the registered-peek DROP stall
 separate until its blocking await is identified. Earlier SLT timeout observations
 remain in the PR, not additional investigation campaigns.
 
-Alongside renewal, locate the CREATE MV end-to-end wait in the existing parallel
-workload. One successful content commit and 0.722s of identified admission within
-a 292.390s statement leave roughly 290.746s before admission unpartitioned.
-Temporary phase events join preparation, catalog waits, DDL ownership and MV
-stages by session and transaction identity in the existing workload. Use them to
-identify that wait and its owner before choosing a repair. Commit-count reduction
-does not close this latency gap.
+Alongside renewal, resolve the CREATE MV end-to-end wait in the existing parallel
+workload. The earlier 292s statement's pre-admission interval remains unpartitioned.
+Statement-correlated captures now demonstrate queued MVs blocked by another MV's
+DDL guard while its commit repeatedly yields. Most retry-ready handoff time is
+occupied by catalog maintenance and introspection protection work, not MV
+optimization. Repair the measured catalog costs before changing scheduling.
+Commit-count reduction alone does not close the user-visible latency gap.
 
 Keep the approved Persist-arbitrated OCC contract: subscribe-certified targets,
 freshness and future-time checks, refolding at every changed target, actual txns
