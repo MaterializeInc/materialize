@@ -8,12 +8,12 @@ rows:
   - Materialize Operator: v26.44.1
     orchestratord version: v26.44.1
     environmentd version: v26.44.1
-    Release date: "2026-10-01"
+    Release date: "2026-10-02"
     Notes: "See [v26.44.1 release notes](/releases/#v26441)"
   - Materialize Operator: v26.43
     orchestratord version: v26.43
     environmentd version: v26.43
-    Release date: "2026-09-24"
+    Release date: "2026-09-25"
     Notes: "See [v26.43 release notes](/releases/#v26430)"
   - Materialize Operator: v26.42
     orchestratord version: v26.42
@@ -33,12 +33,12 @@ rows:
   - Materialize Operator: v26.40
     orchestratord version: v26.40
     environmentd version: v26.40
-    Release date: "2026-09-03"
+    Release date: "2026-09-04"
     Notes: "See [v26.40 release notes](/releases/#v26400)"
   - Materialize Operator: v26.39
     orchestratord version: v26.39
     environmentd version: v26.39
-    Release date: "2026-08-27"
+    Release date: "2026-08-28"
     Notes: "See [v26.39 release notes](/releases/#v26390)"
   - Materialize Operator: v26.38.2
     orchestratord version: v26.38.2
@@ -53,7 +53,7 @@ rows:
   - Materialize Operator: v26.37
     orchestratord version: v26.37
     environmentd version: v26.37
-    Release date: "2026-08-13"
+    Release date: "2026-08-14"
     Notes: "See [v26.37 release notes](/releases/#v26370)"
   - Materialize Operator: v26.36
     orchestratord version: v26.36
@@ -63,7 +63,7 @@ rows:
   - Materialize Operator: v26.35
     orchestratord version: v26.35
     environmentd version: v26.35
-    Release date: "2026-07-30"
+    Release date: "2026-07-31"
     Notes: "See [v26.35 release notes](/releases/#v26350)"
   - Materialize Operator: v26.34.1
     orchestratord version: v26.34.1
