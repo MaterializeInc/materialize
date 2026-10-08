@@ -131,6 +131,13 @@ measured on the wall clock:
     history for it, and the next attempt to use it fails with an error rather
     than silently skipping the gap. See [Expiry](#expiry).
 
+A subscription that has acknowledged everything up to the object's current time
+does not count toward the deadline, since there is nothing further to
+acknowledge. A subscription to a materialized view with a long
+[refresh schedule](/transform-data/patterns/refresh-strategies/) therefore
+does not expire between refreshes. The deadline starts again when the object's
+time next advances.
+
 Choose a value that covers the outages you expect to recover from, plus the time
 your application needs to restart. A minute is a reasonable starting point for
 an interactive client. There is a system-wide minimum and maximum; ask your
@@ -310,11 +317,11 @@ together, record that you applied it, and skip timestamps you have already
 applied. Resuming always starts on a timestamp boundary, so anything re-sent is
 re-sent as whole timestamps.
 
-Do not deduplicate on the combination of `mz_timestamp` and the row. After a
-resume the same logical change may arrive consolidated differently than it did
-the first time, so per-row comparison cannot distinguish a re-delivery from a
-genuine second change. For the same reason, do not treat the stream as an event
-log.
+You do not need to compare individual rows. A re-sent timestamp contains the
+same updates it contained the first time, so the timestamp alone identifies what
+you already applied. Do not treat the stream as an event log, because
+Materialize consolidates the updates at each timestamp, so a change that is
+undone at the same timestamp never appears.
 
 Materialize does not enforce uniqueness, since tables support neither [primary
 keys nor unique constraints](/sql/create-table/user-populated/#known-limitations). If you apply

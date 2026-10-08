@@ -295,7 +295,7 @@ The restriction is about cost, not correctness. Materialize computes every
 collection as a deterministic function of its inputs at each timestamp, which is
 what lets independent replicas of one dataflow agree. So for any query over held
 inputs, a fresh dataflow at as-of `H` emits the same changes after `H` that the
-original stream emitted, possibly consolidated differently, and a client that
+original stream emitted, and a client that
 holds the query's result at `H` stays correct. What a general query changes is
 the cost of an attach:
 
@@ -546,6 +546,23 @@ frontier-anchored acknowledgement deadline never fires precisely when releasing 
 matters most. A wall clock is uniform across every target type and needs no
 knowledge of the target's schedule.
 
+**A caught-up subscription does not age.** When `H + 1` equals the target's
+write frontier, the client has acknowledged everything that exists, and it
+cannot acknowledge further because a value beyond the write frontier is an
+error. Without an exception, a `REFRESH EVERY '1 day'` MV would expire every
+client with a shorter deadline between refreshes, however promptly it
+acknowledged. The periodic task therefore advances a caught-up subscription's
+last-acknowledgement time to the current wall-clock time, so the deadline
+starts when the frontier next moves past `H + 1`.
+
+Renewing the deadline on an acknowledgement at or below the current position
+would also fix the `REFRESH` case, but a client stuck behind a poisoned batch
+could then re-send its old position forever and hold history without bound. The
+caught-up exception costs no retention: a caught-up hold sits at
+`upper - 1`, which is no lower than the frontier the default one-second policy
+permits. For the same reason it does not weaken expiry on a frozen frontier,
+where the hold that matters is the one of a client that is behind.
+
 The last-acknowledgement wall-clock time is recorded durably alongside `H`,
 which the periodic flush is already writing. Keeping it only in memory would
 grant every subscription a fresh deadline on every environment restart.
@@ -629,11 +646,13 @@ acknowledges, and a failure in between means re-delivery.
 
 The idempotence rule is per timestamp, not per row: **apply each timestamp
 atomically, record which timestamp you applied, and skip timestamps already
-applied.** Deduplicating on the timestamp and row is not sufficient, because a
-resumed interval may consolidate differently than it did originally, so the same
-logical change can arrive as a different set of `(row, diff)` tuples. It is also
-not necessary, because resume always lands on a timestamp boundary, so
-re-delivery is always of whole timestamps. Every sync engine surveyed already
+applied.** Deduplicating on the timestamp and row is not necessary, because
+resume always lands on a timestamp boundary, so re-delivery is always of whole
+timestamps, and a re-delivered timestamp carries the same `(row, diff)` tuples
+as the original. `process_response` merges each batch across workers and
+consolidates it, and a timestamp never straddles a batch, so each timestamp's
+output is canonical. Recording the timestamp alone therefore identifies
+everything already applied. Every sync engine surveyed already
 works this way, applying one upstream commit atomically and recording the
 resulting version inside the same transaction.
 
@@ -831,6 +850,10 @@ Then the cases that would otherwise fail silently:
 * **Fencing**, with two connections, asserting the first stream errors.
 * **Expiry**, asserting the error names the subscription. The deadline is
   wall-clock, so drive it with a very short deadline rather than by waiting.
+* **A caught-up subscription on a `REFRESH` target.** Acknowledge up to the
+  write frontier, wait past the deadline with no refresh, and assert the
+  subscription is still active. Then let a refresh advance the frontier, withhold
+  the acknowledgement, and assert it expires one deadline later.
 * **`DROP` of the target without `CASCADE`** fails while a subscription exists.
 * **Rejected surface**: temporal filters, multi-collection `FROM`, joins and
   aggregations, and `AS OF AT LEAST`.
