@@ -3150,10 +3150,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",

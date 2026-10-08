@@ -310,6 +310,7 @@ impl PeekClient {
     /// logging slot at the point where the coordinator takes over. Everywhere
     /// else the slot stays armed and `SessionClient::execute` logs the end from
     /// the returned result.
+    #[mz_ore::instrument(level = "debug")]
     async fn try_frontend_peek_inner(
         &mut self,
         session: &mut Session,
