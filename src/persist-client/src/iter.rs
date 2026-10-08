@@ -1121,7 +1121,7 @@ mod tests {
                 // Toy compaction loop!
                 let fetch_cfg = FetchConfig {
                     validate_bounds_on_read: true,
-                    part_decode_batch_rows: 0,
+                    part_decode_batch_rows: None,
                 };
                 let mut consolidator = Consolidator {
                     cfg: fetch_cfg.clone(),
@@ -1245,7 +1245,7 @@ mod tests {
 
             let fetch_cfg = FetchConfig {
                 validate_bounds_on_read: true,
-                part_decode_batch_rows: 0,
+                part_decode_batch_rows: None,
             };
 
             let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =

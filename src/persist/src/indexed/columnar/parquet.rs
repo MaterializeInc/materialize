@@ -83,6 +83,11 @@ pub fn decode_trace_parquet<T: Timestamp + Codec64>(
 /// only the encoded bytes and one decoded batch are resident at a time. Each
 /// batch is validated like [`BlobTraceBatchPart::validate`] validates a whole
 /// part.
+///
+/// Successive batches cover the part's rows in their encoded order, without
+/// gaps or overlap. A caller that consolidates adjacent updates can therefore
+/// carry its pending update across a batch boundary and merge the same
+/// updates as it would on the whole part.
 #[derive(Debug)]
 pub struct BlobTraceBatchPartReader<T> {
     desc: Description<T>,

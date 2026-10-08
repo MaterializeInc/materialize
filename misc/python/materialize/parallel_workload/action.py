@@ -2992,7 +2992,7 @@ class FlipFlagsAction(Action):
             "'.*'",
         ]
         self.flags_with_values["persist_part_decode_batch_rows"] = [
-            "0",
+            "''",
             "7",
             "16384",
         ]

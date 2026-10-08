@@ -91,7 +91,15 @@ async fn assert_batched_reads(
         .await
         .expect("valid usage");
 
-    for batch_rows in [0, 1, 3, 4, 10, 16384] {
+    for batch_rows in [
+        None,
+        Some(0),
+        Some(1),
+        Some(3),
+        Some(4),
+        Some(10),
+        Some(16384),
+    ] {
         client.cfg.set_config(&PART_DECODE_BATCH_ROWS, batch_rows);
 
         let mut stream = pin::pin!(read.snapshot_and_stream(as_of.clone()).await.unwrap());
@@ -101,7 +109,7 @@ async fn assert_batched_reads(
         }
         assert_eq!(
             actual, expected,
-            "snapshot_and_stream, batch_rows={batch_rows}"
+            "snapshot_and_stream, batch_rows={batch_rows:?}"
         );
 
         let parts = read.snapshot(as_of.clone()).await.expect("as_of available");
@@ -122,7 +130,7 @@ async fn assert_batched_reads(
         }
         assert_eq!(
             actual, expected,
-            "FetchedBlob::parse, batch_rows={batch_rows}"
+            "FetchedBlob::parse, batch_rows={batch_rows:?}"
         );
     }
 }

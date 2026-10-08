@@ -580,12 +580,12 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
         ),
-        # 0 decodes fetched parts whole; otherwise at most this many rows at
-        # once. 7 makes batch boundaries split small test parts.
+        # Empty decodes fetched parts whole, otherwise at most this many rows
+        # at once. 7 makes batch boundaries split small test parts.
         *(
             [
                 VariableSystemParameter(
-                    "persist_part_decode_batch_rows", "16384", ["0", "7", "16384"]
+                    "persist_part_decode_batch_rows", "16384", ["", "7", "16384"]
                 )
             ]
             if version >= MzVersion.parse_mz("v26.46.0-dev")

@@ -90,12 +90,12 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     ParameterScope::Environment,
 );
 
-pub(crate) const PART_DECODE_BATCH_ROWS: Config<usize> = Config::new(
+pub(crate) const PART_DECODE_BATCH_ROWS: Config<Option<usize>> = Config::new(
     "persist_part_decode_batch_rows",
-    0,
+    None,
     "\
     Maximum number of rows of a fetched blob part that a reader decodes at \
-    once. 0 decodes the whole part at once.",
+    once. Unset decodes the whole part at once.",
     ParameterScope::Environment,
 );
 
@@ -119,7 +119,7 @@ pub(crate) struct FetchConfig {
     pub(crate) validate_bounds_on_read: bool,
     /// See [`PART_DECODE_BATCH_ROWS`]. Only consulted by readers that decode
     /// through [`FetchedPart`].
-    pub(crate) part_decode_batch_rows: usize,
+    pub(crate) part_decode_batch_rows: Option<usize>,
 }
 
 impl FetchConfig {
@@ -135,7 +135,7 @@ impl FetchConfig {
 pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
     pub(crate) validate_bounds_on_read: ConfigValHandle<bool>,
-    pub(crate) part_decode_batch_rows: ConfigValHandle<usize>,
+    pub(crate) part_decode_batch_rows: ConfigValHandle<Option<usize>>,
 }
 
 impl BatchFetcherConfig {
@@ -1210,7 +1210,7 @@ pub(crate) struct EncodedPart<T> {
 /// in bounded batches on demand.
 ///
 /// Readers decode hollow parts in batches when
-/// [`FetchConfig::part_decode_batch_rows`] is non-zero. Inline parts, and
+/// [`FetchConfig::part_decode_batch_rows`] is set. Inline parts, and
 /// all parts read through [`EncodedPart`] directly (compaction, consolidating
 /// iteration, inspect), are decoded whole.
 #[derive(Debug)]
@@ -1221,7 +1221,7 @@ pub(crate) enum PartSource<T> {
 
 impl<T: Timestamp + Lattice + Codec64> PartSource<T> {
     /// Decodes the fetched blob `buf` of the hollow `part`, in batches if
-    /// [`FetchConfig::part_decode_batch_rows`] is non-zero.
+    /// [`FetchConfig::part_decode_batch_rows`] is set.
     pub(crate) fn from_hollow_blob(
         cfg: &FetchConfig,
         metrics: &Metrics,
@@ -1231,7 +1231,7 @@ impl<T: Timestamp + Lattice + Codec64> PartSource<T> {
         buf: &SegmentedBytes,
     ) -> Self {
         match cfg.part_decode_batch_rows {
-            0 => PartSource::Whole(decode_batch_part_blob(
+            None => PartSource::Whole(decode_batch_part_blob(
                 cfg,
                 metrics,
                 read_metrics,
@@ -1239,8 +1239,9 @@ impl<T: Timestamp + Lattice + Codec64> PartSource<T> {
                 part,
                 buf,
             )),
-            _ => PartSource::Batched(EncodedPartBatches::new(
+            Some(batch_rows) => PartSource::Batched(EncodedPartBatches::new(
                 cfg,
+                batch_rows,
                 metrics,
                 read_metrics.clone(),
                 registered_desc,
@@ -1262,7 +1263,7 @@ struct PartNormalization<T> {
 }
 
 /// A hollow part decoded into normalized updates in batches of at most
-/// [`FetchConfig::part_decode_batch_rows`] rows.
+/// `batch_rows` rows.
 ///
 /// Holds the encoded bytes until the last batch is decoded.
 #[derive(Debug)]
@@ -1274,6 +1275,7 @@ pub(crate) struct EncodedPartBatches<T> {
 impl<T: Timestamp + Lattice + Codec64> EncodedPartBatches<T> {
     pub(crate) fn new(
         cfg: &FetchConfig,
+        batch_rows: usize,
         metrics: &Metrics,
         read_metrics: ReadMetrics,
         registered_desc: Description<T>,
@@ -1283,7 +1285,7 @@ impl<T: Timestamp + Lattice + Codec64> EncodedPartBatches<T> {
         let reader = metrics
             .codecs
             .batch
-            .decode(|| BlobTraceBatchPartReader::new(buf, cfg.part_decode_batch_rows))
+            .decode(|| BlobTraceBatchPartReader::new(buf, batch_rows))
             .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
             // Same as `decode_batch_part_blob`: undecodable durable data is
             // not recoverable.
