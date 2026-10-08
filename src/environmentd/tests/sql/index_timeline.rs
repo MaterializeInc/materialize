@@ -22,7 +22,7 @@ use mz_postgres_util::{batch_execute, sql};
 async fn creation_protects_timelines_before_installation() {
     let test_case = async {
         let server = TestHarness::default()
-            .enable_feature_flags(&["enable_refresh_every_mvs"])
+            .with_system_parameter_default("enable_refresh_every_mvs".into(), "true".into())
             .start()
             .await;
         let client = server.connect().await.unwrap();
