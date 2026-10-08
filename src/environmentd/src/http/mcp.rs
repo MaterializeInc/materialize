@@ -508,7 +508,7 @@ async fn handle_mcp_request(
     let record_request =
         |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
 
-    // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
+    // Check the per-endpoint feature flag via a catalog snapshot, similar to peek_sequencing.rs.
     // The configured `MCP_REQUEST_TIMEOUT` lives in the snapshot we are about
     // to fetch, so bound this phase with the compiled-in default. Without it a
     // stalled snapshot would hang the request past any configured timeout.
