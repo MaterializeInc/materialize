@@ -44,6 +44,7 @@ from materialize.antithesis.drivers.rollouts import (
     POLL_SECONDS,
     TRANSIENT_ERRORS,
     Kube,
+    Snapshot,
     lifecycle_ddl_in_flight,
     peek_db,
 )
@@ -190,7 +191,9 @@ def _count(endpoints: Endpoints, name: str, query: str) -> int:
         conn.close()
 
 
-def trigger_met(trigger: str, endpoints: Endpoints, kube: Kube) -> bool:
+def trigger_met(trigger: str, endpoints: Endpoints, snap: Snapshot | None) -> bool:
+    """Whether `trigger` holds now. `snap` is a CR snapshot taken for this
+    poll, needed only by the rollout triggers."""
     if trigger == "now":
         return True
     if trigger == "lifecycle_pending":
@@ -202,12 +205,10 @@ def trigger_met(trigger: str, endpoints: Endpoints, kube: Kube) -> bool:
             _count(
                 endpoints,
                 postgres_sources.STATE_DB,
-                "SELECT count(*) FROM terminal t JOIN exports e ON e.name = t.name"
-                " WHERE e.state != 'dropped'",
+                postgres_sources.TERMINAL_EXPORTS_QUERY,
             )
             > 0
         )
-    snap = kube.try_snapshot()
     if snap is None:
         return False
     if trigger == "rollout_applying":
@@ -292,16 +293,31 @@ def timeline_params(db: sqlite3.Connection) -> TimelineParams:
     return timeline_params(db)
 
 
-def wait_for_trigger(trigger: str, endpoints: Endpoints, kube: Kube) -> bool:
+def wait_for_trigger(
+    weights: dict[str, int], endpoints: Endpoints, kube: Kube
+) -> str | None:
+    """Wait until any trigger in `weights` holds and return one of those that
+    hold, drawn by weight. None if none held within `TRIGGER_WAIT_SECONDS`.
+
+    Each moment is short, and Test Composer often leaves the driver whose
+    state a trigger reads unscheduled for the whole wait, so waiting on one
+    trigger drawn up front rarely ends in a kill.
+    """
     deadline = time.monotonic() + TRIGGER_WAIT_SECONDS
+    needs_cr = any(t.startswith("rollout_") for t in weights)
     while True:
-        try:
-            if trigger_met(trigger, endpoints, kube):
-                return True
-        except TRANSIENT_ERRORS as e:
-            log(f"checking trigger {trigger} failed: {e}")
+        snap = kube.try_snapshot() if needs_cr else None
+        met = []
+        for trigger in weights:
+            try:
+                if trigger_met(trigger, endpoints, snap):
+                    met.append(trigger)
+            except TRANSIENT_ERRORS as e:
+                log(f"checking trigger {trigger} failed: {e}")
+        if met:
+            return rng.choices(met, weights=[weights[t] for t in met])[0]
         if time.monotonic() >= deadline:
-            return False
+            return None
         time.sleep(POLL_SECONDS)
 
 
@@ -356,15 +372,23 @@ def driver_main() -> int:
     if quiet_period_active(endpoints):
         log("quiet period active; not restarting anything")
         return 0
+    # The draw only decides between an immediate and a triggered kill; a
+    # triggered kill fires on whichever armed trigger holds first.
     trigger = rng.choices(
         list(params.trigger_weights), weights=list(params.trigger_weights.values())
     )[0]
     target = rng.choices(
         list(params.target_weights), weights=list(params.target_weights.values())
     )[0]
-    if not wait_for_trigger(trigger, endpoints, kube):
-        log(f"trigger {trigger} not met; not restarting anything")
-        return 0
+    if trigger != "now":
+        armed = {
+            t: w for t, w in params.trigger_weights.items() if t != "now" and w > 0
+        }
+        met = wait_for_trigger(armed, endpoints, kube)
+        if met is None:
+            log(f"no trigger of {sorted(armed)} met; not restarting anything")
+            return 0
+        trigger = met
     # The trigger wait may have run into a quiet period.
     if quiet_period_active(endpoints):
         log("quiet period active; not restarting anything")
