@@ -122,9 +122,6 @@ pub enum ConnectionError {
     #[error("deployment '{deploy_id}' has already been promoted to production")]
     DeploymentAlreadyPromoted { deploy_id: String },
 
-    #[error("unsupported statement type: {0}")]
-    UnsupportedStatementType(String),
-
     #[error("{0}")]
     Message(String),
 }

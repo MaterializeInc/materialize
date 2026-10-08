@@ -400,10 +400,7 @@ impl<'ast> Visit<'ast, Raw> for DependencyVisitor<'_> {
 /// Extract all dependencies from a statement.
 ///
 /// Returns a tuple of (object_dependencies, cluster_dependencies).
-///
-/// This function is public to allow the changeset module to analyze
-/// cluster dependencies for incremental deployment.
-pub(crate) fn extract_dependencies(
+fn extract_dependencies(
     stmt: &Statement,
     default_database: &str,
     default_schema: &str,

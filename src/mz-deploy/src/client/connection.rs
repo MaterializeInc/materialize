@@ -38,6 +38,7 @@
 use crate::client::errors::ConnectionError;
 use crate::config::{Profile, SslMode};
 use crate::info;
+use futures::SinkExt;
 use mz_postgres_util::Sql;
 use std::collections::BTreeMap;
 use tokio_postgres::types::ToSql;
@@ -326,6 +327,58 @@ impl Client {
             .await
             .map_err(ConnectionError::from)
     }
+
+    /// Bulk-load `rows` into a table with `COPY <table> FROM STDIN`.
+    ///
+    /// Each row is one line of tab-delimited text in the table's column order,
+    /// which is COPY's default text format. Callers must escape any tab,
+    /// newline, or backslash in a value; [`copy_escape`] does that.
+    ///
+    /// COPY is a write, so this cannot share a transaction with a read of the
+    /// same table.
+    pub async fn copy_into(
+        &self,
+        table: &str,
+        rows: impl Iterator<Item = String>,
+    ) -> Result<(), ConnectionError> {
+        let mut buf = String::new();
+        for row in rows {
+            buf.push_str(&row);
+            buf.push('\n');
+        }
+
+        let statement = format!("COPY {} FROM STDIN", table);
+        let sink = self
+            .client
+            .copy_in::<_, bytes::Bytes>(statement.as_str())
+            .await
+            .map_err(ConnectionError::from)?;
+        futures::pin_mut!(sink);
+        sink.send(bytes::Bytes::from(buf))
+            .await
+            .map_err(ConnectionError::from)?;
+        sink.finish().await.map_err(ConnectionError::from)?;
+        Ok(())
+    }
+}
+
+/// Escape a value for COPY's text format.
+///
+/// COPY reads backslash as an escape introducer and treats tab and newline as
+/// delimiters, so a value containing any of them would otherwise shift or
+/// split the row. Catalog names can contain all three.
+pub fn copy_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Platform CA bundle candidates, walked in order by `build_connector` when
